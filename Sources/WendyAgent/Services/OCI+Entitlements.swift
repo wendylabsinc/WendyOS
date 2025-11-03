@@ -1,6 +1,35 @@
 import AppConfig
 import Foundation
 
+extension Array where Element == Entitlement {
+    /// Check if GPU entitlement is present
+    var hasGPUEntitlement: Bool {
+        contains { entitlement in
+            if case .gpu = entitlement {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Build environment variables from entitlements
+    func environmentVariables() -> [String] {
+        var env: [String] = []
+
+        for entitlement in self {
+            switch entitlement {
+            case .gpu:
+                env.append("NVIDIA_VISIBLE_DEVICES=all")
+                env.append("NVIDIA_DRIVER_CAPABILITIES=all")
+            default:
+                ()
+            }
+        }
+
+        return env
+    }
+}
+
 extension OCI {
     mutating func setDeviceCapabilities(appName: String) {
         let deviceCapabilities = [
@@ -62,6 +91,8 @@ extension OCI {
 
         for entitlement in entitlements {
             switch entitlement {
+            case .gpu:
+                () // Handled by NVIDIA runtime
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:

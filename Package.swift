@@ -88,6 +88,7 @@ let package = Package(
                 .target(name: "WendyShared"),
                 .target(name: "Imager"),
                 .target(name: "ContainerRegistry"),
+                .target(name: "ContainerdGRPC"),
                 .target(name: "DownloadSupport"),
                 .target(name: "AppConfig"),
                 .target(name: "CliXPCProtocol"),

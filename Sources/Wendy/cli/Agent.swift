@@ -42,9 +42,10 @@ struct Agent {
             try await agent.listWiFiNetworks(.init())
         }.networks
 
-        let ssids = Set(networks.map { $0.ssid })
+        let ssids = networks.map { $0.ssid }
             .sorted()
             .filter { !$0.isEmpty }
+    
 
         let index = try await Noora().selectableTable(
             headers: ["SSID"],
@@ -54,7 +55,7 @@ struct Agent {
             pageSize: networks.count
         )
 
-        return networks[index].ssid
+        return ssids[index]
     }
 
     func connectToWiFi(

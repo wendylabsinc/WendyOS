@@ -200,6 +200,8 @@ struct RunContainerRequestHandler {
                 )
                 for entitlement in appConfig.entitlements {
                     switch entitlement {
+                    case .gpu:
+                        runOptions.append(.gpus("all"))
                     case .video:
                         runOptions.append(.device("/dev/video0"))
                     case .bluetooth:
