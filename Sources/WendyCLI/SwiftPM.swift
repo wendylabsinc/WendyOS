@@ -131,8 +131,8 @@ public struct SwiftPM: Sendable {
             try await Subprocess.run(
                 Subprocess.Executable.name(executableName),
                 arguments: Subprocess.Arguments(allArgs),
-                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false),
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false), // TODO: Pipe into Noora?
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false), // TODO: Pipe into Noora?
             )
         }
 

@@ -126,7 +126,15 @@ extension RunCommand {
             logger: Logger(label: "sh.wendy.cli.run.docker.container.docker")
         )
 
-        try await buildDockerBased(name: name)
+        try await Noora().progressStep(
+            message: "Building container",
+            successMessage: "Container built successfully!",
+            errorMessage: "Failed to build container",
+            showSpinner: true
+        ) { _ in
+            try await buildDockerBased(name: name)
+        }
+
         let output = FileManager.default.temporaryDirectory.appending(component: UUID().uuidString)
             .path()
         try await uploadDockerTar(
@@ -148,83 +156,101 @@ extension RunCommand {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
 
-        try await buildDockerBased(name: name)
-
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString
-        )
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-        let imageTarPath = tempDir.appendingPathComponent("\(name).tar")
-
-        let docker = DockerCLI()
-        try await docker.save(name: name, output: imageTarPath.path())
-        var layers = [ContainerdLayer]()
-
-        // Extract file (tar) to temp FS
-        let extractDir = tempDir.appendingPathComponent("extract")
-        try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
-        try await extractTar(from: imageTarPath, to: extractDir)
-
-        // Parse manifest.json to get layer order and metadata
-        let manifestPath = extractDir.appendingPathComponent("manifest.json")
-        let manifestData = try Data(contentsOf: manifestPath)
-        let manifests = try JSONDecoder().decode([DockerManifest].self, from: manifestData)
-
-        guard let manifest = manifests.first else {
-            throw Error.noManifestFound
+        try await Noora().progressStep(
+            message: "Building container",
+            successMessage: "Container built successfully!",
+            errorMessage: "Failed to build container",
+            showSpinner: true
+        ) { _ in
+            try await buildDockerBased(name: name)
         }
 
-        // Load and parse the config file
-        let configPath = extractDir.appendingPathComponent(manifest.config)
-        let configData = try Data(contentsOf: configPath)
-        let imageConfig = try JSONDecoder().decode(ImageConfig.self, from: configData)
-
-        logger.debug(
-            "Loaded container config",
-            metadata: [
-                "architecture": .string(imageConfig.architecture),
-                "os": .string(imageConfig.os),
-                "cmd": .string(imageConfig.config.cmd?.joined(separator: " ") ?? "none"),
-                "workingDir": .string(imageConfig.config.workingDir ?? "none"),
-            ]
-        )
-
-        // Process layers in the correct order from manifest
-        for layerPath in manifest.layers {
-            // Extract the digest from the layer path (e.g., "blobs/sha256/abc123..." -> "sha256:abc123...")
-            let digest = "sha256:" + String(layerPath.dropFirst("blobs/sha256/".count))
-
-            // Get layer metadata from LayerSources to detect gzip or not
-            let gzip: Bool
-            if let layerSource = manifest.layerSources?[digest] {
-                // LayerSources only exists in Docker format, not in OCI
-                // And Docker produces gzipped files
-                gzip = layerSource.mediaType.contains("gzip")
-            } else {
-                // Layer sources does not exist in OCI format
-                // OCI is not gzip-ed normally
-                gzip = true
-            }
-
-            // Construct the full path to the layer file
-            let layerFile = extractDir.appendingPathComponent(layerPath)
-
-            guard let info = try await FileSystem.shared.info(forFileAt: FilePath(layerFile.path()))
-            else {
-                logger.warning("Layer file not found: \(layerFile.path)")
-                continue
-            }
-
-            layers.append(
-                ContainerdLayer(
-                    source: .path(layerFile),
-                    digest: digest,
-                    diffID: digest,
-                    size: info.size,
-                    gzip: gzip
-                )
+        let (layers, imageConfig) = try await Noora().progressStep(
+            message: "Preparing container",
+            successMessage: "Container prepared and ready to run!",
+            errorMessage: "Failed to prepare container",
+            showSpinner: true
+        ) { progress in
+            progress("Saving container")
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString
             )
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+            let imageTarPath = tempDir.appendingPathComponent("\(name).tar")
+
+            let docker = DockerCLI()
+            try await docker.save(name: name, output: imageTarPath.path())
+
+            // Extract file (tar) to temp FS
+            progress("Extracting container")
+            let extractDir = tempDir.appendingPathComponent("extract")
+            try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+            try await extractTar(from: imageTarPath, to: extractDir)
+
+            // Parse manifest.json to get layer order and metadata
+            let manifestPath = extractDir.appendingPathComponent("manifest.json")
+            let manifestData = try Data(contentsOf: manifestPath)
+            let manifests = try JSONDecoder().decode([DockerManifest].self, from: manifestData)
+
+            guard let manifest = manifests.first else {
+                throw Error.noManifestFound
+            }
+
+            // Load and parse the config file
+            progress("Loading container config")
+            let configPath = extractDir.appendingPathComponent(manifest.config)
+            let configData = try Data(contentsOf: configPath)
+            let imageConfig = try JSONDecoder().decode(ImageConfig.self, from: configData)
+            logger.debug(
+                "Loaded container config",
+                metadata: [
+                    "architecture": .string(imageConfig.architecture),
+                    "os": .string(imageConfig.os),
+                    "cmd": .string(imageConfig.config.cmd?.joined(separator: " ") ?? "none"),
+                    "workingDir": .string(imageConfig.config.workingDir ?? "none"),
+                ]
+            )
+
+            // Process layers in the correct order from manifest
+            progress("Processing layers")
+            var layers = [ContainerdLayer]()
+            for layerPath in manifest.layers {
+                // Extract the digest from the layer path (e.g., "blobs/sha256/abc123..." -> "sha256:abc123...")
+                let digest = "sha256:" + String(layerPath.dropFirst("blobs/sha256/".count))
+
+                // Get layer metadata from LayerSources to detect gzip or not
+                let gzip: Bool
+                if let layerSource = manifest.layerSources?[digest] {
+                    // LayerSources only exists in Docker format, not in OCI
+                    // And Docker produces gzipped files
+                    gzip = layerSource.mediaType.contains("gzip")
+                } else {
+                    // Layer sources does not exist in OCI format
+                    // OCI is not gzip-ed normally
+                    gzip = true
+                }
+
+                // Construct the full path to the layer file
+                let layerFile = extractDir.appendingPathComponent(layerPath)
+
+                guard let info = try await FileSystem.shared.info(forFileAt: FilePath(layerFile.path()))
+                else {
+                    logger.warning("Layer file not found: \(layerFile.path)")
+                    continue
+                }
+
+                layers.append(
+                    ContainerdLayer(
+                        source: .path(layerFile),
+                        digest: digest,
+                        diffID: digest,
+                        size: info.size,
+                        gzip: gzip
+                    )
+                )
+            }
+            return (layers, imageConfig)
         }
 
         try await uploadAndRunContainerdContainer(
@@ -346,8 +372,6 @@ extension RunCommand {
 
         let appConfigData = try await readAppConfigData(logger: logger)
 
-        print("Getting container layers")
-
         try await withAgentGRPCClient(
             agentConnectionOptions,
             title: "Which device do you want to run this app on?"
@@ -409,7 +433,9 @@ extension RunCommand {
                 let layersUploaded = LayersUploaded()
                 let layersToUpload = layers.filter { !existingHashes.contains($0.digest) }
 
-                if !layersToUpload.isEmpty {
+                if layersToUpload.isEmpty {
+                    Noora().info("All layers are already uploaded")
+                } else {
                     for layer in layersToUpload {
                         await layersUploaded.incrementUploading()
                         taskGroup.addTask {
@@ -584,85 +610,98 @@ extension RunCommand {
             }
         }
 
-        try await swiftPM.build(
-            .product(executableTarget.name),
-            .swiftSDK(swiftSDK),
-            .configuration(debug ? "debug" : "release"),
-            .scratchPath(".wendy-build"),
-            .staticSwiftStdlib,
-            .xLinker("-s")
-        )
+        let (imageName, container) = try await Noora().progressStep(
+            message: "Building container",
+            successMessage: "Container built successfully!",
+            errorMessage: "Failed to build container",
+            showSpinner: true
+        ) { progress in
+            progress("Building Swift app")
+            try await swiftPM.build(
+                .product(executableTarget.name),
+                .swiftSDK(swiftSDK),
+                .configuration(debug ? "debug" : "release"),
+                .scratchPath(".wendy-build"),
+                .staticSwiftStdlib,
+                .xLinker("-s")
+            )
 
-        let binPath = try await swiftPM.buildWithOutput(
-            .showBinPath,
-            .product(executableTarget.name),
-            .swiftSDK(swiftSDK),
-            .configuration(debug ? "debug" : "release"),
-            .quiet,
-            .scratchPath(".wendy-build"),
-            .staticSwiftStdlib
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let buildDir = URL(fileURLWithPath: binPath)
-        let executable = buildDir.appendingPathComponent(executableTarget.name)
+            progress("Building container with base image \(baseImage)")
+            let binPath = try await swiftPM.buildWithOutput(
+                .showBinPath,
+                .product(executableTarget.name),
+                .swiftSDK(swiftSDK),
+                .configuration(debug ? "debug" : "release"),
+                .quiet,
+                .scratchPath(".wendy-build"),
+                .staticSwiftStdlib
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let buildDir = URL(fileURLWithPath: binPath)
+            let executable = buildDir.appendingPathComponent(executableTarget.name)
 
-        logger.debug("Building container with base image \(baseImage)")
-        let imageName = executableTarget.name.lowercased()
+            logger.debug("Building container with base image \(baseImage)")
+            progress("Preparing base image")
+            let imageName = executableTarget.name.lowercased()
 
-        // Use the debian:bookworm-slim base image instead of a blank image
-        var imageSpec = try await ContainerImageSpec.withBaseImage(
-            baseImage: baseImage,
-            executable: executable
-        )
+            // Use the debian:bookworm-slim base image instead of a blank image
+            var imageSpec = try await ContainerImageSpec.withBaseImage(
+                baseImage: baseImage,
+                executable: executable
+            )
+            progress("Adding Swift PM resources")
+            try await addSwiftPMResources(at: buildDir, to: &imageSpec)
 
-        try await addSwiftPMResources(at: buildDir, to: &imageSpec)
+            progress("Adding debugger executable")
+            if debug {
+                // Include the ds2 executable in the container image.
+                let ds2URL: URL
+                if let url = Bundle.module.url(
+                    forResource: "ds2-124963fd-static-linux-arm64",
+                    withExtension: nil
+                ) {
+                    ds2URL = url
+                } else {
+                    let url = URL(fileURLWithPath: CommandLine.arguments[0])
+                        .deletingLastPathComponent()
+                        .appending(path: "wendy-agent_wendy.bundle")
+                        .appending(path: "Contents")
+                        .appending(path: "Resources")
+                        .appending(path: "Resources")
+                        .appending(component: "ds2-124963fd-static-linux-arm64")
 
-        if debug {
-            // Include the ds2 executable in the container image.
-            let ds2URL: URL
-            if let url = Bundle.module.url(
-                forResource: "ds2-124963fd-static-linux-arm64",
-                withExtension: nil
-            ) {
-                ds2URL = url
-            } else {
-                let url = URL(fileURLWithPath: CommandLine.arguments[0])
-                    .deletingLastPathComponent()
-                    .appending(path: "wendy-agent_wendy.bundle")
-                    .appending(path: "Contents")
-                    .appending(path: "Resources")
-                    .appending(path: "Resources")
-                    .appending(component: "ds2-124963fd-static-linux-arm64")
+                    guard FileManager.default.fileExists(atPath: url.path()) else {
+                        fatalError("Could not find ds2 executable in bundle resources")
+                    }
 
-                guard FileManager.default.fileExists(atPath: url.path()) else {
-                    fatalError("Could not find ds2 executable in bundle resources")
+                    ds2URL = url
                 }
 
-                ds2URL = url
+                let ds2Files = [
+                    ContainerImageSpec.Layer.File(
+                        source: ds2URL,
+                        destination: "/bin/ds2",
+                        permissions: 0o755
+                    )
+                ]
+                let ds2Layer = ContainerImageSpec.Layer(files: ds2Files)
+                imageSpec.layers.append(ds2Layer)
             }
 
-            let ds2Files = [
-                ContainerImageSpec.Layer.File(
-                    source: ds2URL,
-                    destination: "/bin/ds2",
-                    permissions: 0o755
-                )
-            ]
-            let ds2Layer = ContainerImageSpec.Layer(files: ds2Files)
-            imageSpec.layers.append(ds2Layer)
+            progress("Building final container image")
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString
+            )
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.removeItem(at: tempDir)
+            }
+            let container = try await buildDockerContainer(
+                image: imageSpec,
+                imageName: imageName,
+                tempDir: tempDir
+            )
+            return (imageName, container)
         }
-
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString
-        )
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-        let container = try await buildDockerContainer(
-            image: imageSpec,
-            imageName: imageName,
-            tempDir: tempDir
-        )
 
         let cmd: [String]
         if debug {
@@ -837,7 +876,14 @@ extension RunCommand {
         ) { [appConfigData] client in
             let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
             try await agent.runContainer { writer in
-                let outputPath = try await builtContainer.value
+                let outputPath = try await Noora().progressStep(
+                    message: "Preparing container for upload",
+                    successMessage: "Container prepared for upload",
+                    errorMessage: "Failed to prepare container for upload",
+                    showSpinner: true
+                ) { progress in
+                    try await builtContainer.value
+                }
 
                 // First, send the header.
                 try await writer.write(
@@ -935,7 +981,7 @@ extension RunCommand {
 
     private func readAppConfigData(logger: Logger) async throws -> Data {
         do {
-            let appConfigData = try Data(contentsOf: URL(fileURLWithPath: "wendy.json"))
+            let appConfigData = try Data(contentsOf: URL(fileURLWithPath: "./wendy.json"))
             // Validate data
             _ = try JSONDecoder().decode(AppConfig.self, from: appConfigData)
             return appConfigData

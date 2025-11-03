@@ -40,6 +40,8 @@ public struct DockerCLI: Sendable {
 
         case device(String)
 
+        case gpus(String)
+
         /// Give extended privileges to this container
         case privileged
 
@@ -81,6 +83,8 @@ public struct DockerCLI: Sendable {
                 return ["--restart", "no"]
             case .restartOnFailure(let retries):
                 return ["--restart", "on-failure:\(retries)"]
+            case .gpus(let gpus):
+                return ["--gpus", gpus]
             }
         }
     }

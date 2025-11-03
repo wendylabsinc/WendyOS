@@ -146,6 +146,8 @@ struct ListCommand: ModifyProjectCommand {
             print("   No additional configuration")
         case .audio:
             print("   No additional configuration")
+        case .gpu:
+            print("   No additional configuration")
         }
     }
 }
@@ -250,6 +252,8 @@ struct AddCommand: ModifyProjectCommand {
                 newEntitlement = .video(VideoEntitlements())
             case .audio:
                 newEntitlement = .audio
+            case .gpu:
+                newEntitlement = .gpu(GPUEntitlements())
             }
         }
 
@@ -301,6 +305,9 @@ struct AddCommand: ModifyProjectCommand {
 
         case .audio:
             return .audio
+
+        case .gpu:
+            return .gpu(GPUEntitlements())
         }
     }
 }
@@ -392,6 +399,8 @@ extension Entitlement {
             return .video
         case .audio:
             return .audio
+        case .gpu:
+            return .gpu
         }
     }
 }
