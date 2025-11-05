@@ -31,6 +31,12 @@ public protocol ImageDownloading: Sendable {
 
 // MARK: - Implementations
 
+/// Represents cached image version metadata
+private struct ImageVersionMetadata: Codable {
+    let version: String
+    let timestamp: Date
+}
+
 /// Manages downloading device images from GCS
 public actor ImageDownloader: ImageDownloading {
     private let fileManager: FileManager
@@ -303,8 +309,11 @@ public actor ImageDownloader: ImageDownloading {
         )
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
 
-        let metadata = ["version": version, "timestamp": ISO8601DateFormatter().string(from: Date())]
-        let data = try JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted)
+        let metadata = ImageVersionMetadata(version: version, timestamp: Date())
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(metadata)
         try data.write(to: metadataURL)
     }
 
@@ -315,11 +324,16 @@ public actor ImageDownloader: ImageDownloading {
         )
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
 
-        guard let data = try? Data(contentsOf: metadataURL),
-              let metadata = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+        guard let data = try? Data(contentsOf: metadataURL) else {
             return nil
         }
-        return metadata["version"]
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let metadata = try? decoder.decode(ImageVersionMetadata.self, from: data) else {
+            return nil
+        }
+        return metadata.version
     }
 
     /// Returns a valid cached .img path if available, else nil.

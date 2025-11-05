@@ -285,7 +285,7 @@ struct OSCommand: AsyncParsableCommand {
             if deviceName == nil {
                 let allDevices = try await manifestManager.getAvailableDevices()
                 guard !allDevices.isEmpty else {
-                    print("No devices found in the manifest.")
+                    noora.error("No devices found in the manifest.")
                     return
                 }
 
@@ -340,7 +340,7 @@ struct OSCommand: AsyncParsableCommand {
                 drives.removeAll { $0.id.hasSuffix("disk0") }
 
                 guard !drives.isEmpty else {
-                    print("No removable drives detected.")
+                    noora.error("No removable drives detected.")
                     return
                 }
 
@@ -366,12 +366,12 @@ struct OSCommand: AsyncParsableCommand {
 
                 let driveChoice = drives[driveIndex]
 
-                print(
-                    "\n⚠️  WARNING: Writing \(selectedDeviceName) will erase all data on \(driveChoice.name) (\(driveChoice.id))."
+                noora.warning(
+                    "Writing \(selectedDeviceName) will erase all data on \(driveChoice.name) (\(driveChoice.id))."
                 )
 
                 if force {
-                    print("Proceeding due to --force flag.")
+                    noora.warning("Proceeding due to --force flag.")
                     selectedDrive = driveChoice
                 } else {
                     let confirmed = noora.yesOrNoChoicePrompt(
@@ -380,7 +380,7 @@ struct OSCommand: AsyncParsableCommand {
                     )
 
                     guard confirmed else {
-                        print("Operation aborted.")
+                        noora.info("Operation aborted.")
                         return
                     }
 
@@ -406,7 +406,7 @@ struct OSCommand: AsyncParsableCommand {
                 }
             }
 
-            print("🔍 Finding latest image for \(selectedDeviceName)...")
+            noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
 
             // Get the latest image information for the device
             let (imageUrl, imageSize) = try await manifestManager.getLatestImageInfo(
@@ -417,10 +417,12 @@ struct OSCommand: AsyncParsableCommand {
             let devices = try await manifestManager.getAvailableDevices()
             let latestVersion = devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
 
-            print("📥 Found image: \(imageUrl.lastPathComponent)")
-            print("   Version: \(latestVersion)")
-            print(
-                "   Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))"
+            noora.info(
+            """
+            📥 Found image: \(imageUrl.lastPathComponent)
+               Version: \(latestVersion)
+               Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))
+            """
             )
 
             // Download and extract as separate progress bars when not using cache
@@ -439,13 +441,12 @@ struct OSCommand: AsyncParsableCommand {
 
             if shouldUseCache, let cachedPath = cachedImagePath {
                 localImagePath = cachedPath
-                print("ℹ️  Using cached image for \(selectedDeviceName) (version: \(latestVersion))")
+                noora.info("Using cached image for \(selectedDeviceName) (version: \(latestVersion))")
             } else {
                 if !redownload && cachedImagePath != nil && !isCachedLatest {
-                    print("ℹ️  Newer version available, downloading updated image...")
+                    noora.info("Newer version available, downloading updated image...")
                 }
                 // 1) Download archive
-                print("\n📥 Downloading image...")
                 let (zipPath, _): (String, String) = try await noora.progressBarStep(
                     message: "Downloading image for \(selectedDeviceName)",
                     successMessage: "Download complete",
@@ -474,7 +475,6 @@ struct OSCommand: AsyncParsableCommand {
                 }
 
                 // 2) Extract archive
-                print("\n📦 Extracting image...")
                 localImagePath = try await noora.progressBarStep(
                     message: "Extracting image",
                     successMessage: "Image ready",
@@ -500,8 +500,12 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             logger.debug("✅ Image ready at: \(localImagePath)")
-            print("\n💾 Writing image to \(selectedDrive.name) (\(selectedDrive.id))...")
-            print("   Press Ctrl+C to cancel\n")
+            noora.info(
+                """
+                💾 Writing image to \(selectedDrive.name) (\(selectedDrive.id))...
+                   Press Ctrl+C to cancel
+                """
+            )
 
             // Ensure we have admin privileges cached up-front so downstream sudo calls don't fail silently
             try await ensureAdminPrivileges()
@@ -529,7 +533,7 @@ struct OSCommand: AsyncParsableCommand {
                 progressUpdater.update(1.0)
             }
 
-            print("\n🎉 Device \(selectedDeviceName) successfully imaged!")
+            noora.success("🎉 Device \(selectedDeviceName) successfully imaged!")
         }
     }
 }
