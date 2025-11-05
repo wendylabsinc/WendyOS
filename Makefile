@@ -68,16 +68,16 @@ build-app-bundle: build-cli build-helper build-network-daemon ## Build and codes
 	@echo "✅ WendyCLI.app bundle built and codesigned"
 
 build-cli-linux: _protos ## build the wendy CLI for linux with musl
-	swiftly run swift build +6.2 --swift-sdk aarch64-swift-linux-musl --product wendy -c release
+	swiftly run swift build +6.2.1 --swift-sdk aarch64-swift-linux-musl --product wendy -c release
 
 build-agent: _protos ## Build the wendy agent executable
-	swiftly run swift build +6.2 --swift-sdk aarch64-swift-linux-musl --product wendy-agent -c debug 
+	swiftly run swift build +6.2.1 --swift-sdk aarch64-swift-linux-musl --product wendy-agent -c debug 
 	cp .build/aarch64-swift-linux-musl/debug/wendy-agent .
 	chmod +x wendy-agent
 	@echo "Binary size: $$(du -h wendy-agent | cut -f1)"
 
 build-agent-release: _protos ## Build the wendy agent executable in release mode
-	swiftly run swift build +6.2 --swift-sdk aarch64-swift-linux-musl \
+	swiftly run swift build +6.2.1 --swift-sdk aarch64-swift-linux-musl \
 	--product wendy-agent \
 	-c release \
 	-Xswiftc -whole-module-optimization \

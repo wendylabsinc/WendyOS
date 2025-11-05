@@ -8,7 +8,7 @@ public struct SwiftPM: Sendable {
     public let path: String
 
     /// Default Swift version to use for building packages
-    public static let defaultSwiftVersion = "+6.2"
+    public static let defaultSwiftVersion = "+6.2.1"
 
     /// Custom Swift version, defaults to defaultSwiftVersion if nil
     public let swiftVersion: String?

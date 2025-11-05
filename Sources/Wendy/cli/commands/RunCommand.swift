@@ -75,7 +75,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var swiftSDK: String = "6.2-RELEASE_edgeos_aarch64"
 
     @Option(name: .long, help: "The Swift SDK to use.")
-    var swiftVersion: String = "+6.2-snapshot"
+    var swiftVersion: String = "+6.2.1"
 
     @Option(name: .long, help: "The base image to use. Defaults to debian:bookworm-slim.")
     var baseImage: String = "debian:bookworm-slim"
