@@ -21,6 +21,7 @@ public enum ContainerRuntime: String, ExpressibleByArgument, Sendable {
 
 struct RunCommand: AsyncParsableCommand, Sendable {
     enum Error: Swift.Error, CustomStringConvertible {
+        case failedToUploadLayers(Int)
         case noExecutableTarget
         case invalidExecutableTarget(String)
         case multipleExecutableTargets([String])
@@ -28,6 +29,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         var description: String {
             switch self {
+            case .failedToUploadLayers:
+                return "Failed to upload"
             case .noExecutableTarget:
                 return "No executable target found in package"
             case .invalidExecutableTarget(let name):
@@ -402,8 +405,13 @@ extension RunCommand {
                 actor LayersUploaded {
                     var layersUploading = 0
                     var layersUploaded = 0
+                    var layersFailedUploaded = 0
                     var status: String {
-                        "Layers uploading \(layersUploaded)/\(layersUploading)"
+                        if layersFailedUploaded > 0 {
+                            return "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
+                        } else {
+                            return "Layers uploading \(layersUploaded)/\(layersUploading)"
+                        }
                     }
                     nonisolated let (statusChange, continuation) = AsyncStream<String>.makeStream()
 
@@ -415,7 +423,17 @@ extension RunCommand {
                     func incrementUploaded() {
                         layersUploaded += 1
                         continuation.yield(status)
+                        checkFinished()
+                    }
 
+                    func incrementFailedUploaded(error: any Swift.Error) {
+                        layersFailedUploaded += 1
+                        layersUploading -= 1
+                        continuation.yield(status)
+                        checkFinished()
+                    }
+
+                    private func checkFinished() {
                         if layersUploaded == layersUploading {
                             finish()
                         }
@@ -444,24 +462,32 @@ extension RunCommand {
                                 "Uploading layer to agent",
                                 metadata: ["digest": .string(layer.digest)]
                             )
-                            try await agentContainers.writeLayer(
-                                request: .init { writer in
-                                    try await layer.withStream { chunk in
-                                        try await writer.write(
-                                            .with {
-                                                $0.digest = layer.digest
-                                                $0.data = Data(chunk)
-                                            }
-                                        )
+                            do {
+                                try await agentContainers.writeLayer(
+                                    request: .init { writer in
+                                        try await layer.withStream { chunk in
+                                            try await writer.write(
+                                                .with {
+                                                    $0.digest = layer.digest
+                                                    $0.data = Data(chunk)
+                                                }
+                                            )
+                                        }
+                                    }
+                                ) { response in
+                                    for try await _ in response.messages {
+                                        // Ignore responses
                                     }
                                 }
-                            ) { response in
-                                for try await _ in response.messages {
-                                    // Ignore responses
-                                }
+                                logger.debug("Uploaded layer successfully", metadata: ["digest": .string(layer.digest)])
+                                await layersUploaded.incrementUploaded()
+                            } catch {
+                                logger.error("Failed to upload layer", metadata: [
+                                    "digest": .string(layer.digest),
+                                    "error": .string("\(error)")
+                                ])
+                                await layersUploaded.incrementFailedUploaded(error: error)
                             }
-                            logger.debug("Uploaded layer \(layer.digest) successfully")
-                            await layersUploaded.incrementUploaded()
                         }
                     }
 
@@ -475,6 +501,11 @@ extension RunCommand {
 
                         for await status in layersUploaded.statusChange {
                             progress(status)
+                        }
+
+                        let errors = await layersUploaded.layersFailedUploaded
+                        if errors > 0 {
+                            throw Error.failedToUploadLayers(errors)
                         }
                     }
                 }
