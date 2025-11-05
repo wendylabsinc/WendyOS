@@ -296,6 +296,32 @@ public actor ImageDownloader: ImageDownloading {
 
     // MARK: - New phased APIs
 
+    /// Stores version metadata for a cached image
+    private func storeVersionMetadata(deviceName: String, version: String) throws {
+        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            ".wendy/cache/images"
+        )
+        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
+
+        let metadata = ["version": version, "timestamp": ISO8601DateFormatter().string(from: Date())]
+        let data = try JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted)
+        try data.write(to: metadataURL)
+    }
+
+    /// Reads version metadata for a cached image
+    private nonisolated func readVersionMetadata(deviceName: String) -> String? {
+        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            ".wendy/cache/images"
+        )
+        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
+
+        guard let data = try? Data(contentsOf: metadataURL),
+              let metadata = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+            return nil
+        }
+        return metadata["version"]
+    }
+
     /// Returns a valid cached .img path if available, else nil.
     public func cachedImageIfValid(deviceName: String) async -> String? {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -309,12 +335,21 @@ public actor ImageDownloader: ImageDownloading {
         }
     }
 
+    /// Checks if cached image version matches the latest version
+    public nonisolated func isCachedImageLatest(deviceName: String, latestVersion: String) -> Bool {
+        guard let cachedVersion = readVersionMetadata(deviceName: deviceName) else {
+            return false
+        }
+        return cachedVersion == latestVersion
+    }
+
     /// Download the archive only, reporting progress. Returns the zip path and the extraction directory path.
     public func downloadArchiveOnly(
         from url: URL,
         deviceName: String,
         expectedSize: Int,
         redownload: Bool,
+        version: String? = nil,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (zipPath: String, extractionDir: String) {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -324,12 +359,7 @@ public actor ImageDownloader: ImageDownloading {
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
         let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
-
-        // If not forcing redownload and a valid cache exists, we can skip download
-        if !redownload, await cachedImageIfValid(deviceName: deviceName) != nil {
-            return (zipPath: localZipURL.path, extractionDir: extractionDirectoryURL.path)
-        }
-
+        
         try await downloadFile(
             from: url,
             to: localZipURL.path,
@@ -344,6 +374,7 @@ public actor ImageDownloader: ImageDownloading {
     public func extractArchiveOnly(
         deviceName: String,
         zipPath: String,
+        version: String? = nil,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -389,6 +420,12 @@ public actor ImageDownloader: ImageDownloading {
         let p = Progress(totalUnitCount: 100)
         p.completedUnitCount = 100
         progressHandler(p)
+
+        // Store version metadata after successful extraction
+        if let version = version {
+            try? storeVersionMetadata(deviceName: deviceName, version: version)
+        }
+
         return resultPath
     }
 }

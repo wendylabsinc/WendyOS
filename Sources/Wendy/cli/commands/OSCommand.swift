@@ -413,7 +413,12 @@ struct OSCommand: AsyncParsableCommand {
                 for: selectedDeviceName
             )
 
+            // Also get the latest version string from manifest
+            let devices = try await manifestManager.getAvailableDevices()
+            let latestVersion = devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
+
             print("📥 Found image: \(imageUrl.lastPathComponent)")
+            print("   Version: \(latestVersion)")
             print(
                 "   Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))"
             )
@@ -423,12 +428,22 @@ struct OSCommand: AsyncParsableCommand {
             let realDownloader = imageDownloader as! ImageDownloader
 
             var localImagePath: String
-            if let cachedPath = await realDownloader.cachedImageIfValid(
-                deviceName: selectedDeviceName
-            ), !redownload {
+
+            // Check if cached image exists and matches the latest version
+            let cachedImagePath = await realDownloader.cachedImageIfValid(deviceName: selectedDeviceName)
+            let isCachedLatest = realDownloader.isCachedImageLatest(
+                deviceName: selectedDeviceName,
+                latestVersion: latestVersion
+            )
+            let shouldUseCache = !redownload && cachedImagePath != nil && isCachedLatest
+
+            if shouldUseCache, let cachedPath = cachedImagePath {
                 localImagePath = cachedPath
-                print("ℹ️  Using cached image for \(selectedDeviceName)")
+                print("ℹ️  Using cached image for \(selectedDeviceName) (version: \(latestVersion))")
             } else {
+                if !redownload && cachedImagePath != nil && !isCachedLatest {
+                    print("ℹ️  Newer version available, downloading updated image...")
+                }
                 // 1) Download archive
                 print("\n📥 Downloading image...")
                 let (zipPath, _): (String, String) = try await noora.progressBarStep(
@@ -442,7 +457,8 @@ struct OSCommand: AsyncParsableCommand {
                         from: imageUrl,
                         deviceName: selectedDeviceName,
                         expectedSize: imageSize,
-                        redownload: redownload
+                        redownload: redownload,
+                        version: latestVersion
                     ) { progress in
                         let totalUnits = max(1, progress.totalUnitCount)
                         let fraction = clampProgress(
@@ -468,7 +484,8 @@ struct OSCommand: AsyncParsableCommand {
                     let monotonic = Monotonic()
                     let result = try await realDownloader.extractArchiveOnly(
                         deviceName: selectedDeviceName,
-                        zipPath: zipPath
+                        zipPath: zipPath,
+                        version: latestVersion
                     ) { p in
                         let total = max(1, p.totalUnitCount)
                         let fraction = clampProgress(Double(p.completedUnitCount) / Double(total))
