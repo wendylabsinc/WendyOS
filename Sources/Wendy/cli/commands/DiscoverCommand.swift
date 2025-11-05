@@ -24,71 +24,6 @@ struct DiscoverCommand: AsyncParsableCommand {
     @Flag(help: "Skip resolving the agent's version")
     var skipResolveAgentVersion: Bool = false
 
-    func listDevices(
-        usbDevices: [USBDevice],
-        ethernetInterfaces: [EthernetInterface],
-        lanDevices: [LANDevice],
-        logger: Logger
-    ) async {
-        let format = json ? OutputFormat.json : OutputFormat.text
-
-        // Handle output based on format and device type
-        switch (format, type) {
-        case (.json, .all):
-            // For JSON format and all device types, use combined output
-            let collection = DevicesCollection(
-                usb: usbDevices,
-                ethernet: ethernetInterfaces,
-                lan: lanDevices
-            )
-            do {
-                let jsonString = try collection.toJSON()
-                print(jsonString)
-            } catch {
-                logger.error("Error serializing to JSON: \(error)")
-            }
-
-        case (_, .usb):
-            // Only USB devices
-            logDevicesFound(usbDevices, deviceType: "USB device(s)", logger: logger)
-            print(USBDevice.formatCollection(usbDevices, as: format))
-
-        case (_, .ethernet):
-            // Only Ethernet interfaces
-            logDevicesFound(ethernetInterfaces, deviceType: "Ethernet interface(s)", logger: logger)
-            print(EthernetInterface.formatCollection(ethernetInterfaces, as: format))
-
-        case (_, .lan):
-            // Only LAN devices
-            logDevicesFound(lanDevices, deviceType: "LAN device(s)", logger: logger)
-            print(LANDevice.formatCollection(lanDevices, as: format))
-
-        case (_, .all):
-            // All device types in text format
-            logDevicesFound(usbDevices, deviceType: "USB device(s)", logger: logger)
-            print(USBDevice.formatCollection(usbDevices, as: format))
-
-            logDevicesFound(ethernetInterfaces, deviceType: "Ethernet interface(s)", logger: logger)
-            print(EthernetInterface.formatCollection(ethernetInterfaces, as: format))
-
-            logDevicesFound(lanDevices, deviceType: "LAN device(s)", logger: logger)
-            print(LANDevice.formatCollection(lanDevices, as: format))
-        }
-    }
-
-    // Helper method for logging device counts
-    private func logDevicesFound<T: Device>(_ devices: [T], deviceType: String, logger: Logger) {
-        if json {
-            return
-        }
-
-        if devices.isEmpty {
-            logger.debug("No Wendy \(deviceType) found.")
-        } else {
-            Noora().info("Found \(devices.count) Wendy \(deviceType)")
-        }
-    }
-
     func run() async throws {
         let logger = Logger(label: "sh.wendy.cli.devices")
         let discovery = PlatformDeviceDiscovery(logger: logger)
@@ -101,30 +36,79 @@ struct DiscoverCommand: AsyncParsableCommand {
 
         switch type {
         case .usb:
-            usbDevices = await discovery.findUSBDevices()
-            logDevicesFound(usbDevices, deviceType: "USB device(s)", logger: logger)
+            if json {
+                usbDevices = await discovery.findUSBDevices()
+            } else {
+                usbDevices = try await Noora().progressStep(
+                    message: "Discovering Wendy USB devices",
+                    successMessage: nil,
+                    errorMessage: nil,
+                    showSpinner: true
+                ) { progress in
+                    await discovery.findUSBDevices()
+                }
+            }
 
         case .ethernet:
-            ethernetDevices = await discovery.findEthernetInterfaces()
-            logDevicesFound(ethernetDevices, deviceType: "Ethernet interface(s)", logger: logger)
+            if json {
+                ethernetDevices = await discovery.findEthernetInterfaces()
+            } else {
+                ethernetDevices = try await Noora().progressStep(
+                    message: "Discovering Wendy Ethernet interfaces",
+                    successMessage: nil,
+                    errorMessage: nil,
+                    showSpinner: true
+                ) { progress in
+                    await discovery.findEthernetInterfaces()
+                }
+            }
 
         case .lan:
-            lanDevices = try await discovery.findLANDevices()
-            logDevicesFound(lanDevices, deviceType: "LAN device(s)", logger: logger)
+            if json {
+                lanDevices = try await discovery.findLANDevices()
+            } else {
+                lanDevices = try await Noora().progressStep(
+                    message: "Discovering Wendy LAN devices",
+                    successMessage: nil,
+                    errorMessage: nil,
+                    showSpinner: true
+                ) { progress in
+                    try await discovery.findLANDevices()
+                }
+            }
 
         case .all:
             // Fetch all types of devices
-            async let _usbDevices = await discovery.findUSBDevices()
-            async let _ethernetDevices = await discovery.findEthernetInterfaces()
-            async let _lanDevices = try await discovery.findLANDevices()
+            if json {
+                async let _usbDevices = await discovery.findUSBDevices()
+                async let _ethernetDevices = await discovery.findEthernetInterfaces()
+                async let _lanDevices = try await discovery.findLANDevices()
 
-            usbDevices = await _usbDevices
-            ethernetDevices = await _ethernetDevices
-            lanDevices = try await _lanDevices
+                usbDevices = await _usbDevices
+                ethernetDevices = await _ethernetDevices
+                lanDevices = try await _lanDevices
+            } else {
+                let devices = try await Noora().progressStep(
+                    message: "Discovering all Wendy devices",
+                    successMessage: nil,
+                    errorMessage: nil,
+                    showSpinner: true
+                ) { progress in
+                    async let _usbDevices = await discovery.findUSBDevices()
+                    async let _ethernetDevices = await discovery.findEthernetInterfaces()
+                    async let _lanDevices = try await discovery.findLANDevices()
 
-            logDevicesFound(usbDevices, deviceType: "USB device(s)", logger: logger)
-            logDevicesFound(ethernetDevices, deviceType: "Ethernet interface(s)", logger: logger)
-            logDevicesFound(lanDevices, deviceType: "LAN device(s)", logger: logger)
+                    let usb = await _usbDevices
+                    let ethernet = await _ethernetDevices
+                    let lan = try await _lanDevices
+
+                    return (usb, ethernet, lan)
+                }
+
+                usbDevices = devices.0
+                ethernetDevices = devices.1
+                lanDevices = devices.2
+            }
         }
 
         // Display devices in the requested format
@@ -146,7 +130,17 @@ struct DiscoverCommand: AsyncParsableCommand {
                 logger.error("Error serializing to JSON: \(error)")
             }
         } else {
-            print(collection.toHumanReadableString())
+            if collection.isEmpty {
+                Noora().error(.alert("No Wendy devices found.", takeaways: [
+                    "Check all cables are plugged in and secure.",
+                    "Ensure the device is powered on and running.",
+                    "If the device is running, try again in a few seconds."
+                ]))
+            }
+            else {
+                Noora().success("Found \(collection.deviceCount) Wendy devices")
+                print(collection.toHumanReadableString())
+            }
         }
     }
 }
