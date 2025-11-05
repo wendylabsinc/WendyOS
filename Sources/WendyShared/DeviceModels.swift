@@ -29,6 +29,16 @@ public struct DevicesCollection: Encodable, Sendable {
         self.lanDevices = lan
     }
 
+    /// Whether the collection contains no devices
+    public var isEmpty: Bool {
+        return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
+    }
+
+    /// The number of devices in the collection
+    public var deviceCount: Int {
+        return usbDevices.count + ethernetDevices.count + lanDevices.count
+    }
+
     public func toJSON() throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
