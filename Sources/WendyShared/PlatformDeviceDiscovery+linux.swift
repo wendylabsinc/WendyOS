@@ -141,19 +141,16 @@
                     }
                 }.first
 
-                guard
-                    let srv,
-                    let txt
-                else {
-                    logger.debug("Got no answers to PTR, SRV, or TXT query")
+                guard let srv = srv else {
+                    logger.debug("Got no SRV answer to PTR query")
                     continue
                 }
 
-                let id = txt.resource.values.values.first ?? ""
+                let id = txt?.resource.values.values.first ?? "WendyOS Device"
 
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: "WendyOS Device",
+                    displayName: id,
                     hostname: srv.resource.domainName.string,
                     port: Int(srv.resource.port),
                     interfaceType: "LAN",

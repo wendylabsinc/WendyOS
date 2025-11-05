@@ -144,17 +144,16 @@
             let ptrWendy = try await resolver.queryPTR(name: "_wendyos._udp.local")
             let ptrEdge = try await resolver.queryPTR(name: "_edgeos._udp.local")
             for name in (ptrWendy.names + ptrEdge.names) {
-                guard
-                    let srv = try await resolver.querySRV(name: name).first,
-                    let txt = try await resolver.queryTXT(name: name).first,
-                    let id = txt.txt.split(separator: "=").last.map(String.init)
-                else {
+                guard let srv = try await resolver.querySRV(name: name).first else {
                     continue
                 }
 
+                let txt = try? await resolver.queryTXT(name: name).first
+                let id = txt?.txt.split(separator: "=").last.map(String.init) ?? ""
+
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: "WendyOS Device",
+                    displayName: id,
                     hostname: srv.host,
                     port: Int(srv.port),
                     interfaceType: "LAN",

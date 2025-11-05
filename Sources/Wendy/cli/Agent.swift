@@ -42,17 +42,25 @@ struct Agent {
             try await agent.listWiFiNetworks(.init())
         }.networks
 
-        let ssids = networks.map { $0.ssid }
-            .sorted()
-            .filter { !$0.isEmpty }
-    
+        // Group networks by SSID and keep the one with highest signal strength
+        let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty }) { $0.ssid }
+            .compactMapValues { networksWithSameSsid -> Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork? in
+                networksWithSameSsid.max(by: { $0.signalStrength < $1.signalStrength })
+            }
+            .values
+            .sorted(by: {
+                $0.signalStrength > $1.signalStrength
+            })
+
+        let ssids = uniqueNetworks.map { $0.ssid }
 
         let index = try await Noora().selectableTable(
-            headers: ["SSID"],
-            rows: ssids.map { ssid in
-                [ssid]
+            headers: ["SSID", "Strength"],
+            rows: uniqueNetworks.map { network in
+                let signalDisplay = network.hasSignalStrength ? "\(network.signalStrength)" : "Unknown"
+                return [network.ssid, signalDisplay]
             },
-            pageSize: networks.count
+            pageSize: uniqueNetworks.count
         )
 
         return ssids[index]
