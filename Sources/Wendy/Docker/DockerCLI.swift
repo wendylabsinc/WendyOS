@@ -25,8 +25,8 @@ public struct DockerCLI: Sendable {
         let result = try await Subprocess.run(
             Subprocess.Executable.name(self.command),
             arguments: Subprocess.Arguments(arguments),
-            output: .discarded // TODO: Pipe into Noora?
-            // TODO: Handle errors
+            output: .discarded  // TODO: Pipe into Noora?
+                // TODO: Handle errors
         )
 
         if result.terminationStatus.isSuccess {
@@ -52,7 +52,7 @@ public struct DockerCLI: Sendable {
             output: .discarded
         )
     }
-    
+
     public enum SubprocessError: Error, LocalizedError {
         case nonZeroExit(command: String, exitCode: Int, output: String, error: String)
 

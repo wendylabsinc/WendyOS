@@ -42,7 +42,8 @@ struct ProjectConfigTests {
         case .bluetooth:
             command.entitlementType = .bluetooth
         case .video:
-            command.entitlementType = .video    case .audio:
+            command.entitlementType = .video
+        case .audio:
             command.entitlementType = .audio
         case .gpu:
             command.entitlementType = .gpu

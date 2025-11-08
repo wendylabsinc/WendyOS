@@ -30,7 +30,10 @@ public func buildDockerContainerLayers(
     imageName: String,
     outputDirectoryPath: URL
 ) async throws -> [ContainerLayer] {
-    logger.debug("Building container layers", metadata: ["image-name": .string(imageName), "output": .string(outputDirectoryPath.path())])
+    logger.debug(
+        "Building container layers",
+        metadata: ["image-name": .string(imageName), "output": .string(outputDirectoryPath.path())]
+    )
     var layers = [ContainerLayer]()
 
     for (index, layer) in image.layers.enumerated() {
@@ -89,7 +92,10 @@ public func buildDockerContainerLayers(
         }
 
         // If the layer has a predefined diffID, use it
-        logger.debug("Calculating diffID for layer", metadata: ["path": .string(layerTarPath.path())])
+        logger.debug(
+            "Calculating diffID for layer",
+            metadata: ["path": .string(layerTarPath.path())]
+        )
         let layer = try await FileSystem.shared.withFileHandle(
             forReadingAt: FilePath(layerTarPath.path())
         ) { fileHandle in
@@ -105,7 +111,13 @@ public func buildDockerContainerLayers(
 
             let diffID = layer.diffID ?? "sha256:\(layerSHA)"
 
-            logger.trace("Calculated diffID for layer", metadata: ["path": .string(layerTarPath.path()), "diffID": .string(diffID), "size": .string("\(fileSize) bytes")])
+            logger.trace(
+                "Calculated diffID for layer",
+                metadata: [
+                    "path": .string(layerTarPath.path()), "diffID": .string(diffID),
+                    "size": .string("\(fileSize) bytes"),
+                ]
+            )
 
             return ContainerLayer(
                 path: layerTarPath,

@@ -9,10 +9,6 @@ import _NIOFileSystem
 struct Agent {
     let client: GRPCClient<GRPCTransport>
 
-    init(client: GRPCClient<GRPCTransport>) {
-        self.client = client
-    }
-
     func provision(
         enrollmentToken: String,
         assetID: Int32,
@@ -44,7 +40,9 @@ struct Agent {
 
         // Group networks by SSID and keep the one with highest signal strength
         let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty }) { $0.ssid }
-            .compactMapValues { networksWithSameSsid -> Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork? in
+            .compactMapValues {
+                networksWithSameSsid -> Wendy_Agent_Services_V1_ListWiFiNetworksResponse
+                    .WiFiNetwork? in
                 networksWithSameSsid.max(by: { $0.signalStrength < $1.signalStrength })
             }
             .values
@@ -57,7 +55,8 @@ struct Agent {
         let index = try await Noora().selectableTable(
             headers: ["SSID", "Strength"],
             rows: uniqueNetworks.map { network in
-                let signalDisplay = network.hasSignalStrength ? "\(network.signalStrength)" : "Unknown"
+                let signalDisplay =
+                    network.hasSignalStrength ? "\(network.signalStrength)" : "Unknown"
                 return [network.ssid, signalDisplay]
             },
             pageSize: uniqueNetworks.count
@@ -123,9 +122,12 @@ struct Agent {
                 }
                 return false
             } catch {
-                logger.error("Failed to update agent", metadata: [
-                    "error": "\(error)"
-                ])
+                logger.error(
+                    "Failed to update agent",
+                    metadata: [
+                        "error": "\(error)"
+                    ]
+                )
                 throw error
             }
         }

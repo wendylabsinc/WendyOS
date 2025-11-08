@@ -88,7 +88,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 // Add labels to prevent garbage collection of uploaded layers
                 let labels = [
                     "containerd.io/gc.root": "true",
-                    "sh.wendy.layer": "true"
+                    "sh.wendy.layer": "true",
                 ]
                 try await client.writeLayer(ref: firstChunk.digest, labels: labels) { writer in
                     try await writer.write(data: firstChunk.data)
@@ -225,7 +225,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
                     // Options will point us to the nvidia runtime if GPU entitlements are present
                     let options: Containerd_Runc_V1_Options?
-                    
+
                     if wantsGPU {
                         options = Containerd_Runc_V1_Options.with {
                             $0.binaryName = "/usr/bin/nvidia-container-runtime"
@@ -235,7 +235,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             "Creating container with GPU options",
                             metadata: [
                                 "app-name": .stringConvertible(request.appName),
-                                "image-name": .stringConvertible(request.imageName)
+                                "image-name": .stringConvertible(request.imageName),
                             ]
                         )
                     } else {
@@ -266,7 +266,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             "Creating container",
                             metadata: [
                                 "app-name": .stringConvertible(request.appName),
-                                "image-name": .stringConvertible(request.imageName)
+                                "image-name": .stringConvertible(request.imageName),
                             ]
                         )
                         try await client.createContainer(

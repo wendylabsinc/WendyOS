@@ -101,7 +101,7 @@ struct OSCommand: AsyncParsableCommand {
         commandName: "os",
         abstract: "Setup and manage your WendyOS images.",
         subcommands: [
-            OSInstallCommand.self,
+            OSInstallCommand.self
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -111,7 +111,7 @@ struct OSCommand: AsyncParsableCommand {
                     ListDevicesCommand.self,
                     WriteCommand.self,
                 ]
-            ),
+            )
         ]
     )
 
@@ -415,14 +415,15 @@ struct OSCommand: AsyncParsableCommand {
 
             // Also get the latest version string from manifest
             let devices = try await manifestManager.getAvailableDevices()
-            let latestVersion = devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
+            let latestVersion =
+                devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
 
             noora.info(
-            """
-            📥 Found image: \(imageUrl.lastPathComponent)
-               Version: \(latestVersion)
-               Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))
-            """
+                """
+                📥 Found image: \(imageUrl.lastPathComponent)
+                   Version: \(latestVersion)
+                   Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))
+                """
             )
 
             // Download and extract as separate progress bars when not using cache
@@ -432,7 +433,9 @@ struct OSCommand: AsyncParsableCommand {
             var localImagePath: String
 
             // Check if cached image exists and matches the latest version
-            let cachedImagePath = await realDownloader.cachedImageIfValid(deviceName: selectedDeviceName)
+            let cachedImagePath = await realDownloader.cachedImageIfValid(
+                deviceName: selectedDeviceName
+            )
             let isCachedLatest = realDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
                 latestVersion: latestVersion
@@ -441,7 +444,9 @@ struct OSCommand: AsyncParsableCommand {
 
             if shouldUseCache, let cachedPath = cachedImagePath {
                 localImagePath = cachedPath
-                noora.info("Using cached image for \(selectedDeviceName) (version: \(latestVersion))")
+                noora.info(
+                    "Using cached image for \(selectedDeviceName) (version: \(latestVersion))"
+                )
             } else {
                 if !redownload && cachedImagePath != nil && !isCachedLatest {
                     noora.info("Newer version available, downloading updated image...")

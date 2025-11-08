@@ -68,12 +68,12 @@ public actor ImageDownloader: ImageDownloading {
 
         func parseImgEntry(_ text: String) -> (entry: String, size: Int64)? {
             var candidate: (String, Int64)?
-            text.split(separator: "\n").forEach { lineSub in
+            for lineSub in text.split(separator: "\n") {
                 let line = String(lineSub)
-                guard line.lowercased().contains(".img") else { return }
+                guard line.lowercased().contains(".img") else { continue }
                 // Expect lines like: "  123456  mm-dd-yy  hh:mm   path/to/file.img"
                 let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-                guard parts.count >= 4 else { return }
+                guard parts.count >= 4 else { continue }
                 if let size = Int64(parts[0]),
                     let nameStart = line.range(of: " ", options: .backwards)?.upperBound
                 {
@@ -307,7 +307,9 @@ public actor ImageDownloader: ImageDownloading {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
             ".wendy/cache/images"
         )
-        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
+        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
+            "version.json"
+        )
 
         let metadata = ImageVersionMetadata(version: version, timestamp: Date())
         let encoder = JSONEncoder()
@@ -322,7 +324,9 @@ public actor ImageDownloader: ImageDownloading {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
             ".wendy/cache/images"
         )
-        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent("version.json")
+        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
+            "version.json"
+        )
 
         guard let data = try? Data(contentsOf: metadataURL) else {
             return nil
@@ -373,7 +377,7 @@ public actor ImageDownloader: ImageDownloading {
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
         let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
-        
+
         try await downloadFile(
             from: url,
             to: localZipURL.path,

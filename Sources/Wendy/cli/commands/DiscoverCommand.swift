@@ -131,13 +131,17 @@ struct DiscoverCommand: AsyncParsableCommand {
             }
         } else {
             if collection.isEmpty {
-                Noora().error(.alert("No Wendy devices found.", takeaways: [
-                    "Check all cables are plugged in and secure.",
-                    "Ensure the device is powered on and running.",
-                    "If the device is running, try again in a few seconds."
-                ]))
-            }
-            else {
+                Noora().error(
+                    .alert(
+                        "No Wendy devices found.",
+                        takeaways: [
+                            "Check all cables are plugged in and secure.",
+                            "Ensure the device is powered on and running.",
+                            "If the device is running, try again in a few seconds.",
+                        ]
+                    )
+                )
+            } else {
                 Noora().success("Found \(collection.deviceCount) Wendy devices")
                 print(collection.toHumanReadableString())
             }

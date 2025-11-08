@@ -188,7 +188,10 @@ extension RunCommand {
             // Extract file (tar) to temp FS
             progress("Extracting container")
             let extractDir = tempDir.appendingPathComponent("extract")
-            try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: extractDir,
+                withIntermediateDirectories: true
+            )
             try await extractTar(from: imageTarPath, to: extractDir)
 
             // Parse manifest.json to get layer order and metadata
@@ -238,7 +241,9 @@ extension RunCommand {
                 let layerFile = extractDir.appendingPathComponent(layerPath)
 
                 guard
-                    let info = try await FileSystem.shared.info(forFileAt: FilePath(layerFile.path()))
+                    let info = try await FileSystem.shared.info(
+                        forFileAt: FilePath(layerFile.path())
+                    )
                 else {
                     logger.warning("Layer file not found: \(layerFile.path)")
                     continue
@@ -287,7 +292,10 @@ extension RunCommand {
                 ) { fileHandle in
                     logger.debug("Reading layer from file handle")
                     for try await chunk in fileHandle.readChunks() {
-                        logger.trace("Reading layer chunk", metadata: ["size": .string("\(chunk.readableBytesView.count) bytes")])
+                        logger.trace(
+                            "Reading layer chunk",
+                            metadata: ["size": .string("\(chunk.readableBytesView.count) bytes")]
+                        )
                         try await write(Array(buffer: chunk)[...])
                     }
                 }
@@ -413,7 +421,8 @@ extension RunCommand {
                     var layersFailedUploaded = 0
                     var status: String {
                         if layersFailedUploaded > 0 {
-                            return "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
+                            return
+                                "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
                         } else {
                             return "Layers uploading \(layersUploaded)/\(layersUploading)"
                         }
@@ -483,27 +492,42 @@ extension RunCommand {
                                     do {
                                         for try await message in response.messages {
                                             // Ignore responses
-                                            logger.trace("Got unknown response", metadata: [
-                                                "digest": .string(layer.digest),
-                                                "response": .string("\(message)")
-                                            ])
+                                            logger.trace(
+                                                "Got unknown response",
+                                                metadata: [
+                                                    "digest": .string(layer.digest),
+                                                    "response": .string("\(message)"),
+                                                ]
+                                            )
                                         }
                                     } catch {
-                                        logger.error("Failed to get response", metadata: [
-                                            "digest": .string(layer.digest),
-                                            "error": .string("\(error)")
-                                        ])
+                                        logger.error(
+                                            "Failed to get response",
+                                            metadata: [
+                                                "digest": .string(layer.digest),
+                                                "error": .string("\(error)"),
+                                            ]
+                                        )
                                         throw error
                                     }
                                 }
-                                logger.debug("Uploaded layer successfully", metadata: ["digest": .string(layer.digest)])
+                                logger.debug(
+                                    "Uploaded layer successfully",
+                                    metadata: ["digest": .string(layer.digest)]
+                                )
                                 await layersUploaded.incrementUploaded()
                             } catch {
-                                logger.error("Failed to upload layer", metadata: [
-                                    "digest": .string(layer.digest),
-                                    "error": .string("\(error)")
-                                ])
-                                logger.error("Failed to upload layer", metadata: ["error": .string("\(error)")])
+                                logger.error(
+                                    "Failed to upload layer",
+                                    metadata: [
+                                        "digest": .string(layer.digest),
+                                        "error": .string("\(error)"),
+                                    ]
+                                )
+                                logger.error(
+                                    "Failed to upload layer",
+                                    metadata: ["error": .string("\(error)")]
+                                )
                                 await layersUploaded.incrementFailedUploaded(error: error)
                             }
                         }
