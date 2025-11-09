@@ -72,7 +72,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var runtime: ContainerRuntime = .containerd
 
     @Option(name: .long, help: "The Swift SDK to use.")
-    var swiftSDK: String = "6.2-RELEASE_edgeos_aarch64"
+    var swiftSDK: String = "6.2.1-RELEASE_wendyos_aarch64"
 
     @Option(name: .long, help: "The Swift SDK to use.")
     var swiftVersion: String = "+6.2.1"
