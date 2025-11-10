@@ -29,8 +29,8 @@ let package = Package(
         .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.5.0"),
         // .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
         .package(
-            url: "https://github.com/grpc/grpc-swift-nio-transport.git",
-            from: "2.3.0"
+            url: "https://github.com/Joannis/grpc-swift-nio-transport.git",
+            branch: "jo/custom-verification-of-server"
         ),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.12.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
@@ -39,7 +39,7 @@ let package = Package(
         //        .package(url: "https://github.com/tuist/Noora.git", from: "0.32.0"),
         .package(
             url: "https://github.com/tuist/Noora.git",
-            from: "0.51.0"
+            revision: "259b4ad29366ba327148aaaea0e59b1c78953831"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
