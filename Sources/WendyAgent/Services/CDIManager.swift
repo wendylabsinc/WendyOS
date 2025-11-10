@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Yams
 
 /// Actor responsible for managing CDI specifications and containerd configuration
 public actor CDIManager {
@@ -199,6 +200,65 @@ public actor CDIManager {
             return String(deviceName[..<dashIndex]).uppercased()
         }
         return "UNKNOWN"
+    }
+
+    /// Load NVIDIA CDI specs from /etc/cdi or /var/run/cdi (YAML format)
+    public func loadNVIDIACDISpec(deviceName: String = "all") throws -> CDISpecification {
+        logger.debug("Loading NVIDIA CDI spec", metadata: ["device": .string(deviceName)])
+
+        // Try multiple common locations for NVIDIA CDI specs
+        let possiblePaths = [
+            "\(cdiSpecPath)/nvidia.yaml",           // /etc/cdi/nvidia.yaml (Jetson)
+            "/var/run/cdi/nvidia.yaml",             // /var/run/cdi/nvidia.yaml (datacenter)
+        ]
+
+        var nvidiaSpecPath: String?
+        for path in possiblePaths {
+            if fileSystemProvider.fileExists(atPath: path) {
+                nvidiaSpecPath = path
+                break
+            }
+        }
+
+        guard let specPath = nvidiaSpecPath else {
+            throw CDIError.specNotFound(possiblePaths.joined(separator: ", "))
+        }
+
+        guard let yamlString = try fileSystemProvider.readFile(atPath: specPath) else {
+            throw CDIError.cannotReadSpec(specPath)
+        }
+
+        // Parse YAML
+        let decoder = YAMLDecoder()
+        let spec = try decoder.decode(CDISpecification.self, from: yamlString)
+
+        logger.debug(
+            "Loaded NVIDIA CDI spec",
+            metadata: [
+                "path": .string(specPath),
+                "kind": .string(spec.kind),
+                "devices": .stringConvertible(spec.devices.count)
+            ]
+        )
+
+        return spec
+    }
+}
+
+enum CDIError: Error, CustomStringConvertible {
+    case specNotFound(String)
+    case cannotReadSpec(String)
+    case deviceNotFound(String)
+
+    var description: String {
+        switch self {
+        case .specNotFound(let path):
+            return "CDI spec not found at \(path)"
+        case .cannotReadSpec(let path):
+            return "Cannot read CDI spec at \(path)"
+        case .deviceNotFound(let name):
+            return "Device '\(name)' not found in CDI spec"
+        }
     }
 }
 

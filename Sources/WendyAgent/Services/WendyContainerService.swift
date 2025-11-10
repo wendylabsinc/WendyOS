@@ -220,27 +220,41 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         appName: request.appName
                     )
 
-                    // Use default runc runtime - GPU devices are manually injected in OCI spec
-                    let runtime = "io.containerd.runc.v2"
-
-                    // Options will point us to the nvidia runtime if GPU entitlements are present
-                    let options: Containerd_Runc_V1_Options?
-                    
+                    // Apply CDI for GPU if requested
                     if wantsGPU {
-                        options = Containerd_Runc_V1_Options.with {
-                            $0.binaryName = "/usr/bin/nvidia-container-runtime"
-                            $0.systemdCgroup = true
-                        }
                         logger.debug(
-                            "Creating container with GPU options",
+                            "Applying NVIDIA CDI spec",
                             metadata: [
                                 "app-name": .stringConvertible(request.appName),
                                 "image-name": .stringConvertible(request.imageName)
                             ]
                         )
-                    } else {
-                        options = nil
+
+                        do {
+                            let cdiManager = CDIManager(
+                                specGenerator: CDISpecGenerator(
+                                    hardwareDiscoverer: SystemHardwareDiscoverer()
+                                )
+                            )
+
+                            let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(deviceName: "all")
+                            try spec.applyCDIDevice(nvidiaSpec, deviceName: "all")
+
+                            logger.info("Successfully applied NVIDIA CDI spec to container")
+                        } catch {
+                            logger.error(
+                                "Failed to apply NVIDIA CDI spec",
+                                metadata: [
+                                    "error": .string(error.localizedDescription)
+                                ]
+                            )
+                            throw error
+                        }
                     }
+
+                    // Use default runc runtime - GPU devices are injected via CDI
+                    let runtime = "io.containerd.runc.v2"
+                    let options: Containerd_Runc_V1_Options? = nil
 
                     let snapshotKey: String?
                     let mounts: [Containerd_Types_Mount]

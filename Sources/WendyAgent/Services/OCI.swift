@@ -5,6 +5,7 @@ struct OCI: Codable {
     var hostname: String
     var mounts: [Mount]
     var linux: Linux
+    var hooks: Hooks?
 
     init(args: [String], env: [String], workingDir: String, appName: String) {
         self = OCI(
@@ -92,7 +93,7 @@ public struct Process: Codable {
     let user: User
     let terminal: Bool
     let args: [String]
-    let env: [String]
+    var env: [String]
     let cwd: String
 
     init(
@@ -221,4 +222,27 @@ public struct Device: Codable {
     let fileMode: Int?
     let uid: Int?
     let gid: Int?
+}
+
+public struct Hooks: Codable {
+    var prestart: [Hook]?
+    var createRuntime: [Hook]?
+    var createContainer: [Hook]?
+    var startContainer: [Hook]?
+    var poststart: [Hook]?
+    var poststop: [Hook]?
+}
+
+public struct Hook: Codable {
+    let path: String
+    let args: [String]?
+    let env: [String]?
+    let timeout: Int?
+
+    init(path: String, args: [String]? = nil, env: [String]? = nil, timeout: Int? = nil) {
+        self.path = path
+        self.args = args
+        self.env = env
+        self.timeout = timeout
+    }
 }
