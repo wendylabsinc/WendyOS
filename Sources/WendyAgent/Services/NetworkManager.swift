@@ -485,7 +485,7 @@ public actor NetworkManager: NetworkConnectionManager {
                 let result = try await Subprocess.run(
                     .path("/usr/bin/nmcli"),
                     arguments: [
-                        "device", "wifi", "connect", ssid, "password", password
+                        "device", "wifi", "connect", ssid, "password", password,
                     ],
                     output: .string(limit: 1024 * 1024),
                     error: .string(limit: 1024 * 1024)
@@ -504,20 +504,30 @@ public actor NetworkManager: NetworkConnectionManager {
                     // Parse the error to provide appropriate error types
                     let combinedOutput = output + " " + errorOutput
 
-                    if combinedOutput.contains("password") || combinedOutput.contains("Secrets were required") {
-                        self.logger.error("WiFi authentication error: Invalid password or authentication failure")
+                    if combinedOutput.contains("password")
+                        || combinedOutput.contains("Secrets were required")
+                    {
+                        self.logger.error(
+                            "WiFi authentication error: Invalid password or authentication failure"
+                        )
                         throw NetworkConnectionError.authenticationFailed
-                    } else if combinedOutput.contains("not found") || combinedOutput.contains("No network with SSID") {
+                    } else if combinedOutput.contains("not found")
+                        || combinedOutput.contains("No network with SSID")
+                    {
                         self.logger.error("Network '\(ssid)' not found")
                         throw NetworkConnectionError.networkNotFound
-                    } else if combinedOutput.contains("permission") || combinedOutput.contains("authorized") {
+                    } else if combinedOutput.contains("permission")
+                        || combinedOutput.contains("authorized")
+                    {
                         self.logger.error("Permission denied")
                         throw NetworkConnectionError.authenticationFailed
                     } else if combinedOutput.contains("timeout") {
                         self.logger.error("Connection attempt timed out")
                         throw NetworkConnectionError.timeout
                     } else {
-                        self.logger.error("nmcli failed with termination status: \(result.terminationStatus)")
+                        self.logger.error(
+                            "nmcli failed with termination status: \(result.terminationStatus)"
+                        )
                         self.logger.error("Output: \(output)")
                         if !errorOutput.isEmpty {
                             self.logger.error("Error output: \(errorOutput)")

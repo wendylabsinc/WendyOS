@@ -19,19 +19,52 @@ jobs:
 
       - name: Run Swift Format Check
         id: format_check
-        run: swift format lint --recursive --strict Sources
-        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          swift format lint --recursive --strict Sources 2>&1 | tee format_output.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo "lint_output<<EOF"
+            cat format_output.txt
+            echo "EOF"
+            echo "exit_code=$status"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
 
-      - name: Fix Formatting Issues
-        if: steps.format_check.outcome != 'success'
-        run: swift format --recursive --in-place Sources
-
-      - name: Comment on PR
-        if: steps.format_check.outcome != 'success'
+      - name: Remove Previous Format Comment
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const targetHeader = '## Swift Format Check Failed';
+            for (const comment of comments) {
+              if (comment.user?.type === 'Bot' && comment.body?.includes(targetHeader)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+      - name: Comment on PR
+        if: steps.format_check.outputs.exit_code != '0'
+        uses: actions/github-script@v6
+        env:
+          LINT_OUTPUT: ${{ steps.format_check.outputs.lint_output }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const lintOutput = process.env.LINT_OUTPUT?.trim();
+            const formattedOutput = lintOutput ? `\`\`\`\n${lintOutput}\n\`\`\`` : '_No formatter output captured._';
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -44,5 +77,16 @@ jobs:
             swift format --recursive --in-place Sources
             \`\`\`
             
+            <details>
+            <summary>Formatting issues</summary>
+            
+            ${formattedOutput}
+            
+            </details>
+            
             Then commit and push the changes.`
             });
+
+      - name: Fail Workflow
+        if: steps.format_check.outputs.exit_code != '0'
+        run: exit 1

@@ -92,7 +92,7 @@ extension OCI {
         for entitlement in entitlements {
             switch entitlement {
             case .gpu:
-                () // Handled by NVIDIA runtime
+                ()  // Handled by NVIDIA runtime
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:
