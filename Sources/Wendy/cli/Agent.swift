@@ -45,7 +45,6 @@ struct Agent {
         let ssids = networks.map { $0.ssid }
             .sorted()
             .filter { !$0.isEmpty }
-    
 
         let index = try await Noora().selectableTable(
             headers: ["SSID"],

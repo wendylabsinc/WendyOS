@@ -16,7 +16,7 @@ extension OCI {
             "Applying CDI device to OCI spec",
             metadata: [
                 "device": .string(deviceName),
-                "kind": .string(cdiSpec.kind)
+                "kind": .string(cdiSpec.kind),
             ]
         )
 
@@ -34,7 +34,7 @@ extension OCI {
             "Successfully applied CDI device",
             metadata: [
                 "device": .string(deviceName),
-                "kind": .string(cdiSpec.kind)
+                "kind": .string(cdiSpec.kind),
             ]
         )
     }
@@ -46,7 +46,7 @@ extension OCI {
                 // Convert CDI device node to OCI device
                 let ociDevice = Device(
                     path: node.path,
-                    type: node.type ?? "c", // default to character device
+                    type: node.type ?? "c",  // default to character device
                     major: node.major ?? 0,
                     minor: node.minor ?? 0,
                     fileMode: node.fileMode,
@@ -79,7 +79,7 @@ extension OCI {
                     "Added mount",
                     metadata: [
                         "containerPath": .string(mount.containerPath),
-                        "hostPath": .string(mount.hostPath)
+                        "hostPath": .string(mount.hostPath),
                     ]
                 )
             }
@@ -157,7 +157,7 @@ extension OCI {
                     "Added hook",
                     metadata: [
                         "hookName": .string(cdiHook.hookName),
-                        "path": .string(cdiHook.path)
+                        "path": .string(cdiHook.path),
                     ]
                 )
             }

@@ -101,7 +101,7 @@ struct OSCommand: AsyncParsableCommand {
         commandName: "os",
         abstract: "Setup and manage your WendyOS images.",
         subcommands: [
-            OSInstallCommand.self,
+            OSInstallCommand.self
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -111,7 +111,7 @@ struct OSCommand: AsyncParsableCommand {
                     ListDevicesCommand.self,
                     WriteCommand.self,
                 ]
-            ),
+            )
         ]
     )
 

@@ -188,7 +188,10 @@ extension RunCommand {
             // Extract file (tar) to temp FS
             progress("Extracting container")
             let extractDir = tempDir.appendingPathComponent("extract")
-            try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: extractDir,
+                withIntermediateDirectories: true
+            )
             try await extractTar(from: imageTarPath, to: extractDir)
 
             // Parse manifest.json to get layer order and metadata
@@ -237,7 +240,10 @@ extension RunCommand {
                 // Construct the full path to the layer file
                 let layerFile = extractDir.appendingPathComponent(layerPath)
 
-                guard let info = try await FileSystem.shared.info(forFileAt: FilePath(layerFile.path()))
+                guard
+                    let info = try await FileSystem.shared.info(
+                        forFileAt: FilePath(layerFile.path())
+                    )
                 else {
                     logger.warning("Layer file not found: \(layerFile.path)")
                     continue
@@ -408,7 +414,8 @@ extension RunCommand {
                     var layersFailedUploaded = 0
                     var status: String {
                         if layersFailedUploaded > 0 {
-                            return "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
+                            return
+                                "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
                         } else {
                             return "Layers uploading \(layersUploaded)/\(layersUploading)"
                         }
@@ -479,13 +486,19 @@ extension RunCommand {
                                         // Ignore responses
                                     }
                                 }
-                                logger.debug("Uploaded layer successfully", metadata: ["digest": .string(layer.digest)])
+                                logger.debug(
+                                    "Uploaded layer successfully",
+                                    metadata: ["digest": .string(layer.digest)]
+                                )
                                 await layersUploaded.incrementUploaded()
                             } catch {
-                                logger.error("Failed to upload layer", metadata: [
-                                    "digest": .string(layer.digest),
-                                    "error": .string("\(error)")
-                                ])
+                                logger.error(
+                                    "Failed to upload layer",
+                                    metadata: [
+                                        "digest": .string(layer.digest),
+                                        "error": .string("\(error)"),
+                                    ]
+                                )
                                 await layersUploaded.incrementFailedUploaded(error: error)
                             }
                         }

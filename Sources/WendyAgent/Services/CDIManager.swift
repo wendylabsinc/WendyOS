@@ -208,8 +208,8 @@ public actor CDIManager {
 
         // Try multiple common locations for NVIDIA CDI specs
         let possiblePaths = [
-            "\(cdiSpecPath)/nvidia.yaml",           // /etc/cdi/nvidia.yaml (Jetson)
-            "/var/run/cdi/nvidia.yaml",             // /var/run/cdi/nvidia.yaml (datacenter)
+            "\(cdiSpecPath)/nvidia.yaml",  // /etc/cdi/nvidia.yaml (Jetson)
+            "/var/run/cdi/nvidia.yaml",  // /var/run/cdi/nvidia.yaml (datacenter)
         ]
 
         var nvidiaSpecPath: String?
@@ -237,7 +237,7 @@ public actor CDIManager {
             metadata: [
                 "path": .string(specPath),
                 "kind": .string(spec.kind),
-                "devices": .stringConvertible(spec.devices.count)
+                "devices": .stringConvertible(spec.devices.count),
             ]
         )
 

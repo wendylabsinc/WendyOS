@@ -88,7 +88,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 // Add labels to prevent garbage collection of uploaded layers
                 let labels = [
                     "containerd.io/gc.root": "true",
-                    "sh.wendy.layer": "true"
+                    "sh.wendy.layer": "true",
                 ]
                 try await client.writeLayer(ref: firstChunk.digest, labels: labels) { writer in
                     try await writer.write(data: firstChunk.data)
@@ -226,7 +226,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             "Applying NVIDIA CDI spec",
                             metadata: [
                                 "app-name": .stringConvertible(request.appName),
-                                "image-name": .stringConvertible(request.imageName)
+                                "image-name": .stringConvertible(request.imageName),
                             ]
                         )
 
@@ -237,7 +237,9 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                                 )
                             )
 
-                            let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(deviceName: "all")
+                            let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(
+                                deviceName: "all"
+                            )
                             try spec.applyCDIDevice(nvidiaSpec, deviceName: "all")
 
                             logger.info("Successfully applied NVIDIA CDI spec to container")
@@ -280,7 +282,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             "Creating container",
                             metadata: [
                                 "app-name": .stringConvertible(request.appName),
-                                "image-name": .stringConvertible(request.imageName)
+                                "image-name": .stringConvertible(request.imageName),
                             ]
                         )
                         try await client.createContainer(

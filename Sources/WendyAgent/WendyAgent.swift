@@ -37,7 +37,7 @@ struct WendyAgent: AsyncParsableCommand {
             logger.logLevel = level
             return logger
         }
-        
+
         let logger = Logger(label: "sh.wendy.agent")
 
         logger.info("Starting Wendy Agent version \(Version.current) on port \(port)")

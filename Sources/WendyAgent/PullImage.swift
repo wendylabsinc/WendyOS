@@ -71,7 +71,7 @@ public struct PullImage {
                 let labels = [
                     "containerd.io/gc.root": "true",
                     "sh.wendy.layer": "true",
-                    "sh.wendy.source": "registry"
+                    "sh.wendy.source": "registry",
                 ]
                 try await containerd.writeLayer(ref: layer.digest, labels: labels) { writer in
                     let data = try await registry.getBlob(
