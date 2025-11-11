@@ -25,11 +25,13 @@ public struct DockerCLI: Sendable {
         let result = try await Subprocess.run(
             Subprocess.Executable.name(self.command),
             arguments: Subprocess.Arguments(arguments),
-            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            output: .discarded  // TODO: Pipe into Noora?
+                // TODO: Handle errors
         )
 
-        if !result.terminationStatus.isSuccess {
+        if result.terminationStatus.isSuccess {
+            return result.standardOutput
+        } else {
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: Int(result.terminationStatus.description) ?? -1,
