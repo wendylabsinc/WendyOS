@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import NIOFileSystem
 import Subprocess
+import DockerOpenAPI
 
 /// A state machine that handles the request to run a container.
 struct RunContainerRequestHandler {
@@ -27,6 +28,7 @@ struct RunContainerRequestHandler {
         struct Running {
             let imageName: String
             let debugPort: UInt32
+            var logStreamingTask: Task<Void, Never>?
         }
     }
 
@@ -59,9 +61,19 @@ struct RunContainerRequestHandler {
     enum Event {
         case containerStarted(ContainerStarted)
         case containerStopped
+        case consoleOutput(ConsoleOutput)
 
         struct ContainerStarted {
             let debugPort: UInt32
+        }
+
+        struct ConsoleOutput {
+            enum StreamType {
+                case stdout
+                case stderr
+            }
+            let type: StreamType
+            let data: Data
         }
     }
 
@@ -102,7 +114,9 @@ struct RunContainerRequestHandler {
         switch state {
         case .acceptingChunks(let acceptingChunks):
             try? await acceptingChunks.fileHandle.close()
-        case .waitingForHeader, .running:
+        case .running(let running):
+            running.logStreamingTask?.cancel()
+        case .waitingForHeader:
             ()
         }
     }
@@ -284,11 +298,63 @@ struct RunContainerRequestHandler {
 
             eventsContinuation.yield(.containerStarted(.init(debugPort: debugPort)))
 
+            // Start streaming logs from the container
+            let logStreamingTask = Task { [eventsContinuation, containerName, logger] in
+                logger.info("Starting Docker log streaming via Unix socket API", metadata: ["container": .string(containerName)])
+
+                do {
+                    // Create Docker API client with Unix socket connection
+                    let dockerClient = try DockerAPIClient(
+                        socketPath: "/var/run/docker.sock",
+                        logger: logger
+                    )
+
+                    logger.info("Created Docker API client with Unix socket")
+
+                    // Stream logs from the container
+                    let logStream = try await dockerClient.streamLogs(
+                        containerID: containerName,
+                        stdout: true,
+                        stderr: true,
+                        follow: true
+                    )
+
+                    logger.info("Log streaming started successfully")
+
+                    // Process log messages as they arrive
+                    for try await logMessage in logStream {
+                        logger.debug("Received log message", metadata: [
+                            "type": .string(logMessage.type == .stdout ? "stdout" : "stderr"),
+                            "size": .string("\(logMessage.data.count) bytes")
+                        ])
+
+                        let event = Event.consoleOutput(
+                            .init(
+                                type: logMessage.type == .stdout ? .stdout : .stderr,
+                                data: logMessage.data
+                            )
+                        )
+                        eventsContinuation.yield(event)
+                    }
+
+                    logger.info("Docker log streaming ended normally")
+
+                    // Clean up the Docker client
+                    try await dockerClient.shutdown()
+                } catch {
+                    logger.error("Failed to stream Docker logs via Unix socket API", metadata: [
+                        "container": .string(containerName),
+                        "error": .string("\(error)")
+                    ])
+                }
+            }
+
             // Update state to running
             self.state = .running(
                 State.Running(
                     imageName: imageName,
-                    debugPort: debugPort
+                    debugPort: debugPort,
+                    logStreamingTask: logStreamingTask
                 )
             )
 
@@ -315,12 +381,17 @@ struct RunContainerRequestHandler {
                 throw error
             }
         // Keep state; caller may still upload/run a new image
-        case (.running(let running), .stop):
+        case (.running(var running), .stop):
             let containerName = "container-\(running.imageName)"
             logger.info(
                 "Stopping running container on request",
                 metadata: ["container": .string(containerName)]
             )
+
+            // Cancel log streaming task
+            running.logStreamingTask?.cancel()
+            running.logStreamingTask = nil
+
             do {
                 _ = try await dockerCLI.stop(container: containerName, timeoutSeconds: 10)
                 logger.info(

@@ -35,6 +35,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.12.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.24.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         //        .package(url: "https://github.com/tuist/Noora.git", from: "0.32.0"),
         .package(
@@ -112,7 +113,13 @@ let package = Package(
         .target(
             name: "DockerOpenAPI",
             dependencies: [
-                .product(name: "OpenAPIAsyncHTTPClient", package: "swift-openapi-async-http-client")
+                .product(name: "OpenAPIAsyncHTTPClient", package: "swift-openapi-async-http-client"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOTransportServices", package: "swift-nio-transport-services"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
@@ -151,6 +158,7 @@ let package = Package(
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "DBUS", package: "dbus"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
@@ -159,6 +167,7 @@ let package = Package(
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
+                .target(name: "DockerOpenAPI"),
             ],
             path: "Sources/WendyAgent"
         ),

@@ -1044,6 +1044,14 @@ extension RunCommand {
                         }
                     case .stopped:
                         Noora().success("Container stopped")
+                    case .stdoutOutput(let stdoutOutput):
+                        stdoutOutput.data.withUnsafeBytes { data in
+                            _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                        }
+                    case .stderrOutput(let stderrOutput):
+                        stderrOutput.data.withUnsafeBytes { data in
+                            _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                        }
                     case nil:
                         logger.warning("Unknown message received from agent")
                     }
