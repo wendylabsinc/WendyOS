@@ -524,6 +524,7 @@ extension RunCommand {
                                         "error": .string("\(error)"),
                                     ]
                                 )
+
                                 logger.error(
                                     "Failed to upload layer",
                                     metadata: ["error": .string("\(error)")]

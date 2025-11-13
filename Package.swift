@@ -55,6 +55,7 @@ let package = Package(
         ),
         .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
@@ -151,6 +152,7 @@ let package = Package(
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "DBUS", package: "dbus"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "Yams", package: "Yams"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
