@@ -141,7 +141,10 @@ struct WendyAgent: AsyncParsableCommand {
                         address: .ipv4(host: "0.0.0.0", port: port + 1),
                         transportSecurity: mTLS
                     ),
-                    services: authenticatedServices
+                    services: authenticatedServices,
+                    interceptors: [
+                        WendyErrorInterceptor()
+                    ]
                 )
             )
             servers.append(
@@ -150,7 +153,10 @@ struct WendyAgent: AsyncParsableCommand {
                         address: .ipv6(host: "::", port: port + 1),
                         transportSecurity: mTLS
                     ),
-                    services: authenticatedServices
+                    services: authenticatedServices,
+                    interceptors: [
+                        WendyErrorInterceptor()
+                    ]
                 )
             )
         }
@@ -161,7 +167,10 @@ struct WendyAgent: AsyncParsableCommand {
                     address: .ipv4(host: "0.0.0.0", port: port),
                     transportSecurity: .plaintext
                 ),
-                services: plaintextServices
+                services: plaintextServices,
+                interceptors: [
+                    WendyErrorInterceptor()
+                ]
             )
         )
 
@@ -171,7 +180,10 @@ struct WendyAgent: AsyncParsableCommand {
                     address: .ipv6(host: "::", port: port),
                     transportSecurity: .plaintext
                 ),
-                services: plaintextServices
+                services: plaintextServices,
+                interceptors: [
+                    WendyErrorInterceptor()
+                ]
             )
         )
 

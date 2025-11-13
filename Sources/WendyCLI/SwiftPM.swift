@@ -8,7 +8,7 @@ public struct SwiftPM: Sendable {
     public let path: String
 
     /// Default Swift version to use for building packages
-    public static let defaultSwiftVersion = "+6.2"
+    public static let defaultSwiftVersion = "+6.2.1"
 
     /// Custom Swift version, defaults to defaultSwiftVersion if nil
     public let swiftVersion: String?
@@ -131,8 +131,8 @@ public struct SwiftPM: Sendable {
             try await Subprocess.run(
                 Subprocess.Executable.name(executableName),
                 arguments: Subprocess.Arguments(allArgs),
-                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),  // TODO: Pipe into Noora?
-                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false),  // TODO: Pipe into Noora?
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
             )
         }
 

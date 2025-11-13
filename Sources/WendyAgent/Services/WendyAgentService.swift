@@ -96,7 +96,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
 
             logger.info("Creating temporary directory")
             let tempDir = try await filesystem.createTemporaryDirectory(
-                template: "wendy-agent-update-XXX"
+                template: "/tmp/wendy-agent-update-XXX"
             )
             let updateFile = tempDir.appending("wendy-agent")
 

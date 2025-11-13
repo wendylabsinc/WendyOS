@@ -30,6 +30,10 @@ public func buildDockerContainerLayers(
     imageName: String,
     outputDirectoryPath: URL
 ) async throws -> [ContainerLayer] {
+    logger.debug(
+        "Building container layers",
+        metadata: ["image-name": .string(imageName), "output": .string(outputDirectoryPath.path())]
+    )
     var layers = [ContainerLayer]()
 
     for (index, layer) in image.layers.enumerated() {
@@ -88,9 +92,12 @@ public func buildDockerContainerLayers(
         }
 
         // If the layer has a predefined diffID, use it
-        logger.debug("Calculating diffID for layer \(layerTarPath.path)")
+        logger.debug(
+            "Calculating diffID for layer",
+            metadata: ["path": .string(layerTarPath.path())]
+        )
         let layer = try await FileSystem.shared.withFileHandle(
-            forReadingAt: FilePath(layerTarPath.path)
+            forReadingAt: FilePath(layerTarPath.path())
         ) { fileHandle in
             var sha = SHA256()
             var fileSize: Int64 = 0
@@ -104,6 +111,14 @@ public func buildDockerContainerLayers(
 
             let diffID = layer.diffID ?? "sha256:\(layerSHA)"
 
+            logger.trace(
+                "Calculated diffID for layer",
+                metadata: [
+                    "path": .string(layerTarPath.path()), "diffID": .string(diffID),
+                    "size": .string("\(fileSize) bytes"),
+                ]
+            )
+
             return ContainerLayer(
                 path: layerTarPath,
                 hash: layerSHA,
@@ -115,6 +130,7 @@ public func buildDockerContainerLayers(
         layers.append(layer)
     }
 
+    logger.trace("Built container layers")
     return layers
 }
 
@@ -228,8 +244,7 @@ public func buildDockerContainerImage(
     try manifestData.write(to: manifestPath)
 
     try await createTarball(from: imageDir, to: URL(fileURLWithPath: outputPath))
-
-    try FileManager.default.removeItem(at: tempDir)
+    logger.debug("Created container image tarball", metadata: ["output": .string(outputPath)])
 }
 
 // Calculate SHA256 hash using Swift Crypto
@@ -245,9 +260,9 @@ private func sha256(data: Data) -> String {
 /// - Throws: An error if the tarball cannot be created.
 private func createTarball(from sourceDir: URL, to destinationURL: URL) async throws {
     _ = try await Subprocess.run(
-        Subprocess.Executable.path("/usr/bin/env"),
+        .name("tar"),
         arguments: Subprocess.Arguments([
-            "tar", "-cf", destinationURL.path, "-C", sourceDir.path, ".",
+            "-cf", destinationURL.path, "-C", sourceDir.path, ".",
         ]),
         output: .discarded
     )

@@ -72,10 +72,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var runtime: ContainerRuntime = .containerd
 
     @Option(name: .long, help: "The Swift SDK to use.")
-    var swiftSDK: String = "6.2-RELEASE_edgeos_aarch64"
+    var swiftSDK: String = "6.2.1-RELEASE_wendyos_aarch64"
 
     @Option(name: .long, help: "The Swift SDK to use.")
-    var swiftVersion: String = "+6.2-snapshot"
+    var swiftVersion: String = "+6.2.1"
 
     @Option(name: .long, help: "The base image to use. Defaults to debian:bookworm-slim.")
     var baseImage: String = "debian:bookworm-slim"
@@ -281,14 +281,21 @@ extension RunCommand {
         let diffID: String
         let size: Int64
         let gzip: Bool
+        let logger = Logger(label: "sh.wendy.cli.run.containerd.layer.stream")
 
         func withStream(_ write: (ArraySlice<UInt8>) async throws -> Void) async throws {
             switch source {
             case .path(let url):
+                logger.debug("Reading layer from path", metadata: ["path": .string(url.path())])
                 try await FileSystem.shared.withFileHandle(
                     forReadingAt: FilePath(url.path())
                 ) { fileHandle in
+                    logger.debug("Reading layer from file handle")
                     for try await chunk in fileHandle.readChunks() {
+                        logger.trace(
+                            "Reading layer chunk",
+                            metadata: ["size": .string("\(chunk.readableBytesView.count) bytes")]
+                        )
                         try await write(Array(buffer: chunk)[...])
                     }
                 }
@@ -482,8 +489,26 @@ extension RunCommand {
                                         }
                                     }
                                 ) { response in
-                                    for try await _ in response.messages {
-                                        // Ignore responses
+                                    do {
+                                        for try await message in response.messages {
+                                            // Ignore responses
+                                            logger.trace(
+                                                "Got unknown response",
+                                                metadata: [
+                                                    "digest": .string(layer.digest),
+                                                    "response": .string("\(message)"),
+                                                ]
+                                            )
+                                        }
+                                    } catch {
+                                        logger.error(
+                                            "Failed to get response",
+                                            metadata: [
+                                                "digest": .string(layer.digest),
+                                                "error": .string("\(error)"),
+                                            ]
+                                        )
+                                        throw error
                                     }
                                 }
                                 logger.debug(
@@ -498,6 +523,11 @@ extension RunCommand {
                                         "digest": .string(layer.digest),
                                         "error": .string("\(error)"),
                                     ]
+                                )
+
+                                logger.error(
+                                    "Failed to upload layer",
+                                    metadata: ["error": .string("\(error)")]
                                 )
                                 await layersUploaded.incrementFailedUploaded(error: error)
                             }
@@ -654,6 +684,13 @@ extension RunCommand {
             }
         }
 
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString
+        )
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempDir)
+        }
         let (imageName, container) = try await Noora().progressStep(
             message: "Building container",
             successMessage: "Container built successfully!",
@@ -732,13 +769,6 @@ extension RunCommand {
             }
 
             progress("Building final container image")
-            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-                UUID().uuidString
-            )
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            defer {
-                try? FileManager.default.removeItem(at: tempDir)
-            }
             let container = try await buildDockerContainer(
                 image: imageSpec,
                 imageName: imageName,
@@ -1053,9 +1083,9 @@ extension RunCommand {
 
     private func extractTar(from sourceURL: URL, to destinationURL: URL) async throws {
         _ = try await Subprocess.run(
-            Subprocess.Executable.path("/usr/bin/env"),
+            .name("tar"),
             arguments: Subprocess.Arguments([
-                "tar", "-xf", sourceURL.path, "-C", destinationURL.path,
+                "-xf", sourceURL.path, "-C", destinationURL.path,
             ]),
             output: .discarded
         )

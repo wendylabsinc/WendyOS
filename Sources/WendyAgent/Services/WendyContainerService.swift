@@ -221,6 +221,13 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     )
 
                     // Apply CDI for GPU if requested
+
+                    // Use default runc runtime - GPU devices are manually injected in OCI spec
+                    let runtime = "io.containerd.runc.v2"
+
+                    // Options will point us to the nvidia runtime if GPU entitlements are present
+                    let options: Containerd_Runc_V1_Options?
+
                     if wantsGPU {
                         logger.debug(
                             "Applying NVIDIA CDI spec",

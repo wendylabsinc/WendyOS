@@ -40,10 +40,10 @@
     {
       "identity" : "grpc-swift-nio-transport",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Joannis/grpc-swift-nio-transport.git",
+      "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
       "state" : {
-        "branch" : "jo/custom-verification-of-server",
-        "revision" : "7b5303f6a1dc44ce2e50f4c59f3cf1622379d15a"
+        "revision" : "11d1f0917aa30ca50e2c78d216e8ae8c72f42af1",
+        "version" : "2.3.0"
       }
     },
     {
@@ -78,7 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tuist/Noora.git",
       "state" : {
-        "revision" : "259b4ad29366ba327148aaaea0e59b1c78953831"
+        "revision" : "f33556847a6d3facd51886409e23b6906b44de67",
+        "version" : "0.51.0"
       }
     },
     {
