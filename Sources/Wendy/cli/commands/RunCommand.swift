@@ -154,120 +154,47 @@ extension RunCommand {
     }
 
     func runContainerdBased() async throws {
-        let logger = Logger(label: "sh.wendy.cli.run.docker.container.containerd")
-
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
 
+        let docker = DockerCLI()
+        
         try await Noora().progressStep(
             message: "Building container",
             successMessage: "Container built successfully!",
             errorMessage: "Failed to build container",
             showSpinner: true
         ) { _ in
-            try await buildDockerBased(name: name)
+            try await docker.buildx(name: name)
         }
 
-        let (layers, imageConfig) = try await Noora().progressStep(
-            message: "Preparing container",
-            successMessage: "Container prepared and ready to run!",
-            errorMessage: "Failed to prepare container",
-            showSpinner: true
-        ) { progress in
-            progress("Saving container")
-            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-                UUID().uuidString
-            )
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-            let imageTarPath = tempDir.appendingPathComponent("\(name).tar")
-
-            let docker = DockerCLI()
-            try await docker.save(name: name, output: imageTarPath.path())
-
-            // Extract file (tar) to temp FS
-            progress("Extracting container")
-            let extractDir = tempDir.appendingPathComponent("extract")
-            try FileManager.default.createDirectory(
-                at: extractDir,
-                withIntermediateDirectories: true
-            )
-            try await extractTar(from: imageTarPath, to: extractDir)
-
-            // Parse manifest.json to get layer order and metadata
-            let manifestPath = extractDir.appendingPathComponent("manifest.json")
-            let manifestData = try Data(contentsOf: manifestPath)
-            let manifests = try JSONDecoder().decode([DockerManifest].self, from: manifestData)
-
-            guard let manifest = manifests.first else {
-                throw Error.noManifestFound
+        try await withAgentGRPCClient(
+            agentConnectionOptions,
+            title: "Which device do you want to run this app on?"
+        ) { [name] client in
+            // TODO: Set up proxy to push the container to the agent
+        
+            try await Noora().progressStep(
+                message: "Uploading container",
+                successMessage: "Container uploaded successfully!",
+                errorMessage: "Failed to upload container",
+                showSpinner: true
+            ) { _ in
+                try await docker.push(name: name)
             }
 
-            // Load and parse the config file
-            progress("Loading container config")
-            let configPath = extractDir.appendingPathComponent(manifest.config)
-            let configData = try Data(contentsOf: configPath)
-            let imageConfig = try JSONDecoder().decode(ImageConfig.self, from: configData)
-            logger.debug(
-                "Loaded container config",
-                metadata: [
-                    "architecture": .string(imageConfig.architecture),
-                    "os": .string(imageConfig.os),
-                    "cmd": .string(imageConfig.config.cmd?.joined(separator: " ") ?? "none"),
-                    "workingDir": .string(imageConfig.config.workingDir ?? "none"),
-                ]
+            // TODO: Create image
+
+            try await createContainerdContainer(
+                appName: name,
+                client: client
             )
 
-            // Process layers in the correct order from manifest
-            progress("Processing layers")
-            var layers = [ContainerdLayer]()
-            for layerPath in manifest.layers {
-                // Extract the digest from the layer path (e.g., "blobs/sha256/abc123..." -> "sha256:abc123...")
-                let digest = "sha256:" + String(layerPath.dropFirst("blobs/sha256/".count))
-
-                // Get layer metadata from LayerSources to detect gzip or not
-                let gzip: Bool
-                if let layerSource = manifest.layerSources?[digest] {
-                    // LayerSources only exists in Docker format, not in OCI
-                    // And Docker produces gzipped files
-                    gzip = layerSource.mediaType.contains("gzip")
-                } else {
-                    // Layer sources does not exist in OCI format
-                    // OCI is not gzip-ed normally
-                    gzip = true
-                }
-
-                // Construct the full path to the layer file
-                let layerFile = extractDir.appendingPathComponent(layerPath)
-
-                guard
-                    let info = try await FileSystem.shared.info(
-                        forFileAt: FilePath(layerFile.path())
-                    )
-                else {
-                    logger.warning("Layer file not found: \(layerFile.path)")
-                    continue
-                }
-
-                layers.append(
-                    ContainerdLayer(
-                        source: .path(layerFile),
-                        digest: digest,
-                        diffID: digest,
-                        size: info.size,
-                        gzip: gzip
-                    )
-                )
-            }
-            return (layers, imageConfig)
+            try await startContainerdContainer(
+                imageName: name,
+                client: client
+            )
         }
-
-        try await uploadAndRunContainerdContainer(
-            layers: layers,
-            imageName: name,
-            config: imageConfig,
-            logger: logger
-        )
     }
 
     struct ContainerdLayer: Sendable {
@@ -416,39 +343,56 @@ extension RunCommand {
             // satisfy the disk more by making more streams. Many streams share a TCP connection
             try await withThrowingTaskGroup { taskGroup in
                 actor LayersUploaded {
-                    var layersUploading = 0
-                    var layersUploaded = 0
-                    var layersFailedUploaded = 0
-                    var status: String {
-                        if layersFailedUploaded > 0 {
-                            return
-                                "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
-                        } else {
-                            return "Layers uploading \(layersUploaded)/\(layersUploading)"
+                    var status = Status()
+                    
+                    struct Status: Sendable {
+                        var layersUploading = 0
+                        var layersUploaded = 0
+                        var layersFailedUploaded = 0
+                        var expectedBytes: Int64 = 0
+                        var uploadedBytes: Int64 = 0
+                        var progress: Double {
+                            return Double(uploadedBytes) / Double(expectedBytes)
+                        }
+                    
+                        var message: String {
+                            if layersFailedUploaded > 0 {
+                                return
+                                    "Layers uploading \(layersUploaded)/\(layersUploading) (failed: \(layersFailedUploaded))"
+                            } else {
+                                return "Layers uploading \(layersUploaded)/\(layersUploading)"
+                            }
                         }
                     }
-                    nonisolated let (statusChange, continuation) = AsyncStream<String>.makeStream()
+                    nonisolated let (statusChange, continuation) = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
-                    func incrementUploading() {
-                        layersUploading += 1
+                    func incrementUploading(_ bytes: Int64) {
+                        status.layersUploading += 1
+                        status.expectedBytes += bytes
                         continuation.yield(status)
                     }
 
+                    func uploaded(_ bytes: Int64) {
+                        status.uploadedBytes += bytes
+                        continuation.yield(status)
+                        checkFinished()
+                    }
+
                     func incrementUploaded() {
-                        layersUploaded += 1
+                        status.layersUploaded += 1
                         continuation.yield(status)
                         checkFinished()
                     }
 
                     func incrementFailedUploaded(error: any Swift.Error) {
-                        layersFailedUploaded += 1
-                        layersUploading -= 1
+                        status.layersFailedUploaded += 1
+                        status.layersUploading -= 1
                         continuation.yield(status)
                         checkFinished()
                     }
 
                     private func checkFinished() {
-                        if layersUploaded == layersUploading {
+                        if status.layersUploaded == status.layersUploading {
                             finish()
                         }
                     }
@@ -469,7 +413,7 @@ extension RunCommand {
                     Noora().info("All layers are already uploaded")
                 } else {
                     for layer in layersToUpload {
-                        await layersUploaded.incrementUploading()
+                        await layersUploaded.incrementUploading(layer.size)
                         taskGroup.addTask {
                             // Upload layers that have changed or are new
                             logger.debug(
@@ -486,6 +430,7 @@ extension RunCommand {
                                                     $0.data = Data(chunk)
                                                 }
                                             )
+                                            await layersUploaded.uploaded(Int64(chunk.count))
                                         }
                                     }
                                 ) { response in
@@ -533,19 +478,12 @@ extension RunCommand {
                         }
                     }
 
-                    try await Noora().progressStep(
-                        message: "Uploading layers to agent",
-                        successMessage: "Layers uploaded to agent",
-                        errorMessage: "Failed to upload layers to agent",
-                        showSpinner: true
-                    ) { progress in
-                        await progress(layersUploaded.status)
-
+                    try await Noora().progressBarStep(message: "Uploading layers to agent") { progress in
                         for await status in layersUploaded.statusChange {
-                            progress(status)
+                            progress(status.progress)
                         }
 
-                        let errors = await layersUploaded.layersFailedUploaded
+                        let errors = await layersUploaded.status.layersFailedUploaded
                         if errors > 0 {
                             throw Error.failedToUploadLayers(errors)
                         }
@@ -596,9 +534,87 @@ extension RunCommand {
                         stderrOutput.data.withUnsafeBytes { data in
                             _ = write(STDERR_FILENO, data.baseAddress!, data.count)
                         }
-                    default:
-                        logger.warning("Unknown message received from agent")
+                    case .none:
+                        ()
                     }
+                }
+            }
+        }
+    }
+
+    func createContainerdContainer(
+        appName: String,
+        client: GRPCClient<HTTP2ClientTransport.Posix>
+    ) async throws {
+        let logger = Logger(label: "sh.wendy.cli.run.containerd.create")
+        let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+            wrapping: client
+        )
+
+        let appConfigData = try await readAppConfigData(logger: logger)
+        _ = try await agentContainers.createContainer(
+            request: .init(message: .with {
+                $0.imageName = "\(appName)"
+                $0.appName = appName
+                $0.appConfig = appConfigData
+                if noRestart {
+                    $0.restartPolicy = .with {
+                        $0.mode = .no
+                    }
+                } else if let retries = restartOnFailureRetries {
+                    $0.restartPolicy = .with {
+                        $0.mode = .onFailure
+                        $0.onFailureMaxRetries = Int32(retries)
+                    }
+                } else if restartUnlessStoppedFlag {
+                    $0.restartPolicy = .with {
+                        $0.mode = .unlessStopped
+                    }
+                } else {
+                    $0.restartPolicy = .with {
+                        $0.mode = .default
+                    }
+                }
+            })
+        )
+    }
+
+    func startContainerdContainer(
+        imageName: String,
+        client: GRPCClient<HTTP2ClientTransport.Posix>
+    ) async throws {
+        let logger = Logger(label: "sh.wendy.cli.run.containerd.start")
+        let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+            wrapping: client
+        )
+
+        _ = try await agentContainers.startContainer(
+            request: .init(message: .with {
+                $0.appName = imageName
+            })
+        ) { response in
+            for try await message in response.messages {
+                switch message.responseType {
+                case .started:
+                    if debug {
+                        Noora().success("Started container with debug port 4242")
+                    } else {
+                        Noora().success("Started app")
+                    }
+
+                    if detach {
+                        return
+                    }
+                case .stdoutOutput(let stdoutOutput):
+                    stdoutOutput.data.withUnsafeBytes { data in
+                        _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                    }
+                case .stderrOutput(let stderrOutput):
+                    stderrOutput.data.withUnsafeBytes { data in
+                        _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                    }
+                default:
+                    logger.warning("Unknown message received from agent")
                 }
             }
         }

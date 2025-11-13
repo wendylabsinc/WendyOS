@@ -12,6 +12,9 @@ import WendyCloudGRPC
 import WendyShared
 import X509
 import _NIOFileSystem
+import ContainerdRegistry
+import Hummingbird
+import OpenAPIHummingbird
 
 @main
 struct WendyAgent: AsyncParsableCommand {
@@ -147,18 +150,6 @@ struct WendyAgent: AsyncParsableCommand {
                     ]
                 )
             )
-            servers.append(
-                GRPCServer(
-                    transport: HTTP2ServerTransport.Posix(
-                        address: .ipv6(host: "::", port: port + 1),
-                        transportSecurity: mTLS
-                    ),
-                    services: authenticatedServices,
-                    interceptors: [
-                        WendyErrorInterceptor()
-                    ]
-                )
-            )
         }
 
         servers.append(
@@ -174,60 +165,62 @@ struct WendyAgent: AsyncParsableCommand {
             )
         )
 
-        servers.append(
-            GRPCServer(
-                transport: HTTP2ServerTransport.Posix(
-                    address: .ipv6(host: "::", port: port),
-                    transportSecurity: .plaintext
-                ),
-                services: plaintextServices,
-                interceptors: [
-                    WendyErrorInterceptor()
-                ]
-            )
+        var services = [any Service]()
+        for service in backgroundServices {
+            services.append(service)
+        }
+        for server in servers {
+            services.append(server)
+        }
+        if mTLS == nil {
+            logger.info("Adding Containerd Registry Service for development")
+            services.append(ContainerdRegistryService())
+        }
+
+        var serviceGroupConfig = ServiceGroupConfiguration(
+            services: services,
+            logger: logger
         )
-
+        serviceGroupConfig.maximumGracefulShutdownDuration = .seconds(10)
+        let serviceGroup = ServiceGroup(
+            configuration: serviceGroupConfig
+        )
+        
         try await withThrowingTaskGroup(of: Void.self) { taskGroup in
-            for server in servers {
-                taskGroup.addTask {
-                    try await server.serve()
-                    continuation.finish()
+            taskGroup.addTask {
+                try await serviceGroup.run()
+            }
+
+            taskGroup.addTask {
+                for try await () in signal {
+                    logger.info("Received signal, restarting")
+                    try await Task.sleep(for: .seconds(3))
+                    return
                 }
             }
+            
+            defer { taskGroup.cancelAll() }
+            try await taskGroup.next()
+        }
+    }
+}
 
-            defer {
-                for server in servers {
-                    server.beginGracefulShutdown()
-                }
-                taskGroup.cancelAll()
-            }
+struct ContainerdRegistryService: Service {
+    func run() async throws {
+        try await Containerd.withClient { client in
+            let router = Router()
+            let registry = RegistryAPI(client: client.client)
+            try registry.registerHandlers(on: router, serverURL: URL(string: "/v2")!)
+            router.put("/v2/:name/manifests/:reference", use: registry.putManifest)
 
-            for service in backgroundServices {
-                taskGroup.addTask {
-                    try await service.run()
-                }
-            }
-
-            // taskGroup.addTask {
-            //     do {
-            //         let imageName = "hello-python"
-            //         try await PullImage().pullAndRun(
-            //             image: "cloud-c7e56/agent-test/\(imageName):latest",
-            //             appName: imageName,
-            //             labels: [:],
-            //             bearerToken: "...",
-            //             registry: "us-central1-docker.pkg.dev"
-            //         )
-            //     } catch {
-            //         logger.error("Failed to pull and run image: \(error)")
-            //     }
-            // }
-
-            for try await () in signal {
-                logger.info("Received signal, restarting")
-                try await Task.sleep(for: .seconds(3))
-                return
-            }
+            let app = Application(
+                router: router,
+                configuration: .init(
+                    address: .hostname("0.0.0.0", port: 8080),
+                    serverName: "containerd-registry"
+                )
+            )
+            try await app.runService()
         }
     }
 }

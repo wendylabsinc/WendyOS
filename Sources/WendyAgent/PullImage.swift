@@ -171,7 +171,6 @@ public struct PullImage {
                     try await containerd.createTask(
                         containerID: appName,
                         appName: appName,
-                        snapshotName: snapshotKey ?? "",
                         mounts: mounts,
                         stdout: stdout,
                         stderr: stderr
@@ -193,7 +192,6 @@ public struct PullImage {
                     try await containerd.createTask(
                         containerID: appName,
                         appName: appName,
-                        snapshotName: snapshotKey ?? "",
                         mounts: mounts,
                         stdout: stdout,
                         stderr: stderr
