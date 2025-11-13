@@ -18,6 +18,23 @@ PyTorch wheel is pre-built by NVIDIA for Jetson with CUDA support.
 
 **All CUDA/cuDNN libraries are provided by CDI at runtime!**
 
+## PyTorch Installation Reference
+
+Official NVIDIA documentation: [Install PyTorch for Jetson Platform](https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html)
+
+This example uses the **Jetson AI Lab PyPI index** which provides optimized ARM64 wheels:
+
+```dockerfile
+RUN pip3 install --no-cache-dir \
+    torch==2.8.0 \
+    torchvision==0.23.0 \
+    torchaudio==2.8.0 \
+    torch-tensorrt==2.8.0+cu126 \
+    --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
+```
+
+**Important:** Always pin specific versions to ensure CUDA-enabled builds, not CPU-only versions from default PyPI.
+
 ## Running
 
 ```bash
@@ -75,3 +92,67 @@ GPU Computation Results:
 
 ✓ ALL TESTS PASSED - GPU is working correctly via CDI!
 ```
+
+## Troubleshooting
+
+### Issue: Container shows CPU-only PyTorch version
+
+**Symptoms:**
+```
+PyTorch successfully imported
+Version: 2.9.0+cpu  # Wrong! Should be 2.8.0
+CUDA Available: False
+```
+
+**Cause:** Containerd on the device has cached old image layers with the wrong PyTorch version.
+
+**Solution:** Clear containerd cache on the device:
+
+```bash
+# SSH into the device
+ssh edgeos@wendyos-patient-cedar.local
+
+# Option 1: Clear specific PyTorch images
+sudo ctr -n default images ls | grep pytorch
+sudo ctr -n default images rm $(sudo ctr -n default images ls -q | grep pytorch)
+
+# Option 2: Clear all container images (more aggressive)
+sudo ctr -n default images ls
+sudo ctr -n default images rm $(sudo ctr -n default images ls -q)
+
+# Option 3: Clear snapshots (if corruption occurred during layer extraction)
+sudo ctr -n default snapshots ls
+sudo ctr -n default snapshots rm $(sudo ctr -n default snapshots ls -q)
+```
+
+After clearing the cache, rebuild and redeploy:
+
+```bash
+# On your laptop
+docker rmi pytorchgpu:latest
+docker build --platform linux/arm64 --no-cache -t pytorchgpu:latest .
+wendy-dev run
+```
+
+### Issue: CUDA libraries not found during build
+
+**Symptoms:**
+```
+OSError: libcudart.so.12: cannot open shared object file: No such file or directory
+ValueError: libcublas.so.*[0-9] not found in the system path
+```
+
+**Expected behavior:** This is normal during build! CUDA libraries are not available in the Docker build environment on your laptop. They will be injected by CDI at runtime on the device.
+
+**Solution:** Don't try to import torch during the build. Use `pip3 show torch` to verify the version instead.
+
+### Issue: LD_LIBRARY_PATH not set
+
+**To investigate:** Check the CDI specification on the device:
+
+```bash
+ssh edgeos@wendyos-patient-cedar.local
+cat /etc/cdi/nvidia.yaml
+```
+
+The CDI spec should include environment variables for CUDA libraries.
