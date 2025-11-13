@@ -2,13 +2,12 @@ import ContainerdGRPC
 import Foundation
 import Logging
 import NIO
+import ServiceLifecycle
 import Subprocess
 
 /// Monitor service that watches containers and enforces restart policies for containerd apps
-actor ContainerMonitor {
+actor ContainerMonitor: Service {
     private let logger = Logger(label: "ContainerMonitor")
-    private var monitoring = false
-    private var monitorTask: Task<Void, Never>?
 
     /// Container restart state tracking
     private struct ContainerState {
@@ -52,36 +51,74 @@ actor ContainerMonitor {
 
     private var containerStates: [String: ContainerState] = [:]
 
-    /// Start monitoring containers
-    func startMonitoring() {
-        guard !monitoring else { return }
-        monitoring = true
+    /// Main monitoring loop
+    func run() async throws {
+        logger.info("Starting container monitor service")
 
-        monitorTask = Task {
-            logger.info("Starting container monitor service")
+        // Wait for containerd to be ready
+        await waitForContainerd()
 
-            // Small delay to let containerd fully start after boot
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-
-            while monitoring {
+        try await withGracefulShutdownHandler {
+            while !Task.isCancelled {
                 do {
                     try await checkContainers()
                     try await Task.sleep(nanoseconds: 15_000_000_000)  // Check every 15 seconds
                 } catch {
                     logger.error("Error in container monitor", metadata: ["error": "\(error)"])
-                    try? await Task.sleep(nanoseconds: 30_000_000_000)  // Wait 30 seconds on error
+                    try await Task.sleep(nanoseconds: 30_000_000_000)  // Wait 30 seconds on error
                 }
             }
-
-            logger.info("Container monitor service stopped")
+        } onGracefulShutdown: {
+            self.logger.info("Container monitor service shutting down gracefully")
         }
+
+        logger.info("Container monitor service stopped")
     }
 
-    /// Stop monitoring containers
-    func stopMonitoring() {
-        monitoring = false
-        monitorTask?.cancel()
-        monitorTask = nil
+    /// Wait for containerd to become available
+    private func waitForContainerd() async {
+        let maxAttempts = 30
+        let delayBetweenAttempts: UInt64 = 1_000_000_000
+
+        logger.info("Waiting for containerd to become available...")
+
+        for attempt in 1...maxAttempts {
+            // Check if task is cancelled
+            if Task.isCancelled {
+                logger.info("Container monitor cancelled while waiting for containerd")
+                return
+            }
+
+            do {
+                // Try to connect to containerd
+                _ = try await Containerd.withClient { client in
+                    // List containers to ensure the client is active
+                    _ = try await client.listContainers()
+                    return true
+                }
+
+                logger.info("Successfully connected to containerd after \(attempt) attempt(s)")
+                return
+            } catch {
+                if attempt == 1 {
+                    logger.debug(
+                        "Containerd not ready yet, will retry...",
+                        metadata: ["error": "\(error)"]
+                    )
+                } else if attempt % 5 == 0 {
+                    logger.info(
+                        "Still waiting for containerd (attempt \(attempt)/\(maxAttempts))..."
+                    )
+                }
+
+                // Don't sleep on the last attempt
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: delayBetweenAttempts)
+                }
+            }
+        }
+
+        logger.warning("Could not connect to containerd after \(maxAttempts) attempts.")
     }
 
     /// Mark a container as explicitly stopped (won't be auto-restarted)
@@ -169,7 +206,7 @@ actor ContainerMonitor {
         )
 
         if shouldRestart {
-            logger.debug(
+            logger.info(
                 "Restarting container",
                 metadata: [
                     "container": "\(appName)",
@@ -178,14 +215,14 @@ actor ContainerMonitor {
             )
 
             do {
-                // Utilize nerdctl to restart the container
+                // Use nerdctl to restart the container
                 _ = try await runNerdctl(["start", appName])
 
                 state.lastRestartTime = Date()
                 state.failureCount += 1
                 containerStates[appName] = state
 
-                logger.debug(
+                logger.info(
                     "Container restarted successfully",
                     metadata: ["container": "\(appName)"]
                 )
@@ -237,15 +274,16 @@ actor ContainerMonitor {
 
     /// Run nerdctl command for container operations
     private func runNerdctl(_ args: [String]) async throws -> String {
+        // Always use the default namespace to match containerd client
         let fullArgs = ["--namespace", "default"] + args
-        logger.info(
+        logger.debug(
             "Running nerdctl command",
             metadata: ["args": "\(fullArgs.joined(separator: " "))"]
         )
 
         do {
             let result = try await Subprocess.run(
-                .name("/usr/local/bin/nerdctl"),
+                .name("nerdctl"),
                 arguments: Subprocess.Arguments(fullArgs),
                 output: .string(limit: .max),
                 error: .string(limit: .max)
