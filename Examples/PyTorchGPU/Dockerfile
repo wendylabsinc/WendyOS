@@ -25,16 +25,6 @@ RUN pip3 install --no-cache-dir \
     torchaudio==2.8.0 \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
-RUN pip3 install --no-cache-dir \
-    torch-tensorrt==2.8.0+cu126 \
-    --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
-
-# Remove bundled TensorRT libraries to force using host's TensorRT 10.3.0 (with Orin SM 87 support)
-# The Python package bundles TensorRT 10.12.0 libs which don't support SM 87
-# We keep the Python bindings but use the host's runtime libs via CDI
-RUN rm -rf /usr/local/lib/python3.10/dist-packages/tensorrt_libs/*.so* \
-    /usr/local/lib/python3.10/dist-packages/tensorrt_cu12_libs/*.so* 2>/dev/null || true
-
 # Ensure host TensorRT libraries are found first
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}
 
