@@ -62,4 +62,5 @@ ENV PYTHONUNBUFFERED=1
 
 # Default command - run bash to keep container alive
 # CMD ["bash", "-c", "while true; do sleep 1000; done"]
-CMD ["sleep", "infinity"]
+CMD ["python3", "gpu-test.py"]
+
