@@ -1,25 +1,25 @@
-import OCIRegistryOpenAPI
-import Hummingbird
-import Foundation
-import Crypto
 import AsyncAlgorithms
 import ContainerdGRPC
+import Crypto
+import Foundation
 import GRPCCore
-import Logging
-import GRPCServiceLifecycle
 import GRPCNIOTransportHTTP2
-import OpenAPIRuntime
-import OpenAPIRuntime
-import NIOFoundationCompat
-import Synchronization
+import GRPCServiceLifecycle
 import HTTPTypes
+import Hummingbird
+import Logging
+import NIOFoundationCompat
+import OCIRegistryOpenAPI
+import OpenAPIRuntime
+import Synchronization
 
 private actor UploadSessionStore {
     struct Session: Sendable {
         let repository: String
         let ref: String
         var offset: Int64
-        var write: @Sendable (Containerd_Services_Content_V1_WriteContentRequest) async throws -> Void
+        var write:
+            @Sendable (Containerd_Services_Content_V1_WriteContentRequest) async throws -> Void
         let finish: @Sendable () async -> Void
     }
 
@@ -29,10 +29,18 @@ private actor UploadSessionStore {
         uuid: String,
         repository: String,
         ref: String,
-        write: @Sendable @escaping (Containerd_Services_Content_V1_WriteContentRequest) async throws -> Void,
+        write:
+            @Sendable @escaping (Containerd_Services_Content_V1_WriteContentRequest) async throws ->
+            Void,
         finish: @Sendable @escaping () async -> Void
     ) {
-        sessions[uuid] = Session(repository: repository, ref: ref, offset: 0, write: write, finish: finish)
+        sessions[uuid] = Session(
+            repository: repository,
+            ref: ref,
+            offset: 0,
+            write: write,
+            finish: finish
+        )
     }
 
     func session(for uuid: String) -> Session? {
@@ -63,7 +71,9 @@ public struct RegistryAPI: APIProtocol {
 
     private static let uploadSessions = UploadSessionStore()
 
-    public func listTags(_ input: OCIRegistryOpenAPI.Operations.ListTags.Input) async throws -> OCIRegistryOpenAPI.Operations.ListTags.Output {
+    public func listTags(
+        _ input: OCIRegistryOpenAPI.Operations.ListTags.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.ListTags.Output {
         let repositoryName = input.path.name
         let imagesClient = Containerd_Services_Images_V1_Images.Client(wrapping: self.client)
 
@@ -105,29 +115,41 @@ public struct RegistryAPI: APIProtocol {
                 sortedTags = Array(sortedTags.prefix(limit))
             }
 
-            return .ok(.init(body: .json(.init(
-                name: repositoryName,
-                tags: sortedTags
-            ))))
+            return .ok(
+                .init(
+                    body: .json(
+                        .init(
+                            name: repositoryName,
+                            tags: sortedTags
+                        )
+                    )
+                )
+            )
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
     }
 
-    public func cancelBlobUpload(_ input: OCIRegistryOpenAPI.Operations.CancelBlobUpload.Input) async throws -> OCIRegistryOpenAPI.Operations.CancelBlobUpload.Output {
+    public func cancelBlobUpload(
+        _ input: OCIRegistryOpenAPI.Operations.CancelBlobUpload.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.CancelBlobUpload.Output {
         let repositoryName = input.path.name
         let uuid = input.path.uuid
 
-        guard let session = await Self.uploadSessions.session(for: uuid), session.repository == repositoryName else {
+        guard let session = await Self.uploadSessions.session(for: uuid),
+            session.repository == repositoryName
+        else {
             return .notFound(.init(body: .json(.init())))
         }
 
         let contentClient = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
 
         do {
-            _ = try await contentClient.abort(.with { request in
-                request.ref = session.ref
-            })
+            _ = try await contentClient.abort(
+                .with { request in
+                    request.ref = session.ref
+                }
+            )
         } catch let error as RPCError where error.code == .notFound {
             _ = await Self.uploadSessions.remove(uuid: uuid)
             return .notFound(.init(body: .json(.init())))
@@ -137,76 +159,111 @@ public struct RegistryAPI: APIProtocol {
         return .noContent(.init())
     }
 
-    public func completeBlobUpload(_ input: OCIRegistryOpenAPI.Operations.CompleteBlobUpload.Input) async throws -> OCIRegistryOpenAPI.Operations.CompleteBlobUpload.Output {
+    public func completeBlobUpload(
+        _ input: OCIRegistryOpenAPI.Operations.CompleteBlobUpload.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.CompleteBlobUpload.Output {
         let logger = Logger(label: "sh.wendyengineer.containerd-registry.complete-blob-upload")
         let repositoryName = input.path.name
         let uuid = input.path.uuid
         let digest = input.query.digest
 
         guard isDigestReference(digest) else {
-            return .badRequest(.init(body: .json(.init(
-                errors: [
-                    .init(code: nil, message: "Not a digest reference", detail: nil)
-                ]
-            ))))
+            return .badRequest(
+                .init(
+                    body: .json(
+                        .init(
+                            errors: [
+                                .init(code: nil, message: "Not a digest reference", detail: nil)
+                            ]
+                        )
+                    )
+                )
+            )
         }
 
-        guard var session = await Self.uploadSessions.session(for: uuid), session.repository == repositoryName else {
+        guard var session = await Self.uploadSessions.session(for: uuid),
+            session.repository == repositoryName
+        else {
             return .notFound(.init(body: .json(.init())))
         }
 
         let body = input.body
 
         do {
-            if let body, case let .binary(httpBody) = body {
+            if let body, case .binary(let httpBody) = body {
                 for try await chunk in httpBody {
                     guard !chunk.isEmpty else { continue }
                     let data = Data(chunk)
-                    try await session.write(.with { request in
-                        request.action = .write
-                        request.ref = session.ref
-                        request.offset = session.offset
-                        request.data = data
-                    })
+                    try await session.write(
+                        .with { request in
+                            request.action = .write
+                            request.ref = session.ref
+                            request.offset = session.offset
+                            request.data = data
+                        }
+                    )
                     session.offset += Int64(data.count)
                 }
             }
-            
-            logger.info("Committing blob upload session", metadata: ["session-id": .string(uuid), "digest": .string(digest), "bytes": .stringConvertible(session.offset)]);
-            try await session.write(.with { request in
-                request.action = .commit
-                request.ref = session.ref
-                request.offset = session.offset
-                request.expected = digest
-                request.labels = [
-                    "containerd.io/gc.root": "true",
-                    "sh.wendy.layer": "true",
+
+            logger.info(
+                "Committing blob upload session",
+                metadata: [
+                    "session-id": .string(uuid), "digest": .string(digest),
+                    "bytes": .stringConvertible(session.offset),
                 ]
-            })
+            )
+            try await session.write(
+                .with { request in
+                    request.action = .commit
+                    request.ref = session.ref
+                    request.offset = session.offset
+                    request.expected = digest
+                    request.labels = [
+                        "containerd.io/gc.root": "true",
+                        "sh.wendy.layer": "true",
+                    ]
+                }
+            )
             await session.finish()
             await Self.uploadSessions.remove(uuid: uuid)
-            
+
             // Verify the blob actually exists before returning success
             // This ensures the commit completed successfully and the blob is available
             let contentClient = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
             do {
-                _ = try await contentClient.info(.with { request in
-                    request.digest = digest
-                })
+                _ = try await contentClient.info(
+                    .with { request in
+                        request.digest = digest
+                    }
+                )
             } catch let error as RPCError where error.code == .notFound {
                 // Blob doesn't exist yet, wait a bit and retry
                 // This handles potential timing issues with containerd
-                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
                 do {
-                    _ = try await contentClient.info(.with { request in
-                        request.digest = digest
-                    })
+                    _ = try await contentClient.info(
+                        .with { request in
+                            request.digest = digest
+                        }
+                    )
                 } catch let retryError as RPCError where retryError.code == .notFound {
-                    return .badRequest(.init(body: .json(.init(
-                        errors: [
-                            .init(code: nil, message: "Blob commit completed but blob is not available", detail: nil)
-                        ]
-                    ))))
+                    return .badRequest(
+                        .init(
+                            body: .json(
+                                .init(
+                                    errors: [
+                                        .init(
+                                            code: nil,
+                                            message:
+                                                "Blob commit completed but blob is not available",
+                                            detail: nil
+                                        )
+                                    ]
+                                )
+                            )
+                        )
+                    )
                 }
             }
         } catch let error as RPCError {
@@ -215,24 +272,48 @@ public struct RegistryAPI: APIProtocol {
                 return .notFound(.init(body: .json(.init())))
             case .alreadyExists:
                 // treat as success; verify blob exists
-                let contentClient = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
+                let contentClient = Containerd_Services_Content_V1_Content.Client(
+                    wrapping: self.client
+                )
                 do {
-                    _ = try await contentClient.info(.with { request in
-                        request.digest = digest
-                    })
+                    _ = try await contentClient.info(
+                        .with { request in
+                            request.digest = digest
+                        }
+                    )
                 } catch let verifyError as RPCError where verifyError.code == .notFound {
-                    return .badRequest(.init(body: .json(.init(
-                        errors: [
-                            .init(code: nil, message: "Blob already exists but is not available", detail: nil)
-                        ]
-                    ))))
+                    return .badRequest(
+                        .init(
+                            body: .json(
+                                .init(
+                                    errors: [
+                                        .init(
+                                            code: nil,
+                                            message: "Blob already exists but is not available",
+                                            detail: nil
+                                        )
+                                    ]
+                                )
+                            )
+                        )
+                    )
                 }
             case .failedPrecondition, .invalidArgument:
-                return .badRequest(.init(body: .json(.init(
-                    errors: [
-                        .init(code: nil, message: "Failed to complete blob upload: \(error.message)", detail: nil)
-                    ]
-                ))))
+                return .badRequest(
+                    .init(
+                        body: .json(
+                            .init(
+                                errors: [
+                                    .init(
+                                        code: nil,
+                                        message: "Failed to complete blob upload: \(error.message)",
+                                        detail: nil
+                                    )
+                                ]
+                            )
+                        )
+                    )
+                )
             default:
                 throw error
             }
@@ -240,30 +321,54 @@ public struct RegistryAPI: APIProtocol {
 
         _ = await Self.uploadSessions.remove(uuid: uuid)
 
-        return .created(.init(headers: .init(
-            location: digest,
-            dockerContentDigest: digest
-        )))
+        return .created(
+            .init(
+                headers: .init(
+                    location: digest,
+                    dockerContentDigest: digest
+                )
+            )
+        )
     }
 
-    public func patchBlobUpload(_ input: OCIRegistryOpenAPI.Operations.PatchBlobUpload.Input) async throws -> OCIRegistryOpenAPI.Operations.PatchBlobUpload.Output {
+    public func patchBlobUpload(
+        _ input: OCIRegistryOpenAPI.Operations.PatchBlobUpload.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.PatchBlobUpload.Output {
         let repositoryName = input.path.name
         let uuid = input.path.uuid
 
-        guard var session = await Self.uploadSessions.session(for: uuid), session.repository == repositoryName else {
-            return .badRequest(.init(body: .json(.init(
-                errors: [
-                    .init(code: nil, message: "Failed to complete blob upload", detail: nil),
-                ]
-            ))))
+        guard var session = await Self.uploadSessions.session(for: uuid),
+            session.repository == repositoryName
+        else {
+            return .badRequest(
+                .init(
+                    body: .json(
+                        .init(
+                            errors: [
+                                .init(
+                                    code: nil,
+                                    message: "Failed to complete blob upload",
+                                    detail: nil
+                                )
+                            ]
+                        )
+                    )
+                )
+            )
         }
 
-        guard case let .binary(body) = input.body else {
-            return .badRequest(.init(body: .json(.init(
-                errors: [
-                    .init(code: nil, message: "Invalid body", detail: nil)
-                ]
-            ))))
+        guard case .binary(let body) = input.body else {
+            return .badRequest(
+                .init(
+                    body: .json(
+                        .init(
+                            errors: [
+                                .init(code: nil, message: "Invalid body", detail: nil)
+                            ]
+                        )
+                    )
+                )
+            )
         }
 
         let contentRange: (start: Int64, end: Int64)?
@@ -283,11 +388,22 @@ public struct RegistryAPI: APIProtocol {
             // Persist the updated offset back to the store
             await Self.uploadSessions.updateOffset(session.offset, for: uuid)
         } catch {
-            return .badRequest(.init(body: .json(.init(
-                errors: [
-                    .init(code: nil, message: "Failed to patch blob upload: \(error.localizedDescription)", detail: nil)
-                ]
-            ))))
+            return .badRequest(
+                .init(
+                    body: .json(
+                        .init(
+                            errors: [
+                                .init(
+                                    code: nil,
+                                    message:
+                                        "Failed to patch blob upload: \(error.localizedDescription)",
+                                    detail: nil
+                                )
+                            ]
+                        )
+                    )
+                )
+            )
         }
 
         if let range = contentRange {
@@ -297,18 +413,26 @@ public struct RegistryAPI: APIProtocol {
                 return .rangeNotSatisfiable(.init())
             }
         }
-        
-        return .accepted(.init(headers: .init(
-            location: uuid,
-            range: rangeHeaderValue(forUploadedBytes: session.offset)
-        )))
+
+        return .accepted(
+            .init(
+                headers: .init(
+                    location: uuid,
+                    range: rangeHeaderValue(forUploadedBytes: session.offset)
+                )
+            )
+        )
     }
 
-    public func resumeBlobUpload(_ input: OCIRegistryOpenAPI.Operations.ResumeBlobUpload.Input) async throws -> OCIRegistryOpenAPI.Operations.ResumeBlobUpload.Output {
+    public func resumeBlobUpload(
+        _ input: OCIRegistryOpenAPI.Operations.ResumeBlobUpload.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.ResumeBlobUpload.Output {
         let repositoryName = input.path.name
         let uuid = input.path.uuid
 
-        guard let session = await Self.uploadSessions.session(for: uuid), session.repository == repositoryName else {
+        guard let session = await Self.uploadSessions.session(for: uuid),
+            session.repository == repositoryName
+        else {
             return .notFound(.init(body: .json(.init())))
         }
 
@@ -317,7 +441,9 @@ public struct RegistryAPI: APIProtocol {
         return .noContent(.init(headers: .init(range: range)))
     }
 
-    public func initiateBlobUpload(_ input: OCIRegistryOpenAPI.Operations.InitiateBlobUpload.Input) async throws -> OCIRegistryOpenAPI.Operations.InitiateBlobUpload.Output {
+    public func initiateBlobUpload(
+        _ input: OCIRegistryOpenAPI.Operations.InitiateBlobUpload.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.InitiateBlobUpload.Output {
         let repositoryName = input.path.name
         let uuid = UUID().uuidString.lowercased()
 
@@ -335,12 +461,19 @@ public struct RegistryAPI: APIProtocol {
                         do {
                             try await writer.write(message)
                         } catch {
-                            logger.error("Failed to write chunk", metadata: ["error": "\(error)", "session-id": .string(uuid)])
+                            logger.error(
+                                "Failed to write chunk",
+                                metadata: ["error": "\(error)", "session-id": .string(uuid)]
+                            )
                             continuation.finish()
                             throw error
                         }
-                    }, finish: {
-                        logger.info("Finished writing blob upload session", metadata: ["session-id": .string(uuid)])
+                    },
+                    finish: {
+                        logger.info(
+                            "Finished writing blob upload session",
+                            metadata: ["session-id": .string(uuid)]
+                        )
                         continuation.finish()
                     }
                 )
@@ -351,70 +484,111 @@ public struct RegistryAPI: APIProtocol {
                     for try await _ in response.messages {}
                     return ()
                 } catch {
-                    logger.error("Failed to read response", metadata: ["error": "\(error)", "session-id": .string(uuid)])
+                    logger.error(
+                        "Failed to read response",
+                        metadata: ["error": "\(error)", "session-id": .string(uuid)]
+                    )
                     throw error
                 }
             }
         }
 
-        return .accepted(.init(headers: .init(
-            location: uuid,
-            range: rangeHeaderValue(forUploadedBytes: 0)
-        )))
+        return .accepted(
+            .init(
+                headers: .init(
+                    location: uuid,
+                    range: rangeHeaderValue(forUploadedBytes: 0)
+                )
+            )
+        )
     }
 
-    public func getBlobUploadStatus(_ input: OCIRegistryOpenAPI.Operations.GetBlobUploadStatus.Input) async throws -> OCIRegistryOpenAPI.Operations.GetBlobUploadStatus.Output {
+    public func getBlobUploadStatus(
+        _ input: OCIRegistryOpenAPI.Operations.GetBlobUploadStatus.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.GetBlobUploadStatus.Output {
         let repositoryName = input.path.name
 
         guard let session = await Self.uploadSessions.firstSession(for: repositoryName) else {
             return .notFound(.init(body: .json(.init())))
         }
 
-        return .noContent(.init(headers: .init(range: rangeHeaderValue(forUploadedBytes: session.offset))))
+        return .noContent(
+            .init(headers: .init(range: rangeHeaderValue(forUploadedBytes: session.offset)))
+        )
     }
 
-    public func deleteBlob(_ input: OCIRegistryOpenAPI.Operations.DeleteBlob.Input) async throws -> OCIRegistryOpenAPI.Operations.DeleteBlob.Output {
+    public func deleteBlob(
+        _ input: OCIRegistryOpenAPI.Operations.DeleteBlob.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.DeleteBlob.Output {
         let content = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
         do {
-            _ = try await content.delete(.with {
-                $0.digest = input.path.digest
-            })
+            _ = try await content.delete(
+                .with {
+                    $0.digest = input.path.digest
+                }
+            )
             return .accepted(.init())
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
     }
 
-    public func headManifest(_ input: Operations.HeadManifest.Input) async throws -> Operations.HeadManifest.Output {
+    public func headManifest(
+        _ input: Operations.HeadManifest.Input
+    ) async throws -> Operations.HeadManifest.Output {
         do {
             let content = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
-            let manifestInfo = try await content.info(.with {
-                $0.digest = input.path.reference
-            })
-            return .ok(.init(headers: .init(dockerContentDigest: input.path.reference, contentLength: Int(manifestInfo.info.size))))
+            let manifestInfo = try await content.info(
+                .with {
+                    $0.digest = input.path.reference
+                }
+            )
+            return .ok(
+                .init(
+                    headers: .init(
+                        dockerContentDigest: input.path.reference,
+                        contentLength: Int(manifestInfo.info.size)
+                    )
+                )
+            )
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
     }
 
-    public func headBlob(_ input: Operations.HeadBlob.Input) async throws -> Operations.HeadBlob.Output {
+    public func headBlob(
+        _ input: Operations.HeadBlob.Input
+    ) async throws -> Operations.HeadBlob.Output {
         do {
             let content = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
-            let blobInfo = try await content.info(.with {
-                $0.digest = input.path.digest
-            })
-            return .ok(.init(headers: .init(contentLength: Int(blobInfo.info.size), dockerContentDigest: input.path.digest)))
+            let blobInfo = try await content.info(
+                .with {
+                    $0.digest = input.path.digest
+                }
+            )
+            return .ok(
+                .init(
+                    headers: .init(
+                        contentLength: Int(blobInfo.info.size),
+                        dockerContentDigest: input.path.digest
+                    )
+                )
+            )
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
     }
 
-    public func getBlob(_ input: OCIRegistryOpenAPI.Operations.GetBlob.Input) async throws -> OCIRegistryOpenAPI.Operations.GetBlob.Output {
+    public func getBlob(
+        _ input: OCIRegistryOpenAPI.Operations.GetBlob.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.GetBlob.Output {
         do {
             let content = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
-            let blobInfo = try await content.info(.with {
-                $0.digest = input.path.digest
-            })
+            let blobInfo = try await content.info(
+                .with {
+                    $0.digest = input.path.digest
+                }
+            )
             let range = input.headers.range.flatMap { range in
                 range.split(separator: "=").last
             }.flatMap { byteRange -> (offset: Int64, size: Int64?)? in
@@ -445,27 +619,36 @@ public struct RegistryAPI: APIProtocol {
                 contentLength = Int(blobInfo.info.size)
             }
 
-            let body = try await content.read(.with {
-                $0.digest = input.path.digest
-                if let range {
-                    $0.offset = range.offset
-                    $0.size = range.size ?? 0
+            let body = try await content.read(
+                .with {
+                    $0.digest = input.path.digest
+                    if let range {
+                        $0.offset = range.offset
+                        $0.size = range.size ?? 0
+                    }
                 }
-            }) { response in
+            ) { response in
                 let sequence = response.messages.map { $0.data }
                 return HTTPBody(sequence, length: expectedLength, iterationBehavior: .single)
             }
 
-            return .ok(.init(
-                headers: .init(contentLength: contentLength, dockerContentDigest: input.path.digest),
-                body: .binary(body)
-            ))
+            return .ok(
+                .init(
+                    headers: .init(
+                        contentLength: contentLength,
+                        dockerContentDigest: input.path.digest
+                    ),
+                    body: .binary(body)
+                )
+            )
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
     }
 
-    public func deleteManifest(_ input: OCIRegistryOpenAPI.Operations.DeleteManifest.Input) async throws -> OCIRegistryOpenAPI.Operations.DeleteManifest.Output {
+    public func deleteManifest(
+        _ input: OCIRegistryOpenAPI.Operations.DeleteManifest.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.DeleteManifest.Output {
         let repositoryName = input.path.name
         let reference = input.path.reference
         let imagesClient = Containerd_Services_Images_V1_Images.Client(wrapping: self.client)
@@ -479,9 +662,11 @@ public struct RegistryAPI: APIProtocol {
         } else {
             let taggedName = repositoryName + ":" + reference
             do {
-                let image = try await imagesClient.get(.with {
-                    $0.name = taggedName
-                }).image
+                let image = try await imagesClient.get(
+                    .with {
+                        $0.name = taggedName
+                    }
+                ).image
                 guard image.hasTarget else {
                     return .notFound(.init(body: .json(.init())))
                 }
@@ -498,9 +683,11 @@ public struct RegistryAPI: APIProtocol {
 
         var manifestExists = false
         do {
-            _ = try await contentClient.info(.with { info in
-                info.digest = digest
-            })
+            _ = try await contentClient.info(
+                .with { info in
+                    info.digest = digest
+                }
+            )
             manifestExists = true
         } catch let error as RPCError where error.code == .notFound {
             manifestExists = false
@@ -511,7 +698,9 @@ public struct RegistryAPI: APIProtocol {
             for image in response.images {
                 guard image.hasTarget else { continue }
                 guard image.target.digest == digest else { continue }
-                guard imageBelongsToRepository(image.name, repository: repositoryName) else { continue }
+                guard imageBelongsToRepository(image.name, repository: repositoryName) else {
+                    continue
+                }
                 imagesByName[image.name] = image
             }
         } catch let error as RPCError where error.code == .notFound {
@@ -525,12 +714,14 @@ public struct RegistryAPI: APIProtocol {
         var deletedAny = false
         for (name, image) in imagesByName {
             do {
-                _ = try await imagesClient.delete(.with { request in
-                    request.name = name
-                    if image.hasTarget {
-                        request.target = image.target
+                _ = try await imagesClient.delete(
+                    .with { request in
+                        request.name = name
+                        if image.hasTarget {
+                            request.target = image.target
+                        }
                     }
-                })
+                )
                 deletedAny = true
             } catch let error as RPCError where error.code == .notFound {
                 continue
@@ -539,9 +730,11 @@ public struct RegistryAPI: APIProtocol {
 
         if manifestExists {
             do {
-                _ = try await contentClient.delete(.with { request in
-                    request.digest = digest
-                })
+                _ = try await contentClient.delete(
+                    .with { request in
+                        request.digest = digest
+                    }
+                )
                 deletedAny = true
             } catch let error as RPCError where error.code == .notFound {
                 // Manifest already removed; ignore.
@@ -556,7 +749,10 @@ public struct RegistryAPI: APIProtocol {
     }
 
     // public func putManifest(_ input: OCIRegistryOpenAPI.Operations.PutManifest.Input) async throws -> OCIRegistryOpenAPI.Operations.PutManifest.Output {
-    public func putManifest(_ request: Request, context: some RequestContext) async throws -> Response {
+    public func putManifest(
+        _ request: Request,
+        context: some RequestContext
+    ) async throws -> Response {
         let repositoryName = try context.parameters.require("name")
         let reference = try context.parameters.require("reference")
 
@@ -576,26 +772,38 @@ public struct RegistryAPI: APIProtocol {
             body.writeImmutableBuffer(chunk)
         }
         let manifestData = Data(buffer: body)
-        
+
         switch request.headers[.contentType] {
         case "application/vnd.docker.distribution.manifest.v2+json":
-            let dockerManifest = try JSONDecoder().decode(Components.Schemas.DockerManifest.self, from: manifestData)
+            let dockerManifest = try JSONDecoder().decode(
+                Components.Schemas.DockerManifest.self,
+                from: manifestData
+            )
             manifestMediaType = "application/vnd.docker.distribution.manifest.v2+json"
             manifestAnnotations = [:]
             dependentDescriptors = [dockerManifest.config] + dockerManifest.layers
         case "application/vnd.oci.image.manifest.v1+json":
-            let ociManifest = try JSONDecoder().decode(Components.Schemas.Manifest.self, from: manifestData)
+            let ociManifest = try JSONDecoder().decode(
+                Components.Schemas.Manifest.self,
+                from: manifestData
+            )
             manifestMediaType = "application/vnd.oci.image.manifest.v1+json"
             manifestAnnotations = ociManifest.annotations?.additionalProperties ?? [:]
             dependentDescriptors = [ociManifest.config] + ociManifest.layers
         default:
             do {
-                let dockerManifest = try JSONDecoder().decode(Components.Schemas.DockerManifest.self, from: manifestData)
+                let dockerManifest = try JSONDecoder().decode(
+                    Components.Schemas.DockerManifest.self,
+                    from: manifestData
+                )
                 manifestMediaType = "application/vnd.docker.distribution.manifest.v2+json"
                 manifestAnnotations = [:]
                 dependentDescriptors = [dockerManifest.config] + dockerManifest.layers
             } catch {
-                let ociManifest = try JSONDecoder().decode(Components.Schemas.Manifest.self, from: manifestData)
+                let ociManifest = try JSONDecoder().decode(
+                    Components.Schemas.Manifest.self,
+                    from: manifestData
+                )
                 manifestMediaType = "application/vnd.oci.image.manifest.v1+json"
                 manifestAnnotations = ociManifest.annotations?.additionalProperties ?? [:]
                 dependentDescriptors = [ociManifest.config] + ociManifest.layers
@@ -605,13 +813,16 @@ public struct RegistryAPI: APIProtocol {
         // Compute digest from Docker's exact bytes (not re-encoded)
         let manifestDigest = computeDigest(for: manifestData)
         let manifestSize = Int64(manifestData.count)
-        
-        logger.info("Computed manifest digest from raw bytes", metadata: [
-            "digest": .string(manifestDigest),
-            "digest-length": .stringConvertible(manifestDigest.count),
-            "manifest-size": .stringConvertible(manifestSize),
-            "reference": .string(reference)
-        ])
+
+        logger.info(
+            "Computed manifest digest from raw bytes",
+            metadata: [
+                "digest": .string(manifestDigest),
+                "digest-length": .stringConvertible(manifestDigest.count),
+                "manifest-size": .stringConvertible(manifestSize),
+                "reference": .string(reference),
+            ]
+        )
 
         if self.isDigestReference(reference) && reference != manifestDigest {
             throw HTTPError(.badRequest, message: "Reference digest does not match manifest digest")
@@ -619,32 +830,54 @@ public struct RegistryAPI: APIProtocol {
 
         for descriptor in dependentDescriptors {
             do {
-                logger.debug("Checking dependent descriptor", metadata: ["digest": .string(descriptor.digest)])
-                _ = try await contentClient.info(.with { request in
-                    request.digest = descriptor.digest
-                })
+                logger.debug(
+                    "Checking dependent descriptor",
+                    metadata: ["digest": .string(descriptor.digest)]
+                )
+                _ = try await contentClient.info(
+                    .with { request in
+                        request.digest = descriptor.digest
+                    }
+                )
             } catch let error as RPCError where error.code == .notFound {
-                logger.info("Dependent descriptor not found", metadata: ["digest": .string(descriptor.digest)])
+                logger.info(
+                    "Dependent descriptor not found",
+                    metadata: ["digest": .string(descriptor.digest)]
+                )
                 throw HTTPError(.notFound, message: "Dependent descriptor not found")
             } catch let error as RPCError where error.code == .invalidArgument {
-                logger.error("Invalid digest format for dependent descriptor", metadata: ["error": "\(error)", "digest": .string(descriptor.digest), "digest-length": .stringConvertible(descriptor.digest.count)])
+                logger.error(
+                    "Invalid digest format for dependent descriptor",
+                    metadata: [
+                        "error": "\(error)", "digest": .string(descriptor.digest),
+                        "digest-length": .stringConvertible(descriptor.digest.count),
+                    ]
+                )
                 throw HTTPError(.badRequest, message: "Invalid digest format: \(descriptor.digest)")
             } catch {
-                logger.error("Failed to get dependent descriptor info", metadata: ["error": "\(error)", "digest": .string(descriptor.digest)])
+                logger.error(
+                    "Failed to get dependent descriptor info",
+                    metadata: ["error": "\(error)", "digest": .string(descriptor.digest)]
+                )
                 throw error
             }
         }
 
         var manifestExists = false
         do {
-            _ = try await contentClient.info(.with { request in
-                request.digest = manifestDigest
-            })
+            _ = try await contentClient.info(
+                .with { request in
+                    request.digest = manifestDigest
+                }
+            )
             manifestExists = true
         } catch let error as RPCError where error.code == .notFound {
             logger.info("Manifest not found", metadata: ["digest": .string(manifestDigest)])
         } catch {
-            logger.error("Failed to get manifest info", metadata: ["error": "\(error)", "digest": .string(manifestDigest)])
+            logger.error(
+                "Failed to get manifest info",
+                metadata: ["error": "\(error)", "digest": .string(manifestDigest)]
+            )
             throw error
         }
 
@@ -658,24 +891,33 @@ public struct RegistryAPI: APIProtocol {
             )
 
             do {
-                logger.info("Writing manifest", metadata: ["digest": .string(manifestDigest), "size": .stringConvertible(manifestSize)])
+                logger.info(
+                    "Writing manifest",
+                    metadata: [
+                        "digest": .string(manifestDigest), "size": .stringConvertible(manifestSize),
+                    ]
+                )
                 try await contentClient.write(
                     requestProducer: { [manifestData] writer in
-                        try await writer.write(Containerd_Services_Content_V1_WriteContentRequest.with { request in
-                            request.action = .write
-                            request.ref = writeRef
-                            request.total = manifestSize
-                            request.expected = manifestDigest
-                            request.offset = 0
-                            request.data = manifestData
-                            request.labels = labels
-                        })
-                        try await writer.write(Containerd_Services_Content_V1_WriteContentRequest.with { request in
-                            request.action = .commit
-                            request.ref = writeRef
-                            request.offset = manifestSize
-                            request.expected = manifestDigest
-                        })
+                        try await writer.write(
+                            Containerd_Services_Content_V1_WriteContentRequest.with { request in
+                                request.action = .write
+                                request.ref = writeRef
+                                request.total = manifestSize
+                                request.expected = manifestDigest
+                                request.offset = 0
+                                request.data = manifestData
+                                request.labels = labels
+                            }
+                        )
+                        try await writer.write(
+                            Containerd_Services_Content_V1_WriteContentRequest.with { request in
+                                request.action = .commit
+                                request.ref = writeRef
+                                request.offset = manifestSize
+                                request.expected = manifestDigest
+                            }
+                        )
                     },
                     onResponse: { response in
                         for try await _ in response.messages {}
@@ -684,9 +926,15 @@ public struct RegistryAPI: APIProtocol {
                 )
             } catch let error as RPCError where error.code == .alreadyExists {
                 // Content already committed; continue.
-                logger.info("Content already committed, skipping", metadata: ["digest": .string(manifestDigest)])
+                logger.info(
+                    "Content already committed, skipping",
+                    metadata: ["digest": .string(manifestDigest)]
+                )
             } catch {
-                logger.error("Failed to write manifest", metadata: ["error": "\(error)", "digest": .string(manifestDigest)])
+                logger.error(
+                    "Failed to write manifest",
+                    metadata: ["error": "\(error)", "digest": .string(manifestDigest)]
+                )
                 throw error
             }
         }
@@ -705,23 +953,44 @@ public struct RegistryAPI: APIProtocol {
             }
 
             do {
-                logger.debug("Creating image", metadata: ["name": .string(name), "digest": .string(targetDescriptor.digest)])
-                _ = try await imagesClient.create(.with { request in
-                    request.image = image
-                })
+                logger.debug(
+                    "Creating image",
+                    metadata: ["name": .string(name), "digest": .string(targetDescriptor.digest)]
+                )
+                _ = try await imagesClient.create(
+                    .with { request in
+                        request.image = image
+                    }
+                )
             } catch let error as RPCError {
                 if error.code == .alreadyExists {
-                    logger.debug("Image already exists, updating", metadata: ["name": .string(name), "digest": .string(targetDescriptor.digest)])
-                    _ = try await imagesClient.update(.with { request in
-                        request.image = image
-                        request.updateMask.paths = ["target"]
-                    })
+                    logger.debug(
+                        "Image already exists, updating",
+                        metadata: [
+                            "name": .string(name), "digest": .string(targetDescriptor.digest),
+                        ]
+                    )
+                    _ = try await imagesClient.update(
+                        .with { request in
+                            request.image = image
+                            request.updateMask.paths = ["target"]
+                        }
+                    )
                 } else {
-                    logger.error("Invalid argument when creating image", metadata: ["error": "\(error)", "name": .string(name), "digest": .string(targetDescriptor.digest)])
+                    logger.error(
+                        "Invalid argument when creating image",
+                        metadata: [
+                            "error": "\(error)", "name": .string(name),
+                            "digest": .string(targetDescriptor.digest),
+                        ]
+                    )
                     throw error
                 }
             } catch {
-                logger.error("Failed to upsert image", metadata: ["error": "\(error)", "name": .string(name)])
+                logger.error(
+                    "Failed to upsert image",
+                    metadata: ["error": "\(error)", "name": .string(name)]
+                )
                 throw error
             }
         }
@@ -738,55 +1007,68 @@ public struct RegistryAPI: APIProtocol {
             try await upsertImage(named: name)
         }
 
-        return Response(status: .created, headers: [
-            .location: reference,
-            HTTPField.Name("Docker-Content-Digest")!: manifestDigest
-        ])
+        return Response(
+            status: .created,
+            headers: [
+                .location: reference,
+                HTTPField.Name("Docker-Content-Digest")!: manifestDigest,
+            ]
+        )
     }
-    
-    public func getManifest(_ input: OCIRegistryOpenAPI.Operations.GetManifest.Input) async throws -> OCIRegistryOpenAPI.Operations.GetManifest.Output {
+
+    public func getManifest(
+        _ input: OCIRegistryOpenAPI.Operations.GetManifest.Input
+    ) async throws -> OCIRegistryOpenAPI.Operations.GetManifest.Output {
         do {
             let images = Containerd_Services_Images_V1_Images.Client(wrapping: self.client)
             let content = Containerd_Services_Content_V1_Content.Client(wrapping: self.client)
-            let image = try await images.get(.with {
-                $0.name = input.path.name
-            }).image
-            let manifest = try await content.read(.with {
-                $0.digest = image.target.digest
-            }) { manifest in
+            let image = try await images.get(
+                .with {
+                    $0.name = input.path.name
+                }
+            ).image
+            let manifest = try await content.read(
+                .with {
+                    $0.digest = image.target.digest
+                }
+            ) { manifest in
                 var data = Data()
                 for try await message in manifest.messages {
                     data.append(message.data)
                 }
                 return try JSONDecoder().decode(ImageManifest.self, from: data)
             }
-            
-            return .ok(.init(
-                headers: .init(
-                    dockerContentDigest: image.target.digest,
-                    contentType: image.target.mediaType
-                ),
-                body: .applicationVnd_oci_image_manifest_v1Json(.init(
-                    schemaVersion: manifest.schemaVersion,
-                    config: .init(
-                        mediaType: image.target.mediaType,
-                        size: Int(image.target.size),
-                        digest: image.target.digest,
-                        annotations: .init(additionalProperties: image.target.annotations)
+
+            return .ok(
+                .init(
+                    headers: .init(
+                        dockerContentDigest: image.target.digest,
+                        contentType: image.target.mediaType
                     ),
-                    layers: manifest.layers.map { layer in
-                        return .init(
-                            mediaType: layer.mediaType,
-                            size: Int(layer.size),
-                            digest: layer.digest,
-                            annotations: layer.annotations.map { annotations in
-                                return .init(additionalProperties: annotations)
-                            }
+                    body: .applicationVnd_oci_image_manifest_v1Json(
+                        .init(
+                            schemaVersion: manifest.schemaVersion,
+                            config: .init(
+                                mediaType: image.target.mediaType,
+                                size: Int(image.target.size),
+                                digest: image.target.digest,
+                                annotations: .init(additionalProperties: image.target.annotations)
+                            ),
+                            layers: manifest.layers.map { layer in
+                                return .init(
+                                    mediaType: layer.mediaType,
+                                    size: Int(layer.size),
+                                    digest: layer.digest,
+                                    annotations: layer.annotations.map { annotations in
+                                        return .init(additionalProperties: annotations)
+                                    }
+                                )
+                            },
+                            annotations: .init(additionalProperties: image.target.annotations)
                         )
-                    },
-                    annotations: .init(additionalProperties: image.target.annotations)
-                ))
-            ))
+                    )
+                )
+            )
         } catch let error as RPCError where error.code == .notFound {
             return .notFound(.init(body: .json(.init())))
         }
@@ -795,17 +1077,20 @@ public struct RegistryAPI: APIProtocol {
     public func checkVersionSupport(
         _ input: OCIRegistryOpenAPI.Operations.CheckVersionSupport.Input
     ) async throws -> OCIRegistryOpenAPI.Operations.CheckVersionSupport.Output {
-        return .ok(.init(headers: .init(dockerDistributionAPIVersion: "registry/2.0")))    
+        return .ok(.init(headers: .init(dockerDistributionAPIVersion: "registry/2.0")))
     }
 
-    private static let digestAlgorithmCharacters = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+_.-")
+    private static let digestAlgorithmCharacters = Set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+_.-"
+    )
     private static let digestHexCharacters = Set("0123456789abcdefABCDEF")
 
     private func isDigestReference(_ reference: String) -> Bool {
         let parts = reference.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
-              !parts[0].isEmpty,
-              !parts[1].isEmpty else {
+            !parts[0].isEmpty,
+            !parts[1].isEmpty
+        else {
             return false
         }
         return parts[0].allSatisfy { Self.digestAlgorithmCharacters.contains($0) }
@@ -860,10 +1145,11 @@ public struct RegistryAPI: APIProtocol {
         let rangeWithoutTotal = rangeComponent.split(separator: "/").first ?? rangeComponent
         let bounds = rangeWithoutTotal.split(separator: "-")
         guard bounds.count == 2,
-              let start = Int64(bounds[0]),
-              let end = Int64(bounds[1]),
-              start >= 0,
-              end >= start else {
+            let start = Int64(bounds[0]),
+            let end = Int64(bounds[1]),
+            start >= 0,
+            end >= start
+        else {
             throw UploadValidationError.invalidRange
         }
 
@@ -879,13 +1165,21 @@ public struct RegistryAPI: APIProtocol {
         for try await chunk in body {
             guard !chunk.isEmpty else { continue }
             let data = Data(chunk)
-            logger.trace("Writing chunk", metadata: ["digest": .string(session.ref), "bytes": .stringConvertible(session.offset), "chunk-size": .stringConvertible(data.count)]);
-            try await session.write(.with { request in
-                request.action = .write
-                request.ref = session.ref
-                request.offset = session.offset
-                request.data = data
-            })
+            logger.trace(
+                "Writing chunk",
+                metadata: [
+                    "digest": .string(session.ref), "bytes": .stringConvertible(session.offset),
+                    "chunk-size": .stringConvertible(data.count),
+                ]
+            )
+            try await session.write(
+                .with { request in
+                    request.action = .write
+                    request.ref = session.ref
+                    request.offset = session.offset
+                    request.data = data
+                }
+            )
             session.offset += Int64(data.count)
         }
     }

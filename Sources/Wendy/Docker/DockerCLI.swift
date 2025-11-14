@@ -38,13 +38,16 @@ public struct DockerCLI: Sendable {
             )
         }
     }
-    
+
     public func buildx(
         name: String,
         directory: String = ".",
         port: Int = 8080
     ) async throws {
-        let arguments = ["buildx", "build", "--platform", "linux/arm64", "-t", "localhost:\(port)/\(name):latest", directory]
+        let arguments = [
+            "buildx", "build", "--platform", "linux/arm64", "-t",
+            "localhost:\(port)/\(name):latest", directory,
+        ]
         let result = try await Subprocess.run(
             Subprocess.Executable.name(self.command),
             arguments: Subprocess.Arguments(arguments),

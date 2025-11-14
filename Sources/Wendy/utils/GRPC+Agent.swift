@@ -101,7 +101,9 @@ func withAgentGRPCClient<R: Sendable>(
 func _withAgentGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
     title: TerminalText,
-    _ body: @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint) async throws -> R
+    _ body:
+        @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
+        async throws -> R
 ) async throws -> R {
     let logger = Logger(label: "sh.wendy.agent-grpc-client")
     do {

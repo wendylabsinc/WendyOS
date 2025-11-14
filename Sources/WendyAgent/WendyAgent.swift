@@ -1,20 +1,20 @@
 import ArgumentParser
 import AsyncHTTPClient
+import ContainerdRegistry
 import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
+import Hummingbird
 import Logging
 import NIOSSL
+import OpenAPIHummingbird
 import ServiceLifecycle
 import WendyAgentGRPC
 import WendyCloudGRPC
 import WendyShared
 import X509
 import _NIOFileSystem
-import ContainerdRegistry
-import Hummingbird
-import OpenAPIHummingbird
 
 @main
 struct WendyAgent: AsyncParsableCommand {
@@ -185,7 +185,7 @@ struct WendyAgent: AsyncParsableCommand {
         let serviceGroup = ServiceGroup(
             configuration: serviceGroupConfig
         )
-        
+
         try await withThrowingTaskGroup(of: Void.self) { taskGroup in
             taskGroup.addTask {
                 try await serviceGroup.run()
@@ -198,7 +198,7 @@ struct WendyAgent: AsyncParsableCommand {
                     return
                 }
             }
-            
+
             defer { taskGroup.cancelAll() }
             try await taskGroup.next()
         }

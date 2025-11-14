@@ -85,14 +85,15 @@ struct Agent {
         let logger = Logger(label: "sh.wendyengineer.agent.update")
         let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
         let (progress, continuation) = AsyncStream<Double>.makeStream()
-        
+
         return try await withThrowingTaskGroup(of: Bool.self) { group in
             group.addTask {
                 defer { continuation.finish() }
                 return try await agent.updateAgent { writer in
                     logger.debug("Opening file...")
                     do {
-                        try await FileSystem.shared.withFileHandle(forReadingAt: FilePath(path)) { handle in
+                        try await FileSystem.shared.withFileHandle(forReadingAt: FilePath(path)) {
+                            handle in
                             let fileSize = try await handle.info().size
                             var writtenBytes: Int64 = 0
                             logger.debug("Uploading binary...")
@@ -143,7 +144,7 @@ struct Agent {
                     }
                 }
             }
-            
+
             for await value in progress {
                 onProgress(value)
             }

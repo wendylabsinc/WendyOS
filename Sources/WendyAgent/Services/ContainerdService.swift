@@ -255,9 +255,11 @@ public struct Containerd: Sendable {
 
     public func fetchBlob(digest: String) async throws -> Data {
         let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
-        return try await content.read(.with {
-            $0.digest = digest
-        }) { response in
+        return try await content.read(
+            .with {
+                $0.digest = digest
+            }
+        ) { response in
             var data = Data()
             for try await message in response.messages {
                 data.append(message.data)
@@ -633,19 +635,27 @@ public struct Containerd: Sendable {
         return try await tasks.list(.init()).tasks
     }
 
-    public func getContainer(named: String) async throws -> Containerd_Services_Containers_V1_Container {
+    public func getContainer(
+        named: String
+    ) async throws -> Containerd_Services_Containers_V1_Container {
         let containers = Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
-        return try await containers.get(.with {
-            $0.id = named
-        }).container
+        return try await containers.get(
+            .with {
+                $0.id = named
+            }
+        ).container
     }
 
-    public func mountsSnapshot(named: String) async throws -> Containerd_Services_Snapshots_V1_MountsResponse {
+    public func mountsSnapshot(
+        named: String
+    ) async throws -> Containerd_Services_Snapshots_V1_MountsResponse {
         let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        return try await snapshots.mounts(.with {
-            $0.key = named
-            $0.snapshotter = "overlayfs"
-        })
+        return try await snapshots.mounts(
+            .with {
+                $0.key = named
+                $0.snapshotter = "overlayfs"
+            }
+        )
     }
 
     public func createTask(

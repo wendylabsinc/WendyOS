@@ -118,7 +118,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             )
         }
     }
-    
+
     func runDockerBased() async throws {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
@@ -175,7 +175,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     )
                 }
             }
-        
+
         func makeClient() async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
             try await ClientBootstrap(group: .singletonMultiThreadedEventLoopGroup)
                 .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -190,7 +190,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
 
         let logger = Logger(label: "sh.wendy.cli.run.tcp-proxy-server")
-        
+
         func handleClient(client: NIOAsyncChannel<ByteBuffer, ByteBuffer>) async throws {
             do {
                 try await client.executeThenClose { serverInbound, serverOutbound in
@@ -238,7 +238,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let name = url.lastPathComponent.lowercased()
 
         let docker = DockerCLI()
-        
+
         let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
         let endpoint = try await agentConnectionOptions.read(title: title)
         try await _withAgentGRPCClient(
@@ -438,7 +438,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             try await withThrowingTaskGroup { taskGroup in
                 actor LayersUploaded {
                     var status = Status()
-                    
+
                     struct Status: Sendable {
                         var layersUploading = 0
                         var layersUploaded = 0
@@ -448,7 +448,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         var progress: Double {
                             return Double(uploadedBytes) / Double(expectedBytes)
                         }
-                    
+
                         var message: String {
                             if layersFailedUploaded > 0 {
                                 return
@@ -458,7 +458,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                             }
                         }
                     }
-                    nonisolated let (statusChange, continuation) = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                    nonisolated let (statusChange, continuation) = AsyncStream<Status>.makeStream(
+                        bufferingPolicy: .bufferingNewest(1)
+                    )
 
                     func incrementUploading(_ bytes: Int64) {
                         status.layersUploading += 1
@@ -573,7 +575,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         }
                     }
 
-                    try await Noora().progressBarStep(message: "Uploading layers to agent") { progress in
+                    try await Noora().progressBarStep(message: "Uploading layers to agent") {
+                        progress in
                         for await status in layersUploaded.statusChange {
                             progress(status.progress)
                         }
@@ -648,29 +651,31 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         let appConfigData = try await readAppConfigData(logger: logger)
         _ = try await agentContainers.createContainer(
-            request: .init(message: .with {
-                $0.imageName = "\(appName)"
-                $0.appName = appName
-                $0.appConfig = appConfigData
-                if noRestart {
-                    $0.restartPolicy = .with {
-                        $0.mode = .no
-                    }
-                } else if let retries = restartOnFailureRetries {
-                    $0.restartPolicy = .with {
-                        $0.mode = .onFailure
-                        $0.onFailureMaxRetries = Int32(retries)
-                    }
-                } else if restartUnlessStoppedFlag {
-                    $0.restartPolicy = .with {
-                        $0.mode = .unlessStopped
-                    }
-                } else {
-                    $0.restartPolicy = .with {
-                        $0.mode = .default
+            request: .init(
+                message: .with {
+                    $0.imageName = "\(appName)"
+                    $0.appName = appName
+                    $0.appConfig = appConfigData
+                    if noRestart {
+                        $0.restartPolicy = .with {
+                            $0.mode = .no
+                        }
+                    } else if let retries = restartOnFailureRetries {
+                        $0.restartPolicy = .with {
+                            $0.mode = .onFailure
+                            $0.onFailureMaxRetries = Int32(retries)
+                        }
+                    } else if restartUnlessStoppedFlag {
+                        $0.restartPolicy = .with {
+                            $0.mode = .unlessStopped
+                        }
+                    } else {
+                        $0.restartPolicy = .with {
+                            $0.mode = .default
+                        }
                     }
                 }
-            })
+            )
         )
     }
 
@@ -684,9 +689,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         )
 
         _ = try await agentContainers.startContainer(
-            request: .init(message: .with {
-                $0.appName = imageName
-            })
+            request: .init(
+                message: .with {
+                    $0.appName = imageName
+                }
+            )
         ) { response in
             for try await message in response.messages {
                 switch message.responseType {
@@ -721,7 +728,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         try await docker.build(name: name)
         logger.debug("Container built successfully!")
     }
-    
+
     func addSwiftPMResources(
         at buildDir: URL,
         to spec: inout ContainerImageSpec

@@ -108,7 +108,8 @@ struct DeviceCommand: AsyncParsableCommand {
                 title: "Which device do you want to update?"
             ) { client in
                 let agent = Agent(client: client)
-                return try await Noora().progressBarStep(message: "Updating Device") { updateProgress in
+                return try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)
                 }
             }
@@ -245,7 +246,8 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 let binary = try await downloadLatestRelease().path
-                let success = try await Noora().progressBarStep(message: "Updating Device") { updateProgress in
+                let success = try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)
                 }
 

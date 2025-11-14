@@ -184,22 +184,26 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         request: .init(
                             metadata: Metadata(),
                             message: .with {
-                            $0.imageName = request.imageName
-                            $0.appName = request.appName
-                            $0.cmd = request.cmd
-                            $0.appConfig = request.appConfig
-                            $0.workingDir = request.workingDir
-                            $0.restartPolicy = request.restartPolicy
-                        }),
+                                $0.imageName = request.imageName
+                                $0.appName = request.appName
+                                $0.cmd = request.cmd
+                                $0.appConfig = request.appConfig
+                                $0.workingDir = request.workingDir
+                                $0.restartPolicy = request.restartPolicy
+                            }
+                        ),
                         context: context
                     ).accepted.get()
 
-                    let response = try await self.startContainer(request: .init(
-                        metadata: Metadata(),
-                        message: .with {
-                            $0.appName = request.appName
-                        }
-                    ), context: context).accepted.get()
+                    let response = try await self.startContainer(
+                        request: .init(
+                            metadata: Metadata(),
+                            message: .with {
+                                $0.appName = request.appName
+                            }
+                        ),
+                        context: context
+                    ).accepted.get()
 
                     return try await response.producer(writer)
                 } catch let error as RPCError {
@@ -234,12 +238,16 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             let images = Containerd_Services_Images_V1_Images.Client(wrapping: client.client)
             let content = Containerd_Services_Content_V1_Content.Client(wrapping: client.client)
 
-            let image = try await images.get(.with {
-                $0.name = request.imageName
-            }).image
-            let manifest = try await content.read(.with {
-                $0.digest = image.target.digest
-            }) { manifest in
+            let image = try await images.get(
+                .with {
+                    $0.name = request.imageName
+                }
+            ).image
+            let manifest = try await content.read(
+                .with {
+                    $0.digest = image.target.digest
+                }
+            ) { manifest in
                 var data = Data()
                 for try await message in manifest.messages {
                     data.append(message.data)
@@ -261,7 +269,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         "on-failure:\(restartPolicy.onFailureMaxRetries)"
                 }
             }
-            
+
             let appConfig: AppConfig
 
             if request.appConfig.isEmpty {
@@ -298,10 +306,14 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             // Assume manifest.config.digest is the reference to the image config blob
             let configDescriptor = manifest.config
             let configData = try await client.fetchBlob(digest: configDescriptor.digest)
-            let imageConfig = try JSONDecoder().decode(ContainerRegistry.ImageConfiguration.self, from: configData)
-            
+            let imageConfig = try JSONDecoder().decode(
+                ContainerRegistry.ImageConfiguration.self,
+                from: configData
+            )
+
             // Set up command
-            let requestCmdIsEmpty = request.cmd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let requestCmdIsEmpty = request.cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
             let args: [String]
             if requestCmdIsEmpty {
                 // Compose from config.entrypoint + config.cmd if they exist (following Docker convention)
@@ -471,7 +483,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 ) async throws {
                     let container = try await client.getContainer(named: request.appName)
                     let snapshot = try await client.mountsSnapshot(named: container.snapshotKey)
-                    
+
                     _ = try await stopContainer(
                         request: .init(
                             metadata: Metadata(),
@@ -481,7 +493,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         ),
                         context: context
                     ).accepted.get()
-                    
+
                     do {
                         logger.info("Creating task")
                         try await client.createTask(
@@ -531,7 +543,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         }
                     )
                 }
-                
+
                 try await client.withStdout { stdout, stderr in
                     try await run(stdout: stdout, stderr: stderr)
                 } onStdout: { bytes in
