@@ -119,6 +119,24 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
     }
 
+    /// Compute the restart policy based on CLI flags
+    private func computeRestartPolicy() -> RestartPolicy {
+        var restartPolicy = RestartPolicy()
+
+        if noRestart {
+            restartPolicy.mode = .no
+        } else if let retries = restartOnFailureRetries {
+            restartPolicy.mode = .onFailure
+            restartPolicy.onFailureMaxRetries = Int32(retries)
+        } else if restartUnlessStoppedFlag {
+            restartPolicy.mode = .unlessStopped
+        } else {
+            restartPolicy.mode = .default
+        }
+
+        return restartPolicy
+    }
+
     func runDockerBased() async throws {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
@@ -595,6 +613,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
             logger.debug("Starting container")
 
+            let restartPolicy = computeRestartPolicy()
+
             _ = try await agentContainers.runContainer(
                 .with {
                     $0.imageName = "\(imageName):latest"
@@ -602,6 +622,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     $0.workingDir = config.config.workingDir ?? "/"
                     $0.cmd = config.config.cmd?.joined(separator: " ") ?? "/bin/\(imageName)"
                     $0.appConfig = appConfigData
+                    $0.restartPolicy = restartPolicy
                     $0.layers = layers.map { layer in
                         .with {
                             $0.digest = layer.digest

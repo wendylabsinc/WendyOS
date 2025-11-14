@@ -53,7 +53,9 @@ struct WendyAgent: AsyncParsableCommand {
             try await FileSystemAgentConfigService(directory: FilePath(configDir))
         }()
 
-        var backgroundServices: [any ServiceLifecycle.Service] = []
+        var backgroundServices: [any ServiceLifecycle.Service] = [
+            containerMonitor  // Add container monitor as a background service
+        ]
         var servers = [GRPCServer<HTTP2ServerTransport.Posix>]()
 
         if let enrolled = await config.enrolled {

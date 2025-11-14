@@ -518,6 +518,17 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                                 "container-id": .stringConvertible(request.appName)
                             ]
                         )
+                        // Mark the container as started in the monitor (reset explicitly stopped flag)
+                        await containerMonitor.markContainerStarted(request.appName)
+                    } catch let error as RPCError where error.code == .notFound {
+                        logger.info("Container wasn't running")
+                    } catch let error as RPCError {
+                        logger.error(
+                            "Failed to kill container",
+                            metadata: [
+                                "container-id": .stringConvertible(request.appName)
+                            ]
+                        )
                         try await client.createTask(
                             containerID: request.appName,
                             appName: request.appName,
@@ -577,6 +588,8 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             )
             do {
                 try await client.stopTask(containerID: appName)
+                // Mark the container as explicitly stopped in the monitor
+                await containerMonitor.markContainerStopped(appName)
                 logger.info(
                     "Stopped container",
                     metadata: ["container-id": .stringConvertible(appName)]
