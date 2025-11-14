@@ -93,6 +93,16 @@ func withAgentGRPCClient<R: Sendable>(
     title: TerminalText,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
+    return try await _withAgentGRPCClient(endpoint, title: title) { client, _ in
+        return try await body(client)
+    }
+}
+
+func _withAgentGRPCClient<R: Sendable>(
+    _ endpoint: AgentConnectionOptions.Endpoint,
+    title: TerminalText,
+    _ body: @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint) async throws -> R
+) async throws -> R {
     let logger = Logger(label: "sh.wendy.agent-grpc-client")
     do {
         let result = try await withGRPCClient(endpoint, security: .plaintext) {
@@ -103,7 +113,7 @@ func withAgentGRPCClient<R: Sendable>(
             let response = try await provisioningAPI.isProvisioned(.init())
             switch response.response {
             case .notProvisioned:
-                return .notProvisioned(try await body(client))
+                return .notProvisioned(try await body(client, endpoint))
             case .provisioned, .none:
                 return .retryWithProvisioned(
                     assetId: response.provisioned.assetID,
@@ -156,9 +166,10 @@ func withAgentGRPCClient<R: Sendable>(
                                 )
                             )
                         }
-                    },
-                    body
-                )
+                    }
+                ) { [endpoint] client in
+                    return try await body(client, endpoint)
+                }
             }
         }
     } catch let error as RPCError where error.code == .unavailable {

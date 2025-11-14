@@ -118,9 +118,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             )
         }
     }
-}
-
-extension RunCommand {
+    
     func runDockerBased() async throws {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
@@ -153,42 +151,138 @@ extension RunCommand {
         )
     }
 
+    func withTCPProxyServer<T: Sendable>(
+        localHostname: String,
+        localPort: Int,
+        remoteHostname: String,
+        remotePort: Int,
+        _ withPort: @escaping @Sendable (NIOCore.SocketAddress?) async throws -> T
+    ) async throws -> T {
+        let server = try await ServerBootstrap(group: .singletonMultiThreadedEventLoopGroup)
+            .serverChannelOption(ChannelOptions.backlog, value: numericCast(256))
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+            .bind(
+                host: localHostname,
+                port: localPort,
+                serverBackPressureStrategy: nil
+            ) { channel in
+                return channel.eventLoop.makeCompletedFuture {
+                    try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                        wrappingChannelSynchronously: channel,
+                        configuration: .init()
+                    )
+                }
+            }
+        
+        func makeClient() async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
+            try await ClientBootstrap(group: .singletonMultiThreadedEventLoopGroup)
+                .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+                .connect(host: remoteHostname, port: remotePort) { channel in
+                    return channel.eventLoop.makeCompletedFuture {
+                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                            wrappingChannelSynchronously: channel,
+                            configuration: .init()
+                        )
+                    }
+                }
+        }
+
+        let logger = Logger(label: "sh.wendy.cli.run.tcp-proxy-server")
+        
+        func handleClient(client: NIOAsyncChannel<ByteBuffer, ByteBuffer>) async throws {
+            do {
+                try await client.executeThenClose { serverInbound, serverOutbound in
+                    try await makeClient().executeThenClose { clientInbound, clientOutbound in
+                        try await withThrowingTaskGroup { group in
+                            group.addTask {
+                                for try await buffer in serverInbound {
+                                    try await clientOutbound.write(buffer)
+                                }
+                            }
+                            group.addTask {
+                                for try await buffer in clientInbound {
+                                    try await serverOutbound.write(buffer)
+                                }
+                            }
+                            try await group.waitForAll()
+                        }
+                    }
+                }
+            } catch {
+                logger.error("Failed to handle client", metadata: ["error": .string("\(error)")])
+            }
+        }
+
+        return try await server.executeThenClose { clients in
+            try await withThrowingTaskGroup { group in
+                group.addTask {
+                    try await withThrowingDiscardingTaskGroup { group in
+                        for try await client in clients {
+                            group.addTask {
+                                try await handleClient(client: client)
+                            }
+                        }
+                    }
+                }
+
+                defer { group.cancelAll() }
+                return try await withPort(server.channel.localAddress)
+            }
+        }
+    }
+
     func runContainerdBased() async throws {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
 
         let docker = DockerCLI()
         
-        try await Noora().progressStep(
-            message: "Building container",
-            successMessage: "Container built successfully!",
-            errorMessage: "Failed to build container",
-            showSpinner: true
-        ) { _ in
-            try await docker.buildx(name: name)
-        }
+        let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
+        let endpoint = try await agentConnectionOptions.read(title: title)
+        try await _withAgentGRPCClient(
+            endpoint,
+            title: title
+        ) { [name] client, endpoint in
+            try await withTCPProxyServer(
+                localHostname: "localhost",
+                localPort: 0,
+                remoteHostname: endpoint.host,
+                remotePort: 8080
+            ) { proxyAddress in
+                try await Noora().progressStep(
+                    message: "Building container",
+                    successMessage: "Container built successfully!",
+                    errorMessage: "Failed to build container",
+                    showSpinner: true
+                ) { _ in
+                    try await docker.buildx(name: name, port: proxyAddress?.port ?? 8080)
+                }
 
-        try await withAgentGRPCClient(
-            agentConnectionOptions,
-            title: "Which device do you want to run this app on?"
-        ) { [name] client in
-            // TODO: Set up proxy to push the container to the agent
-        
-            try await Noora().progressStep(
-                message: "Uploading container",
-                successMessage: "Container uploaded successfully!",
-                errorMessage: "Failed to upload container",
-                showSpinner: true
-            ) { _ in
-                try await docker.push(name: name)
+                try await Noora().progressStep(
+                    message: "Uploading container",
+                    successMessage: "Container uploaded successfully!",
+                    errorMessage: "Failed to upload container",
+                    showSpinner: true
+                ) { _ in
+                    try await docker.push(name: name, port: proxyAddress?.port ?? 8080)
+                }
             }
 
-            // TODO: Create image
+            // TODO: Create image might be needed here, but my tests didn't require it for some reason
 
-            try await createContainerdContainer(
-                appName: name,
-                client: client
-            )
+            try await Noora().progressStep(
+                message: "Preparing app",
+                successMessage: "App ready to start",
+                errorMessage: "Failed to prepare app",
+                showSpinner: true
+            ) { _ in
+                try await createContainerdContainer(
+                    appName: name,
+                    client: client
+                )
+            }
 
             try await startContainerdContainer(
                 imageName: name,
@@ -626,9 +720,7 @@ extension RunCommand {
         try await docker.build(name: name)
         logger.debug("Container built successfully!")
     }
-}
-
-extension RunCommand {
+    
     func addSwiftPMResources(
         at buildDir: URL,
         to spec: inout ContainerImageSpec
