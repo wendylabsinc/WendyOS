@@ -6,16 +6,19 @@ import Logging
 public struct CDISpecification: Codable, Sendable {
     let cdiVersion: String
     let kind: String
+    let containerEdits: CDIContainerEdits?
     let devices: [CDIDevice]
 
     public init(
         devices: [CDIDevice],
         cdiVersion: String = "0.6.0",
-        kind: String = "edge.com/hardware"  // TODO: What's this?
+        kind: String = "edge.com/hardware",  // TODO: What's this?
+        containerEdits: CDIContainerEdits? = nil
     ) {
-        self.devices = devices
         self.cdiVersion = cdiVersion
         self.kind = kind
+        self.containerEdits = containerEdits
+        self.devices = devices
     }
 }
 
@@ -49,8 +52,8 @@ public struct CDIContainerEdits: Codable, Sendable {
 }
 
 public struct CDIDeviceNode: Codable, Sendable {
-    let hostPath: String
     let path: String
+    let hostPath: String?
     let type: String?
     let major: Int?
     let minor: Int?
@@ -58,21 +61,26 @@ public struct CDIDeviceNode: Codable, Sendable {
     let permissions: String?
 
     public init(
-        hostPath: String,
         path: String,
+        hostPath: String? = nil,
         type: String? = nil,
         major: Int? = nil,
         minor: Int? = nil,
         fileMode: Int? = nil,
         permissions: String? = nil
     ) {
-        self.hostPath = hostPath
         self.path = path
+        self.hostPath = hostPath
         self.type = type
         self.major = major
         self.minor = minor
         self.fileMode = fileMode
         self.permissions = permissions
+    }
+
+    /// The actual host path (defaults to container path if not specified)
+    var effectiveHostPath: String {
+        return hostPath ?? path
     }
 }
 
@@ -216,8 +224,8 @@ public struct CDISpecGenerator: Sendable {
         // Create device node for the primary device path
         deviceNodes.append(
             CDIDeviceNode(
-                hostPath: capability.devicePath,
                 path: capability.devicePath,
+                hostPath: capability.devicePath,
                 permissions: getPermissionsForCategory(capability.category)
             )
         )
@@ -257,8 +265,8 @@ public struct CDISpecGenerator: Sendable {
                 for path in additionalPaths {
                     deviceNodes.append(
                         CDIDeviceNode(
-                            hostPath: path,
                             path: path,
+                            hostPath: path,
                             permissions: "rw"
                         )
                     )
