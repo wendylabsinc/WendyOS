@@ -7,5 +7,10 @@
             "type": "network",
             "mode": "host"
         }
-    ]
+    ],
+    "python": {
+        "container": {
+            "sourceRoot": "/app"
+        }
+    }
 }
