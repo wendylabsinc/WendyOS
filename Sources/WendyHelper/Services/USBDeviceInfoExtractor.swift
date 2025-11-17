@@ -44,7 +44,8 @@
             let usbDevice = USBDevice(
                 name: deviceName,
                 vendorId: Int(vendorId, radix: 16) ?? 0,
-                productId: Int(productId, radix: 16) ?? 0
+                productId: Int(productId, radix: 16) ?? 0,
+                linkSpeedMbps: nil
             )
 
             return USBDeviceInfo(from: usbDevice)

@@ -87,8 +87,89 @@
         }
 
         public func findEthernetInterfaces() async -> [EthernetInterface] {
-            logger.error("Listing Ethernet interfaces on Linux is not implemented")
-            let interfaces: [EthernetInterface] = []
+            logger.info("Listing Ethernet interfaces on Linux")
+            var interfaces: [EthernetInterface] = []
+
+            do {
+                // Read interface list from /sys/class/net
+                let interfaceNames = try FileManager.default.contentsOfDirectory(
+                    atPath: "/sys/class/net"
+                )
+
+                for interfaceName in interfaceNames {
+                    // Skip loopback and virtual interfaces
+                    if interfaceName == "lo" || interfaceName.hasPrefix("veth")
+                        || interfaceName.hasPrefix("docker")
+                    {
+                        continue
+                    }
+
+                    // Read interface type
+                    let typePath = "/sys/class/net/\(interfaceName)/type"
+                    guard
+                        let typeStr = try? String(contentsOfFile: typePath, encoding: .utf8)
+                            .trimmingCharacters(in: .whitespacesAndNewlines),
+                        let typeInt = Int(typeStr)
+                    else {
+                        continue
+                    }
+
+                    // Type 1 is Ethernet, 772/778 are WiFi
+                    let interfaceType: String
+                    switch typeInt {
+                    case 1:
+                        interfaceType = "Ethernet"
+                    case 772, 778:
+                        interfaceType = "WiFi"
+                    default:
+                        continue
+                    }
+
+                    // Read MAC address
+                    let addressPath = "/sys/class/net/\(interfaceName)/address"
+                    let macAddress = try? String(contentsOfFile: addressPath, encoding: .utf8)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    // Read link speed (in Mbps, or -1 if unknown)
+                    let speedPath = "/sys/class/net/\(interfaceName)/speed"
+                    var linkSpeedMbps: Int? = nil
+                    if let speedStr = try? String(contentsOfFile: speedPath, encoding: .utf8)
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                        let speed = Int(speedStr), speed > 0
+                    {
+                        linkSpeedMbps = speed
+                    }
+
+                    // Only collect interfaces containing "Wendy" in their name
+                    if !interfaceName.contains("Wendy") {
+                        continue
+                    }
+
+                    let ethernetInterface = EthernetInterface(
+                        name: interfaceName,
+                        displayName: interfaceName,
+                        interfaceType: interfaceType,
+                        macAddress: macAddress,
+                        linkSpeedMbps: linkSpeedMbps
+                    )
+
+                    interfaces.append(ethernetInterface)
+                    logger.debug(
+                        "Found Wendy Ethernet interface: \(interfaceName)",
+                        metadata: [
+                            "type": .string(interfaceType),
+                            "speed": .string(linkSpeedMbps.map { "\($0) Mbps" } ?? "unknown"),
+                        ]
+                    )
+                }
+            } catch {
+                logger.error("Failed to list Ethernet interfaces: \(error)")
+            }
+
+            if interfaces.isEmpty {
+                logger.info("No Wendy Ethernet interfaces found.")
+            }
+
             return interfaces
         }
 
