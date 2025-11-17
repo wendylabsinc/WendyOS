@@ -195,15 +195,6 @@
 
             var interfaces: [LANDevice] = []
             for case .some(let message) in messages {
-                let ptr = message.answers.compactMap { answer in
-                    switch answer {
-                    case .ptr(let ptr):
-                        return ptr
-                    default:
-                        return nil
-                    }
-                }.first
-
                 let srv = message.answers.compactMap { answer in
                     switch answer {
                     case .srv(let srv):
@@ -223,7 +214,7 @@
                 }.first
 
                 guard let srv = srv else {
-                    logger.debug("Got no SRV answer to PTR query")
+                    logger.debug("Got no SRV answer")
                     continue
                 }
 

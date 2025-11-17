@@ -117,7 +117,9 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
     public func toHumanReadableString() -> String {
         let version = agentVersion.map { "v\($0)" }
         let metadata = [version].compactMap { $0 }.joined(separator: " ")
-        return "\(displayName) @ \(hostname):\(port) \(metadata)"
+        return "\(displayName) @ \(hostname):\(port) \(metadata)".trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
 
     public var description: String { displayName }
@@ -171,7 +173,9 @@ public struct EthernetInterface: Device, Encodable, Sendable {
         let mac = macAddress.map { "[\($0)]" }
         let speed = linkSpeedMbps.map { "[\($0) Mbps]" }
         let metadata = [version, mac, speed].compactMap { $0 }.joined(separator: " ")
-        return "\(displayName) @ \(name) \(metadata)"
+        return "\(displayName) @ \(name) \(metadata)".trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
 
     public static func formatCollection(
@@ -216,7 +220,7 @@ public struct USBDevice: Device, Encodable, Sendable {
         let version = agentVersion.map { "v\($0)" }
         let speed = linkSpeedMbps.map { "\($0) Mbps" }
         let metadata = [version, speed].compactMap { $0 }.joined(separator: " ")
-        return "\(name) \(metadata)"
+        return "\(name) \(metadata)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public static func formatCollection(_ devices: [USBDevice], as format: OutputFormat) -> String {
