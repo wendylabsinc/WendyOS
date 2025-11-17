@@ -124,7 +124,7 @@
                     displayName: displayName,
                     interfaceType: interfaceType,
                     macAddress: macAddress,
-                    linkSpeedMbps: nil  // macOS doesn't easily expose link speed via SystemConfiguration
+                    linkSpeedMbps: nil
                 )
 
                 interfaces.append(ethernetInterface)
