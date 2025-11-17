@@ -308,12 +308,12 @@ struct InitCommand: AsyncParsableCommand {
                 atomically: true,
                 encoding: .utf8
             )
-            // Make entrypoint.sh executable
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/chmod")
-            process.arguments = ["+x", entrypointPath]
-            try process.run()
-            process.waitUntilExit()
+            _ = try await Subprocess.run(
+                .name("chmod"),
+                arguments: ["+x", entrypointPath],
+                output: .discarded,
+                error: .discarded
+            )
         } catch {
             throw InitError.fileCreationFailed(
                 path: entrypointPath,
