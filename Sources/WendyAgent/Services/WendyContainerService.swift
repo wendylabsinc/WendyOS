@@ -202,11 +202,12 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
                     labels["sh.wendy/app.version"] = appConfig.version
 
-                    // Build environment variables from entitlements
-                    var env = [
+                    // Build base environment variables
+                    // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
+                    // handled by CDI and added during applyCDIDevice()
+                    let env = [
                         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                     ]
-                    env.append(contentsOf: appConfig.entitlements.environmentVariables())
 
                     var spec = OCI(
                         args: request.cmd.split(separator: " ").map(String.init),
