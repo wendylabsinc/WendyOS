@@ -1,5 +1,5 @@
 {
-  "originHash" : "aab1b82ac48f52f81b475222fb5bf2d15d38622a68b9ba70a5b06bc9573012ec",
+  "originHash" : "ba1c5221f4033c2ec18c00062458b6cfd4702350a239ab1987047657733651ff",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
       "state" : {
-        "branch" : "jo/custom-verification-of-server",
-        "revision" : "7b5303f6a1dc44ce2e50f4c59f3cf1622379d15a"
+        "revision" : "11d1f0917aa30ca50e2c78d216e8ae8c72f42af1",
+        "version" : "2.3.0"
       }
     },
     {
@@ -78,7 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tuist/Noora.git",
       "state" : {
-        "revision" : "259b4ad29366ba327148aaaea0e59b1c78953831"
+        "revision" : "f33556847a6d3facd51886409e23b6906b44de67",
+        "version" : "0.51.0"
       }
     },
     {

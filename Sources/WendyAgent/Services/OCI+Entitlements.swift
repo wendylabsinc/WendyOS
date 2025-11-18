@@ -1,5 +1,6 @@
 import AppConfig
 import Foundation
+import Logging
 
 extension Array where Element == Entitlement {
     /// Check if GPU entitlement is present
@@ -87,12 +88,41 @@ extension OCI {
         entitlements: [Entitlement],
         appName: String
     ) {
+        let logger = Logger(label: "OCI+Entitlements")
+        logger.info(
+            "applyEntitlements called",
+            metadata: [
+                "entitlements_count": .stringConvertible(entitlements.count),
+                "entitlements": .string("\(entitlements)"),
+            ]
+        )
         var didSetDeviceCapabilities = false
 
         for entitlement in entitlements {
+            logger.info(
+                "Processing entitlement",
+                metadata: ["entitlement": .string("\(entitlement)")]
+            )
             switch entitlement {
-            case .gpu:
-                ()  // Handled by NVIDIA runtime
+            case .gpu(_):
+                logger.info("GPU entitlement detected - adding video group")
+                // Add video group (gid 44) for access to GPU devices
+                // GPU devices on Jetson are owned by group 'video' (gid 44)
+                if self.process.user.additionalGids == nil {
+                    self.process.user.additionalGids = [44]
+                    logger.info("Set additionalGids to [44] (video group)")
+                } else if !self.process.user.additionalGids!.contains(44) {
+                    self.process.user.additionalGids!.append(44)
+                    logger.info("Appended 44 (video group) to additionalGids")
+                } else {
+                    logger.debug("additionalGids already contains 44 (video group)")
+                }
+                logger.debug(
+                    "After GPU entitlement",
+                    metadata: [
+                        "additionalGids": .stringConvertible(self.process.user.additionalGids ?? [])
+                    ]
+                )
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:

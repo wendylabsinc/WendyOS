@@ -9,10 +9,6 @@ import _NIOFileSystem
 struct Agent {
     let client: GRPCClient<GRPCTransport>
 
-    init(client: GRPCClient<GRPCTransport>) {
-        self.client = client
-    }
-
     func provision(
         enrollmentToken: String,
         assetID: Int32,

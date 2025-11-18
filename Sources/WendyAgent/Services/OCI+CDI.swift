@@ -1,7 +1,35 @@
 import Foundation
 import Logging
 
+#if canImport(Darwin)
+    import Darwin
+#elseif canImport(Glibc)
+    import Glibc
+#endif
+
 extension OCI {
+    /// Get device major/minor numbers from a device file path
+    private func getDeviceNumbers(_ path: String) throws -> (major: Int64, minor: Int64) {
+        var st = stat()
+        guard stat(path, &st) == 0 else {
+            throw CDIError.failedToStatDevice(path)
+        }
+
+        // Extract major/minor from st_rdev using Linux macros
+        // Linux uses: major = (dev >> 8) & 0xfff, minor = (dev & 0xff) | ((dev >> 12) & 0xfff00)
+        #if os(Linux)
+            // Use Linux device number encoding
+            let major = Int64((st.st_rdev >> 8) & 0xfff)
+            let minor = Int64((st.st_rdev & 0xff) | ((st.st_rdev >> 12) & 0xfff00))
+        #else
+            // Use traditional Unix layout for macOS
+            let major = Int64((st.st_rdev >> 8) & 0xFF)
+            let minor = Int64(st.st_rdev & 0xFF)
+        #endif
+
+        return (major, minor)
+    }
+
     /// Apply a CDI device specification to this OCI spec
     /// This adds device nodes, mounts, environment variables, and hooks from the CDI spec
     mutating func applyCDIDevice(_ cdiSpec: CDISpecification, deviceName: String) throws {
@@ -43,22 +71,74 @@ extension OCI {
         // 1. Add device nodes
         if let deviceNodes = edits.deviceNodes {
             for node in deviceNodes {
+                // If major/minor not specified in CDI spec, look them up from host device
+                let (major, minor): (Int, Int)
+                if let nodeMajor = node.major, let nodeMinor = node.minor {
+                    major = nodeMajor
+                    minor = nodeMinor
+                } else {
+                    // Use hostPath if available, otherwise use path
+                    let devicePath = node.hostPath ?? node.path
+                    do {
+                        let (maj64, min64) = try getDeviceNumbers(devicePath)
+                        major = Int(maj64)
+                        minor = Int(min64)
+                        logger.debug(
+                            "Looked up device numbers",
+                            metadata: [
+                                "path": .string(devicePath),
+                                "major": .stringConvertible(major),
+                                "minor": .stringConvertible(minor),
+                            ]
+                        )
+                    } catch {
+                        logger.warning(
+                            "Failed to stat device, using 0:0",
+                            metadata: [
+                                "path": .string(devicePath),
+                                "error": .string(error.localizedDescription),
+                            ]
+                        )
+                        major = 0
+                        minor = 0
+                    }
+                }
+
                 // Convert CDI device node to OCI device
                 let ociDevice = Device(
                     path: node.path,
                     type: node.type ?? "c",  // default to character device
-                    major: node.major ?? 0,
-                    minor: node.minor ?? 0,
+                    major: major,
+                    minor: minor,
                     fileMode: node.fileMode,
                     uid: 0,
                     gid: 0
                 )
                 self.linux.devices.append(ociDevice)
 
+                // Add cgroup device allowance for this device
+                if self.linux.resources == nil {
+                    self.linux.resources = Resources(devices: [])
+                }
+                if self.linux.resources?.devices == nil {
+                    self.linux.resources?.devices = []
+                }
+
+                let deviceAllowance = DeviceAllowance(
+                    allow: true,
+                    type: node.type ?? "c",
+                    major: major,
+                    minor: minor,
+                    access: "rwm"  // read, write, mknod
+                )
+                self.linux.resources?.devices?.append(deviceAllowance)
+
                 logger.trace(
-                    "Added device node",
+                    "Added device node and cgroup allowance",
                     metadata: [
-                        "path": .string(node.path)
+                        "path": .string(node.path),
+                        "major": .stringConvertible(major),
+                        "minor": .stringConvertible(minor),
                     ]
                 )
             }
