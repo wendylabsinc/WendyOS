@@ -108,21 +108,15 @@ extension OCI {
                 logger.info("GPU entitlement detected - adding video group")
                 // Add video group (gid 44) for access to GPU devices
                 // GPU devices on Jetson are owned by group 'video' (gid 44)
-                if self.process.user.additionalGids == nil {
-                    self.process.user.additionalGids = [44]
-                    logger.info("Set additionalGids to [44] (video group)")
-                } else if !self.process.user.additionalGids!.contains(44) {
-                    self.process.user.additionalGids!.append(44)
-                    logger.info("Appended 44 (video group) to additionalGids")
-                } else {
-                    logger.debug("additionalGids already contains 44 (video group)")
+                if !self.process.user.additionalGids.contains(44) {
+                    self.process.user.additionalGids.append(44)
+                    logger.debug(
+                        "Added video group to additionalGids",
+                        metadata: [
+                            "additionalGids": .stringConvertible(self.process.user.additionalGids)
+                        ]
+                    )
                 }
-                logger.debug(
-                    "After GPU entitlement",
-                    metadata: [
-                        "additionalGids": .stringConvertible(self.process.user.additionalGids ?? [])
-                    ]
-                )
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:
