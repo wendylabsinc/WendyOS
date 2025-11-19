@@ -114,17 +114,6 @@
                         continue
                     }
 
-                    // Type 1 is Ethernet, 772/778 are WiFi
-                    let interfaceType: String
-                    switch typeInt {
-                    case 1:
-                        interfaceType = "Ethernet"
-                    case 772, 778:
-                        interfaceType = "WiFi"
-                    default:
-                        continue
-                    }
-
                     // Read MAC address
                     let addressPath = "/sys/class/net/\(interfaceName)/address"
                     let macAddress = try? String(contentsOfFile: addressPath, encoding: .utf8)
@@ -148,7 +137,6 @@
                     let ethernetInterface = EthernetInterface(
                         name: interfaceName,
                         displayName: interfaceName,
-                        interfaceType: interfaceType,
                         macAddress: macAddress,
                         linkSpeedMbps: linkSpeedMbps
                     )
@@ -157,17 +145,16 @@
                     logger.debug(
                         "Found Wendy Ethernet interface: \(interfaceName)",
                         metadata: [
-                            "type": .string(interfaceType),
-                            "speed": .string(linkSpeedMbps.map { "\($0) Mbps" } ?? "unknown"),
+                            "speed": .string(linkSpeedMbps.map { "\($0) Mbps" } ?? "unknown")
                         ]
                     )
                 }
+
+                if interfaces.isEmpty {
+                    logger.info("No Wendy Ethernet interfaces found.")
+                }
             } catch {
                 logger.error("Failed to list Ethernet interfaces: \(error)")
-            }
-
-            if interfaces.isEmpty {
-                logger.info("No Wendy Ethernet interfaces found.")
             }
 
             return interfaces

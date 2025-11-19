@@ -139,7 +139,6 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
 public struct EthernetInterface: Device, Encodable, Sendable {
     public let name: String
     public let displayName: String
-    public let interfaceType: String
     public let macAddress: String?
     public let linkSpeedMbps: Int?
     public let isWendyDevice: Bool
@@ -148,13 +147,11 @@ public struct EthernetInterface: Device, Encodable, Sendable {
     public init(
         name: String,
         displayName: String,
-        interfaceType: String,
         macAddress: String?,
         linkSpeedMbps: Int? = nil
     ) {
         self.name = name
         self.displayName = displayName
-        self.interfaceType = interfaceType
         self.macAddress = macAddress
         self.linkSpeedMbps = linkSpeedMbps
         self.isWendyDevice = displayName.contains("Wendy") || name.contains("Wendy")
