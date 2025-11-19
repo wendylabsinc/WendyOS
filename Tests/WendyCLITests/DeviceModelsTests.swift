@@ -104,13 +104,11 @@ struct EthernetInterfaceTests {
         let wendyInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
         #expect(wendyInterface.name == "wendy0")
         #expect(wendyInterface.displayName == "Wendy Ethernet")
-        #expect(wendyInterface.interfaceType == "Ethernet")
         #expect(wendyInterface.macAddress == "11:22:33:44:55:66")
         #expect(wendyInterface.isWendyDevice)
 
@@ -118,13 +116,11 @@ struct EthernetInterfaceTests {
         let nonWendyInterface = EthernetInterface(
             name: "en0",
             displayName: "Wi-Fi",
-            interfaceType: "IEEE80211",
             macAddress: "aa:bb:cc:dd:ee:ff"
         )
 
         #expect(nonWendyInterface.name == "en0")
         #expect(nonWendyInterface.displayName == "Wi-Fi")
-        #expect(nonWendyInterface.interfaceType == "IEEE80211")
         #expect(nonWendyInterface.macAddress == "aa:bb:cc:dd:ee:ff")
         #expect(!nonWendyInterface.isWendyDevice)
     }
@@ -135,7 +131,6 @@ struct EthernetInterfaceTests {
         let interface1 = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -148,7 +143,6 @@ struct EthernetInterfaceTests {
         let interface2 = EthernetInterface(
             name: "wendy1",
             displayName: "Wendy PPP",
-            interfaceType: "PPP",
             macAddress: nil
         )
 
@@ -161,7 +155,6 @@ struct EthernetInterfaceTests {
         let interface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -187,7 +180,6 @@ struct EthernetInterfaceTests {
         // Verify all properties match
         #expect(decodedInterface.name == interface.name)
         #expect(decodedInterface.displayName == interface.displayName)
-        #expect(decodedInterface.interfaceType == interface.interfaceType)
         #expect(decodedInterface.macAddress == interface.macAddress)
         #expect(decodedInterface.isWendyDevice == interface.isWendyDevice)
     }
@@ -199,13 +191,11 @@ struct EthernetInterfaceTests {
             EthernetInterface(
                 name: "wendy0",
                 displayName: "Wendy Ethernet",
-                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "wendy1",
                 displayName: "Wendy Wi-Fi",
-                interfaceType: "IEEE80211",
                 macAddress: "aa:bb:cc:dd:ee:ff"
             ),
         ]
@@ -468,7 +458,6 @@ struct DevicesCollectionTests {
         let ethernetInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
         let lanDevice = LANDevice(
@@ -551,13 +540,11 @@ struct DevicesCollectionTests {
             EthernetInterface(
                 name: "Wendy0",
                 displayName: "Wendy Ethernet 1",
-                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "Wendy1",
                 displayName: "Wendy Ethernet 2",
-                interfaceType: "Ethernet",
                 macAddress: "AA:BB:CC:DD:EE:FF"
             ),
         ]
