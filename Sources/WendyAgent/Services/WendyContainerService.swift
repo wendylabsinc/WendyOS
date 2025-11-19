@@ -295,11 +295,12 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
             labels["sh.wendy/app.version"] = appConfig.version
 
-            // Build environment variables from entitlements
-            var env = [
+            // Build base environment variables
+            // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
+            // handled by CDI and added during applyCDIDevice()
+            let env = [
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ]
-            env.append(contentsOf: appConfig.entitlements.environmentVariables())
 
             // Infer command and workingDir from the image config, if not provided in the request.
 
@@ -522,7 +523,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         await containerMonitor.markContainerStarted(request.appName)
                     } catch let error as RPCError where error.code == .notFound {
                         logger.info("Container wasn't running")
-                    } catch let error as RPCError {
+                    } catch is RPCError {
                         logger.error(
                             "Failed to kill container",
                             metadata: [

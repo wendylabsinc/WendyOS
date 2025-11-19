@@ -86,11 +86,12 @@ public struct Process: Codable {
     struct User: Codable {
         let uid: Int
         let gid: Int
+        var additionalGids: [Int] = []
 
-        static let root = User(uid: 0, gid: 0)
+        static let root = User(uid: 0, gid: 0, additionalGids: [])
     }
 
-    let user: User
+    var user: User
     let terminal: Bool
     let args: [String]
     var env: [String]
