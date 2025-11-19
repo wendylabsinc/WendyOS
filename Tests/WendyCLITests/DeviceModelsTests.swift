@@ -33,7 +33,7 @@ struct USBDeviceTests {
         let device = USBDevice(name: "Wendy Device", vendorId: 0x1234, productId: 0xABCD)
         let humanReadable = device.toHumanReadableString()
 
-        #expect(humanReadable == "Wendy Device - Vendor ID: 0x1234, Product ID: 0xABCD")
+        #expect(humanReadable == "Wendy Device")
     }
 
     @Test("JSON serialization and Codable conformance")
@@ -141,8 +141,7 @@ struct EthernetInterfaceTests {
 
         let humanReadable1 = interface1.toHumanReadableString()
         #expect(
-            humanReadable1
-                == "- Wendy Ethernet (wendy0) [Ethernet]\n  MAC Address: 11:22:33:44:55:66"
+            humanReadable1 == "Wendy Ethernet @ wendy0 [11:22:33:44:55:66]"
         )
 
         // Without MAC address
@@ -154,7 +153,7 @@ struct EthernetInterfaceTests {
         )
 
         let humanReadable2 = interface2.toHumanReadableString()
-        #expect(humanReadable2 == "- Wendy PPP (wendy1) [PPP]")
+        #expect(humanReadable2 == "Wendy PPP @ wendy1")
     }
 
     @Test("Interface JSON serialization and Codable conformance")
@@ -268,7 +267,7 @@ struct LANDeviceTests {
         )
 
         let humanReadable = device.toHumanReadableString()
-        #expect(humanReadable == "Wendy LAN Device @ wendy.local:8080 [device123]")
+        #expect(humanReadable == "Wendy LAN Device @ wendy.local:8080")
     }
 
     @Test("LANDevice JSON serialization and Codable conformance")
