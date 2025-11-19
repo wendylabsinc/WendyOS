@@ -59,8 +59,8 @@ extension OCI {
         entitlements: [Entitlement],
         appName: String
     ) {
-        let logger = Logger(label: "OCI+Entitlements")
-        logger.info(
+        let logger = Logger(label: #file)
+        logger.debug(
             "applyEntitlements called",
             metadata: [
                 "entitlements_count": .stringConvertible(entitlements.count),
@@ -70,7 +70,7 @@ extension OCI {
         var didSetDeviceCapabilities = false
 
         for entitlement in entitlements {
-            logger.info(
+            logger.trace(
                 "Processing entitlement",
                 metadata: ["entitlement": .string("\(entitlement)")]
             )
