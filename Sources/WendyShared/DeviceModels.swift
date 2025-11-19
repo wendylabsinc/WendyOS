@@ -34,9 +34,117 @@ public struct DevicesCollection: Encodable, Sendable {
         return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
     }
 
-    /// The number of devices in the collection
+    /// The number of unique devices (counting each unique device name once)
     public var deviceCount: Int {
-        return usbDevices.count + ethernetDevices.count + lanDevices.count
+        return uniqueDeviceNames.count
+    }
+
+    /// Normalize device name for grouping similar devices
+    private func normalizeDeviceName(_ name: String) -> String {
+        // Convert to lowercase, remove common prefixes, and normalize separators
+        var normalized = name.lowercased()
+
+        // Remove common prefixes
+        let prefixes = ["wendyos device", "wendy device", "device"]
+        for prefix in prefixes {
+            if normalized.hasPrefix(prefix + " ") {
+                normalized = String(normalized.dropFirst(prefix.count + 1))
+            }
+        }
+
+        // Normalize all separators (spaces, underscores, hyphens) to hyphens
+        normalized = normalized.replacingOccurrences(of: "_", with: "-")
+        normalized = normalized.replacingOccurrences(of: " ", with: "-")
+
+        // Remove any duplicate hyphens that might result
+        while normalized.contains("--") {
+            normalized = normalized.replacingOccurrences(of: "--", with: "-")
+        }
+
+        // Remove extra whitespace and trim hyphens from ends
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "- "))
+
+        return normalized
+    }
+
+    /// Get unique device names across all interfaces (using normalized names)
+    private var uniqueDeviceNames: Set<String> {
+        var names = Set<String>()
+        usbDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
+        ethernetDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
+        lanDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
+        return names
+    }
+
+    /// Groups all devices by their normalized name
+    private func groupedDevices() -> [(name: String, interfaces: [InterfaceInfo])] {
+        // Use normalized names as keys, but track the best display name
+        var deviceGroups: [String: (displayName: String, interfaces: [InterfaceInfo])] = [:]
+
+        // Helper to choose the best display name (prefer shorter, cleaner names)
+        func betterDisplayName(_ name1: String, _ name2: String) -> String {
+            // Prefer names without "WendyOS Device" prefix
+            if name1.hasPrefix("WendyOS Device") && !name2.hasPrefix("WendyOS Device") {
+                return name2
+            }
+            if !name1.hasPrefix("WendyOS Device") && name2.hasPrefix("WendyOS Device") {
+                return name1
+            }
+            // Otherwise prefer shorter names or the first one
+            return name1.count <= name2.count ? name1 : name2
+        }
+
+        // Group USB devices
+        for device in usbDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            group.displayName = betterDisplayName(group.displayName, device.displayName)
+            group.interfaces.append(InterfaceInfo(
+                type: "USB",
+                identifier: "Vendor: \(device.vendorId), Product: \(device.productId)",
+                agentVersion: device.agentVersion
+            ))
+            deviceGroups[normalizedName] = group
+        }
+
+        // Group Ethernet devices
+        for device in ethernetDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            group.displayName = betterDisplayName(group.displayName, device.displayName)
+            var identifier = "\(device.name)"
+            if let mac = device.macAddress {
+                identifier += " (MAC: \(mac))"
+            }
+            group.interfaces.append(InterfaceInfo(
+                type: "Ethernet",
+                identifier: identifier,
+                agentVersion: device.agentVersion
+            ))
+            deviceGroups[normalizedName] = group
+        }
+
+        // Group LAN devices
+        for device in lanDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            group.displayName = betterDisplayName(group.displayName, device.displayName)
+            group.interfaces.append(InterfaceInfo(
+                type: "LAN",
+                identifier: "\(device.hostname):\(device.port)",
+                agentVersion: device.agentVersion
+            ))
+            deviceGroups[normalizedName] = group
+        }
+
+        // Sort by display name for consistent output
+        return deviceGroups.map { ($1.displayName, $1.interfaces) }.sorted { $0.0 < $1.0 }
+    }
+    /// Information about a specific interface for a device
+    private struct InterfaceInfo {
+        let type: String
+        let identifier: String
+        let agentVersion: String?
     }
 
     public func toJSON() throws -> String {
@@ -47,39 +155,35 @@ public struct DevicesCollection: Encodable, Sendable {
     }
 
     public func toHumanReadableString() -> String {
+        let grouped = groupedDevices()
+
+        if grouped.isEmpty {
+            return "No devices found."
+        }
+
         var result = ""
 
-        // Add USB devices section
-        if !usbDevices.isEmpty {
-            result += "\nUSB Devices:"
-            for device in usbDevices {
-                result += "\n" + device.toHumanReadableString()
-            }
-        }
-
-        // Add Ethernet devices section
-        if !ethernetDevices.isEmpty {
+        for (deviceName, interfaces) in grouped {
             if !result.isEmpty {
                 result += "\n"
             }
-            result += "\nEthernet Interfaces:"
-            for device in ethernetDevices {
-                result += "\n" + device.toHumanReadableString()
+
+            // Get the first available agent version (should be the same across interfaces)
+            let agentVersion = interfaces.first(where: { $0.agentVersion != nil })?.agentVersion
+
+            // Add device name with agent version if available
+            result += "\n\(deviceName)"
+            if let version = agentVersion {
+                result += " (Agent: \(version))"
+            }
+
+            // List all interfaces for this device
+            for interface in interfaces {
+                result += "\n   \(interface.type): \(interface.identifier)"
             }
         }
 
-        // Add LAN devices section
-        if !lanDevices.isEmpty {
-            if !result.isEmpty {
-                result += "\n"
-            }
-            result += "\nLAN Devices:"
-            for device in lanDevices {
-                result += "\n" + device.toHumanReadableString()
-            }
-        }
-
-        return result.isEmpty ? "No devices found." : result
+        return result
     }
 }
 
