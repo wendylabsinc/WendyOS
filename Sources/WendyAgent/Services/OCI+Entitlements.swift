@@ -1,34 +1,6 @@
 import AppConfig
 import Foundation
-
-extension Array where Element == Entitlement {
-    /// Check if GPU entitlement is present
-    var hasGPUEntitlement: Bool {
-        contains { entitlement in
-            if case .gpu = entitlement {
-                return true
-            }
-            return false
-        }
-    }
-
-    /// Build environment variables from entitlements
-    func environmentVariables() -> [String] {
-        var env: [String] = []
-
-        for entitlement in self {
-            switch entitlement {
-            case .gpu:
-                env.append("NVIDIA_VISIBLE_DEVICES=all")
-                env.append("NVIDIA_DRIVER_CAPABILITIES=all")
-            default:
-                ()
-            }
-        }
-
-        return env
-    }
-}
+import Logging
 
 extension OCI {
     mutating func setDeviceCapabilities(appName: String) {
@@ -87,12 +59,35 @@ extension OCI {
         entitlements: [Entitlement],
         appName: String
     ) {
+        let logger = Logger(label: #file)
+        logger.debug(
+            "applyEntitlements called",
+            metadata: [
+                "entitlements_count": .stringConvertible(entitlements.count),
+                "entitlements": .string("\(entitlements)"),
+            ]
+        )
         var didSetDeviceCapabilities = false
 
         for entitlement in entitlements {
+            logger.trace(
+                "Processing entitlement",
+                metadata: ["entitlement": .string("\(entitlement)")]
+            )
             switch entitlement {
-            case .gpu:
-                ()  // Handled by NVIDIA runtime
+            case .gpu(_):
+                logger.info("GPU entitlement detected - adding video group")
+                // Add video group (gid 44) for access to GPU devices
+                // GPU devices on Jetson are owned by group 'video' (gid 44)
+                if !self.process.user.additionalGids.contains(44) {
+                    self.process.user.additionalGids.append(44)
+                    logger.debug(
+                        "Added video group to additionalGids",
+                        metadata: [
+                            "additionalGids": .stringConvertible(self.process.user.additionalGids)
+                        ]
+                    )
+                }
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:

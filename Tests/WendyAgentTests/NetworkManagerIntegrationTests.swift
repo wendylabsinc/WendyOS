@@ -106,7 +106,7 @@ struct NetworkManagerIntegrationTests {
         try await manager.setupWiFi(ssid: "test", password: "test")
 
         // This test just verifies compilation - that all protocol methods are implemented
-        #expect(true)
+        #expect(Bool(true))
     }
 
     @Test("Configuration integration with factory preference")
