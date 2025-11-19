@@ -59,8 +59,7 @@ struct DeviceCommand: AsyncParsableCommand {
 
             var latestVersion: String? = nil
 
-            if checkUpdates {
-                let releases = try await fetchReleases()
+            if checkUpdates, let releases = try? await fetchReleases() {
                 if prerelease {
                     latestVersion = releases.first?.name
                 } else {

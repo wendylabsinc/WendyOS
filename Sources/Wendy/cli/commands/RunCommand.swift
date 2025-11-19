@@ -636,11 +636,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 for try await message in response.messages {
                     switch message.responseType {
                     case .started:
-                        if debug {
-                            Noora().success("Started container with debug port 4242")
-                        } else {
-                            Noora().success("Started app")
-                        }
+                        Noora().success("Started app")
 
                         if detach {
                             return
@@ -1168,14 +1164,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             } onResponse: { response in
                 for try await message in response.messages {
                     switch message.responseType {
-                    case .started(let started):
-                        if started.debugPort != 0 {
-                            Noora().success(
-                                "Started container with debug port \(started.debugPort)"
-                            )
-                        } else {
-                            Noora().success("Started container")
-                        }
+                    case .started:
+                        Noora().success("Started app")
+
                         if detach {
                             return
                         }

@@ -5,6 +5,19 @@ public struct AppConfig: Codable {
     public let version: String
     public var language: String?
     public let entitlements: [Entitlement]
+    public var python: PythonConfig?
+
+    public struct PythonConfig: Codable, Sendable, Hashable {
+        public struct PythonContainerConfig: Codable, Sendable, Hashable {
+            public var sourceRoot: String
+        }
+
+        public var container: PythonContainerConfig?
+
+        public init(sourceRoot: String) {
+            self.container = .init(sourceRoot: sourceRoot)
+        }
+    }
 
     public init(
         appId: String,
