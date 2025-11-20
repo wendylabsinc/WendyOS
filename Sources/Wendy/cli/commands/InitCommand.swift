@@ -23,6 +23,12 @@ struct InitCommand: AsyncParsableCommand {
     )
     var projectPath: String = "."
 
+    @Option(
+        name: .customLong("language"),
+        help: "Programming language for the project (swift or python)"
+    )
+    var language: ProjectLanguage = .swift
+
     private var logger: Logger {
         Logger(label: "sh.wendy.cli.init")
     }
@@ -39,7 +45,7 @@ struct InitCommand: AsyncParsableCommand {
                     atPath: projectPath,
                     withIntermediateDirectories: true
                 )
-                Noora().info("Created project directory: \(projectPath)")
+                Noora().info("Creating project directory at \(projectPath)")
             } catch {
                 throw InitError.directoryCreationFailed(
                     path: projectPath,
@@ -48,21 +54,12 @@ struct InitCommand: AsyncParsableCommand {
             }
         }
 
-        // Run swift package init in the specified directory using bash -c to cd into the directory first
-        let command = "cd \"\(projectPath)\" && swift package init --type executable"
-        let result = try await Subprocess.run(
-            Subprocess.Executable.name("bash"),
-            arguments: Subprocess.Arguments(["-c", command]),
-            output: .string(limit: .max),
-            error: .string(limit: .max)
-        )
-
-        if !result.terminationStatus.isSuccess {
-            throw InitError.commandFailed(
-                command: command,
-                exitCode: Int(result.terminationStatus.description) ?? -1,
-                error: result.standardError ?? ""
-            )
+        // Initialize project based on selected language
+        switch language {
+        case .swift:
+            try await initializeSwiftProject()
+        case .python:
+            try await initializePythonProject()
         }
 
         // Create wendy directory inside the project path
@@ -71,16 +68,264 @@ struct InitCommand: AsyncParsableCommand {
 
         do {
             try fileManager.createDirectory(atPath: wendyDirPath, withIntermediateDirectories: true)
-            Noora().info("Created wendy directory in \(projectPath)")
         } catch {
-            print("Warning: Failed to create wendy directory: \(error.localizedDescription)")
+            throw InitError.directoryCreationFailed(
+                path: wendyDirPath,
+                error: error.localizedDescription
+            )
         }
 
         // Create default wendy.json configuration file
-        try await createDefaultWendyJson(in: projectPath)
+        try await createDefaultWendyJson(in: projectPath, language: language)
     }
 
-    private func createDefaultWendyJson(in projectPath: String) async throws {
+    private func initializeSwiftProject() async throws {
+        // Run swift package init in the specified directory using bash -c to cd into the directory first
+        let result = try await Subprocess.run(
+            .name("swift"),
+            arguments: Subprocess.Arguments(["package", "init", "--type", "executable"]),
+            workingDirectory: .init(projectPath),
+            output: .string(limit: .max),
+            error: .string(limit: .max)
+        )
+
+        if !result.terminationStatus.isSuccess {
+            throw InitError.commandFailed(
+                command: "swift package init --type executable",
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                error: result.standardError ?? ""
+            )
+        }
+    }
+
+    private func initializePythonProject() async throws {
+        // Create app.py
+        let appPyPath =
+            projectPath.hasSuffix("/") ? "\(projectPath)app.py" : "\(projectPath)/app.py"
+        let appPyContent = #"""
+            #!/usr/bin/env python3
+            """
+            Simple Hello World Python HTTP Server
+            """
+
+            from http.server import HTTPServer, BaseHTTPRequestHandler
+            import json
+            import os
+
+            class HelloWorldHandler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    if self.path == '/':
+                        self.send_response(200)
+                        self.send_header('Content-type', 'text/html')
+                        self.end_headers()
+                        
+                        html_content = """
+                        <!DOCTYPE html charset="utf-8">
+                        <html lang="en">
+                        <head>
+                            <title>Hello World Server</title>
+                            <style>
+                                body { 
+                                    font-family: Arial, sans-serif; 
+                                    max-width: 800px; 
+                                    margin: 50px auto; 
+                                    padding: 20px;
+                                    background-color: #f5f5f5;
+                                }
+                                .container {
+                                    background-color: white;
+                                    padding: 30px;
+                                    border-radius: 10px;
+                                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                                    text-align: center;
+                                }
+                                h1 { color: #333; }
+                                .status { color: #28a745; font-weight: bold; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <h1>Hello World!</h1>
+                                <p class="status">Server is running successfully!</p>
+                                <p>This is a simple Python HTTP server running in a Docker container.</p>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                        self.wfile.write(html_content.encode())
+                        
+                    elif self.path == '/api/hello':
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        
+                        response = {
+                            "message": "Hello World!",
+                            "status": "success",
+                            "server": "Python HTTP Server"
+                        }
+                        self.wfile.write(json.dumps(response, indent=2).encode())
+                        
+                    elif self.path == '/health':
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        
+                        health_response = {
+                            "status": "healthy",
+                            "message": "Server is running"
+                        }
+                        self.wfile.write(json.dumps(health_response).encode())
+                        
+                    else:
+                        self.send_response(404)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        
+                        error_response = {
+                            "error": "Not Found",
+                            "message": f"Path {self.path} not found"
+                        }
+                        self.wfile.write(json.dumps(error_response).encode())
+
+                def log_message(self, format, *args):
+                    print(f"[{self.date_time_string()}] {format % args}", flush=True)
+
+            def run_server(port=8000):
+                server_address = ('0.0.0.0', port)
+                httpd = HTTPServer(server_address, HelloWorldHandler)
+                print(f"Starting server on {server_address[0]}:{server_address[1]}", flush=True)
+                print(f"Visit http://localhost:{port} to see the Hello World page", flush=True)
+                print(f"API endpoints available:", flush=True)
+                print(f"  GET  /api/hello - JSON hello message", flush=True)
+                print(f"  GET  /health - Health check", flush=True)
+                print("Server is ready to accept connections...", flush=True)
+                
+                try:
+                    httpd.serve_forever()
+                except KeyboardInterrupt:
+                    print("\nShutting down server...", flush=True)
+                    httpd.shutdown()
+
+            if __name__ == '__main__':
+                port = int(os.environ.get('PORT', 8000))
+                run_server(port)
+            """#
+
+        do {
+            try appPyContent.write(
+                to: URL(fileURLWithPath: appPyPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw InitError.fileCreationFailed(path: appPyPath, error: error.localizedDescription)
+        }
+
+        // Create requirements.txt
+        let requirementsPath =
+            projectPath.hasSuffix("/")
+            ? "\(projectPath)requirements.txt" : "\(projectPath)/requirements.txt"
+        let requirementsContent = "debugpy\n"
+        do {
+            try requirementsContent.write(
+                to: URL(fileURLWithPath: requirementsPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw InitError.fileCreationFailed(
+                path: requirementsPath,
+                error: error.localizedDescription
+            )
+        }
+
+        // Create Dockerfile
+        let dockerfilePath =
+            projectPath.hasSuffix("/") ? "\(projectPath)Dockerfile" : "\(projectPath)/Dockerfile"
+        let dockerfileContent = #"""
+            # Use Python 3.11 slim image as base
+            FROM python:3.11-slim
+
+            # Set working directory
+            WORKDIR /app
+
+            # Copy requirements first for better caching
+            COPY requirements.txt .
+
+            # Install dependencies
+            RUN pip install --no-cache-dir -r requirements.txt
+
+            # Copy application code
+            COPY app.py .
+            COPY entrypoint.sh .
+
+            # Create a non-root user for security
+            RUN useradd --create-home --shell /bin/bash app && \
+                chmod +x entrypoint.sh && \
+                chown -R app:app /app
+            USER app
+
+            # Expose port 8000 for the HTTP server
+            EXPOSE 8000
+
+            # Expose debugpy port 5678 for remote debugging
+            EXPOSE 5678
+
+            # Health check
+            HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+                CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+            # Run the application
+            # Set DEBUG=true to enable debugpy, DEBUG_WAIT=true to wait for debugger
+            CMD ["./entrypoint.sh"]
+            """#
+        do {
+            try dockerfileContent.write(
+                to: URL(fileURLWithPath: dockerfilePath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw InitError.fileCreationFailed(
+                path: dockerfilePath,
+                error: error.localizedDescription
+            )
+        }
+
+        // Create entrypoint.sh
+        let entrypointPath =
+            projectPath.hasSuffix("/")
+            ? "\(projectPath)entrypoint.sh" : "\(projectPath)/entrypoint.sh"
+        let entrypointContent = """
+            #!/bin/bash
+            # Entrypoint script for running the app with optional debugpy
+            exec python -m debugpy --listen "0.0.0.0:5678" app.py
+            """
+        do {
+            try entrypointContent.write(
+                to: URL(fileURLWithPath: entrypointPath),
+                atomically: true,
+                encoding: .utf8
+            )
+            _ = try await Subprocess.run(
+                .name("chmod"),
+                arguments: ["+x", entrypointPath],
+                output: .discarded,
+                error: .discarded
+            )
+        } catch {
+            throw InitError.fileCreationFailed(
+                path: entrypointPath,
+                error: error.localizedDescription
+            )
+        }
+    }
+
+    private func createDefaultWendyJson(
+        in projectPath: String,
+        language: ProjectLanguage
+    ) async throws {
         let fileManager = FileManager.default
         let wendyJsonPath =
             projectPath.hasSuffix("/") ? "\(projectPath)wendy.json" : "\(projectPath)/wendy.json"
@@ -97,21 +342,29 @@ struct InitCommand: AsyncParsableCommand {
             "com.example.\(projectName.lowercased().replacingOccurrences(of: "-", with: ""))"
 
         // Create default AppConfig
-        let defaultConfig = AppConfig(
+        var defaultConfig = AppConfig(
             appId: appId,
             version: "0.0.1",
+            language: language.rawValue,
             entitlements: []
         )
+
+        if language == .python {
+            defaultConfig.python = .init(sourceRoot: "/app")
+            defaultConfig.entitlements.append(.network(.init(mode: .host)))
+        }
 
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let jsonData = try encoder.encode(defaultConfig)
 
-            try jsonData.write(to: URL(fileURLWithPath: wendyJsonPath))
+            try encoder.encode(defaultConfig).write(to: URL(fileURLWithPath: wendyJsonPath))
             logger.debug(
                 "Created wendy.json configuration file",
-                metadata: ["appId": .string(appId), "version": .string("0.0.1")]
+                metadata: [
+                    "appId": .string(appId), "version": .string("0.0.1"),
+                    "language": .string(language.rawValue),
+                ]
             )
         } catch {
             throw InitError.wendyJsonCreationFailed(
@@ -122,10 +375,16 @@ struct InitCommand: AsyncParsableCommand {
     }
 }
 
+enum ProjectLanguage: String, ExpressibleByArgument, CaseIterable {
+    case swift
+    case python
+}
+
 enum InitError: Error {
     case commandFailed(command: String, exitCode: Int, error: String)
     case directoryCreationFailed(path: String, error: String)
     case wendyJsonCreationFailed(path: String, error: String)
+    case fileCreationFailed(path: String, error: String)
 
     var localizedDescription: String {
         switch self {
@@ -135,6 +394,8 @@ enum InitError: Error {
             return "Failed to create directory at '\(path)': \(error)"
         case .wendyJsonCreationFailed(let path, let error):
             return "Failed to create wendy.json at '\(path)': \(error)"
+        case .fileCreationFailed(let path, let error):
+            return "Failed to create file at '\(path)': \(error)"
         }
     }
 }

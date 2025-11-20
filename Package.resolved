@@ -1,5 +1,5 @@
 {
-  "originHash" : "ba1c5221f4033c2ec18c00062458b6cfd4702350a239ab1987047657733651ff",
+  "originHash" : "54288c54c83d082a8a90cfd087abee0aecc82d2d9405ff229d79e7fcada5d237",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -34,6 +34,15 @@
       "location" : "https://github.com/grpc/grpc-swift-2.git",
       "state" : {
         "revision" : "0e52abf7ea0fca7ffe876953aa41feff84cc6e29",
+        "version" : "2.1.0"
+      }
+    },
+    {
+      "identity" : "grpc-swift-extras",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/grpc/grpc-swift-extras.git",
+      "state" : {
+        "revision" : "f6fc3a28a896cb5e01365758c717a3d56c16a2b2",
         "version" : "2.1.0"
       }
     },
@@ -305,6 +314,15 @@
       "state" : {
         "revision" : "d74223cc5595a8165181c4d9579243c932e5cd07",
         "version" : "1.10.3"
+      }
+    },
+    {
+      "identity" : "swift-openapi-hummingbird",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/swift-openapi-hummingbird.git",
+      "state" : {
+        "revision" : "026b50b17e9afe74d4d82c883d9c37154a8b30bf",
+        "version" : "2.0.1"
       }
     },
     {

@@ -122,8 +122,8 @@
                 let ethernetInterface = EthernetInterface(
                     name: name,
                     displayName: displayName,
-                    interfaceType: interfaceType,
-                    macAddress: macAddress
+                    macAddress: macAddress,
+                    linkSpeedMbps: nil
                 )
 
                 interfaces.append(ethernetInterface)
