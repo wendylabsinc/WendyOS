@@ -109,7 +109,7 @@
                     guard
                         let typeStr = try? String(contentsOfFile: typePath, encoding: .utf8)
                             .trimmingCharacters(in: .whitespacesAndNewlines),
-                        let typeInt = Int(typeStr)
+                        Int(typeStr) != nil
                     else {
                         continue
                     }

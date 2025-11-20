@@ -1,4 +1,5 @@
 import AsyncAlgorithms
+import ContainerRegistry
 import ContainerdGRPC
 import Crypto
 import Foundation
