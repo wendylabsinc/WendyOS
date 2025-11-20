@@ -670,7 +670,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         _ = try await agentContainers.createContainer(
             request: .init(
                 message: .with {
-                    $0.imageName = "\(appName)"
+                    $0.imageName = "\(appName):latest"
                     $0.appName = appName
                     $0.appConfig = appConfigData
                     if noRestart {

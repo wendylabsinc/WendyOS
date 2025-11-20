@@ -403,12 +403,16 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 (snapshotKey, _) = try await client.createSnapshot(
                     imageName: request.imageName,
                     appName: request.appName,
-                    layers: manifest.layers.map { layer in
+                    layers: manifest.layers.enumerated().map { (index, layer) in
                         return .with {
                             $0.digest = layer.digest
                             $0.size = layer.size
                             $0.gzip = layer.mediaType.contains("gzip")
-                            $0.diffID = layer.digest.replacing("sha256:", with: "")
+                            // Use the correct diffID from the image config
+                            $0.diffID =
+                                index < imageConfig.rootfs.diff_ids.count
+                                ? imageConfig.rootfs.diff_ids[index].replacing("sha256:", with: "")
+                                : layer.digest.replacing("sha256:", with: "")
                         }
                     }
                 )
