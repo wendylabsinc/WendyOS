@@ -346,13 +346,12 @@ struct InitCommand: AsyncParsableCommand {
             appId: appId,
             version: "0.0.1",
             language: language.rawValue,
-            entitlements: [
-                .network(.init(mode: .host))
-            ]
+            entitlements: []
         )
 
         if language == .python {
             defaultConfig.python = .init(sourceRoot: "/app")
+            defaultConfig.entitlements.append(.network(.init(mode: .host)))
         }
 
         do {

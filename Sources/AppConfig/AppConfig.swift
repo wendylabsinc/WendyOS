@@ -4,7 +4,7 @@ public struct AppConfig: Codable {
     public let appId: String
     public let version: String
     public var language: String?
-    public let entitlements: [Entitlement]
+    public var entitlements: [Entitlement]
     public var python: PythonConfig?
 
     public struct PythonConfig: Codable, Sendable, Hashable {
