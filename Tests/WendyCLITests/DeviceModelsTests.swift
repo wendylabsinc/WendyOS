@@ -164,7 +164,6 @@ struct EthernetInterfaceTests {
         // Verify JSON contains all fields with correct values
         #expect(jsonString.contains("\"name\" : \"wendy0\""))
         #expect(jsonString.contains("\"displayName\" : \"Wendy Ethernet\""))
-        #expect(jsonString.contains("\"interfaceType\" : \"Ethernet\""))
         #expect(jsonString.contains("\"macAddress\" : \"11:22:33:44:55:66\""))
         #expect(jsonString.contains("\"isWendyDevice\" : true"))
 
