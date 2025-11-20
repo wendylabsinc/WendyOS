@@ -130,6 +130,7 @@ let package = Package(
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .target(name: "ContainerdGRPC"),
+                .target(name: "ContainerRegistry"),
                 .target(name: "OCIRegistryOpenAPI"),
             ]
         ),
