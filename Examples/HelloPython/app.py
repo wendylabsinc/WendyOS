@@ -41,7 +41,7 @@ class HelloWorldHandler(BaseHTTPRequestHandler):
             </head>
             <body>
                 <div class="container">
-                    <h1>Hello World! 🌍</h1>
+                    <h1>Hello World</h1>
                     <p class="status">Server is running successfully!</p>
                     <p>This is a simple Python HTTP server running in a Docker container.</p>
                 </div>

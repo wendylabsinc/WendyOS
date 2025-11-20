@@ -249,6 +249,7 @@ enum CDIError: Error, CustomStringConvertible {
     case specNotFound(String)
     case cannotReadSpec(String)
     case deviceNotFound(String)
+    case failedToStatDevice(String)
 
     var description: String {
         switch self {
@@ -258,6 +259,8 @@ enum CDIError: Error, CustomStringConvertible {
             return "Cannot read CDI spec at \(path)"
         case .deviceNotFound(let name):
             return "Device '\(name)' not found in CDI spec"
+        case .failedToStatDevice(let path):
+            return "Failed to stat device at \(path)"
         }
     }
 }

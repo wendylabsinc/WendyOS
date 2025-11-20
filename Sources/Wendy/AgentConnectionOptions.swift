@@ -70,20 +70,6 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var agent: Endpoint?
 
-    private enum DiscoveredEndpoint: Sendable, Hashable, CustomStringConvertible {
-        case lan(LANDevice)
-        case other
-
-        var description: String {
-            switch self {
-            case .lan(let device):
-                return device.displayName
-            case .other:
-                return "Other"
-            }
-        }
-    }
-
     func read(title: TerminalText?) async throws -> Endpoint {
         if let device {
             return device
@@ -92,9 +78,6 @@ struct AgentConnectionOptions: ParsableArguments {
         if let agent {
             return agent
         }
-
-        let defaultEndpoint =
-            ProcessInfo.processInfo.environment["WENDY_AGENT"] ?? "edgeos-device.local:50051"
 
         let discovery = PlatformDeviceDiscovery(
             logger: Logger(label: "sh.wendy.cli.find-agent")
@@ -108,40 +91,20 @@ struct AgentConnectionOptions: ParsableArguments {
             try await discovery.findLANDevices()
         }
 
-        var endpoints = [DiscoveredEndpoint]()
-        endpoints.append(
-            contentsOf: lanDevices.map(DiscoveredEndpoint.lan)
-        )
-        endpoints.append(.other)
+        if lanDevices.isEmpty {
+            throw NoDevicesFound()
+        }
 
-        let endpoint = Noora().singleChoicePrompt(
+        let device = Noora().singleChoicePrompt(
             title: title,
             question: "Select a device",
-            options: endpoints
+            options: lanDevices
         )
 
-        switch endpoint {
-        case .lan(let device):
-            return Endpoint(
-                host: device.hostname,
-                port: device.port
-            )
-        case .other:
-            let prompt = Noora().textPrompt(
-                title: title,
-                prompt: TerminalText(stringLiteral: defaultEndpoint),
-                description: "Press empty to use the default"
-            )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if prompt.isEmpty, let endpoint = Endpoint(argument: defaultEndpoint) {
-                return endpoint
-            } else if let endpoint = Endpoint(argument: prompt) {
-                return endpoint
-            } else {
-                throw InvalidEndpoint()
-            }
-        }
+        return Endpoint(
+            host: device.hostname,
+            port: device.port
+        )
     }
 
     var endpoint: Endpoint {
@@ -166,3 +129,12 @@ struct AgentConnectionOptions: ParsableArguments {
 }
 
 struct InvalidEndpoint: Error {}
+struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConvertible {
+    var description: String {
+        "No Wendy devices found"
+    }
+
+    var debugDescription: String {
+        "No Wendy devices found"
+    }
+}
