@@ -42,7 +42,7 @@ public struct DockerCLI: Sendable {
     public func buildx(
         name: String,
         directory: String = ".",
-        port: Int = 8080
+        port: Int = 5000
     ) async throws {
         let arguments = [
             "buildx", "build", "--platform", "linux/arm64", "-t",
@@ -67,7 +67,7 @@ public struct DockerCLI: Sendable {
 
     func push(
         name: String,
-        port: Int = 8080
+        port: Int = 5000
     ) async throws {
         let arguments = ["push", "localhost:\(port)/\(name):latest"]
         let result = try await Subprocess.run(

@@ -175,8 +175,8 @@ struct WendyAgent: AsyncParsableCommand {
             services.append(server)
         }
         if mTLS == nil {
-            logger.info("Adding Containerd Registry Service for development")
-            services.append(ContainerdRegistryService())
+            logger.info("Adding Registry Container Service for development")
+            services.append(RegistryContainerService())
         }
 
         var serviceGroupConfig = ServiceGroupConfiguration(
