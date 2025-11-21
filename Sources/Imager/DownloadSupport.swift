@@ -38,12 +38,8 @@ private struct ImageVersionMetadata: Codable {
 }
 
 /// Manages downloading device images from GCS
-public actor ImageDownloader: ImageDownloading {
-    private let fileManager: FileManager
-
-    public init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
-    }
+public final class ImageDownloader: ImageDownloading {
+    private var fileManager: FileManager { .default }
 
     private func extractImage(
         from path: String,
@@ -205,9 +201,8 @@ public actor ImageDownloader: ImageDownloading {
         redownload: Bool = false,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (String, cached: Bool) {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
@@ -304,9 +299,8 @@ public actor ImageDownloader: ImageDownloading {
 
     /// Stores version metadata for a cached image
     private func storeVersionMetadata(deviceName: String, version: String) throws {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
             "version.json"
         )
@@ -320,10 +314,9 @@ public actor ImageDownloader: ImageDownloading {
     }
 
     /// Reads version metadata for a cached image
-    private nonisolated func readVersionMetadata(deviceName: String) -> String? {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+    private nonisolated func readVersionMetadata(deviceName: String) throws -> String? {
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
             "version.json"
         )
@@ -341,10 +334,9 @@ public actor ImageDownloader: ImageDownloading {
     }
 
     /// Returns a valid cached .img path if available, else nil.
-    public func cachedImageIfValid(deviceName: String) async -> String? {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+    public func cachedImageIfValid(deviceName: String) async throws -> String? {
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
         do {
             return try await validateImage(at: extractionDirectoryURL.path)
@@ -354,8 +346,8 @@ public actor ImageDownloader: ImageDownloading {
     }
 
     /// Checks if cached image version matches the latest version
-    public nonisolated func isCachedImageLatest(deviceName: String, latestVersion: String) -> Bool {
-        guard let cachedVersion = readVersionMetadata(deviceName: deviceName) else {
+    public nonisolated func isCachedImageLatest(deviceName: String, latestVersion: String) throws -> Bool {
+        guard let cachedVersion = try readVersionMetadata(deviceName: deviceName) else {
             return false
         }
         return cachedVersion == latestVersion
@@ -370,9 +362,8 @@ public actor ImageDownloader: ImageDownloading {
         version: String? = nil,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (zipPath: String, extractionDir: String) {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
@@ -395,9 +386,8 @@ public actor ImageDownloader: ImageDownloading {
         version: String? = nil,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/images"
-        )
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("images")
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
 
         // Prepare extraction dir: clear if exists, then recreate

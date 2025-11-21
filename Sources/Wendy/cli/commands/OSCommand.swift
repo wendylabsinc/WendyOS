@@ -433,10 +433,10 @@ struct OSCommand: AsyncParsableCommand {
             var localImagePath: String
 
             // Check if cached image exists and matches the latest version
-            let cachedImagePath = await realDownloader.cachedImageIfValid(
+            let cachedImagePath = try await realDownloader.cachedImageIfValid(
                 deviceName: selectedDeviceName
             )
-            let isCachedLatest = realDownloader.isCachedImageLatest(
+            let isCachedLatest = try realDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
                 latestVersion: latestVersion
             )

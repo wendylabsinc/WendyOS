@@ -12,11 +12,8 @@ extension ContainerImageSpec {
         imageRef: ImageReference,
         architecture: String
     ) async throws -> ImageManifest {
-        // Try to fetch from `.wendy/cache` first
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/manifests"
-        )
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("manifests")
         let repoName = imageRef.repository.addingPercentEncoding(
             withAllowedCharacters: .alphanumerics
         )!
@@ -86,10 +83,8 @@ extension ContainerImageSpec {
         imageRef: ImageReference,
         configDigest: String
     ) async throws -> ImageConfiguration {
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/configs"
-        )
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("configs")
         let repoName = imageRef.repository.addingPercentEncoding(
             withAllowedCharacters: .alphanumerics
         )!
@@ -177,10 +172,8 @@ extension ContainerImageSpec {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
         // Create a cache directory for layers
-        let cacheDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".wendy/cache/layers"
-        )
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let cacheDir = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("layers")
 
         // Download each layer and store as tarball layer
         var baseLayers: [Layer] = []
