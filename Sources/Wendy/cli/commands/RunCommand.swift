@@ -267,7 +267,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 localHostname: "localhost",
                 localPort: 0,
                 remoteHostname: endpoint.host,
-                remotePort: 8080
+                remotePort: 5000
             ) { proxyAddress in
                 try await Noora().progressStep(
                     message: "Building container",
@@ -275,7 +275,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     errorMessage: "Failed to build container",
                     showSpinner: true
                 ) { _ in
-                    try await docker.buildx(name: name, port: proxyAddress?.port ?? 8080)
+                    try await docker.buildx(name: name, port: proxyAddress?.port ?? 5000)
                 }
 
                 try await Noora().progressStep(
@@ -284,7 +284,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     errorMessage: "Failed to upload container",
                     showSpinner: true
                 ) { _ in
-                    try await docker.push(name: name, port: proxyAddress?.port ?? 8080)
+                    try await docker.push(name: name, port: proxyAddress?.port ?? 5000)
                 }
             }
 
