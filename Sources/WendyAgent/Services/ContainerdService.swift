@@ -572,6 +572,7 @@ public struct Containerd: Sendable {
         appName: String,
         snapshotKey: String,
         ociSpec: Data,
+        labels: [String: String],
         runtime: String = "io.containerd.runc.v2",
         options: Containerd_Runc_V1_Options? = nil
     ) async throws {
@@ -594,6 +595,7 @@ public struct Containerd: Sendable {
                         $0.snapshotter = "overlayfs"
                         $0.snapshotKey = snapshotKey
                         $0.image = imageName
+                        $0.labels = labels
                     }
                 }
             )

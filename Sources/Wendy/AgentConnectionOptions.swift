@@ -79,6 +79,12 @@ struct AgentConnectionOptions: ParsableArguments {
             return agent
         }
 
+        if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
+            let endpoint = Endpoint(argument: endpoint)
+        {
+            return endpoint
+        }
+
         let discovery = PlatformDeviceDiscovery(
             logger: Logger(label: "sh.wendy.cli.find-agent")
         )
