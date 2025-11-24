@@ -1,9 +1,9 @@
 import AsyncHTTPClient
+import ContainerBuilder
 import DownloadSupport
 import Foundation
 import NIOCore
 import _NIOFileSystem
-import ContainerBuilder
 
 #if os(macOS)
     import Darwin
