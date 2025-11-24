@@ -195,11 +195,29 @@ public struct Wendy_Agent_Services_V1_RunContainerResponse: Sendable {
     set {responseType = .stopped(newValue)}
   }
 
+  public var stdoutOutput: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput {
+    get {
+      if case .stdoutOutput(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput()
+    }
+    set {responseType = .stdoutOutput(newValue)}
+  }
+
+  public var stderrOutput: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput {
+    get {
+      if case .stderrOutput(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput()
+    }
+    set {responseType = .stderrOutput(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public enum OneOf_ResponseType: Equatable, Sendable {
     case started(Wendy_Agent_Services_V1_RunContainerResponse.Started)
     case stopped(Wendy_Agent_Services_V1_RunContainerResponse.Stopped)
+    case stdoutOutput(Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput)
+    case stderrOutput(Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput)
 
   }
 
@@ -222,6 +240,19 @@ public struct Wendy_Agent_Services_V1_RunContainerResponse: Sendable {
     // SwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
+
+  public struct ConsoleOutput: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// Output data from the container
+    public var data: Data = Data()
 
     public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -895,7 +926,7 @@ extension Wendy_Agent_Services_V1_ControlCommand.Stop: SwiftProtobuf.Message, Sw
 
 extension Wendy_Agent_Services_V1_RunContainerResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunContainerResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}started\0\u{1}stopped\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}started\0\u{1}stopped\0\u{3}stdout_output\0\u{3}stderr_output\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -929,6 +960,32 @@ extension Wendy_Agent_Services_V1_RunContainerResponse: SwiftProtobuf.Message, S
           self.responseType = .stopped(v)
         }
       }()
+      case 3: try {
+        var v: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .stdoutOutput(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .stdoutOutput(v)
+        }
+      }()
+      case 4: try {
+        var v: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .stderrOutput(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .stderrOutput(v)
+        }
+      }()
       default: break
       }
     }
@@ -947,6 +1004,14 @@ extension Wendy_Agent_Services_V1_RunContainerResponse: SwiftProtobuf.Message, S
     case .stopped?: try {
       guard case .stopped(let v)? = self.responseType else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case .stdoutOutput?: try {
+      guard case .stdoutOutput(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .stderrOutput?: try {
+      guard case .stderrOutput(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     }()
     case nil: break
     }
@@ -1004,6 +1069,36 @@ extension Wendy_Agent_Services_V1_RunContainerResponse.Stopped: SwiftProtobuf.Me
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_RunContainerResponse.Stopped, rhs: Wendy_Agent_Services_V1_RunContainerResponse.Stopped) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Wendy_Agent_Services_V1_RunContainerResponse.protoMessageName + ".ConsoleOutput"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.data) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.data.isEmpty {
+      try visitor.visitSingularBytesField(value: self.data, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput, rhs: Wendy_Agent_Services_V1_RunContainerResponse.ConsoleOutput) -> Bool {
+    if lhs.data != rhs.data {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

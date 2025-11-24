@@ -81,6 +81,8 @@ message RunContainerResponse {
     oneof response_type {
         Started started = 1;
         Stopped stopped = 2;
+        ConsoleOutput stdout_output = 3;
+        ConsoleOutput stderr_output = 4;
     }
 
     message Started {
@@ -91,6 +93,11 @@ message RunContainerResponse {
 
     message Stopped {
         // No fields; indicates container has been stopped
+    }
+
+    message ConsoleOutput {
+        // Output data from the container
+        bytes data = 1;
     }
 }
 

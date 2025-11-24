@@ -138,7 +138,12 @@ let package = Package(
         .target(
             name: "DockerOpenAPI",
             dependencies: [
-                .product(name: "OpenAPIAsyncHTTPClient", package: "swift-openapi-async-http-client")
+                .product(name: "OpenAPIAsyncHTTPClient", package: "swift-openapi-async-http-client"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
@@ -185,6 +190,7 @@ let package = Package(
                 .product(name: "GRPCServiceLifecycle", package: "grpc-swift-extras"),
                 .product(name: "DBUS", package: "dbus"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Yams", package: "Yams"),
                 .target(name: "ContainerdRegistry"),
                 .target(name: "WendyCloudGRPC"),
@@ -195,6 +201,7 @@ let package = Package(
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
+                .target(name: "DockerOpenAPI"),
             ],
             path: "Sources/WendyAgent"
         ),

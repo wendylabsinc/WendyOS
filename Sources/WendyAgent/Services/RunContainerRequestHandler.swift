@@ -1,4 +1,5 @@
 import AppConfig
+import DockerOpenAPI
 import Foundation
 import Logging
 import NIOFileSystem
@@ -7,15 +8,20 @@ import Subprocess
 /// A state machine that handles the request to run a container.
 struct RunContainerRequestHandler {
     enum State {
-        /// This is the initial state. The handler is waiting for the header.
+        /// Initial state, waiting for the header
         case waitingForHeader
 
-        /// After the header is received, the handler transitions to the `acceptingChunks`. In this
-        /// state, a file handle is opened for writing and chunks are being accepted.
+        /// Receiving container image chunks
         case acceptingChunks(AcceptingChunks)
 
-        /// Container is running, with associated data about the running container.
+        /// Container is starting up (before log streaming begins)
+        case containerStarting(ContainerStarting)
+
+        /// Container is running with active log streaming
         case running(Running)
+
+        /// Container is stopped/completed
+        case stopped
 
         struct AcceptingChunks {
             let header: Header
@@ -24,9 +30,15 @@ struct RunContainerRequestHandler {
             var fileHandle: WriteFileHandle
         }
 
+        struct ContainerStarting {
+            let imageName: String
+            let debugPort: UInt32
+        }
+
         struct Running {
             let imageName: String
             let debugPort: UInt32
+            let logStreamingTask: Task<Void, Never>
         }
     }
 
@@ -59,9 +71,19 @@ struct RunContainerRequestHandler {
     enum Event {
         case containerStarted(ContainerStarted)
         case containerStopped
+        case consoleOutput(ConsoleOutput)
 
         struct ContainerStarted {
             let debugPort: UInt32
+        }
+
+        struct ConsoleOutput {
+            enum StreamType {
+                case stdout
+                case stderr
+            }
+            let type: StreamType
+            let data: Data
         }
     }
 
@@ -98,12 +120,15 @@ struct RunContainerRequestHandler {
         self.eventsContinuation = continuation
     }
 
+    /// Performs cleanup of resources based on current state
     func cleanup() async {
         switch state {
         case .acceptingChunks(let acceptingChunks):
             try? await acceptingChunks.fileHandle.close()
-        case .waitingForHeader, .running:
-            ()
+        case .running(let running):
+            running.logStreamingTask.cancel()
+        case .containerStarting, .stopped, .waitingForHeader:
+            break
         }
     }
 
@@ -185,7 +210,18 @@ struct RunContainerRequestHandler {
                 "Removing any existing containers with the same name",
                 metadata: ["container": .string(containerName)]
             )
-            try await dockerCLI.rm(options: [.force], container: containerName)
+            do {
+                try await dockerCLI.rm(options: [.force], container: containerName)
+                logger.info(
+                    "Removed existing container",
+                    metadata: ["container": .string(containerName)]
+                )
+            } catch {
+                logger.debug(
+                    "No existing container to remove or removal failed",
+                    metadata: ["container": .string(containerName), "error": .string("\(error)")]
+                )
+            }
 
             var runOptions: [DockerCLI.RunOption] = [
                 .name(containerName),
@@ -284,11 +320,101 @@ struct RunContainerRequestHandler {
 
             eventsContinuation.yield(.containerStarted(.init(debugPort: debugPort)))
 
-            // Update state to running
+            // Transition to containerStarting state
+            self.state = .containerStarting(
+                State.ContainerStarting(
+                    imageName: imageName,
+                    debugPort: debugPort
+                )
+            )
+
+            // Start streaming logs from the container
+            let logStreamingTask = Task { [eventsContinuation, containerName, logger] in
+                logger.info(
+                    "Starting Docker log streaming via Unix socket API",
+                    metadata: ["container": .string(containerName)]
+                )
+
+                do {
+                    let dockerClient = try DockerAPIClient(
+                        socketPath: "/var/run/docker.sock",
+                        logger: logger
+                    )
+
+                    // Stream logs from the container
+                    let logStream = try await dockerClient.streamLogs(
+                        containerID: containerName,
+                        stdout: true,
+                        stderr: true,
+                        follow: true
+                    )
+
+                    logger.info("Log streaming started successfully")
+
+                    // Process log messages as they arrive
+                    do {
+                        for try await logMessage in logStream where !Task.isCancelled {
+                            logger.debug(
+                                "Received log message",
+                                metadata: [
+                                    "type": .string(
+                                        logMessage.type == .stdout ? "stdout" : "stderr"
+                                    ),
+                                    "size": .string("\(logMessage.data.count) bytes"),
+                                ]
+                            )
+
+                            let event = Event.consoleOutput(
+                                .init(
+                                    type: logMessage.type == .stdout ? .stdout : .stderr,
+                                    data: logMessage.data
+                                )
+                            )
+                            eventsContinuation.yield(event)
+                        }
+
+                        if Task.isCancelled {
+                            logger.info("Log streaming task cancelled")
+                        } else {
+                            logger.info("Docker log streaming ended normally")
+                        }
+                    } catch {
+                        logger.error(
+                            "Error during log streaming",
+                            metadata: [
+                                "error": .string("\(error)")
+                            ]
+                        )
+                    }
+
+                    do {
+                        try await dockerClient.shutdown()
+                        logger.debug("Docker client shut down successfully")
+                    } catch {
+                        logger.error(
+                            "Failed to shut down Docker client",
+                            metadata: [
+                                "error": .string("\(error)")
+                            ]
+                        )
+                    }
+                } catch {
+                    logger.error(
+                        "Failed to set up Docker log streaming",
+                        metadata: [
+                            "container": .string(containerName),
+                            "error": .string("\(error)"),
+                        ]
+                    )
+                }
+            }
+
+            // Transition to running state with active log streaming
             self.state = .running(
                 State.Running(
                     imageName: imageName,
-                    debugPort: debugPort
+                    debugPort: debugPort,
+                    logStreamingTask: logStreamingTask
                 )
             )
 
@@ -315,12 +441,14 @@ struct RunContainerRequestHandler {
                 throw error
             }
         // Keep state; caller may still upload/run a new image
-        case (.running(let running), .stop):
-            let containerName = "container-\(running.imageName)"
+        case (.containerStarting(let starting), .stop):
+            // Stop container that is starting (no logs yet)
+            let containerName = "container-\(starting.imageName)"
             logger.info(
-                "Stopping running container on request",
+                "Stopping container that is starting",
                 metadata: ["container": .string(containerName)]
             )
+
             do {
                 _ = try await dockerCLI.stop(container: containerName, timeoutSeconds: 10)
                 logger.info(
@@ -328,6 +456,7 @@ struct RunContainerRequestHandler {
                     metadata: ["container": .string(containerName)]
                 )
                 eventsContinuation.yield(.containerStopped)
+                self.state = .stopped
             } catch {
                 logger.error(
                     "Failed to stop container",
@@ -335,7 +464,38 @@ struct RunContainerRequestHandler {
                 )
                 throw error
             }
-        case (.running, _):
+
+        case (.running(let running), .stop):
+            let containerName = "container-\(running.imageName)"
+            logger.info(
+                "Stopping running container with active log streaming",
+                metadata: ["container": .string(containerName)]
+            )
+
+            // Cancel log streaming task
+            running.logStreamingTask.cancel()
+
+            do {
+                _ = try await dockerCLI.stop(container: containerName, timeoutSeconds: 10)
+                logger.info(
+                    "Container stopped",
+                    metadata: ["container": .string(containerName)]
+                )
+                eventsContinuation.yield(.containerStopped)
+                self.state = .stopped
+            } catch {
+                logger.error(
+                    "Failed to stop container",
+                    metadata: ["container": .string(containerName), "error": .string("\(error)")]
+                )
+                throw error
+            }
+
+        case (.stopped, .stop):
+            // Already stopped, ignore
+            logger.debug("Received stop command but container is already stopped")
+
+        case (_, _):
             throw Error.unexpectedControlCommand(control)
         }
     }
