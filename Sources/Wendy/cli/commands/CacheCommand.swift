@@ -8,7 +8,8 @@ struct CacheCommand: AsyncParsableCommand {
         commandName: "cache",
         abstract: "Inspect cached WendyOS images.",
         subcommands: [
-            ListCommand.self
+            ListCommand.self,
+            ClearCommand.self,
         ],
         defaultSubcommand: ListCommand.self
     )
@@ -74,6 +75,129 @@ struct CacheCommand: AsyncParsableCommand {
                 print(
                     "\nSome cache entries look incomplete. Remove the corresponding folders under \(cacheDirectory().path) if you need to reclaim space."
                 )
+            }
+        }
+    }
+
+    struct ClearCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "clear",
+            abstract: "Remove cached WendyOS images by device or all."
+        )
+
+        @Argument(
+            help: "Device name to clear. Omit to select from existing cached images."
+        )
+        var device: String?
+
+        @Flag(name: .long, help: "Remove all cached images.")
+        var all: Bool = false
+
+        @Flag(name: .long, help: "Skip confirmation prompts")
+        var force: Bool = false
+
+        func run() async throws {
+            guard all || device != nil else {
+                throw ValidationError("Specify a device name or --all, not both.")
+            }
+
+            let noora = Noora()
+            let fileManager = FileManager.default
+            let cachedImages = try listCachedImages(fileManager: fileManager)
+
+            guard !cachedImages.isEmpty else {
+                noora.info("No cached WendyOS images to clear.")
+                return
+            }
+
+            let targets: [CachedImageEntry]
+            if all {
+                targets = cachedImages
+            } else if let device {
+                guard let entry = cachedImages.first(where: { $0.device == device }) else {
+                    throw ValidationError("No cached image found for device '\(device)'.")
+                }
+                targets = [entry]
+            } else {
+                let rows = cachedImages.map { entry in
+                    [
+                        entry.device,
+                        entry.version ?? "—",
+                        entry.status.displayValue,
+                        ByteCountFormatter.string(
+                            fromByteCount: entry.sizeBytes,
+                            countStyle: .file
+                        ),
+                    ]
+                }
+
+                let selectedIndex = try await noora.selectableTable(
+                    headers: [
+                        "Device",
+                        "Version",
+                        "Status",
+                        "Size",
+                    ],
+                    rows: rows,
+                    pageSize: rows.count
+                )
+
+                targets = [cachedImages[selectedIndex]]
+            }
+
+            let totalBytes = targets.reduce(0) { $0 + $1.sizeBytes }
+            if !force {
+                let description: String
+                if all {
+                    description = "all cached images"
+                } else if targets.count == 1 {
+                    description = "the cache for \(targets[0].device)"
+                } else {
+                    description = "the selected caches"
+                }
+                let sizeText = ByteCountFormatter.string(
+                    fromByteCount: totalBytes,
+                    countStyle: .file
+                )
+                let confirmed = noora.yesOrNoChoicePrompt(
+                    question: "Remove \(description)? (~\(sizeText))",
+                    defaultAnswer: false
+                )
+                guard confirmed else {
+                    noora.info("Aborted.")
+                    return
+                }
+            }
+
+            let root = cacheDirectory(fileManager: fileManager)
+            var failures: [(String, String)] = []
+
+            for entry in targets {
+                let path = root.appendingPathComponent(entry.device)
+                do {
+                    if fileManager.fileExists(atPath: path.path) {
+                        try fileManager.removeItem(at: path)
+                    }
+                } catch {
+                    failures.append((entry.device, error.localizedDescription))
+                }
+            }
+
+            if failures.isEmpty {
+                let sizeText = ByteCountFormatter.string(
+                    fromByteCount: totalBytes,
+                    countStyle: .file
+                )
+                if all {
+                    noora.success("Cleared all cached images (\(sizeText)).")
+                } else {
+                    let names = targets.map(\.device).joined(separator: ", ")
+                    noora.success("Cleared cache for \(names) (\(sizeText)).")
+                }
+            } else {
+                for failure in failures {
+                    noora.error("Failed to clear cache for \(failure.0): \(failure.1)")
+                }
             }
         }
     }
