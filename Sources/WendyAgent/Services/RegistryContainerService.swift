@@ -9,7 +9,7 @@ struct RegistryContainerService: Service {
     let serviceName = "wendyos-dev-registry"
     let healthCheckInterval: Duration = .seconds(30)
 
-    func run() async throws {
+    func run() async {
         logger.info("Starting registry container service")
 
         // Ensure registry is running
