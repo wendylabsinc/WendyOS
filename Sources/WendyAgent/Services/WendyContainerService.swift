@@ -451,6 +451,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         appName: request.appName,
                         snapshotKey: snapshotKey ?? "",
                         ociSpec: try JSONEncoder().encode(spec),
+                        labels: labels,
                         runtime: runtime,
                         options: options
                     )
@@ -524,7 +525,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             ]
                         )
                         // Mark the container as started in the monitor (reset explicitly stopped flag)
-                        await containerMonitor.markContainerStarted(request.appName)
+                        await ContainerMonitor.shared.markContainerStarted(request.appName)
                     } catch let error as RPCError where error.code == .notFound {
                         logger.info("Container wasn't running")
                     } catch is RPCError {
@@ -594,7 +595,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             do {
                 try await client.stopTask(containerID: appName)
                 // Mark the container as explicitly stopped in the monitor
-                await containerMonitor.markContainerStopped(appName)
+                await ContainerMonitor.shared.markContainerStopped(appName)
                 logger.info(
                     "Stopped container",
                     metadata: ["container-id": .stringConvertible(appName)]

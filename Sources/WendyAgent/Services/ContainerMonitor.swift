@@ -8,6 +8,9 @@ import Subprocess
 /// Monitor service that watches containers and enforces restart policies for containerd apps
 actor ContainerMonitor: Service {
     private let logger = Logger(label: "ContainerMonitor")
+    static let shared = ContainerMonitor()
+
+    private init() {}
 
     /// Container restart state tracking
     private struct ContainerState {
@@ -307,6 +310,3 @@ actor ContainerMonitor: Service {
         }
     }
 }
-
-// Singleton instance
-let containerMonitor = ContainerMonitor()

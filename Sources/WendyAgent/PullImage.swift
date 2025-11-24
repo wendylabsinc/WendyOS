@@ -158,7 +158,8 @@ public struct PullImage {
                     imageName: appName,
                     appName: appName,
                     snapshotKey: snapshotKey ?? "",
-                    ociSpec: runtimeSpecData
+                    ociSpec: runtimeSpecData,
+                    labels: labels
                 )
             }
 

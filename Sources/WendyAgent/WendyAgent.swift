@@ -54,7 +54,7 @@ struct WendyAgent: AsyncParsableCommand {
         }()
 
         var backgroundServices: [any ServiceLifecycle.Service] = [
-            containerMonitor  // Add container monitor as a background service
+            ContainerMonitor.shared  // Add container monitor as a background service
         ]
         var servers = [GRPCServer<HTTP2ServerTransport.Posix>]()
 
