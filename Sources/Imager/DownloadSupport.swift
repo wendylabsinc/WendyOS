@@ -3,6 +3,7 @@ import DownloadSupport
 import Foundation
 import NIOCore
 import _NIOFileSystem
+import ContainerBuilder
 
 #if os(macOS)
     import Darwin
@@ -201,13 +202,8 @@ public final class ImageDownloader: ImageDownloading {
         redownload: Bool = false,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (String, cached: Bool) {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
+        let cacheDir = try FileManager.default
+            .cacheDirectory(.images)
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
@@ -304,13 +300,7 @@ public final class ImageDownloader: ImageDownloading {
 
     /// Stores version metadata for a cached image
     private func storeVersionMetadata(deviceName: String, version: String) throws {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
             "version.json"
         )
@@ -325,13 +315,7 @@ public final class ImageDownloader: ImageDownloading {
 
     /// Reads version metadata for a cached image
     private nonisolated func readVersionMetadata(deviceName: String) throws -> String? {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
         let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
             "version.json"
         )
@@ -350,14 +334,7 @@ public final class ImageDownloader: ImageDownloading {
 
     /// Returns a valid cached .img path if available, else nil.
     public func cachedImageIfValid(deviceName: String) async throws -> String? {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
-        return cacheDir.path
+        return try FileManager.default.cacheDirectory(.images).path
     }
 
     /// Checks if cached image version matches the latest version
@@ -380,13 +357,7 @@ public final class ImageDownloader: ImageDownloading {
         version: String? = nil,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (zipPath: String, extractionDir: String) {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
@@ -409,13 +380,7 @@ public final class ImageDownloader: ImageDownloading {
         version: String? = nil,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
-        let cacheDir = try FileManager.default.url(
-            for: .cachesDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("images")
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
 
         // Prepare extraction dir: clear if exists, then recreate
