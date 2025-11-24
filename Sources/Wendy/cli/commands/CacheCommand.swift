@@ -80,7 +80,7 @@ struct CacheCommand: AsyncParsableCommand {
 }
 // MARK: - Cache listing
 
-fileprivate enum CachedImageStatus: String, Codable {
+private enum CachedImageStatus: String, Codable {
     case ready
     case incomplete
     case empty
@@ -97,7 +97,7 @@ fileprivate enum CachedImageStatus: String, Codable {
     }
 }
 
-fileprivate struct CachedImageEntry: Codable {
+private struct CachedImageEntry: Codable {
     let device: String
     let version: String?
     let cachedAt: Date?
@@ -106,11 +106,11 @@ fileprivate struct CachedImageEntry: Codable {
     let status: CachedImageStatus
 }
 
-fileprivate func cacheDirectory(fileManager: FileManager = .default) -> URL {
+private func cacheDirectory(fileManager: FileManager = .default) -> URL {
     fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".wendy/cache/images")
 }
 
-fileprivate func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
+private func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
     let root = cacheDirectory(fileManager: fileManager)
     guard fileManager.fileExists(atPath: root.path) else { return [] }
 
@@ -159,7 +159,7 @@ fileprivate func listCachedImages(fileManager: FileManager = .default) throws ->
     return entries.sorted { $0.device < $1.device }
 }
 
-fileprivate func readCacheMetadata(at url: URL) -> (String?, Date?) {
+private func readCacheMetadata(at url: URL) -> (String?, Date?) {
     let metadataURL = url.appendingPathComponent("version.json")
 
     guard let data = try? Data(contentsOf: metadataURL) else {
@@ -181,11 +181,15 @@ fileprivate func readCacheMetadata(at url: URL) -> (String?, Date?) {
 }
 
 private func directorySize(of url: URL, fileManager: FileManager = .default) -> Int64 {
-    guard let enumerator = fileManager.enumerator(
-        at: url,
-        includingPropertiesForKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey],
-        options: [.skipsHiddenFiles]
-    ) else { return 0 }
+    guard
+        let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [
+                .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey,
+            ],
+            options: [.skipsHiddenFiles]
+        )
+    else { return 0 }
 
     var total: Int64 = 0
     for case let fileURL as URL in enumerator {
@@ -207,11 +211,13 @@ private func directorySize(of url: URL, fileManager: FileManager = .default) -> 
 }
 
 private func findImageFile(in url: URL, fileManager: FileManager = .default) -> URL? {
-    guard let enumerator = fileManager.enumerator(
-        at: url,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsHiddenFiles]
-    ) else { return nil }
+    guard
+        let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+    else { return nil }
 
     for case let fileURL as URL in enumerator {
         guard

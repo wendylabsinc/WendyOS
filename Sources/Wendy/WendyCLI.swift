@@ -49,7 +49,7 @@ struct WendyCommand: AsyncParsableCommand {
                 name: "Misc.",
                 subcommands: [
                     HelperCommand.self,
-                    CacheCommand.self
+                    CacheCommand.self,
                 ]
             ),
         ]
