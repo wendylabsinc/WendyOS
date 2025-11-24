@@ -61,6 +61,21 @@ extension RunContainerRequestHandler.Event {
                 )
             case .containerStopped:
                 $0.responseType = .stopped(.init())
+            case .consoleOutput(let output):
+                switch output.type {
+                case .stdout:
+                    $0.responseType = .stdoutOutput(
+                        .with {
+                            $0.data = output.data
+                        }
+                    )
+                case .stderr:
+                    $0.responseType = .stderrOutput(
+                        .with {
+                            $0.data = output.data
+                        }
+                    )
+                }
             }
         }
     }

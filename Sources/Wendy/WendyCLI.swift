@@ -48,7 +48,8 @@ struct WendyCommand: AsyncParsableCommand {
             CommandGroup(
                 name: "Misc.",
                 subcommands: [
-                    HelperCommand.self
+                    HelperCommand.self,
+                    CacheCommand.self,
                 ]
             ),
         ]
