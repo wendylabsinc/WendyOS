@@ -19,6 +19,7 @@ struct ProjectConfigTests {
 
         var initCommand = InitCommand()
         initCommand.projectPath = projectDir.path()
+        initCommand.language = .swift
 
         try await initCommand.run()
 

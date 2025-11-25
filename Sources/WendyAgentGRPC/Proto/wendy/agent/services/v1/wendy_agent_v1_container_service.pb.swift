@@ -111,7 +111,7 @@ public struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sendable {
 
   public var appName: String = String()
 
-  /// The commavar d to run when the container starts.
+  /// The command to run when the container starts.
   public var cmd: String = String()
 
   /// The layers that will be uploaded to the agent.
@@ -137,6 +137,59 @@ public struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sendable {
   public init() {}
 
   fileprivate var _restartPolicy: RestartPolicy? = nil
+}
+
+public struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var imageName: String = String()
+
+  public var appName: String = String()
+
+  public var cmd: String = String()
+
+  public var appConfig: Data = Data()
+
+  public var workingDir: String = String()
+
+  public var restartPolicy: RestartPolicy {
+    get {return _restartPolicy ?? RestartPolicy()}
+    set {_restartPolicy = newValue}
+  }
+  /// Returns true if `restartPolicy` has been explicitly set.
+  public var hasRestartPolicy: Bool {return self._restartPolicy != nil}
+  /// Clears the value of `restartPolicy`. Subsequent reads from it will return its default value.
+  public mutating func clearRestartPolicy() {self._restartPolicy = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _restartPolicy: RestartPolicy? = nil
+}
+
+public struct Wendy_Agent_Services_V1_CreateContainerResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_StartContainerRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var appName: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
 }
 
 public struct Wendy_Agent_Services_V1_RunContainerLayerHeader: Sendable {
@@ -470,6 +523,114 @@ extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Messa
     if lhs.appConfig != rhs.appConfig {return false}
     if lhs._restartPolicy != rhs._restartPolicy {return false}
     if lhs.workingDir != rhs.workingDir {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateContainerRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{3}app_config\0\u{3}working_dir\0\u{3}restart_policy\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.imageName) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.appName) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.cmd) }()
+      case 4: try { try decoder.decodeSingularBytesField(value: &self.appConfig) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.workingDir) }()
+      case 6: try { try decoder.decodeSingularMessageField(value: &self._restartPolicy) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.imageName.isEmpty {
+      try visitor.visitSingularStringField(value: self.imageName, fieldNumber: 1)
+    }
+    if !self.appName.isEmpty {
+      try visitor.visitSingularStringField(value: self.appName, fieldNumber: 2)
+    }
+    if !self.cmd.isEmpty {
+      try visitor.visitSingularStringField(value: self.cmd, fieldNumber: 3)
+    }
+    if !self.appConfig.isEmpty {
+      try visitor.visitSingularBytesField(value: self.appConfig, fieldNumber: 4)
+    }
+    if !self.workingDir.isEmpty {
+      try visitor.visitSingularStringField(value: self.workingDir, fieldNumber: 5)
+    }
+    try { if let v = self._restartPolicy {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerRequest, rhs: Wendy_Agent_Services_V1_CreateContainerRequest) -> Bool {
+    if lhs.imageName != rhs.imageName {return false}
+    if lhs.appName != rhs.appName {return false}
+    if lhs.cmd != rhs.cmd {return false}
+    if lhs.appConfig != rhs.appConfig {return false}
+    if lhs.workingDir != rhs.workingDir {return false}
+    if lhs._restartPolicy != rhs._restartPolicy {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_CreateContainerResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateContainerResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerResponse, rhs: Wendy_Agent_Services_V1_CreateContainerResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_StartContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".StartContainerRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_name\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.appName) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.appName.isEmpty {
+      try visitor.visitSingularStringField(value: self.appName, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_StartContainerRequest, rhs: Wendy_Agent_Services_V1_StartContainerRequest) -> Bool {
+    if lhs.appName != rhs.appName {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

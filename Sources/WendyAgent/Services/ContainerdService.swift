@@ -58,6 +58,12 @@ public struct SystemFIFOManager: FIFOManager {
 // MARK: - Containerd Client
 
 struct NamespaceInterceptor: ClientInterceptor {
+    let namespace: String
+
+    init(namespace: String = "default") {
+        self.namespace = namespace
+    }
+
     func intercept<Input, Output>(
         request: StreamingClientRequest<Input>,
         context: ClientContext,
@@ -65,7 +71,7 @@ struct NamespaceInterceptor: ClientInterceptor {
             StreamingClientResponse<Output>
     ) async throws -> StreamingClientResponse<Output> where Input: Sendable, Output: Sendable {
         var request = request
-        request.metadata.addString("default", forKey: "containerd-namespace")
+        request.metadata.addString(namespace, forKey: "containerd-namespace")
         return try await next(request, context)
     }
 }
@@ -244,6 +250,21 @@ public struct Containerd: Sendable {
                 )
                 throw error
             }
+        }
+    }
+
+    public func fetchBlob(digest: String) async throws -> Data {
+        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
+        return try await content.read(
+            .with {
+                $0.digest = digest
+            }
+        ) { response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return data
         }
     }
 
@@ -551,6 +572,7 @@ public struct Containerd: Sendable {
         appName: String,
         snapshotKey: String,
         ociSpec: Data,
+        labels: [String: String],
         runtime: String = "io.containerd.runc.v2",
         options: Containerd_Runc_V1_Options? = nil
     ) async throws {
@@ -573,6 +595,7 @@ public struct Containerd: Sendable {
                         $0.snapshotter = "overlayfs"
                         $0.snapshotKey = snapshotKey
                         $0.image = imageName
+                        $0.labels = labels
                     }
                 }
             )
@@ -614,10 +637,32 @@ public struct Containerd: Sendable {
         return try await tasks.list(.init()).tasks
     }
 
+    public func getContainer(
+        named: String
+    ) async throws -> Containerd_Services_Containers_V1_Container {
+        let containers = Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
+        return try await containers.get(
+            .with {
+                $0.id = named
+            }
+        ).container
+    }
+
+    public func mountsSnapshot(
+        named: String
+    ) async throws -> Containerd_Services_Snapshots_V1_MountsResponse {
+        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+        return try await snapshots.mounts(
+            .with {
+                $0.key = named
+                $0.snapshotter = "overlayfs"
+            }
+        )
+    }
+
     public func createTask(
         containerID: String,
         appName: String,
-        snapshotName: String,
         mounts: [Containerd_Types_Mount],
         stdout: String?,
         stderr: String?,

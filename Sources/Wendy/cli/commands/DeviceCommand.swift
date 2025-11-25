@@ -59,8 +59,7 @@ struct DeviceCommand: AsyncParsableCommand {
 
             var latestVersion: String? = nil
 
-            if checkUpdates {
-                let releases = try await fetchReleases()
+            if checkUpdates, let releases = try? await fetchReleases() {
                 if prerelease {
                     latestVersion = releases.first?.name
                 } else {
@@ -108,7 +107,10 @@ struct DeviceCommand: AsyncParsableCommand {
                 title: "Which device do you want to update?"
             ) { client in
                 let agent = Agent(client: client)
-                return try await agent.update(fromBinary: binary)
+                return try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
+                    try await agent.update(fromBinary: binary, onProgress: updateProgress)
+                }
             }
 
             guard success else {
@@ -243,7 +245,10 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 let binary = try await downloadLatestRelease().path
-                let success = try await agent.update(fromBinary: binary)
+                let success = try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
+                    try await agent.update(fromBinary: binary, onProgress: updateProgress)
+                }
 
                 guard success else {
                     Noora().error("Failed to update agent")
