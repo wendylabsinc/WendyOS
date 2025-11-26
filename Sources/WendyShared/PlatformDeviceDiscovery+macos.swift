@@ -58,7 +58,7 @@
                     // Only track Wendy devices
                     if device.isWendyDevice {
                         devices.append(device)
-                        logger.info(
+                        logger.debug(
                             "Wendy device found",
                             metadata: ["deviceName": .string(device.name)]
                         )
