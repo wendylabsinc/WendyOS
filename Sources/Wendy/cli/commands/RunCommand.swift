@@ -228,6 +228,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         }
                     }
                 }
+            } catch is CancellationError {
+                // Connection was cancelled (normal when buildx completes)
+                logger.trace("Client connection cancelled")
             } catch {
                 logger.error("Failed to handle client", metadata: ["error": .string("\(error)")])
             }
@@ -263,29 +266,42 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             endpoint,
             title: title
         ) { [name] client, endpoint in
-            try await withTCPProxyServer(
-                localHostname: "localhost",
+            let port = try await withTCPProxyServer(
+                localHostname: "0.0.0.0",  // Bind to all interfaces for Docker Desktop compatibility
                 localPort: 0,
                 remoteHostname: endpoint.host,
                 remotePort: 5000
-            ) { proxyAddress in
-                try await Noora().progressStep(
-                    message: "Building container",
-                    successMessage: "Container built successfully!",
-                    errorMessage: "Failed to build container",
+            ) { proxyAddress -> Int in
+                let port = proxyAddress?.port ?? 5000
+
+                // Create buildx builder with insecure registry support
+                let builderName = try await Noora().progressStep(
+                    message: "Setting up builder",
+                    successMessage: "Builder ready",
+                    errorMessage: "Failed to create builder",
                     showSpinner: true
                 ) { _ in
-                    try await docker.buildx(name: name, port: proxyAddress?.port ?? 5000)
+                    try await docker.createBuildxBuilder(port: port)
                 }
 
+                // Ensure builder cleanup
+                defer {
+                    Task {
+                        try? await docker.removeBuildxBuilder(name: builderName)
+                    }
+                }
+
+                // Build and push in a single operation for better performance
                 try await Noora().progressStep(
-                    message: "Uploading container",
-                    successMessage: "Container uploaded successfully!",
-                    errorMessage: "Failed to upload container",
+                    message: "Building and uploading container",
+                    successMessage: "Container built and uploaded successfully!",
+                    errorMessage: "Failed to build and upload container",
                     showSpinner: true
                 ) { _ in
-                    try await docker.push(name: name, port: proxyAddress?.port ?? 5000)
+                    try await docker.buildxAndPush(name: name, port: port, builder: builderName)
                 }
+
+                return port
             }
 
             // TODO: Create image might be needed here, but my tests didn't require it for some reason
@@ -670,6 +686,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         _ = try await agentContainers.createContainer(
             request: .init(
                 message: .with {
+                    // The image is pushed to the device's local registry as just "appName"
+                    // The host.docker.internal:port prefix is only for routing during push
                     $0.imageName = "\(appName):latest"
                     $0.appName = appName
                     $0.appConfig = appConfigData

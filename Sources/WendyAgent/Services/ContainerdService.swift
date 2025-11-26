@@ -310,6 +310,154 @@ public struct Containerd: Sendable {
         )
     }
 
+    /// Unpack an image from the content store into snapshots.
+    /// This is required when images are pushed to the registry but not yet unpacked.
+    public func unpackImage(named imageName: String) async throws {
+        let images = Containerd_Services_Images_V1_Images.Client(wrapping: client)
+        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
+        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
+
+        logger.info("Unpacking image", metadata: ["image": .stringConvertible(imageName)])
+
+        // Get the image
+        let image = try await images.get(.with { $0.name = imageName }).image
+
+        // Read the manifest
+        let manifestData = try await content.read(.with { $0.digest = image.target.digest }) {
+            response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return data
+        }
+
+        struct ImageManifest: Codable {
+            let config: ManifestDescriptor
+            let layers: [ManifestDescriptor]
+
+            struct ManifestDescriptor: Codable {
+                let digest: String
+                let size: Int64
+                let mediaType: String
+            }
+        }
+
+        let manifest = try JSONDecoder().decode(ImageManifest.self, from: manifestData)
+
+        // Read the config to get diffIDs
+        let configData = try await content.read(.with { $0.digest = manifest.config.digest }) {
+            response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return data
+        }
+
+        struct ImageConfig: Codable {
+            let rootfs: RootFS
+
+            struct RootFS: Codable {
+                let diff_ids: [String]
+
+                enum CodingKeys: String, CodingKey {
+                    case diff_ids
+                }
+            }
+        }
+
+        let config = try JSONDecoder().decode(ImageConfig.self, from: configData)
+
+        // Unpack each layer
+        var previousLayerKey: String? = nil
+
+        for (index, layer) in manifest.layers.enumerated() {
+            let diffID =
+                index < config.rootfs.diff_ids.count
+                ? config.rootfs.diff_ids[index].replacingOccurrences(of: "sha256:", with: "")
+                : layer.digest.replacingOccurrences(of: "sha256:", with: "")
+
+            let layerKey = "\(imageName)-\(diffID)"
+
+            // Check if snapshot already exists
+            do {
+                _ = try await snapshots.stat(
+                    .with {
+                        $0.key = layerKey
+                        $0.snapshotter = "overlayfs"
+                    }
+                )
+                logger.debug(
+                    "Snapshot already exists, skipping",
+                    metadata: ["layer-key": .stringConvertible(layerKey)]
+                )
+                previousLayerKey = layerKey
+                continue
+            } catch let error as RPCError where error.code == .notFound {
+                // Snapshot doesn't exist, need to create it
+            }
+
+            // Prepare snapshot
+            let tmpKey = UUID().uuidString
+            let prepareRequest: Containerd_Services_Snapshots_V1_PrepareSnapshotRequest
+            if let parent = previousLayerKey {
+                prepareRequest = .with {
+                    $0.key = tmpKey
+                    $0.parent = parent
+                    $0.snapshotter = "overlayfs"
+                }
+            } else {
+                prepareRequest = .with {
+                    $0.key = tmpKey
+                    $0.snapshotter = "overlayfs"
+                }
+            }
+
+            let snapshot = try await snapshots.prepare(prepareRequest)
+
+            // Apply diff
+            _ = try await diffs.apply(
+                .with {
+                    $0.diff = .with {
+                        $0.digest = layer.digest
+                        $0.size = layer.size
+                        $0.mediaType = layer.mediaType
+                    }
+                    $0.mounts = snapshot.mounts
+                }
+            )
+
+            // Commit snapshot
+            do {
+                _ = try await snapshots.commit(
+                    .with {
+                        $0.key = tmpKey
+                        $0.name = layerKey
+                        $0.snapshotter = "overlayfs"
+                    }
+                )
+                logger.debug(
+                    "Committed snapshot",
+                    metadata: ["layer-key": .stringConvertible(layerKey)]
+                )
+            } catch let error as RPCError where error.code == .alreadyExists {
+                logger.debug(
+                    "Snapshot already exists after commit",
+                    metadata: ["layer-key": .stringConvertible(layerKey)]
+                )
+            }
+
+            previousLayerKey = layerKey
+        }
+
+        logger.info(
+            "Image unpacked successfully",
+            metadata: ["image": .stringConvertible(imageName)]
+        )
+    }
+
     public func createSnapshot(
         imageName: String,
         appName: String,

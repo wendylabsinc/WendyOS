@@ -397,6 +397,20 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 }
             }
 
+            // Unpack the image from the content store into snapshots
+            // This is required when images are pushed via registry but not yet unpacked
+            do {
+                try await client.unpackImage(named: request.imageName)
+            } catch {
+                logger.warning(
+                    "Failed to unpack image, will attempt to create snapshots anyway",
+                    metadata: [
+                        "image-name": .stringConvertible(request.imageName),
+                        "error": .stringConvertible(error.localizedDescription),
+                    ]
+                )
+            }
+
             let snapshotKey: String?
 
             do {

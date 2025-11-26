@@ -87,6 +87,130 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// Build and push a Docker container in a single operation using buildx.
+    /// This is more efficient than separate build and push as it streams layers directly to the registry.
+    /// Uses host.docker.internal:PORT for cross-platform support (works on both Linux and Docker Desktop).
+    /// Disables provenance and SBOM to ensure Docker v2 manifest format (not OCI image index).
+    /// Uses registry cache to preserve build cache across builder recreations.
+    public func buildxAndPush(
+        name: String,
+        directory: String = ".",
+        port: Int = 5000,
+        builder: String
+    ) async throws {
+        let cacheRef = "host.docker.internal:\(port)/\(name):buildcache"
+        let arguments = [
+            "buildx", "build",
+            "--builder", builder,
+            "--platform", "linux/arm64",
+            "--provenance=false",
+            "--sbom=false",
+            "--cache-from", "type=registry,ref=\(cacheRef)",
+            "--cache-to", "type=registry,ref=\(cacheRef),mode=max",
+            "--push",
+            "-t", "host.docker.internal:\(port)/\(name):latest",
+            directory,
+        ]
+
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+
+        guard result.terminationStatus.isSuccess else {
+            throw SubprocessError.nonZeroExit(
+                command: ([self.command] + arguments).joined(separator: " "),
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                output: "",
+                error: ""
+            )
+        }
+    }
+
+    /// Creates a buildx builder with insecure registry support for the specified port.
+    /// Returns the name of the created builder.
+    public func createBuildxBuilder(
+        port: Int
+    ) async throws -> String {
+        let builderName = "wendy-builder-\(port)"
+
+        // Create buildkitd.toml configuration
+        // Include multiple registry configurations to handle different networking scenarios
+        let configContent = """
+            [registry."host.docker.internal:\(port)"]
+              http = true
+              insecure = true
+
+            [registry."localhost:\(port)"]
+              http = true
+              insecure = true
+
+            [registry."192.168.65.254:\(port)"]
+              http = true
+              insecure = true
+
+            [registry."127.0.0.1:\(port)"]
+              http = true
+              insecure = true
+            """
+
+        let tempDir = FileManager.default.temporaryDirectory
+        let configPath = tempDir.appendingPathComponent("buildkitd-\(builderName).toml")
+        try configContent.write(to: configPath, atomically: true, encoding: .utf8)
+
+        // Create builder with configuration
+        let createArguments = [
+            "buildx", "create",
+            "--name", builderName,
+            "--driver", "docker-container",
+            "--config", configPath.path,
+            "--bootstrap",  // Start the builder immediately to load config
+        ]
+
+        let createResult = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(createArguments),
+            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+
+        guard createResult.terminationStatus.isSuccess else {
+            throw SubprocessError.nonZeroExit(
+                command: ([self.command] + createArguments).joined(separator: " "),
+                exitCode: Int(createResult.terminationStatus.description) ?? -1,
+                output: "",
+                error: ""
+            )
+        }
+
+        return builderName
+    }
+
+    /// Removes a buildx builder.
+    public func removeBuildxBuilder(
+        name: String
+    ) async throws {
+        let arguments = ["buildx", "rm", name]
+
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+
+        guard result.terminationStatus.isSuccess else {
+            throw SubprocessError.nonZeroExit(
+                command: ([self.command] + arguments).joined(separator: " "),
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                output: "",
+                error: ""
+            )
+        }
+    }
+
     /// Export a Docker container.
     public func save(
         name: String,
