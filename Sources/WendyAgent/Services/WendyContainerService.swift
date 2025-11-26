@@ -538,8 +538,6 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                                 "container-id": .stringConvertible(request.appName)
                             ]
                         )
-                        // Mark the container as started in the monitor (reset explicitly stopped flag)
-                        await ContainerMonitor.shared.markContainerStarted(request.appName)
                     } catch let error as RPCError where error.code == .notFound {
                         logger.info("Container wasn't running")
                     } catch is RPCError {
@@ -567,6 +565,9 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
                     logger.info("Starting task")
                     try await client.runTask(containerID: request.appName)
+                    
+                    // Mark the container as started in the monitor (reset explicitly stopped flag)
+                    await ContainerMonitor.shared.markContainerStarted(request.appName)
 
                     try await writer.write(
                         .with {
