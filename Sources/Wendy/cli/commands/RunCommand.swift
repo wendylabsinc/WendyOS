@@ -266,28 +266,24 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             endpoint,
             title: title
         ) { [name] client, endpoint in
-            let port = try await withTCPProxyServer(
+            try await withTCPProxyServer(
                 localHostname: "0.0.0.0",  // Bind to all interfaces for Docker Desktop compatibility
-                localPort: 0,
+                localPort: 50053,
                 remoteHostname: endpoint.host,
                 remotePort: 5000
-            ) { proxyAddress -> Int in
-                let port = proxyAddress?.port ?? 5000
+            ) { proxyAddress in
+                let port = proxyAddress?.port ?? 50053
+                let builderName = docker.builderName(forPort: port)
 
-                // Create buildx builder with insecure registry support
-                let builderName = try await Noora().progressStep(
-                    message: "Setting up builder",
-                    successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.createBuildxBuilder(port: port)
-                }
-
-                // Ensure builder cleanup
-                defer {
-                    Task {
-                        try? await docker.removeBuildxBuilder(name: builderName)
+                if try await !docker.hasBuildxBuilder(builderName: builderName) {
+                    // Create buildx builder with insecure registry support
+                    try await Noora().progressStep(
+                        message: "Setting up builder",
+                        successMessage: "Builder ready",
+                        errorMessage: "Failed to create builder",
+                        showSpinner: true
+                    ) { _ in
+                        try await docker.createBuildxBuilder(port: port)
                     }
                 }
 
@@ -300,8 +296,6 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 ) { _ in
                     try await docker.buildxAndPush(name: name, port: port, builder: builderName)
                 }
-
-                return port
             }
 
             // TODO: Create image might be needed here, but my tests didn't require it for some reason

@@ -98,15 +98,12 @@ public struct DockerCLI: Sendable {
         port: Int = 5000,
         builder: String
     ) async throws {
-        let cacheRef = "host.docker.internal:\(port)/\(name):buildcache"
         let arguments = [
             "buildx", "build",
             "--builder", builder,
             "--platform", "linux/arm64",
             "--provenance=false",
             "--sbom=false",
-            "--cache-from", "type=registry,ref=\(cacheRef)",
-            "--cache-to", "type=registry,ref=\(cacheRef),mode=max",
             "--push",
             "-t", "host.docker.internal:\(port)/\(name):latest",
             directory,
@@ -129,12 +126,45 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    public func listBuildxBuilders() async throws -> [String] {
+        let arguments = ["buildx", "ls", "--format", "{{.Name}}"]
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .string(limit: 100_000, encoding: UTF8.self),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+
+        guard 
+            result.terminationStatus.isSuccess,
+            let output = result.standardOutput
+        else {
+            throw SubprocessError.nonZeroExit(
+                command: ([self.command] + arguments).joined(separator: " "),
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                output: "",
+                error: ""
+            )
+        }
+        
+        return output.split(separator: "\n").map { String($0) }
+    }
+
+    public func builderName(forPort port: Int) -> String {
+        return "wendy-builder-\(port)"
+    }
+
+    public func hasBuildxBuilder(builderName: String) async throws -> Bool {
+        let builders = try await listBuildxBuilders()
+        return builders.contains(builderName)
+    }
+
     /// Creates a buildx builder with insecure registry support for the specified port.
     /// Returns the name of the created builder.
     public func createBuildxBuilder(
         port: Int
-    ) async throws -> String {
-        let builderName = "wendy-builder-\(port)"
+    ) async throws {
+        let builderName = builderName(forPort: port)
 
         // Create buildkitd.toml configuration
         // Include multiple registry configurations to handle different networking scenarios
@@ -144,10 +174,6 @@ public struct DockerCLI: Sendable {
               insecure = true
 
             [registry."localhost:\(port)"]
-              http = true
-              insecure = true
-
-            [registry."192.168.65.254:\(port)"]
               http = true
               insecure = true
 
@@ -184,8 +210,6 @@ public struct DockerCLI: Sendable {
                 error: ""
             )
         }
-
-        return builderName
     }
 
     /// Removes a buildx builder.
