@@ -533,13 +533,19 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         )
                         try await client.deleteTask(containerID: request.appName)
                         logger.debug(
-                            "Task removed",
+                            "Task removed, recreating",
                             metadata: [
                                 "container-id": .stringConvertible(request.appName)
                             ]
                         )
-                    } catch let error as RPCError where error.code == .notFound {
-                        logger.info("Container wasn't running")
+                        try await client.createTask(
+                            containerID: request.appName,
+                            appName: request.appName,
+                            mounts: snapshot.mounts,
+                            stdout: stdout,
+                            stderr: stderr,
+                            runtime: container.runtime.name
+                        )
                     } catch is RPCError {
                         logger.error(
                             "Failed to kill container",
