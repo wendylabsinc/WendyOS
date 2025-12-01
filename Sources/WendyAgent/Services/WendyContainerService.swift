@@ -571,7 +571,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
                     logger.info("Starting task")
                     try await client.runTask(containerID: request.appName)
-                    
+
                     // Mark the container as started in the monitor (reset explicitly stopped flag)
                     await ContainerMonitor.shared.markContainerStarted(request.appName)
 
