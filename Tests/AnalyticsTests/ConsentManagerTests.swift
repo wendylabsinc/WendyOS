@@ -44,6 +44,8 @@ struct ConsentManagerEnvironmentTests {
         ]
     )
     func shouldDisableAnalyticsInCIEnvironment(indicator: String) {
+        // WENDY_ANALYTICS takes precedence, so ensure it's unset
+        unsetenv("WENDY_ANALYTICS")
         setenv(indicator, "true", 1)
         #expect(ConsentManager.shouldDisableAnalytics() == true)
         unsetenv(indicator)
