@@ -172,6 +172,7 @@ let package = Package(
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
+                .target(name: "DockerOpenAPI"),
                 .target(name: "WendyShared"),
                 .target(name: "AppConfig"),
                 .target(name: "ContainerRegistry"),

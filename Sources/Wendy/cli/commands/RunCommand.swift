@@ -90,6 +90,19 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     func run() async throws {
         let logger = Logger(label: "sh.wendy.cli.run")
         let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
+        let directory = try FileManager.default.contentsOfDirectory(
+            atPath: FileManager.default.currentDirectoryPath
+        )
+
+        for item in directory where item.lowercased().contains("dockerfile") {
+            switch runtime {
+            case .docker:
+                try await runDockerBased()
+            case .containerd:
+                try await runContainerdBased()
+            }
+            return
+        }
 
         if isSwiftPackage {
             switch runtime {
@@ -99,20 +112,6 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 try await runSwiftContainerdBased()
             }
         } else {
-            let directory = try FileManager.default.contentsOfDirectory(
-                atPath: FileManager.default.currentDirectoryPath
-            )
-
-            for item in directory where item.lowercased().contains("dockerfile") {
-                switch runtime {
-                case .docker:
-                    try await runDockerBased()
-                case .containerd:
-                    try await runContainerdBased()
-                }
-                return
-            }
-
             logger.error(
                 "Directory is not a Swift Package, nor can it be built as a docker container"
             )
