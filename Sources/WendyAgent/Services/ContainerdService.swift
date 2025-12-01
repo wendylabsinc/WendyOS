@@ -81,16 +81,34 @@ public struct Containerd: Sendable {
     let logger = Logger(label: "Containerd")
     let fifoManager: FIFOManager
 
+    // Protocol-based service dependencies for testing
+    let imagesService: ContainerdImagesService
+    let contentService: ContainerdContentService
+    let snapshotsService: ContainerdSnapshotsService
+    let diffsService: ContainerdDiffsService
+
     /// Initialize a Containerd client
     /// - Parameters:
     ///   - client: The gRPC client for containerd
     ///   - fifoManager: The FIFO manager (defaults to SystemFIFOManager for production)
+    ///   - imagesService: Images service implementation (defaults to production gRPC client)
+    ///   - contentService: Content service implementation (defaults to production gRPC client)
+    ///   - snapshotsService: Snapshots service implementation (defaults to production gRPC client)
+    ///   - diffsService: Diffs service implementation (defaults to production gRPC client)
     public init(
         client: GRPCClient<HTTP2ClientTransport.Posix>,
-        fifoManager: FIFOManager = SystemFIFOManager()
+        fifoManager: FIFOManager = SystemFIFOManager(),
+        imagesService: ContainerdImagesService? = nil,
+        contentService: ContainerdContentService? = nil,
+        snapshotsService: ContainerdSnapshotsService? = nil,
+        diffsService: ContainerdDiffsService? = nil
     ) {
         self.client = client
         self.fifoManager = fifoManager
+        self.imagesService = imagesService ?? GRPCImagesService(client: client)
+        self.contentService = contentService ?? GRPCContentService(client: client)
+        self.snapshotsService = snapshotsService ?? GRPCSnapshotsService(client: client)
+        self.diffsService = diffsService ?? GRPCDiffsService(client: client)
     }
 
     public static func withClient<R: Sendable>(
@@ -313,21 +331,17 @@ public struct Containerd: Sendable {
     /// Unpack an image from the content store into snapshots.
     /// This is required when images are pushed to the registry but not yet unpacked.
     public func unpackImage(named imageName: String) async throws {
-        let images = Containerd_Services_Images_V1_Images.Client(wrapping: client)
-        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
-
         logger.info("Unpacking image", metadata: ["image": .stringConvertible(imageName)])
 
         // Get the image
-        let image = try await images.get(.with { $0.name = imageName }).image
+        let image = try await imagesService.get(.with { $0.name = imageName }).image
 
         // Read the manifest
-        let manifestData = try await content.read(.with { $0.digest = image.target.digest }) {
-            response in
+        let manifestData = try await contentService.read(.with { $0.digest = image.target.digest })
+        {
+            stream in
             var data = Data()
-            for try await message in response.messages {
+            for try await message in stream {
                 data.append(message.data)
             }
             return data
@@ -347,10 +361,11 @@ public struct Containerd: Sendable {
         let manifest = try JSONDecoder().decode(ImageManifest.self, from: manifestData)
 
         // Read the config to get diffIDs
-        let configData = try await content.read(.with { $0.digest = manifest.config.digest }) {
-            response in
+        let configData = try await contentService.read(.with { $0.digest = manifest.config.digest })
+        {
+            stream in
             var data = Data()
-            for try await message in response.messages {
+            for try await message in stream {
                 data.append(message.data)
             }
             return data
@@ -383,7 +398,7 @@ public struct Containerd: Sendable {
 
             // Check if snapshot already exists
             do {
-                _ = try await snapshots.stat(
+                _ = try await snapshotsService.stat(
                     .with {
                         $0.key = layerKey
                         $0.snapshotter = "overlayfs"
@@ -415,10 +430,10 @@ public struct Containerd: Sendable {
                 }
             }
 
-            let snapshot = try await snapshots.prepare(prepareRequest)
+            let snapshot = try await snapshotsService.prepare(prepareRequest)
 
             // Apply diff
-            _ = try await diffs.apply(
+            _ = try await diffsService.apply(
                 .with {
                     $0.diff = .with {
                         $0.digest = layer.digest
@@ -431,7 +446,7 @@ public struct Containerd: Sendable {
 
             // Commit snapshot
             do {
-                _ = try await snapshots.commit(
+                try await snapshotsService.commit(
                     .with {
                         $0.key = tmpKey
                         $0.name = layerKey
