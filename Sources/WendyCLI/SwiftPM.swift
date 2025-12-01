@@ -100,9 +100,14 @@ public struct SwiftPM: Sendable {
         if result.terminationStatus.isSuccess {
             return result.standardOutput ?? ""
         } else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: allArgs.joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
                 output: "",
                 error: ""
             )
@@ -139,9 +144,14 @@ public struct SwiftPM: Sendable {
         if result.terminationStatus.isSuccess {
             return result.standardOutput
         } else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: allArgs.joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
                 output: "",
                 error: ""
             )
@@ -167,9 +177,14 @@ public struct SwiftPM: Sendable {
         if result.terminationStatus.isSuccess, let output = result.standardOutput {
             return try JSONDecoder().decode(Package.self, from: Data(output.utf8))
         } else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: allArgs.joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
                 output: result.standardOutput ?? "",
                 error: result.standardError ?? ""
             )

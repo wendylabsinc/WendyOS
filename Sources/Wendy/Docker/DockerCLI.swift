@@ -30,9 +30,15 @@ public struct DockerCLI: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -56,9 +62,15 @@ public struct DockerCLI: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -78,9 +90,15 @@ public struct DockerCLI: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -117,9 +135,15 @@ public struct DockerCLI: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -139,9 +163,15 @@ public struct DockerCLI: Sendable {
             result.terminationStatus.isSuccess,
             let output = result.standardOutput
         else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -203,13 +233,22 @@ public struct DockerCLI: Sendable {
         )
 
         guard createResult.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch createResult.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + createArguments).joined(separator: " "),
-                exitCode: Int(createResult.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: createResult.terminationStatus.description,
                 output: "",
                 error: ""
             )
         }
+
+        // Config has been loaded into builder container, safe to delete now
+        try? FileManager.default.removeItem(at: configPath)
     }
 
     /// Removes a buildx builder.
@@ -226,9 +265,15 @@ public struct DockerCLI: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw SubprocessError.nonZeroExit(
                 command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -248,13 +293,19 @@ public struct DockerCLI: Sendable {
     }
 
     public enum SubprocessError: Error, LocalizedError {
-        case nonZeroExit(command: String, exitCode: Int, output: String, error: String)
+        case nonZeroExit(
+            command: String,
+            exitCode: Int,
+            terminationReason: String,
+            output: String,
+            error: String
+        )
 
         public var errorDescription: String? {
             switch self {
-            case .nonZeroExit(let command, let exitCode, let output, let error):
+            case .nonZeroExit(let command, _, let terminationReason, let output, let error):
                 return """
-                    Command '\(command)' failed with exit code \(exitCode): \(error)
+                    Command '\(command)' failed with \(terminationReason): \(error)
 
                     \(output)
                     """

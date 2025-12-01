@@ -90,9 +90,14 @@ struct InitCommand: AsyncParsableCommand {
         )
 
         if !result.terminationStatus.isSuccess {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
             throw InitError.commandFailed(
                 command: "swift package init --type executable",
-                exitCode: Int(result.terminationStatus.description) ?? -1,
+                exitCode: exitCode,
                 error: result.standardError ?? ""
             )
         }
