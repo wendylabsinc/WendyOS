@@ -35,11 +35,14 @@ extension RegistryClientError: CustomStringConvertible {
     /// Human-readable description of a RegistryClientError
     public var description: String {
         switch self {
-        case let .registryParseError(reference): return "Unable to parse registry: \(reference)"
-        case let .invalidRegistryPath(path): return "Unable to construct URL for registry path: \(path)"
-        case let .invalidUploadLocation(location): return "Received invalid upload location from registry: \(location)"
-        case let .invalidDigestAlgorithm(digest): return "Invalid or unsupported digest algorithm: \(digest)"
-        case let .digestMismatch(expected, registry):
+        case .registryParseError(let reference): return "Unable to parse registry: \(reference)"
+        case .invalidRegistryPath(let path):
+            return "Unable to construct URL for registry path: \(path)"
+        case .invalidUploadLocation(let location):
+            return "Received invalid upload location from registry: \(location)"
+        case .invalidDigestAlgorithm(let digest):
+            return "Invalid or unsupported digest algorithm: \(digest)"
+        case .digestMismatch(let expected, let registry):
             return "Digest mismatch: expected \(expected), registry sent \(registry)"
         }
     }

@@ -3,8 +3,8 @@ import AsyncHTTPClient
 import Crypto
 import Foundation
 import GRPCCore
-import GRPCServiceLifecycle
 import GRPCNIOTransportHTTP2
+import GRPCServiceLifecycle
 import Hummingbird
 import Logging
 import NIOSSL

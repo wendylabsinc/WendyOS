@@ -24,7 +24,10 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         request: StreamingServerRequest<Wendy_Agent_Services_V1_RunContainerRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerResponse> {
-        throw RPCError(code: .unavailable, message: "Use the newer WendyContainerService APIs instead")
+        throw RPCError(
+            code: .unavailable,
+            message: "Use the newer WendyContainerService APIs instead"
+        )
     }
 
     func updateAgent(

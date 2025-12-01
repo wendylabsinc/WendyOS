@@ -101,7 +101,9 @@ func withAgentGRPCClient<R: Sendable>(
 func withAgentGRPCClientAndEndpoint<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
     title: TerminalText,
-    _ body: @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint) async throws -> R
+    _ body:
+        @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
+        async throws -> R
 ) async throws -> R {
     let endpoint = try await connectionOptions.read(title: title)
     return try await _withAgentGRPCClient(endpoint, title: title) { client, endpoint in

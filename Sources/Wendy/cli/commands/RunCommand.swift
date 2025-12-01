@@ -20,7 +20,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         case invalidExecutableTarget(String)
         case multipleExecutableTargets([String])
         case noManifestFound
-        
+
         var description: String {
             switch self {
             case .failedToUploadLayers:
@@ -30,37 +30,38 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             case .invalidExecutableTarget(let name):
                 return "No executable target named '\(name)' found in package"
             case .multipleExecutableTargets(let names):
-                return "multiple executable targets available, but none specified: \(names.joined(separator: ", "))"
+                return
+                    "multiple executable targets available, but none specified: \(names.joined(separator: ", "))"
             case .noManifestFound:
                 return "No manifest found in Docker image"
             }
         }
     }
-    
+
     static let configuration = CommandConfiguration(
         commandName: "run",
         abstract: "Run Wendy projects."
     )
-    
+
     @Flag(name: .long, help: "Attach a debugger to the container")
     var debug: Bool = false
-    
+
     @Flag(name: .long, help: "Run the container in the background")
     var detach: Bool = false
-    
+
     // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
     @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
     var noRestart: Bool = false
-    
+
     @Flag(name: .customLong("restart-unless-stopped"), help: "Restart unless stopped")
     var restartUnlessStoppedFlag: Bool = false
-    
+
     @Option(
         name: .customLong("restart-on-failure"),
         help: "Restart on failure up to N times"
     )
     var restartOnFailureRetries: Int?
-    
+
     @Argument(
         help: "The executable to run. Required when a package has multiple executable targets."
     )
@@ -68,7 +69,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     @OptionGroup
     var agentConnectionOptions: AgentConnectionOptions
-    
+
     var swiftVersion: String { "6.2.1" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
 
@@ -242,9 +243,12 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     func runSwiftApp() async throws {
         let swiftPM = SwiftPM()
-        try await swiftPM.addDependency(url: "https://github.com/apple/swift-container-plugin", from: "1.0.0")
+        try await swiftPM.addDependency(
+            url: "https://github.com/apple/swift-container-plugin",
+            from: "1.0.0"
+        )
         let package = try await swiftPM.dumpPackage()
-        
+
         // Get all executable targets
         let executableTargets = package.targets.filter { $0.type == "executable" }
 
@@ -284,7 +288,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 appName: appName,
                 client: client
             )
-            
+
             Noora().info("Starting Container")
             try await startContainerdContainer(imageName: appName, client: client)
         }

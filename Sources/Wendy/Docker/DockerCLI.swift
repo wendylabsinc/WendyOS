@@ -328,7 +328,7 @@ public struct DockerCLI: Sendable {
             error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
         )
 
-        guard 
+        guard
             result.terminationStatus.isSuccess,
             let output = result.standardOutput
         else {
@@ -339,7 +339,7 @@ public struct DockerCLI: Sendable {
                 error: ""
             )
         }
-        
+
         return output.split(separator: "\n").map { String($0) }
     }
 

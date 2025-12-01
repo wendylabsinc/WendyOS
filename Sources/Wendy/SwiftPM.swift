@@ -12,7 +12,7 @@ public struct SwiftPM: Sendable {
 
     /// Custom Swift version, defaults to defaultSwiftVersion if nil
     public let swiftVersion: String?
-    
+
     private var executableName: String {
         path.split(separator: " ").first.map(String.init) ?? path
     }
@@ -20,7 +20,7 @@ public struct SwiftPM: Sendable {
     func arguments(_ arguments: [String]) -> Subprocess.Arguments {
         // Use the executable path instead of just the command name
         let runArgs = path.split(separator: " ").dropFirst().map(String.init)
-        
+
         return Subprocess.Arguments(runArgs + arguments)
     }
 
@@ -189,14 +189,14 @@ public struct SwiftPM: Sendable {
             )
         }
     }
-    
+
     public func addDependency(url: String, from: String) async throws {
         let args = arguments([
             "package",
             "add-dependency",
             url,
             "--from",
-            from
+            from,
         ])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
@@ -204,7 +204,7 @@ public struct SwiftPM: Sendable {
             output: .string(limit: 100_000),
             error: .string(limit: 100_000)
         )
-        
+
         guard result.terminationStatus.isSuccess else {
             throw SubprocessError.nonZeroExit(
                 command: args.description,
