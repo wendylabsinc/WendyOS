@@ -79,7 +79,7 @@ public struct ErrorSanitizer: Sendable {
     /// - Returns: A sanitized string with sensitive data replaced
     public static func sanitizeString(_ string: String) -> String {
         var sanitized = string
-        
+
         // Remove URLs first (before paths, since URLs contain paths)
         sanitized = urlPattern.stringByReplacingMatches(
             in: sanitized,
