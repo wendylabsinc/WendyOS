@@ -266,8 +266,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             endpoint,
             title: title
         ) { [name] client, endpoint in
+            // Bind to all interfaces for Docker Desktop compatibility
             try await withTCPProxyServer(
-                localHostname: "0.0.0.0",  // Bind to all interfaces for Docker Desktop compatibility
+                localHostname: "0.0.0.0",
                 localPort: 50053,
                 remoteHostname: endpoint.host,
                 remotePort: 5000
