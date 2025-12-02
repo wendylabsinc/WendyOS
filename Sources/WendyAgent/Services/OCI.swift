@@ -48,7 +48,6 @@ struct OCI: Codable {
                     .init(type: "uts"),
                     .init(type: "mount"),
                 ],
-                networkMode: "host",
                 capabilities: .init(
                     bounding: ["SYS_PTRACE"],
                     effective: ["SYS_PTRACE"],
@@ -140,7 +139,6 @@ public struct Mount: Codable {
 
 public struct Linux: Codable {
     var namespaces: [Namespace]
-    var networkMode: String
     var capabilities: Capabilities
     var seccomp: Seccomp
     var devices: [Device]

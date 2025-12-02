@@ -91,9 +91,33 @@ extension OCI {
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:
-                    self.linux.networkMode = "host"
+                    // Remove any network namespace to ensure host networking
+                    self.linux.namespaces.removeAll(where: { $0.type == "network" })
+                    // Bind mount host's /etc/resolv.conf for DNS resolution
+                    if !self.mounts.contains(where: { $0.destination == "/etc/resolv.conf" }) {
+                        self.mounts.append(
+                            .init(
+                                destination: "/etc/resolv.conf",
+                                type: "bind",
+                                source: "/etc/resolv.conf",
+                                options: ["rbind", "ro"]
+                            )
+                        )
+                        logger.debug("Added /etc/resolv.conf bind mount for host networking")
+                    }
+                    // Bind mount host's /etc/hosts for hostname resolution
+                    if !self.mounts.contains(where: { $0.destination == "/etc/hosts" }) {
+                        self.mounts.append(
+                            .init(
+                                destination: "/etc/hosts",
+                                type: "bind",
+                                source: "/etc/hosts",
+                                options: ["rbind", "ro"]
+                            )
+                        )
+                        logger.debug("Added /etc/hosts bind mount for host networking")
+                    }
                 case .none:
-                    self.linux.networkMode = "none"
                     self.linux.namespaces.append(.init(type: "network"))
                 }
             case .bluetooth(let bluetooth):
