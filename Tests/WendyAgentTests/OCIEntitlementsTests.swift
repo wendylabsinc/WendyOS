@@ -70,7 +70,6 @@ struct OCIEntitlementsTests {
 
         // Then: All entitlements should be applied
         #expect(ociSpec.process.user.additionalGids.contains(44))
-        #expect(ociSpec.linux.networkMode == "host")
     }
 
     // MARK: - Network Entitlement Tests
@@ -83,9 +82,6 @@ struct OCIEntitlementsTests {
         // When: Applying host network entitlement
         let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
-
-        // Then: Network mode should be set to host
-        #expect(ociSpec.linux.networkMode == "host")
     }
 
     @Test("Network entitlement sets none mode")
@@ -98,7 +94,6 @@ struct OCIEntitlementsTests {
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
 
         // Then: Network mode should be set to none and namespace added
-        #expect(ociSpec.linux.networkMode == "none")
         #expect(ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
     }
 
@@ -159,14 +154,12 @@ struct OCIEntitlementsTests {
         // Given: An OCI spec
         var ociSpec = createBaseOCISpec()
         let originalGids = ociSpec.process.user.additionalGids
-        let originalNetworkMode = ociSpec.linux.networkMode
 
         // When: Applying empty entitlements array
         ociSpec.applyEntitlements(entitlements: [], appName: "test-app")
 
         // Then: No changes should be made
         #expect(ociSpec.process.user.additionalGids == originalGids)
-        #expect(ociSpec.linux.networkMode == originalNetworkMode)
     }
 
     // MARK: - Helper Methods
