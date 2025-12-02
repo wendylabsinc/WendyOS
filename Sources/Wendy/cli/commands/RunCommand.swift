@@ -11,7 +11,6 @@ import NIOFileSystem
 import Noora
 import Subprocess
 import WendyAgentGRPC
-import WendyCLI
 
 struct RunCommand: AsyncParsableCommand, Sendable {
     enum Error: Swift.Error, CustomStringConvertible {
