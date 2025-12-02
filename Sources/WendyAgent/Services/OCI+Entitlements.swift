@@ -108,15 +108,17 @@ extension OCI {
                                 options: ["rbind", "ro"]
                             )
                         )
-                        logger.debug("Added /run/systemd/resolve/resolv.conf bind mount for host networking DNS")
+                        logger.debug(
+                            "Added /run/systemd/resolve/resolv.conf bind mount for host networking DNS"
+                        )
                     }
 
-                    // Note: We do NOT mount /etc/hosts because:
-                    // 1. Containerd manages the container's own /etc/hosts file with container-specific entries
-                    // 2. The container needs its own IP/hostname mappings, not the host's
-                    // 3. Mounting host's /etc/hosts would leak host-internal names and break container identity
-                    // If custom host entries are needed, they should be added via the OCI spec's /etc/hosts
-                    // generation or via container runtime mechanisms, not by mounting the host's file.
+                // Note: We do NOT mount /etc/hosts because:
+                // 1. Containerd manages the container's own /etc/hosts file with container-specific entries
+                // 2. The container needs its own IP/hostname mappings, not the host's
+                // 3. Mounting host's /etc/hosts would leak host-internal names and break container identity
+                // If custom host entries are needed, they should be added via the OCI spec's /etc/hosts
+                // generation or via container runtime mechanisms, not by mounting the host's file.
 
                 case .none:
                     self.linux.namespaces.append(.init(type: "network"))
