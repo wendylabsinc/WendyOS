@@ -118,7 +118,7 @@ message UpdateAgentRequest {
         }
 
         message Update {
-            
+            string sha256 = 1;
         }
     }
 }

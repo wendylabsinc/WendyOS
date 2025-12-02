@@ -106,7 +106,7 @@ public struct SwiftPM: Sendable {
                 exitCode = Int(code)
             }
             throw SubprocessError.nonZeroExit(
-                command: allArgs.joined(separator: " "),
+                command: allArgs.description,
                 exitCode: exitCode,
                 output: "",
                 error: ""

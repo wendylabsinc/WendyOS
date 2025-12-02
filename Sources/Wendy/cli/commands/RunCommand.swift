@@ -12,7 +12,6 @@ import NIOFileSystem
 import Noora
 import Subprocess
 import WendyAgentGRPC
-import WendyCLI
 
 public enum ContainerRuntime: String, ExpressibleByArgument, Sendable {
     case docker
