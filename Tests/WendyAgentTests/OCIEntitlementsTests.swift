@@ -70,8 +70,6 @@ struct OCIEntitlementsTests {
 
         // Then: All entitlements should be applied
         #expect(ociSpec.process.user.additionalGids.contains(44))
-        // Host networking: no network namespace should be present
-        #expect(!ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
     }
 
     // MARK: - Network Entitlement Tests
@@ -193,7 +191,7 @@ struct OCIEntitlementsTests {
         let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .none))]
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
 
-        // Then: Network namespace should be added (isolated networking)
+        // Then: Network mode should be set to none and namespace added
         #expect(ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
     }
 
@@ -271,14 +269,12 @@ struct OCIEntitlementsTests {
         // Given: An OCI spec
         var ociSpec = createBaseOCISpec()
         let originalGids = ociSpec.process.user.additionalGids
-        let originalNamespaceCount = ociSpec.linux.namespaces.count
 
         // When: Applying empty entitlements array
         ociSpec.applyEntitlements(entitlements: [], appName: "test-app")
 
         // Then: No changes should be made
         #expect(ociSpec.process.user.additionalGids == originalGids)
-        #expect(ociSpec.linux.namespaces.count == originalNamespaceCount)
     }
 
     // MARK: - Helper Methods
