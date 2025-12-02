@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Logging
 import NIOCore
@@ -66,19 +67,33 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 )
             ) { writer in
                 var bufferedWriter = writer.bufferedWriter()
+                var hash = SHA256()
                 for try await event in request.messages {
                     switch event.requestType {
                     case .chunk(let chunk):
+                        hash.update(data: chunk.data)
                         try await bufferedWriter.write(contentsOf: ByteBuffer(data: chunk.data))
-                    case .control:
+                    case .control(let update):
+                        let finalHash = hash.finalize().map { String(format: "%02x", $0) }.joined()
+                        guard
+                            update.update.sha256.isEmpty  // If the hash is empty, we don't check it
+                                || finalHash.caseInsensitiveCompare(update.update.sha256)
+                                    == .orderedSame
+                        else {
+                            throw RPCError(
+                                code: .invalidArgument,
+                                message: "Invalid request: SHA256 hash mismatch"
+                            )
+                        }
+                        try await bufferedWriter.flush()
                         logger.info("Received control command, binary is written")
                         return
                     case .none:
                         // Unknown, ignore.
                         ()
                     }
+                    try await bufferedWriter.flush()
                 }
-                try await bufferedWriter.flush()
             }
 
             logger.info("Applying update to \(currentBinary)")
