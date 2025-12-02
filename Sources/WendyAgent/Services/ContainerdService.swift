@@ -85,7 +85,6 @@ public struct Containerd: Sendable {
     // Protocol-based dependencies for testing (optional, default to wrapping client)
     private let _containersClient:
         (any Containerd_Services_Containers_V1_Containers.ClientProtocol)?
-    private let _snapshotsClient: (any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol)?
     private let _tasksClient: (any Containerd_Services_Tasks_V1_Tasks.ClientProtocol)?
 
     // Computed properties that return either injected protocols or create from client
@@ -93,41 +92,63 @@ public struct Containerd: Sendable {
         _containersClient ?? Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
     }
 
-    private var snapshotsClient: any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol {
-        _snapshotsClient ?? Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-    }
-
     private var tasksClient: any Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
         _tasksClient ?? Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
     }
+
+    // Protocol-based service dependencies for image unpacking (testable)
+    let imagesService: ContainerdImagesService
+    let contentService: ContainerdContentService
+    let snapshotsService: ContainerdSnapshotsService
+    let diffsService: ContainerdDiffsService
 
     /// Initialize a Containerd client
     /// - Parameters:
     ///   - client: The gRPC client for containerd
     ///   - fifoManager: The FIFO manager (defaults to SystemFIFOManager for production)
+    ///   - imagesService: Images service implementation (defaults to gRPC client wrapper)
+    ///   - contentService: Content service implementation (defaults to gRPC client wrapper)
+    ///   - snapshotsService: Snapshots service implementation (defaults to gRPC client wrapper)
+    ///   - diffsService: Diffs service implementation (defaults to gRPC client wrapper)
     public init(
         client: GRPCClient<HTTP2ClientTransport.Posix>,
-        fifoManager: FIFOManager = SystemFIFOManager()
+        fifoManager: FIFOManager = SystemFIFOManager(),
+        imagesService: ContainerdImagesService? = nil,
+        contentService: ContainerdContentService? = nil,
+        snapshotsService: ContainerdSnapshotsService? = nil,
+        diffsService: ContainerdDiffsService? = nil
     ) {
         self.client = client
         self.fifoManager = fifoManager
         self._containersClient = nil
         self._snapshotsClient = nil
         self._tasksClient = nil
+        self.imagesService = imagesService ?? GRPCImagesService(client: client)
+        self.contentService = contentService ?? GRPCContentService(client: client)
+        self.snapshotsService = snapshotsService ?? GRPCSnapshotsService(client: client)
+        self.diffsService = diffsService ?? GRPCDiffsService(client: client)
     }
 
     /// Initialize a Containerd client with injected protocol dependencies (for testing)
     /// - Parameters:
     ///   - client: The gRPC client (not used when mocks are injected, but required for initialization)
     ///   - containersClient: Mock or real containers client
-    ///   - snapshotsClient: Mock or real snapshots client
+    ///   - snapshotsClient: Mock or real snapshots client (for container management)
     ///   - tasksClient: Mock or real tasks client
+    ///   - imagesService: Mock or real images service (for image unpacking)
+    ///   - contentService: Mock or real content service (for image unpacking)
+    ///   - snapshotsService: Mock or real snapshots service (for image unpacking)
+    ///   - diffsService: Mock or real diffs service (for image unpacking)
     ///   - fifoManager: The FIFO manager (defaults to SystemFIFOManager for production)
     internal init(
         client: GRPCClient<HTTP2ClientTransport.Posix>,
         containersClient: any Containerd_Services_Containers_V1_Containers.ClientProtocol,
         snapshotsClient: any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol,
         tasksClient: any Containerd_Services_Tasks_V1_Tasks.ClientProtocol,
+        imagesService: ContainerdImagesService? = nil,
+        contentService: ContainerdContentService? = nil,
+        snapshotsService: ContainerdSnapshotsService? = nil,
+        diffsService: ContainerdDiffsService? = nil,
         fifoManager: FIFOManager = SystemFIFOManager()
     ) {
         self.client = client
@@ -135,6 +156,10 @@ public struct Containerd: Sendable {
         self._containersClient = containersClient
         self._snapshotsClient = snapshotsClient
         self._tasksClient = tasksClient
+        self.imagesService = imagesService ?? GRPCImagesService(client: client)
+        self.contentService = contentService ?? GRPCContentService(client: client)
+        self.snapshotsService = snapshotsService ?? GRPCSnapshotsService(client: client)
+        self.diffsService = diffsService ?? GRPCDiffsService(client: client)
     }
 
     public static func withClient<R: Sendable>(
@@ -612,14 +637,10 @@ public struct Containerd: Sendable {
     public func unpackImage(
         named imageName: String
     ) async throws -> (snapshotKey: String?, mounts: [Containerd_Types_Mount]) {
-        let images = Containerd_Services_Images_V1_Images.Client(wrapping: client)
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
-
         logger.info("Unpacking image", metadata: ["image": .stringConvertible(imageName)])
 
         // Get the image
-        let image = try await images.get(.with { $0.name = imageName }).image
+        let image = try await imagesService.get(.with { $0.name = imageName }).image
 
         // Read the manifest
         let manifest = try await self.readJSONContent(
@@ -674,7 +695,7 @@ public struct Containerd: Sendable {
             // Check if snapshot already exists
             let snapshotExists: Bool
             do {
-                _ = try await snapshots.stat(
+                _ = try await snapshotsService.stat(
                     .with {
                         $0.key = layerKey
                         $0.snapshotter = "overlayfs"
@@ -716,7 +737,7 @@ public struct Containerd: Sendable {
             let tmpKey = UUID().uuidString
 
             // Prepare snapshot
-            let snapshot = try await snapshots.prepare(
+            let snapshot = try await snapshotsService.prepare(
                 .with {
                     $0.key = tmpKey
                     if let parent = previousChainID {
@@ -727,7 +748,7 @@ public struct Containerd: Sendable {
             )
 
             // Apply diff - this is the most expensive operation
-            _ = try await diffs.apply(
+            _ = try await diffsService.apply(
                 .with {
                     $0.diff = .with {
                         $0.digest = layer.digest
@@ -749,7 +770,7 @@ public struct Containerd: Sendable {
 
             // Commit snapshot
             do {
-                _ = try await snapshots.commit(
+                try await snapshotsService.commit(
                     .with {
                         $0.key = tmpKey
                         $0.name = layerKey
@@ -771,7 +792,8 @@ public struct Containerd: Sendable {
                     ]
                 )
                 do {
-                    _ = try await snapshots.remove(
+                    let snapshotsClient = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+                    _ = try await snapshotsClient.remove(
                         .with {
                             $0.key = tmpKey
                             $0.snapshotter = "overlayfs"
@@ -811,7 +833,7 @@ public struct Containerd: Sendable {
         }
 
         let ephemeralKey = UUID().uuidString
-        let ephemeralSnapshot = try await snapshots.prepare(
+        let ephemeralSnapshot = try await snapshotsService.prepare(
             .with {
                 $0.key = ephemeralKey
                 $0.parent = previousChainID
