@@ -93,30 +93,31 @@ extension OCI {
                 case .host:
                     // Remove any network namespace to ensure host networking
                     self.linux.namespaces.removeAll(where: { $0.type == "network" })
-                    // Bind mount host's /etc/resolv.conf for DNS resolution
+
+                    // Mount systemd-resolved's actual resolv.conf for DNS resolution
+                    // We use /run/systemd/resolve/resolv.conf instead of /etc/resolv.conf
+                    // because /etc/resolv.conf often points to 127.0.0.53 (systemd-resolved stub)
+                    // which doesn't work in containers. The /run path contains the real upstream DNS servers.
+                    // See: https://github.com/moby/moby/blob/master/libnetwork/resolvconf/resolvconf.go#L16
                     if !self.mounts.contains(where: { $0.destination == "/etc/resolv.conf" }) {
                         self.mounts.append(
                             .init(
                                 destination: "/etc/resolv.conf",
                                 type: "bind",
-                                source: "/etc/resolv.conf",
+                                source: "/run/systemd/resolve/resolv.conf",
                                 options: ["rbind", "ro"]
                             )
                         )
-                        logger.debug("Added /etc/resolv.conf bind mount for host networking")
+                        logger.debug("Added /run/systemd/resolve/resolv.conf bind mount for host networking DNS")
                     }
-                    // Bind mount host's /etc/hosts for hostname resolution
-                    if !self.mounts.contains(where: { $0.destination == "/etc/hosts" }) {
-                        self.mounts.append(
-                            .init(
-                                destination: "/etc/hosts",
-                                type: "bind",
-                                source: "/etc/hosts",
-                                options: ["rbind", "ro"]
-                            )
-                        )
-                        logger.debug("Added /etc/hosts bind mount for host networking")
-                    }
+
+                    // Note: We do NOT mount /etc/hosts because:
+                    // 1. Containerd manages the container's own /etc/hosts file with container-specific entries
+                    // 2. The container needs its own IP/hostname mappings, not the host's
+                    // 3. Mounting host's /etc/hosts would leak host-internal names and break container identity
+                    // If custom host entries are needed, they should be added via the OCI spec's /etc/hosts
+                    // generation or via container runtime mechanisms, not by mounting the host's file.
+
                 case .none:
                     self.linux.namespaces.append(.init(type: "network"))
                 }
