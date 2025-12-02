@@ -92,7 +92,6 @@ let package = Package(
                 .product(name: "DNSClient", package: "DNSClient"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
-                .target(name: "WendyCLI"),
                 .target(name: "WendyShared"),
                 .target(name: "Imager"),
                 .target(name: "ContainerRegistry"),
