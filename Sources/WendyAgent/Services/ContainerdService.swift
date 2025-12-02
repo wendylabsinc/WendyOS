@@ -310,6 +310,20 @@ public struct Containerd: Sendable {
         )
     }
 
+    public func readJSONContent<D: Decodable & Sendable>(
+        digest: String,
+        as type: D.Type
+    ) async throws -> D {
+        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
+        return try await content.read(.with { $0.digest = digest }) { response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return try JSONDecoder().decode(type, from: data)
+        }
+    }
+
     /// Unpack an image from the content store into snapshots.
     /// This is required when images are pushed to the registry but not yet unpacked.
     public func unpackImage(named imageName: String) async throws {

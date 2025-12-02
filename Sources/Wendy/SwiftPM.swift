@@ -8,10 +8,21 @@ public struct SwiftPM: Sendable {
     public let path: String
 
     /// Default Swift version to use for building packages
-    public static let defaultSwiftVersion = "+6.2.1"
+    public static let defaultSwiftVersion = "6.2.1"
 
     /// Custom Swift version, defaults to defaultSwiftVersion if nil
     public let swiftVersion: String?
+
+    private var executableName: String {
+        path.split(separator: " ").first.map(String.init) ?? path
+    }
+
+    func arguments(_ arguments: [String]) -> Subprocess.Arguments {
+        // Use the executable path instead of just the command name
+        let runArgs = path.split(separator: " ").dropFirst().map(String.init)
+
+        return Subprocess.Arguments(runArgs + arguments)
+    }
 
     public init(
         path: String = "swiftly run swift",
@@ -79,20 +90,12 @@ public struct SwiftPM: Sendable {
 
     /// Build the Swift package.
     public func buildWithOutput(_ options: BuildOption...) async throws -> String {
-        let version = swiftVersion.map { [$0] } ?? []
-
-        // Find the executable path
-        let executableName = path.split(separator: " ").first.map(String.init) ?? path
-        // print("Using swiftly at path: \(executablePath)")
-
-        // Use the executable path instead of just the command name
-        let runArgs = path.split(separator: " ").dropFirst().map(String.init)
-        let allArgs =
-            runArgs + ["build"] + version + options.flatMap(\.arguments)
+        let version = swiftVersion.map { ["+\($0)"] } ?? []
+        let allArgs = arguments(["build"] + version + options.flatMap(\.arguments))
 
         let result = try await Subprocess.run(
             .name(executableName),
-            arguments: Subprocess.Arguments(allArgs),
+            arguments: allArgs,
             output: .string(limit: .max),
             error: .standardError
         )
@@ -117,15 +120,9 @@ public struct SwiftPM: Sendable {
     /// Build the Swift package.
     public func build(_ options: BuildOption...) async throws {
         let version = swiftVersion.map { [$0] } ?? []
-
-        // Find the executable path
-        let executableName = path.split(separator: " ").first.map(String.init) ?? path
-        // print("Using swiftly at path: \(executablePath)")
-
-        // Use the executable path instead of just the command name
-        let runArgs = path.split(separator: " ").dropFirst().map(String.init)
-        let allArgs =
-            runArgs + ["build"] + version + options.flatMap(\.arguments)
+        let allArgs = arguments(
+            ["build"] + version + options.flatMap(\.arguments)
+        )
 
         let result = try await Noora().progressStep(
             message: "Building Swift package",
@@ -135,7 +132,7 @@ public struct SwiftPM: Sendable {
         ) { _ in
             try await Subprocess.run(
                 Subprocess.Executable.name(executableName),
-                arguments: Subprocess.Arguments(allArgs),
+                arguments: allArgs,
                 output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
                 error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
             )
@@ -150,7 +147,7 @@ public struct SwiftPM: Sendable {
                 exitCode = Int(code)
             }
             throw SubprocessError.nonZeroExit(
-                command: allArgs.joined(separator: " "),
+                command: allArgs.description,
                 exitCode: exitCode,
                 output: "",
                 error: ""
@@ -158,18 +155,72 @@ public struct SwiftPM: Sendable {
         }
     }
 
-    public func dumpPackage(_ options: BuildOption...) async throws -> Package {
-        // Find the executable path
-        let executableName = path.split(separator: " ").first.map(String.init) ?? path
+    public func buildAndPushContainer(
+        swiftSDK: String,
+        product: SwiftPM.Package.Target,
+        device: String
+    ) async throws {
+        let args = arguments([
+            "package",
+            "--swift-sdk=\(swiftSDK)",
+            "--allow-network-connections=all",
+            "build-container-image",
+            "--from=swift:slim",
+            "--allow-insecure-http=destination",
+            "--product=\(product.name)",
+            "--repository=\(device):5000/\(product.name.lowercased())",
+            // TODO: Resources like DS2
+            // TODO: Select target architecture based on target device advertisement?
+            "--architecture=arm64",
+        ])
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(executableName),
+            arguments: args,
+            output: .standardOutput,
+            error: .standardError
+        )
 
-        // Use the executable path instead of just the command name
-        let runArgs = path.split(separator: " ").dropFirst().map(String.init)
-        let allArgs =
-            runArgs + ["package", "dump-package"] + options.flatMap(\.arguments)
+        guard result.terminationStatus.isSuccess else {
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                output: "",
+                error: ""
+            )
+        }
+    }
+
+    public func addDependency(url: String, from: String) async throws {
+        let args = arguments([
+            "package",
+            "add-dependency",
+            url,
+            "--from",
+            from,
+        ])
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(executableName),
+            arguments: args,
+            output: .string(limit: 100_000),
+            error: .string(limit: 100_000)
+        )
+
+        guard result.terminationStatus.isSuccess else {
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: Int(result.terminationStatus.description) ?? -1,
+                output: result.standardOutput ?? "",
+                error: result.standardError ?? ""
+            )
+        }
+    }
+
+    public func dumpPackage(_ options: BuildOption...) async throws -> Package {
+        let args = arguments(["package", "dump-package"] + options.flatMap(\.arguments))
 
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
-            arguments: Subprocess.Arguments(allArgs),
+            arguments: args,
             output: .string(limit: 100_000),
             error: .string(limit: 100_000)
         )
@@ -183,7 +234,7 @@ public struct SwiftPM: Sendable {
                 exitCode = Int(code)
             }
             throw SubprocessError.nonZeroExit(
-                command: allArgs.joined(separator: " "),
+                command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
                 error: result.standardError ?? ""
@@ -212,9 +263,13 @@ public struct SwiftPM: Sendable {
     public struct Package: Decodable, Sendable {
         public var targets: [Target]
 
-        public struct Target: Decodable, Sendable {
+        public struct Target: Decodable, Sendable, Hashable, CustomStringConvertible {
             public var name: String
             public var type: String
+
+            public var description: String {
+                return name
+            }
         }
     }
 }

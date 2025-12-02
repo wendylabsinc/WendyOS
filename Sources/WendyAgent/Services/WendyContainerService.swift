@@ -236,23 +236,45 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             let request = request.message
 
             let images = Containerd_Services_Images_V1_Images.Client(wrapping: client.client)
-            let content = Containerd_Services_Content_V1_Content.Client(wrapping: client.client)
 
             let image = try await images.get(
                 .with {
                     $0.name = request.imageName
                 }
             ).image
-            let manifest = try await content.read(
-                .with {
-                    $0.digest = image.target.digest
+
+            let manifest: ImageManifest
+            switch image.target.mediaType {
+            case "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.docker.distribution.manifest.v2+json":
+                manifest = try await client.readJSONContent(
+                    digest: image.target.digest,
+                    as: ImageManifest.self
+                )
+            case "application/vnd.oci.image.index.v1+json":
+                let index = try await client.readJSONContent(
+                    digest: image.target.digest,
+                    as: ImageIndex.self
+                )
+                guard
+                    let manifestDescriptor = index.manifests.first(where: {
+                        $0.mediaType == "application/vnd.oci.image.manifest.v1+json"
+                    })
+                else {
+                    throw RPCError(
+                        code: .invalidArgument,
+                        message: "No manifest descriptor found in index"
+                    )
                 }
-            ) { manifest in
-                var data = Data()
-                for try await message in manifest.messages {
-                    data.append(message.data)
-                }
-                return try JSONDecoder().decode(ImageManifest.self, from: data)
+                manifest = try await client.readJSONContent(
+                    digest: manifestDescriptor.digest,
+                    as: ImageManifest.self
+                )
+            default:
+                throw RPCError(
+                    code: .invalidArgument,
+                    message: "Unsupported media type: \(image.target.mediaType)"
+                )
             }
 
             do {
@@ -571,6 +593,9 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
                     logger.info("Starting task")
                     try await client.runTask(containerID: request.appName)
+
+                    // Mark the container as started in the monitor (reset explicitly stopped flag)
+                    await ContainerMonitor.shared.markContainerStarted(request.appName)
 
                     // Mark the container as started in the monitor (reset explicitly stopped flag)
                     await ContainerMonitor.shared.markContainerStarted(request.appName)

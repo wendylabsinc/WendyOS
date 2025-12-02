@@ -21,10 +21,6 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
-        .package(
-            url: "https://github.com/hummingbird-project/swift-openapi-hummingbird.git",
-            from: "2.0.1"
-        ),
         .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3"),
@@ -55,7 +51,6 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.10.3"),
-        .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.8.3"),
         .package(
             url: "https://github.com/swift-server/swift-openapi-async-http-client.git",
             from: "1.1.0"
@@ -77,10 +72,6 @@ let package = Package(
                 .product(name: "SystemPackage", package: "swift-system"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(
-                    name: "OpenAPIAsyncHTTPClient",
-                    package: "swift-openapi-async-http-client"
-                ),
-                .product(
                     name: "Hummingbird",
                     package: "hummingbird"
                 ),
@@ -101,6 +92,7 @@ let package = Package(
                 .target(name: "CliXPCProtocol"),
                 .target(name: "WendySDK"),
                 .target(name: "DockerOpenAPI"),
+                .target(name: "Analytics"),
             ],
             path: "Sources/Wendy",
             resources: [
@@ -113,24 +105,6 @@ let package = Package(
             dependencies: [
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "Crypto", package: "swift-crypto"),
-            ]
-        ),
-
-        .target(
-            name: "ContainerdRegistry",
-            dependencies: [
-                .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "HTTPTypes", package: "swift-http-types"),
-                .product(name: "HTTPTypesFoundation", package: "swift-http-types"),
-                .product(name: "AsyncHTTPClient", package: "async-http-client"),
-                .product(name: "OpenAPIHummingbird", package: "swift-openapi-hummingbird"),
-                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
-                .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
-                .product(name: "GRPCCore", package: "grpc-swift-2"),
-                .product(name: "Hummingbird", package: "hummingbird"),
-                .target(name: "ContainerdGRPC"),
-                .target(name: "ContainerRegistry"),
-                .target(name: "OCIRegistryOpenAPI"),
             ]
         ),
 
@@ -149,35 +123,6 @@ let package = Package(
             ],
             plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
-        .target(
-            name: "OCIRegistryOpenAPI",
-            dependencies: [
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
-            ],
-            plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
-        ),
-
-        /// Contains everything WendyCLI, except for the command line interface.
-        .target(
-            name: "WendyCLI",
-            dependencies: [
-                .target(name: "ContainerBuilder"),
-                .product(name: "Subprocess", package: "swift-subprocess"),
-                .product(name: "Logging", package: "swift-log"),
-            ]
-        ),
-
-        /// Tools to build OCI-compliant container images.
-        .target(
-            name: "ContainerBuilder",
-            dependencies: [
-                .product(name: "Subprocess", package: "swift-subprocess"),
-                .product(name: "_NIOFileSystem", package: "swift-nio"),
-                .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "NIOFoundationCompat", package: "swift-nio"),
-                .target(name: "ContainerRegistry"),
-            ]
-        ),
 
         /// The main executable provided by wendy-agent.
         .executableTarget(
@@ -194,16 +139,15 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Yams", package: "Yams"),
-                .target(name: "ContainerdRegistry"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
+                .target(name: "DockerOpenAPI"),
                 .target(name: "WendyShared"),
                 .target(name: "AppConfig"),
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
-                .target(name: "DockerOpenAPI"),
             ],
             path: "Sources/WendyAgent"
         ),
@@ -287,6 +231,17 @@ let package = Package(
             ]
         ),
 
+        /// Analytics module for privacy-first usage tracking
+        .target(
+            name: "Analytics",
+            dependencies: [
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Noora", package: "Noora"),
+                .target(name: "WendyShared"),
+            ]
+        ),
+
         /// Tests for WendyCLI components
         .testTarget(
             name: "WendyCLITests",
@@ -362,6 +317,13 @@ let package = Package(
             dependencies: [
                 .target(name: "wendy"),
                 .target(name: "wendy-agent"),
+            ]
+        ),
+
+        .testTarget(
+            name: "AnalyticsTests",
+            dependencies: [
+                .target(name: "Analytics"),
             ]
         ),
 

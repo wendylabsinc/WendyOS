@@ -1,14 +1,12 @@
 import ArgumentParser
 import AsyncHTTPClient
-import ContainerdRegistry
 import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
-import Hummingbird
+import GRPCServiceLifecycle
 import Logging
 import NIOSSL
-import OpenAPIHummingbird
 import ServiceLifecycle
 import WendyAgentGRPC
 import WendyCloudGRPC
@@ -174,10 +172,6 @@ struct WendyAgent: AsyncParsableCommand {
         for server in servers {
             services.append(server)
         }
-        if mTLS == nil {
-            logger.info("Adding Registry Container Service for development")
-            services.append(RegistryContainerService())
-        }
 
         var serviceGroupConfig = ServiceGroupConfiguration(
             services: services,
@@ -203,26 +197,6 @@ struct WendyAgent: AsyncParsableCommand {
 
             defer { taskGroup.cancelAll() }
             try await taskGroup.next()
-        }
-    }
-}
-
-struct ContainerdRegistryService: Service {
-    func run() async throws {
-        try await Containerd.withClient { client in
-            let router = Router()
-            let registry = RegistryAPI(client: client.client)
-            try registry.registerHandlers(on: router, serverURL: URL(string: "/v2")!)
-            router.put("/v2/:name/manifests/:reference", use: registry.putManifest)
-
-            let app = Application(
-                router: router,
-                configuration: .init(
-                    address: .hostname("0.0.0.0", port: 8080),
-                    serverName: "containerd-registry"
-                )
-            )
-            try await app.runService()
         }
     }
 }
