@@ -70,7 +70,8 @@ struct OCIEntitlementsTests {
 
         // Then: All entitlements should be applied
         #expect(ociSpec.process.user.additionalGids.contains(44))
-        #expect(ociSpec.linux.networkMode == "host")
+        // Host networking: no network namespace should be present
+        #expect(!ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
     }
 
     // MARK: - Network Entitlement Tests
@@ -84,8 +85,103 @@ struct OCIEntitlementsTests {
         let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
 
-        // Then: Network mode should be set to host
-        #expect(ociSpec.linux.networkMode == "host")
+        // Then: Network namespace should NOT be present (host networking)
+        #expect(!ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
+    }
+
+    @Test("Host network mode mounts resolv.conf for DNS resolution")
+    func applyNetworkEntitlement_HostMode_MountsResolvConf() {
+        // Given: An OCI spec
+        var ociSpec = createBaseOCISpec()
+
+        // When: Applying host network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: /etc/resolv.conf should be bind-mounted from host
+        let resolvConfMount = ociSpec.mounts.first(where: { $0.destination == "/etc/resolv.conf" })
+        #expect(resolvConfMount != nil)
+        #expect(resolvConfMount?.type == "bind")
+        #expect(resolvConfMount?.source == "/etc/resolv.conf")
+        #expect(resolvConfMount?.options?.contains("rbind") == true)
+        #expect(resolvConfMount?.options?.contains("ro") == true)
+    }
+
+    @Test("Host network mode mounts /etc/hosts for hostname resolution")
+    func applyNetworkEntitlement_HostMode_MountsHosts() {
+        // Given: An OCI spec
+        var ociSpec = createBaseOCISpec()
+
+        // When: Applying host network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: /etc/hosts should be bind-mounted from host
+        let hostsMount = ociSpec.mounts.first(where: { $0.destination == "/etc/hosts" })
+        #expect(hostsMount != nil)
+        #expect(hostsMount?.type == "bind")
+        #expect(hostsMount?.source == "/etc/hosts")
+        #expect(hostsMount?.options?.contains("rbind") == true)
+        #expect(hostsMount?.options?.contains("ro") == true)
+    }
+
+    @Test("Host network mode does not duplicate resolv.conf mount")
+    func applyNetworkEntitlement_HostMode_DoesNotDuplicateResolvConf() {
+        // Given: An OCI spec that already has /etc/resolv.conf mounted
+        var ociSpec = createBaseOCISpec()
+        ociSpec.mounts.append(
+            .init(
+                destination: "/etc/resolv.conf",
+                type: "bind",
+                source: "/etc/resolv.conf",
+                options: ["rbind", "ro"]
+            )
+        )
+
+        // When: Applying host network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: /etc/resolv.conf should not be duplicated
+        let resolvConfMounts = ociSpec.mounts.filter { $0.destination == "/etc/resolv.conf" }
+        #expect(resolvConfMounts.count == 1)
+    }
+
+    @Test("Host network mode does not duplicate /etc/hosts mount")
+    func applyNetworkEntitlement_HostMode_DoesNotDuplicateHosts() {
+        // Given: An OCI spec that already has /etc/hosts mounted
+        var ociSpec = createBaseOCISpec()
+        ociSpec.mounts.append(
+            .init(
+                destination: "/etc/hosts",
+                type: "bind",
+                source: "/etc/hosts",
+                options: ["rbind", "ro"]
+            )
+        )
+
+        // When: Applying host network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: /etc/hosts should not be duplicated
+        let hostsMounts = ociSpec.mounts.filter { $0.destination == "/etc/hosts" }
+        #expect(hostsMounts.count == 1)
+    }
+
+    @Test("Host network mode removes network namespace if present")
+    func applyNetworkEntitlement_HostMode_RemovesNetworkNamespace() {
+        // Given: An OCI spec with a network namespace already added
+        var ociSpec = createBaseOCISpec()
+        ociSpec.linux.namespaces.append(.init(type: "network"))
+        #expect(ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
+
+        // When: Applying host network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .host))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: Network namespace should be removed
+        #expect(!ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
     }
 
     @Test("Network entitlement sets none mode")
@@ -97,9 +193,25 @@ struct OCIEntitlementsTests {
         let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .none))]
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
 
-        // Then: Network mode should be set to none and namespace added
-        #expect(ociSpec.linux.networkMode == "none")
+        // Then: Network namespace should be added (isolated networking)
         #expect(ociSpec.linux.namespaces.contains(where: { $0.type == "network" }))
+    }
+
+    @Test("Isolated network mode does not mount resolv.conf or hosts")
+    func applyNetworkEntitlement_NoneMode_DoesNotMountDNSFiles() {
+        // Given: An OCI spec
+        var ociSpec = createBaseOCISpec()
+
+        // When: Applying none (isolated) network entitlement
+        let entitlements: [Entitlement] = [.network(NetworkEntitlements(mode: .none))]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: /etc/resolv.conf and /etc/hosts should NOT be mounted
+        // (These should be managed by the container runtime for isolated networking)
+        let resolvConfMount = ociSpec.mounts.first(where: { $0.destination == "/etc/resolv.conf" })
+        let hostsMount = ociSpec.mounts.first(where: { $0.destination == "/etc/hosts" })
+        #expect(resolvConfMount == nil)
+        #expect(hostsMount == nil)
     }
 
     // MARK: - Audio Entitlement Tests
@@ -159,14 +271,14 @@ struct OCIEntitlementsTests {
         // Given: An OCI spec
         var ociSpec = createBaseOCISpec()
         let originalGids = ociSpec.process.user.additionalGids
-        let originalNetworkMode = ociSpec.linux.networkMode
+        let originalNamespaceCount = ociSpec.linux.namespaces.count
 
         // When: Applying empty entitlements array
         ociSpec.applyEntitlements(entitlements: [], appName: "test-app")
 
         // Then: No changes should be made
         #expect(ociSpec.process.user.additionalGids == originalGids)
-        #expect(ociSpec.linux.networkMode == originalNetworkMode)
+        #expect(ociSpec.linux.namespaces.count == originalNamespaceCount)
     }
 
     // MARK: - Helper Methods
