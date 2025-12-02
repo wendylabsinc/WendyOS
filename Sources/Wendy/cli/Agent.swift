@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import GRPCCore
 import Logging
@@ -92,12 +93,15 @@ struct Agent {
                 return try await agent.updateAgent { writer in
                     logger.debug("Opening file...")
                     do {
-                        try await FileSystem.shared.withFileHandle(forReadingAt: FilePath(path)) {
-                            handle in
+                        try await FileSystem.shared.withFileHandle(
+                            forReadingAt: FilePath(path)
+                        ) { handle in
+                            var hash = SHA256()
                             let fileSize = try await handle.info().size
                             var writtenBytes: Int64 = 0
                             logger.debug("Uploading binary...")
                             for try await chunk in handle.readChunks() {
+                                hash.update(data: chunk.readableBytesView)
                                 try await writer.write(
                                     .with {
                                         $0.chunk = .with {
@@ -110,10 +114,16 @@ struct Agent {
                             }
 
                             logger.debug("Finalizing update")
+                            let finalHash = hash.finalize().map { String(format: "%02x", $0) }
+                                .joined()
                             try await writer.write(
                                 .with {
                                     $0.control = .with {
-                                        $0.command = .update(.init())
+                                        $0.command = .update(
+                                            .with {
+                                                $0.sha256 = finalHash
+                                            }
+                                        )
                                     }
                                 }
                             )
