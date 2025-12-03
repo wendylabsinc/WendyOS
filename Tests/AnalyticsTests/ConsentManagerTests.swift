@@ -3,6 +3,20 @@ import Testing
 
 @testable import Analytics
 
+// MARK: - Mock Environment Provider
+
+struct MockEnvironmentProvider: EnvironmentProvider {
+    private var environment: [String: String]
+
+    init(_ environment: [String: String] = [:]) {
+        self.environment = environment
+    }
+
+    func getValue(forKey key: String) -> String? {
+        environment[key]
+    }
+}
+
 // MARK: - Environment Variable Tests
 
 @Suite("Consent Manager Environment Variables")
@@ -15,9 +29,9 @@ struct ConsentManagerEnvironmentTests {
         ]
     )
     func shouldDisableAnalyticsWithWendyAnalyticsFalse(value: String) {
-        setenv("WENDY_ANALYTICS", value, 1)
-        #expect(ConsentManager.shouldDisableAnalytics() == true)
-        unsetenv("WENDY_ANALYTICS")
+        let mockEnv = MockEnvironmentProvider(["WENDY_ANALYTICS": value])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
+        #expect(consentManager.shouldDisableAnalytics() == true)
     }
 
     @Test(
@@ -27,9 +41,9 @@ struct ConsentManagerEnvironmentTests {
         ]
     )
     func shouldNotDisableAnalyticsWithWendyAnalyticsEnabled(value: String) {
-        setenv("WENDY_ANALYTICS", value, 1)
-        #expect(ConsentManager.shouldDisableAnalytics() == false)
-        unsetenv("WENDY_ANALYTICS")
+        let mockEnv = MockEnvironmentProvider(["WENDY_ANALYTICS": value])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
+        #expect(consentManager.shouldDisableAnalytics() == false)
     }
 
     @Test(
@@ -44,34 +58,25 @@ struct ConsentManagerEnvironmentTests {
         ]
     )
     func shouldDisableAnalyticsInCIEnvironment(indicator: String) {
-        // WENDY_ANALYTICS takes precedence, so ensure it's unset
-        unsetenv("WENDY_ANALYTICS")
-        setenv(indicator, "true", 1)
-        #expect(ConsentManager.shouldDisableAnalytics() == true)
-        unsetenv(indicator)
+        let mockEnv = MockEnvironmentProvider([indicator: "true"])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
+        #expect(consentManager.shouldDisableAnalytics() == true)
     }
 
     @Test("WENDY_ANALYTICS should take precedence over CI detection")
     func environmentVariablePriority() {
-        setenv("CI", "true", 1)
-        setenv("WENDY_ANALYTICS", "true", 1)
-        #expect(ConsentManager.shouldDisableAnalytics() == false)
-        unsetenv("CI")
-        unsetenv("WENDY_ANALYTICS")
+        let mockEnv = MockEnvironmentProvider(["CI": "true", "WENDY_ANALYTICS": "true"])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
+        #expect(consentManager.shouldDisableAnalytics() == false)
     }
 
     @Test("Should not disable analytics by default (no env vars set)")
     func shouldNotDisableByDefault() {
-        // Ensure no relevant env vars are set
-        unsetenv("WENDY_ANALYTICS")
-        unsetenv("CI")
-        unsetenv("CONTINUOUS_INTEGRATION")
-        unsetenv("BUILD_ID")
-        unsetenv("JENKINS_URL")
-        unsetenv("GITHUB_ACTIONS")
-        unsetenv("GITLAB_CI")
+        // Use mock environment with no variables set
+        let mockEnv = MockEnvironmentProvider([:])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
 
-        #expect(ConsentManager.shouldDisableAnalytics() == false)
+        #expect(consentManager.shouldDisableAnalytics() == false)
     }
 }
 
@@ -92,16 +97,9 @@ struct ConsentManagerAsyncTests {
 
     @Test("Analytics should be enabled by default (opt-out model)")
     func isAnalyticsEnabledByDefault() async {
-        // Ensure no relevant env vars are set (must unset ALL CI indicators)
-        unsetenv("WENDY_ANALYTICS")
-        unsetenv("CI")
-        unsetenv("CONTINUOUS_INTEGRATION")
-        unsetenv("BUILD_ID")
-        unsetenv("JENKINS_URL")
-        unsetenv("GITHUB_ACTIONS")
-        unsetenv("GITLAB_CI")
-
-        let consentManager = ConsentManager()
+        // Use mock environment with no CI variables set
+        let mockEnv = MockEnvironmentProvider([:])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
 
         // Without any config or environment variables, should default to enabled
         let enabled = await consentManager.isAnalyticsEnabled()
