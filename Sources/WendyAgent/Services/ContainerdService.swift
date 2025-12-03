@@ -325,6 +325,30 @@ public struct Containerd: Sendable {
         }
     }
 
+    /// Compute ChainID for a layer based on parent ChainID and current DiffID.
+    /// ChainID is a cryptographic identifier representing the cumulative state of all layers.
+    /// - For the first layer: ChainID = DiffID
+    /// - For subsequent layers: ChainID = SHA256(ChainID(parent) + " " + DiffID(current))
+    private func computeChainID(parent: String?, diffID: String) -> String {
+        // Normalize diffID to remove "sha256:" prefix if present
+        let normalizedDiffID = diffID.replacingOccurrences(of: "sha256:", with: "")
+
+        guard let parent = parent, !parent.isEmpty else {
+            // Base case: first layer's ChainID equals its DiffID
+            return "sha256:\(normalizedDiffID)"
+        }
+
+        // Normalize parent to remove "sha256:" prefix
+        let normalizedParent = parent.replacingOccurrences(of: "sha256:", with: "")
+
+        // Compute: SHA256(parent + " " + diffID)
+        let combined = "sha256:\(normalizedParent) sha256:\(normalizedDiffID)"
+        let hash = SHA256.hash(data: Data(combined.utf8))
+        let chainID = hash.map { String(format: "%02x", $0) }.joined()
+
+        return "sha256:\(chainID)"
+    }
+
     /// Unpack an image from the content store into snapshots.
     /// This is required when images are pushed to the registry but not yet unpacked.
     public func unpackImage(
@@ -345,18 +369,42 @@ public struct Containerd: Sendable {
             as: ImageManifest.self
         )
 
+        // Read the image config to get DiffIDs (uncompressed layer hashes)
+        let config = try await self.readJSONContent(
+            digest: manifest.config.digest,
+            as: ImageConfiguration.self
+        )
+
+        // Verify we have matching layer counts
+        guard manifest.layers.count == config.rootfs.diff_ids.count else {
+            throw RPCError(
+                code: .internalError,
+                message:
+                    "Manifest layer count (\(manifest.layers.count)) doesn't match config diff_ids count (\(config.rootfs.diff_ids.count))"
+            )
+        }
+
         // Unpack each layer, reusing existing snapshots when possible
-        var previousLayerKey: String? = nil
+        var previousChainID: String? = nil
         let totalLayers = manifest.layers.count
+        var snapshotsReused = 0
+        var snapshotsCreated = 0
 
         for (index, layer) in manifest.layers.enumerated() {
-            let layerKey = layer.digest
+            // Get the DiffID for this layer from the config
+            let diffID = config.rootfs.diff_ids[index]
+
+            // Compute the ChainID for this layer
+            let chainID = computeChainID(parent: previousChainID, diffID: diffID)
+            let layerKey = chainID
 
             logger.info(
                 "Processing layer",
                 metadata: [
                     "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
                     "layer-digest": .stringConvertible(layer.digest),
+                    "layer-diff-id": .stringConvertible(diffID),
+                    "layer-chain-id": .stringConvertible(chainID),
                     "layer-size": .stringConvertible(layer.size),
                     "layer-size-mb": .stringConvertible(
                         String(format: "%.2f", Double(layer.size) / 1_000_000.0)
@@ -377,19 +425,34 @@ public struct Containerd: Sendable {
                 snapshotExists = true
             } catch let error as RPCError where error.code == .notFound {
                 snapshotExists = false
+            } catch {
+                // Log unexpected errors but propagate them
+                logger.error(
+                    "Unexpected error checking snapshot existence",
+                    metadata: [
+                        "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
+                        "chain-id": .stringConvertible(chainID),
+                        "error": .stringConvertible(String(describing: error)),
+                    ]
+                )
+                throw error
             }
 
             if snapshotExists {
+                snapshotsReused += 1
                 logger.debug(
                     "Snapshot already exists, reusing",
                     metadata: [
                         "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
-                        "layer-key": .stringConvertible(layerKey),
+                        "chain-id": .stringConvertible(chainID),
                     ]
                 )
-                previousLayerKey = layerKey
+                previousChainID = chainID
                 continue
             }
+
+            // Snapshot doesn't exist, we'll create it
+            snapshotsCreated += 1
 
             // Snapshot doesn't exist, create it
             let tmpKey = UUID().uuidString
@@ -398,7 +461,7 @@ public struct Containerd: Sendable {
             let snapshot = try await snapshots.prepare(
                 .with {
                     $0.key = tmpKey
-                    if let parent = previousLayerKey {
+                    if let parent = previousChainID {
                         $0.parent = parent
                     }
                     $0.snapshotter = "overlayfs"
@@ -438,7 +501,7 @@ public struct Containerd: Sendable {
                 logger.debug(
                     "Committed snapshot",
                     metadata: [
-                        "layer-key": .stringConvertible(layerKey)
+                        "chain-id": .stringConvertible(chainID)
                     ]
                 )
             } catch let error as RPCError where error.code == .alreadyExists {
@@ -446,18 +509,26 @@ public struct Containerd: Sendable {
                 logger.debug(
                     "Snapshot was created concurrently, cleaning up temporary snapshot",
                     metadata: [
-                        "layer-key": .stringConvertible(layerKey)
+                        "chain-id": .stringConvertible(chainID)
                     ]
                 )
-                _ = try await snapshots.remove(
-                    .with {
-                        $0.key = tmpKey
-                        $0.snapshotter = "overlayfs"
-                    }
-                )
+                do {
+                    _ = try await snapshots.remove(
+                        .with {
+                            $0.key = tmpKey
+                            $0.snapshotter = "overlayfs"
+                        }
+                    )
+                } catch let removeError as RPCError where removeError.code == .notFound {
+                    // Already cleaned up, this is fine
+                    logger.debug(
+                        "Temporary snapshot already removed",
+                        metadata: ["tmp-key": .stringConvertible(tmpKey)]
+                    )
+                }
             }
 
-            previousLayerKey = layerKey
+            previousChainID = chainID
         }
 
         logger.info(
@@ -465,30 +536,33 @@ public struct Containerd: Sendable {
             metadata: [
                 "image": .stringConvertible(imageName),
                 "total-layers": .stringConvertible(totalLayers),
+                "snapshots-reused": .stringConvertible(snapshotsReused),
+                "snapshots-created": .stringConvertible(snapshotsCreated),
+                "reuse-percentage": .stringConvertible(
+                    String(
+                        format: "%.1f%%",
+                        totalLayers > 0
+                            ? (Double(snapshotsReused) / Double(totalLayers)) * 100.0 : 0.0
+                    )
+                ),
             ]
         )
 
-        guard let previousLayerKey else {
+        guard let previousChainID else {
             throw RPCError(code: .internalError, message: "Failed to unpack image")
         }
 
         let ephemeralKey = UUID().uuidString
-        _ = try await snapshots.prepare(
+        let ephemeralSnapshot = try await snapshots.prepare(
             .with {
                 $0.key = ephemeralKey
-                $0.parent = previousLayerKey
+                $0.parent = previousChainID
                 $0.snapshotter = "overlayfs"
             }
         )
 
-        // Get mounts from the committed snapshot
-        let mountsResponse = try await snapshots.mounts(
-            .with {
-                $0.key = ephemeralKey
-                $0.snapshotter = "overlayfs"
-            }
-        )
-        return (snapshotKey: ephemeralKey, mounts: mountsResponse.mounts)
+        // Use mounts from the prepare response (optimization: avoid extra RPC call)
+        return (snapshotKey: ephemeralKey, mounts: ephemeralSnapshot.mounts)
     }
 
     public func createContainer(
