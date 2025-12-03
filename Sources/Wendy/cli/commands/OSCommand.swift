@@ -427,15 +427,14 @@ struct OSCommand: AsyncParsableCommand {
 
             // Download and extract as separate progress bars when not using cache
             let imageDownloader = ImageDownloaderFactory.createImageDownloader()
-            let realDownloader = imageDownloader as! ImageDownloader
 
             var localImagePath: String
 
             // Check if cached image exists and matches the latest version
-            let cachedImagePath = await realDownloader.cachedImageIfValid(
+            let cachedImagePath = try await imageDownloader.cachedImageIfValid(
                 deviceName: selectedDeviceName
             )
-            let isCachedLatest = realDownloader.isCachedImageLatest(
+            let isCachedLatest = try imageDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
                 latestVersion: latestVersion
             )
@@ -458,7 +457,7 @@ struct OSCommand: AsyncParsableCommand {
                 ) { updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
-                    let result = try await realDownloader.downloadArchiveOnly(
+                    let result = try await imageDownloader.downloadArchiveOnly(
                         from: imageUrl,
                         deviceName: selectedDeviceName,
                         expectedSize: imageSize,
@@ -486,7 +485,7 @@ struct OSCommand: AsyncParsableCommand {
                 ) { updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
-                    let result = try await realDownloader.extractArchiveOnly(
+                    let result = try await imageDownloader.extractArchiveOnly(
                         deviceName: selectedDeviceName,
                         zipPath: zipPath,
                         version: latestVersion
