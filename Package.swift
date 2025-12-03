@@ -321,7 +321,7 @@ let package = Package(
         .testTarget(
             name: "AnalyticsTests",
             dependencies: [
-                .target(name: "Analytics"),
+                .target(name: "Analytics")
             ]
         ),
 
