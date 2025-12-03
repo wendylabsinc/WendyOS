@@ -187,5 +187,6 @@ private struct AnalyticsConfigWrapper: Codable {
         let enabled: Bool?
         let anonymousId: String?
         let optOutDate: String?
+        let isInternal: Bool?
     }
 }

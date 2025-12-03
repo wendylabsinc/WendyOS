@@ -15,6 +15,7 @@ private struct WendyAnalyticsConfig: Codable {
     let enabled: Bool?
     let anonymousId: String?
     let optOutDate: String?
+    let isInternal: Bool?
 }
 
 // MARK: - Analytics Service
@@ -42,21 +43,24 @@ public actor AnalyticsService {
     private let logger = Logger(label: "sh.wendy.analytics")
     private var sessionId = UUID()
     private var anonymousId: String
+    private let isInternalUser: Bool
 
     /// Initialize the analytics service
     public init() throws {
         self.consentManager = ConsentManager()
 
-        // Try to get anonymous ID from config, or generate a new one
-        self.anonymousId = Self.getAnonymousId()
+        // Load config values
+        let config = Self.loadAnalyticsConfig()
+        self.anonymousId = config.anonymousId
+        self.isInternalUser = config.isInternal
 
         // Create PostHog client
         // This key is safe to embed, it is a public facing key with write-only access
         self.client = PostHogClient(apiKey: "phc_DCgbsvbGPdGhU6GW3CQnEwGCsNNrAHYwMhj4HkhjU4f")
     }
 
-    /// Get or create an anonymous user ID
-    private static func getAnonymousId() -> String {
+    /// Loads analytics configuration from the config file
+    private static func loadAnalyticsConfig() -> (anonymousId: String, isInternal: Bool) {
         do {
             let configURL = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".wendy")
@@ -65,15 +69,21 @@ public actor AnalyticsService {
             if FileManager.default.fileExists(atPath: configURL.path) {
                 let data = try Data(contentsOf: configURL)
                 let config = try JSONDecoder().decode(WendyConfig.self, from: data)
-                if let id = config.analytics?.anonymousId {
-                    return id
-                }
+                return (
+                    anonymousId: config.analytics?.anonymousId ?? UUID().uuidString,
+                    isInternal: config.analytics?.isInternal ?? false
+                )
             }
         } catch {
-            // Ignore errors, just generate a new ID
+            // Ignore errors, use defaults
         }
 
-        return UUID().uuidString
+        return (anonymousId: UUID().uuidString, isInternal: false)
+    }
+
+    /// The user type for analytics events
+    private var userType: String {
+        isInternalUser ? "internal" : "user"
     }
 
     /// Tracks command execution with timing and error handling
@@ -135,6 +145,7 @@ public actor AnalyticsService {
                 "os_version": Platform.osVersion,
                 "arch": Platform.architecture,
                 "session_id": sessionId.uuidString,
+                "user_type": userType,
             ],
             distinctId: anonymousId
         )
@@ -166,6 +177,7 @@ public actor AnalyticsService {
                 "os_version": Platform.osVersion,
                 "arch": Platform.architecture,
                 "session_id": sessionId.uuidString,
+                "user_type": userType,
             ],
             distinctId: anonymousId
         )
@@ -217,6 +229,7 @@ public actor AnalyticsService {
         allProperties["cli_version"] = Version.current
         allProperties["os"] = Platform.current.description
         allProperties["session_id"] = sessionId.uuidString
+        allProperties["user_type"] = userType
 
         let event = AnalyticsEvent(
             name: name,
