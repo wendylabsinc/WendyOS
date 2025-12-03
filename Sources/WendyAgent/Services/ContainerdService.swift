@@ -753,15 +753,20 @@ public struct Containerd: Sendable {
         }
     }
 
-    public func deleteTask(containerID: String) async throws {
+    /// Wait for a task to exit and then delete it.
+    /// This function will wait up to the specified timeout for the task to exit.
+    /// If the task is still running after the kill signal, it will wait for it to exit.
+    public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(5)) async throws {
         let tasks = Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
         let runningTasks = try await tasks.list(.init())
+
         for runningTask in runningTasks.tasks {
             logger.info(
-                "Found running task",
+                "Found task",
                 metadata: [
                     "container-id": .stringConvertible(runningTask.containerID),
                     "task-id": .stringConvertible(runningTask.id),
+                    "has-exited": .stringConvertible(runningTask.hasExitedAt),
                 ]
             )
 
@@ -777,28 +782,80 @@ public struct Containerd: Sendable {
                 continue
             }
 
-            if runningTask.hasExitedAt {
+            // If task hasn't exited yet, wait for it to exit
+            if !runningTask.hasExitedAt {
                 logger.debug(
-                    "Task has exited, deleting process",
+                    "Task is still running, waiting for it to exit",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
 
+                // Wait for task to exit with a timeout
+                let startTime = ContinuousClock.now
+                var hasExited = false
+
+                while !hasExited && (ContinuousClock.now - startTime) < waitTimeout {
+                    try await Task.sleep(for: .milliseconds(100))
+
+                    // Check if task has exited
+                    let updatedTasks = try await tasks.list(.init())
+                    if let updatedTask = updatedTasks.tasks.first(where: {
+                        $0.containerID == runningTask.containerID || $0.id == runningTask.id
+                    }) {
+                        hasExited = updatedTask.hasExitedAt
+                    } else {
+                        // Task no longer in list, consider it exited
+                        hasExited = true
+                    }
+                }
+
+                if !hasExited {
+                    logger.warning(
+                        "Task did not exit within timeout, attempting delete anyway",
+                        metadata: [
+                            "container-id": .stringConvertible(containerID),
+                            "task-id": .stringConvertible(runningTask.id),
+                            "timeout": .stringConvertible(waitTimeout),
+                        ]
+                    )
+                }
+            }
+
+            // Now delete the task
+            logger.debug(
+                "Deleting task",
+                metadata: [
+                    "container-id": .stringConvertible(containerID),
+                    "task-id": .stringConvertible(runningTask.id),
+                ]
+            )
+
+            do {
                 _ = try await tasks.delete(
                     .with {
                         $0.containerID = runningTask.id
                     }
                 )
-            } else {
                 logger.debug(
-                    "Task is still running, skipping",
+                    "Task deleted successfully",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
+            } catch let error as RPCError {
+                logger.error(
+                    "Failed to delete task",
+                    metadata: [
+                        "container-id": .stringConvertible(containerID),
+                        "task-id": .stringConvertible(runningTask.id),
+                        "error": .stringConvertible(error.message),
+                        "error-code": .stringConvertible(String(describing: error.code)),
+                    ]
+                )
+                throw error
             }
         }
     }
