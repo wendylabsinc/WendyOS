@@ -48,7 +48,6 @@ struct OCI: Codable {
                     .init(type: "uts"),
                     .init(type: "mount"),
                 ],
-                networkMode: "host",
                 capabilities: .init(
                     bounding: ["SYS_PTRACE"],
                     effective: ["SYS_PTRACE"],
@@ -86,11 +85,12 @@ public struct Process: Codable {
     struct User: Codable {
         let uid: Int
         let gid: Int
+        var additionalGids: [Int] = []
 
-        static let root = User(uid: 0, gid: 0)
+        static let root = User(uid: 0, gid: 0, additionalGids: [])
     }
 
-    let user: User
+    var user: User
     let terminal: Bool
     let args: [String]
     var env: [String]
@@ -139,7 +139,6 @@ public struct Mount: Codable {
 
 public struct Linux: Codable {
     var namespaces: [Namespace]
-    var networkMode: String
     var capabilities: Capabilities
     var seccomp: Seccomp
     var devices: [Device]

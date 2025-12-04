@@ -24,4 +24,12 @@ extension ImageManifest {
         let encoded = try! encoder.encode(self)
         return ContainerRegistry.digest(of: encoded)
     }
+
+    public var size: Int64 {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        encoder.dateEncodingStrategy = .iso8601
+        let encoded = try! encoder.encode(self)
+        return Int64(encoded.count)
+    }
 }

@@ -1,34 +1,6 @@
 import AppConfig
 import Foundation
-
-extension Array where Element == Entitlement {
-    /// Check if GPU entitlement is present
-    var hasGPUEntitlement: Bool {
-        contains { entitlement in
-            if case .gpu = entitlement {
-                return true
-            }
-            return false
-        }
-    }
-
-    /// Build environment variables from entitlements
-    func environmentVariables() -> [String] {
-        var env: [String] = []
-
-        for entitlement in self {
-            switch entitlement {
-            case .gpu:
-                env.append("NVIDIA_VISIBLE_DEVICES=all")
-                env.append("NVIDIA_DRIVER_CAPABILITIES=all")
-            default:
-                ()
-            }
-        }
-
-        return env
-    }
-}
+import Logging
 
 extension OCI {
     mutating func setDeviceCapabilities(appName: String) {
@@ -87,18 +59,68 @@ extension OCI {
         entitlements: [Entitlement],
         appName: String
     ) {
+        let logger = Logger(label: #file)
+        logger.debug(
+            "applyEntitlements called",
+            metadata: [
+                "entitlements_count": .stringConvertible(entitlements.count),
+                "entitlements": .string("\(entitlements)"),
+            ]
+        )
         var didSetDeviceCapabilities = false
 
         for entitlement in entitlements {
+            logger.trace(
+                "Processing entitlement",
+                metadata: ["entitlement": .string("\(entitlement)")]
+            )
             switch entitlement {
-            case .gpu:
-                ()  // Handled by NVIDIA runtime
+            case .gpu(_):
+                logger.info("GPU entitlement detected - adding video group")
+                // Add video group (gid 44) for access to GPU devices
+                // GPU devices on Jetson are owned by group 'video' (gid 44)
+                if !self.process.user.additionalGids.contains(44) {
+                    self.process.user.additionalGids.append(44)
+                    logger.debug(
+                        "Added video group to additionalGids",
+                        metadata: [
+                            "additionalGids": .stringConvertible(self.process.user.additionalGids)
+                        ]
+                    )
+                }
             case .network(let entitlement):
                 switch entitlement.mode {
                 case .host:
-                    self.linux.networkMode = "host"
+                    // Remove any network namespace to ensure host networking
+                    self.linux.namespaces.removeAll(where: { $0.type == "network" })
+
+                    // Mount systemd-resolved's actual resolv.conf for DNS resolution
+                    // We use /run/systemd/resolve/resolv.conf instead of /etc/resolv.conf
+                    // because /etc/resolv.conf often points to 127.0.0.53 (systemd-resolved stub)
+                    // which doesn't work in containers. The /run path contains the real upstream DNS servers.
+                    // See: https://github.com/moby/moby/blob/master/libnetwork/resolvconf/resolvconf.go#L16
+                    if !self.mounts.contains(where: { $0.destination == "/etc/resolv.conf" }) {
+                        self.mounts.append(
+                            .init(
+                                destination: "/etc/resolv.conf",
+                                type: "bind",
+                                source: "/run/systemd/resolve/resolv.conf",
+                                options: ["rbind", "ro"]
+                            )
+                        )
+                        logger.debug(
+                            "Added /run/systemd/resolve/resolv.conf bind mount for host networking DNS"
+                        )
+                    }
+
+                // Note: We do NOT mount /etc/hosts because:
+                // 1. Containerd manages the container's own /etc/hosts file with container-specific entries
+                // 2. The container needs its own IP/hostname mappings, not the host's
+                // 3. Mounting host's /etc/hosts would leak host-internal names and break container identity
+                // If custom host entries are needed, they should be added via the OCI spec's /etc/hosts
+                // generation or via container runtime mechanisms, not by mounting the host's file.
+
                 case .none:
-                    self.linux.networkMode = "none"
                     self.linux.namespaces.append(.init(type: "network"))
                 }
             case .bluetooth(let bluetooth):

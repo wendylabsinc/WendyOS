@@ -48,6 +48,48 @@ extension RegistryClient {
             .absoluteString
     }
 
+    /// Encodes and uploads an image index.
+    ///
+    /// - Parameters:
+    ///   - repository: Name of the destination repository.
+    ///   - reference: Optional tag to apply to this index.
+    ///   - index: Index to be uploaded.
+    /// - Returns: An ContentDescriptor object representing the
+    ///            uploaded index.
+    /// - Throws: If the index cannot be encoded or the upload fails.
+    ///
+    /// An index is a type of manifest.   Manifests are not treated as blobs
+    /// by the distribution specification.   They have their own MIME types
+    /// and are uploaded to different endpoint.
+    public func putIndex(
+        repository: String,
+        reference: String?,
+        index: ImageIndex
+    ) async throws -> ContentDescriptor {
+        // See https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pushing-manifests
+
+        let encoded = try encoder.encode(index)
+        let digest = digest(of: encoded)
+        let mediaType = index.mediaType ?? "application/vnd.oci.image.index.v1+json"
+
+        let _ = try await executeRequestThrowing(
+            .put(
+                repository,
+                path: "manifests/\(reference ?? digest)",
+                contentType: mediaType
+            ),
+            uploading: encoded,
+            expectingStatus: .created,
+            decodingErrors: [.notFound]
+        )
+
+        return ContentDescriptor(
+            mediaType: mediaType,
+            digest: digest,
+            size: Int64(encoded.count)
+        )
+    }
+
     public func getManifest(repository: String, reference: String) async throws -> ImageManifest {
         // See https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests
         precondition(repository.count > 0, "repository must not be an empty string")

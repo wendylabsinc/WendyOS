@@ -33,7 +33,7 @@ struct USBDeviceTests {
         let device = USBDevice(name: "Wendy Device", vendorId: 0x1234, productId: 0xABCD)
         let humanReadable = device.toHumanReadableString()
 
-        #expect(humanReadable == "Wendy Device - Vendor ID: 0x1234, Product ID: 0xABCD")
+        #expect(humanReadable == "Wendy Device")
     }
 
     @Test("JSON serialization and Codable conformance")
@@ -104,13 +104,11 @@ struct EthernetInterfaceTests {
         let wendyInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
         #expect(wendyInterface.name == "wendy0")
         #expect(wendyInterface.displayName == "Wendy Ethernet")
-        #expect(wendyInterface.interfaceType == "Ethernet")
         #expect(wendyInterface.macAddress == "11:22:33:44:55:66")
         #expect(wendyInterface.isWendyDevice)
 
@@ -118,13 +116,11 @@ struct EthernetInterfaceTests {
         let nonWendyInterface = EthernetInterface(
             name: "en0",
             displayName: "Wi-Fi",
-            interfaceType: "IEEE80211",
             macAddress: "aa:bb:cc:dd:ee:ff"
         )
 
         #expect(nonWendyInterface.name == "en0")
         #expect(nonWendyInterface.displayName == "Wi-Fi")
-        #expect(nonWendyInterface.interfaceType == "IEEE80211")
         #expect(nonWendyInterface.macAddress == "aa:bb:cc:dd:ee:ff")
         #expect(!nonWendyInterface.isWendyDevice)
     }
@@ -135,26 +131,23 @@ struct EthernetInterfaceTests {
         let interface1 = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
         let humanReadable1 = interface1.toHumanReadableString()
         #expect(
-            humanReadable1
-                == "- Wendy Ethernet (wendy0) [Ethernet]\n  MAC Address: 11:22:33:44:55:66"
+            humanReadable1 == "Wendy Ethernet @ wendy0 [11:22:33:44:55:66]"
         )
 
         // Without MAC address
         let interface2 = EthernetInterface(
             name: "wendy1",
             displayName: "Wendy PPP",
-            interfaceType: "PPP",
             macAddress: nil
         )
 
         let humanReadable2 = interface2.toHumanReadableString()
-        #expect(humanReadable2 == "- Wendy PPP (wendy1) [PPP]")
+        #expect(humanReadable2 == "Wendy PPP @ wendy1")
     }
 
     @Test("Interface JSON serialization and Codable conformance")
@@ -162,7 +155,6 @@ struct EthernetInterfaceTests {
         let interface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -172,7 +164,6 @@ struct EthernetInterfaceTests {
         // Verify JSON contains all fields with correct values
         #expect(jsonString.contains("\"name\" : \"wendy0\""))
         #expect(jsonString.contains("\"displayName\" : \"Wendy Ethernet\""))
-        #expect(jsonString.contains("\"interfaceType\" : \"Ethernet\""))
         #expect(jsonString.contains("\"macAddress\" : \"11:22:33:44:55:66\""))
         #expect(jsonString.contains("\"isWendyDevice\" : true"))
 
@@ -188,7 +179,6 @@ struct EthernetInterfaceTests {
         // Verify all properties match
         #expect(decodedInterface.name == interface.name)
         #expect(decodedInterface.displayName == interface.displayName)
-        #expect(decodedInterface.interfaceType == interface.interfaceType)
         #expect(decodedInterface.macAddress == interface.macAddress)
         #expect(decodedInterface.isWendyDevice == interface.isWendyDevice)
     }
@@ -200,13 +190,11 @@ struct EthernetInterfaceTests {
             EthernetInterface(
                 name: "wendy0",
                 displayName: "Wendy Ethernet",
-                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "wendy1",
                 displayName: "Wendy Wi-Fi",
-                interfaceType: "IEEE80211",
                 macAddress: "aa:bb:cc:dd:ee:ff"
             ),
         ]
@@ -268,7 +256,7 @@ struct LANDeviceTests {
         )
 
         let humanReadable = device.toHumanReadableString()
-        #expect(humanReadable == "Wendy LAN Device @ wendy.local:8080 [device123]")
+        #expect(humanReadable == "Wendy LAN Device @ wendy.local:8080")
     }
 
     @Test("LANDevice JSON serialization and Codable conformance")
@@ -469,7 +457,6 @@ struct DevicesCollectionTests {
         let ethernetInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
-            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
         let lanDevice = LANDevice(
@@ -552,13 +539,11 @@ struct DevicesCollectionTests {
             EthernetInterface(
                 name: "Wendy0",
                 displayName: "Wendy Ethernet 1",
-                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "Wendy1",
                 displayName: "Wendy Ethernet 2",
-                interfaceType: "Ethernet",
                 macAddress: "AA:BB:CC:DD:EE:FF"
             ),
         ]

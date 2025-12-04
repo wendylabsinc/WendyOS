@@ -4,6 +4,7 @@ import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
+import GRPCServiceLifecycle
 import Logging
 import NIOSSL
 import ServiceLifecycle
@@ -29,9 +30,15 @@ struct WendyAgent: AsyncParsableCommand {
 
     func run() async throws {
         LoggingSystem.bootstrap { label in
+            #if DEBUG
+                let defaultLogLevel = Logger.Level.debug
+            #else
+                let defaultLogLevel = Logger.Level.info
+            #endif
+
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? .info
+                .flatMap(Logger.Level.init) ?? defaultLogLevel
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
@@ -51,7 +58,7 @@ struct WendyAgent: AsyncParsableCommand {
         }()
 
         var backgroundServices: [any ServiceLifecycle.Service] = [
-            containerMonitor  // Add container monitor as a background service
+            ContainerMonitor.shared  // Add container monitor as a background service
         ]
         var servers = [GRPCServer<HTTP2ServerTransport.Posix>]()
 
@@ -149,18 +156,6 @@ struct WendyAgent: AsyncParsableCommand {
                     ]
                 )
             )
-            servers.append(
-                GRPCServer(
-                    transport: HTTP2ServerTransport.Posix(
-                        address: .ipv6(host: "::", port: port + 1),
-                        transportSecurity: mTLS
-                    ),
-                    services: authenticatedServices,
-                    interceptors: [
-                        WendyErrorInterceptor()
-                    ]
-                )
-            )
         }
 
         servers.append(
@@ -176,60 +171,42 @@ struct WendyAgent: AsyncParsableCommand {
             )
         )
 
-        servers.append(
-            GRPCServer(
-                transport: HTTP2ServerTransport.Posix(
-                    address: .ipv6(host: "::", port: port),
-                    transportSecurity: .plaintext
-                ),
-                services: plaintextServices,
-                interceptors: [
-                    WendyErrorInterceptor()
-                ]
-            )
+        var services = [any Service]()
+        for service in backgroundServices {
+            services.append(service)
+        }
+        for server in servers {
+            services.append(server)
+        }
+        if mTLS == nil {
+            logger.info("Adding Registry Container Service for development")
+            services.append(RegistryContainerService())
+        }
+
+        var serviceGroupConfig = ServiceGroupConfiguration(
+            services: services,
+            logger: logger
+        )
+        serviceGroupConfig.maximumGracefulShutdownDuration = .seconds(10)
+        let serviceGroup = ServiceGroup(
+            configuration: serviceGroupConfig
         )
 
         try await withThrowingTaskGroup(of: Void.self) { taskGroup in
-            for server in servers {
-                taskGroup.addTask {
-                    try await server.serve()
-                    continuation.finish()
+            taskGroup.addTask {
+                try await serviceGroup.run()
+            }
+
+            taskGroup.addTask {
+                for try await () in signal {
+                    logger.info("Received signal, restarting")
+                    try await Task.sleep(for: .seconds(3))
+                    return
                 }
             }
 
-            defer {
-                for server in servers {
-                    server.beginGracefulShutdown()
-                }
-                taskGroup.cancelAll()
-            }
-
-            for service in backgroundServices {
-                taskGroup.addTask {
-                    try await service.run()
-                }
-            }
-
-            // taskGroup.addTask {
-            //     do {
-            //         let imageName = "hello-python"
-            //         try await PullImage().pullAndRun(
-            //             image: "cloud-c7e56/agent-test/\(imageName):latest",
-            //             appName: imageName,
-            //             labels: [:],
-            //             bearerToken: "...",
-            //             registry: "us-central1-docker.pkg.dev"
-            //         )
-            //     } catch {
-            //         logger.error("Failed to pull and run image: \(error)")
-            //     }
-            // }
-
-            for try await () in signal {
-                logger.info("Received signal, restarting")
-                try await Task.sleep(for: .seconds(3))
-                return
-            }
+            defer { taskGroup.cancelAll() }
+            try await taskGroup.next()
         }
     }
 }

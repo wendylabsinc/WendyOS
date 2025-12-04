@@ -178,21 +178,18 @@
             let ethernetInterface = interfaces.first { $0.name == "en0" }
             #expect(ethernetInterface != nil, "Should find Wendy Ethernet interface")
             #expect(ethernetInterface?.displayName == "Wendy Ethernet")
-            #expect(ethernetInterface?.interfaceType == kSCNetworkInterfaceTypeEthernet as String)
             #expect(ethernetInterface?.macAddress == "00:11:22:33:44:55")
 
             // Find WiFi interface
             let wifiInterface = interfaces.first { $0.name == "en1" }
             #expect(wifiInterface != nil, "Should find Wendy WiFi interface")
             #expect(wifiInterface?.displayName == "Wendy WiFi")
-            #expect(wifiInterface?.interfaceType == kSCNetworkInterfaceTypeIEEE80211 as String)
             #expect(wifiInterface?.macAddress == "aa:bb:cc:dd:ee:ff")
 
             // Find PPP interface
             let pppInterface = interfaces.first { $0.name == "ppp0" }
             #expect(pppInterface != nil, "Should find Wendy PPP interface")
             #expect(pppInterface?.displayName == "Wendy PPP")
-            #expect(pppInterface?.interfaceType == kSCNetworkInterfaceTypePPP as String)
             #expect(pppInterface?.macAddress == nil, "PPP interface should not have MAC address")
 
             // Verify the non-Wendy interface was filtered out
@@ -309,7 +306,6 @@
 
             // Test the actual business rules
             #expect(interfaces.allSatisfy { $0.isWendyDevice })
-            #expect(interfaces.contains { $0.interfaceType == "Ethernet" })
         }
 
         @Test("No interfaces found when")

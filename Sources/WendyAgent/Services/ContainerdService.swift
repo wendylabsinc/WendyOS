@@ -1,3 +1,4 @@
+import ContainerRegistry
 import ContainerdGRPC
 import Crypto
 import Foundation
@@ -58,6 +59,12 @@ public struct SystemFIFOManager: FIFOManager {
 // MARK: - Containerd Client
 
 struct NamespaceInterceptor: ClientInterceptor {
+    let namespace: String
+
+    init(namespace: String = "default") {
+        self.namespace = namespace
+    }
+
     func intercept<Input, Output>(
         request: StreamingClientRequest<Input>,
         context: ClientContext,
@@ -65,7 +72,7 @@ struct NamespaceInterceptor: ClientInterceptor {
             StreamingClientResponse<Output>
     ) async throws -> StreamingClientResponse<Output> where Input: Sendable, Output: Sendable {
         var request = request
-        request.metadata.addString("default", forKey: "containerd-namespace")
+        request.metadata.addString(namespace, forKey: "containerd-namespace")
         return try await next(request, context)
     }
 }
@@ -247,6 +254,21 @@ public struct Containerd: Sendable {
         }
     }
 
+    public func fetchBlob(digest: String) async throws -> Data {
+        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
+        return try await content.read(
+            .with {
+                $0.digest = digest
+            }
+        ) { response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return data
+        }
+    }
+
     public func updateImage(
         named name: String,
         manifestHash: String,
@@ -289,151 +311,170 @@ public struct Containerd: Sendable {
         )
     }
 
-    public func createSnapshot(
-        imageName: String,
-        appName: String,
-        layers: [Wendy_Agent_Services_V1_RunContainerLayerHeader]
-    ) async throws -> (snapshotKey: String?, mounts: [Containerd_Types_Mount]) {
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
-        var layers = layers
+    public func readJSONContent<D: Decodable & Sendable>(
+        digest: String,
+        as type: D.Type
+    ) async throws -> D {
+        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
+        return try await content.read(.with { $0.digest = digest }) { response in
+            var data = Data()
+            for try await message in response.messages {
+                data.append(message.data)
+            }
+            return try JSONDecoder().decode(type, from: data)
+        }
+    }
 
-        if layers.isEmpty {
-            return (snapshotKey: nil, mounts: [])
+    /// Compute ChainID for a layer based on parent ChainID and current DiffID.
+    /// ChainID is a cryptographic identifier representing the cumulative state of all layers.
+    /// - For the first layer: ChainID = DiffID
+    /// - For subsequent layers: ChainID = SHA256(ChainID(parent) + " " + DiffID(current))
+    private func computeChainID(parent: String?, diffID: String) -> String {
+        // Normalize diffID to remove "sha256:" prefix if present
+        let normalizedDiffID = diffID.replacingOccurrences(of: "sha256:", with: "")
+
+        guard let parent = parent, !parent.isEmpty else {
+            // Base case: first layer's ChainID equals its DiffID
+            return "sha256:\(normalizedDiffID)"
         }
 
-        var layer = layers.removeFirst()
-        var layerIndex = 0
+        // Normalize parent to remove "sha256:" prefix
+        let normalizedParent = parent.replacingOccurrences(of: "sha256:", with: "")
 
-        logger.info(
-            "Preparing snapshot for layer",
-            metadata: [
-                "layer-diff-id": .stringConvertible(layer.diffID)
-            ]
-        )
+        // Compute: SHA256(parent + " " + diffID)
+        let combined = "sha256:\(normalizedParent) sha256:\(normalizedDiffID)"
+        let hash = SHA256.hash(data: Data(combined.utf8))
+        let chainID = hash.map { String(format: "%02x", $0) }.joined()
 
-        var layerKey = "\(appName)-\(layer.diffID)"
+        return "sha256:\(chainID)"
+    }
 
-        let tmpKey = UUID().uuidString
-        let snapshot = try await snapshots.prepare(
-            .with {
-                $0.key = tmpKey
-                $0.snapshotter = "overlayfs"
-            }
-        )
-        logger.info(
-            "Prepared snapshot",
-            metadata: [
-                "layer-diff-id": .stringConvertible(layer.diffID),
-                "layer-digest": .stringConvertible(layer.digest),
-                "layer-size": .stringConvertible(layer.size),
-                "layer-gzip": .stringConvertible(layer.gzip),
-                "layer-media-type": .stringConvertible(
-                    layer.gzip
-                        ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                        : "application/vnd.oci.image.layer.v1.tar"
-                ),
-                "snapshot-mounts": .stringConvertible(
-                    snapshot.mounts.map { $0.source }.joined(separator: ", ")
-                ),
-            ]
-        )
-        _ = try await diffs.apply(
-            .with {
-                $0.diff = .with {
-                    $0.digest = layer.digest
-                    $0.size = layer.size
-                    $0.mediaType =
-                        layer.gzip
-                        ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                        : "application/vnd.oci.image.layer.v1.tar"
-                }
-                $0.mounts = snapshot.mounts
-            }
-        )
-        logger.info(
-            "Applied diff",
-            metadata: [
-                "layer-diff-id": .stringConvertible(layer.diffID),
-                "layer-digest": .stringConvertible(layer.digest),
-                "layer-size": .stringConvertible(layer.size),
-                "layer-gzip": .stringConvertible(layer.gzip),
-                "layer-media-type": .stringConvertible(
-                    layer.gzip
-                        ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                        : "application/vnd.oci.image.layer.v1.tar"
-                ),
-            ]
+    /// Unpack an image from the content store into snapshots.
+    /// This is required when images are pushed to the registry but not yet unpacked.
+    public func unpackImage(
+        named imageName: String
+    ) async throws -> (snapshotKey: String?, mounts: [Containerd_Types_Mount]) {
+        let images = Containerd_Services_Images_V1_Images.Client(wrapping: client)
+        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
+
+        logger.info("Unpacking image", metadata: ["image": .stringConvertible(imageName)])
+
+        // Get the image
+        let image = try await images.get(.with { $0.name = imageName }).image
+
+        // Read the manifest
+        let manifest = try await self.readJSONContent(
+            digest: image.target.digest,
+            as: ImageManifest.self
         )
 
-        do {
-            _ = try await snapshots.commit(
-                .with {
-                    $0.key = tmpKey
-                    $0.name = layerKey
-                    $0.snapshotter = "overlayfs"
-                }
+        // Read the image config to get DiffIDs (uncompressed layer hashes)
+        let config = try await self.readJSONContent(
+            digest: manifest.config.digest,
+            as: ImageConfiguration.self
+        )
+
+        // Verify we have matching layer counts
+        guard manifest.layers.count == config.rootfs.diff_ids.count else {
+            throw RPCError(
+                code: .internalError,
+                message:
+                    "Manifest layer count (\(manifest.layers.count)) doesn't match config diff_ids count (\(config.rootfs.diff_ids.count))"
             )
+        }
+
+        // Unpack each layer, reusing existing snapshots when possible
+        var previousChainID: String? = nil
+        let totalLayers = manifest.layers.count
+        var snapshotsReused = 0
+        var snapshotsCreated = 0
+
+        for (index, layer) in manifest.layers.enumerated() {
+            // Get the DiffID for this layer from the config
+            let diffID = config.rootfs.diff_ids[index]
+
+            // Compute the ChainID for this layer
+            let chainID = computeChainID(parent: previousChainID, diffID: diffID)
+            let layerKey = chainID
+
             logger.info(
-                "Committed snapshot",
+                "Processing layer",
                 metadata: [
-                    "layer-diff-id": .stringConvertible(layer.diffID),
+                    "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
                     "layer-digest": .stringConvertible(layer.digest),
+                    "layer-diff-id": .stringConvertible(diffID),
+                    "layer-chain-id": .stringConvertible(chainID),
                     "layer-size": .stringConvertible(layer.size),
-                    "layer-gzip": .stringConvertible(layer.gzip),
-                    "layer-media-type": .stringConvertible(
-                        layer.gzip
-                            ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                            : "application/vnd.oci.image.layer.v1.tar"
+                    "layer-size-mb": .stringConvertible(
+                        String(format: "%.2f", Double(layer.size) / 1_000_000.0)
                     ),
+                    "layer-media-type": .stringConvertible(layer.mediaType),
                 ]
             )
-        } catch let error as RPCError where error.code == .alreadyExists {}
 
-        while !layers.isEmpty {
-            layerIndex += 1
-            let nextLayer = layers.removeFirst()
-            let nextLayerKey = "\(appName)-\(nextLayer.diffID)"
+            // Check if snapshot already exists
+            let snapshotExists: Bool
+            do {
+                _ = try await snapshots.stat(
+                    .with {
+                        $0.key = layerKey
+                        $0.snapshotter = "overlayfs"
+                    }
+                )
+                snapshotExists = true
+            } catch let error as RPCError where error.code == .notFound {
+                snapshotExists = false
+            } catch {
+                // Log unexpected errors but propagate them
+                logger.error(
+                    "Unexpected error checking snapshot existence",
+                    metadata: [
+                        "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
+                        "chain-id": .stringConvertible(chainID),
+                        "error": .stringConvertible(String(describing: error)),
+                    ]
+                )
+                throw error
+            }
 
+            if snapshotExists {
+                snapshotsReused += 1
+                logger.debug(
+                    "Snapshot already exists, reusing",
+                    metadata: [
+                        "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
+                        "chain-id": .stringConvertible(chainID),
+                    ]
+                )
+                previousChainID = chainID
+                continue
+            }
+
+            // Snapshot doesn't exist, we'll create it
+            snapshotsCreated += 1
+
+            // Snapshot doesn't exist, create it
             let tmpKey = UUID().uuidString
-            logger.info(
-                "Preparing snapshot for layer",
-                metadata: [
-                    "layer-diff-id": .stringConvertible(nextLayer.diffID)
-                ]
-            )
+
+            // Prepare snapshot
             let snapshot = try await snapshots.prepare(
                 .with {
                     $0.key = tmpKey
-                    $0.parent = layerKey
+                    if let parent = previousChainID {
+                        $0.parent = parent
+                    }
                     $0.snapshotter = "overlayfs"
                 }
             )
 
-            logger.info(
-                "Prepared snapshot",
-                metadata: [
-                    "layer-diff-id": .stringConvertible(nextLayer.diffID),
-                    "layer-digest": .stringConvertible(nextLayer.digest),
-                    "layer-size": .stringConvertible(nextLayer.size),
-                    "layer-gzip": .stringConvertible(nextLayer.gzip),
-                    "layer-media-type": .stringConvertible(
-                        nextLayer.gzip
-                            ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                            : "application/vnd.oci.image.layer.v1.tar"
-                    ),
-                ]
-            )
-
+            // Apply diff - this is the most expensive operation
             _ = try await diffs.apply(
                 .with {
                     $0.diff = .with {
-                        $0.digest = nextLayer.digest
-                        $0.size = nextLayer.size
-                        $0.mediaType =
-                            nextLayer.gzip
-                            ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                            : "application/vnd.oci.image.layer.v1.tar"
+                        $0.digest = layer.digest
+                        $0.size = layer.size
+                        $0.mediaType = layer.mediaType
                     }
                     $0.mounts = snapshot.mounts
                 }
@@ -441,63 +482,86 @@ public struct Containerd: Sendable {
             logger.info(
                 "Applied diff",
                 metadata: [
-                    "layer-diff-id": .stringConvertible(nextLayer.diffID),
-                    "layer-digest": .stringConvertible(nextLayer.digest),
-                    "layer-size": .stringConvertible(nextLayer.size),
-                    "layer-gzip": .stringConvertible(nextLayer.gzip),
-                    "layer-media-type": .stringConvertible(
-                        nextLayer.gzip
-                            ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                            : "application/vnd.oci.image.layer.v1.tar"
+                    "layer-index": .stringConvertible("\(index + 1)/\(totalLayers)"),
+                    "layer-size-mb": .stringConvertible(
+                        String(format: "%.2f", Double(layer.size) / 1_000_000.0)
                     ),
                 ]
             )
 
+            // Commit snapshot
             do {
                 _ = try await snapshots.commit(
                     .with {
                         $0.key = tmpKey
-                        $0.name = nextLayerKey
+                        $0.name = layerKey
                         $0.snapshotter = "overlayfs"
                     }
                 )
-                logger.info(
+                logger.debug(
                     "Committed snapshot",
                     metadata: [
-                        "layer-diff-id": .stringConvertible(nextLayer.diffID),
-                        "layer-digest": .stringConvertible(nextLayer.digest),
-                        "layer-size": .stringConvertible(nextLayer.size),
-                        "layer-gzip": .stringConvertible(nextLayer.gzip),
-                        "layer-media-type": .stringConvertible(
-                            nextLayer.gzip
-                                ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                                : "application/vnd.oci.image.layer.v1.tar"
-                        ),
+                        "chain-id": .stringConvertible(chainID)
                     ]
                 )
-            } catch let error as RPCError where error.code == .alreadyExists {}
+            } catch let error as RPCError where error.code == .alreadyExists {
+                // Race condition: snapshot was created by another process
+                logger.debug(
+                    "Snapshot was created concurrently, cleaning up temporary snapshot",
+                    metadata: [
+                        "chain-id": .stringConvertible(chainID)
+                    ]
+                )
+                do {
+                    _ = try await snapshots.remove(
+                        .with {
+                            $0.key = tmpKey
+                            $0.snapshotter = "overlayfs"
+                        }
+                    )
+                } catch let removeError as RPCError where removeError.code == .notFound {
+                    // Already cleaned up, this is fine
+                    logger.debug(
+                        "Temporary snapshot already removed",
+                        metadata: ["tmp-key": .stringConvertible(tmpKey)]
+                    )
+                }
+            }
 
-            layer = nextLayer
-            layerKey = nextLayerKey
+            previousChainID = chainID
+        }
+
+        logger.info(
+            "Image unpacked successfully",
+            metadata: [
+                "image": .stringConvertible(imageName),
+                "total-layers": .stringConvertible(totalLayers),
+                "snapshots-reused": .stringConvertible(snapshotsReused),
+                "snapshots-created": .stringConvertible(snapshotsCreated),
+                "reuse-percentage": .stringConvertible(
+                    String(
+                        format: "%.1f%%",
+                        totalLayers > 0
+                            ? (Double(snapshotsReused) / Double(totalLayers)) * 100.0 : 0.0
+                    )
+                ),
+            ]
+        )
+
+        guard let previousChainID else {
+            throw RPCError(code: .internalError, message: "Failed to unpack image")
         }
 
         let ephemeralKey = UUID().uuidString
-
-        logger.info(
-            "Making ephemeral snapshot",
-            metadata: [
-                "snapshot-key": .stringConvertible(ephemeralKey),
-                "parent-digest": .stringConvertible(layerKey),
-            ]
-        )
         let ephemeralSnapshot = try await snapshots.prepare(
             .with {
                 $0.key = ephemeralKey
-                $0.parent = layerKey
+                $0.parent = previousChainID
                 $0.snapshotter = "overlayfs"
             }
         )
 
+        // Use mounts from the prepare response (optimization: avoid extra RPC call)
         return (snapshotKey: ephemeralKey, mounts: ephemeralSnapshot.mounts)
     }
 
@@ -551,6 +615,7 @@ public struct Containerd: Sendable {
         appName: String,
         snapshotKey: String,
         ociSpec: Data,
+        labels: [String: String],
         runtime: String = "io.containerd.runc.v2",
         options: Containerd_Runc_V1_Options? = nil
     ) async throws {
@@ -573,6 +638,7 @@ public struct Containerd: Sendable {
                         $0.snapshotter = "overlayfs"
                         $0.snapshotKey = snapshotKey
                         $0.image = imageName
+                        $0.labels = labels
                     }
                 }
             )
@@ -614,10 +680,32 @@ public struct Containerd: Sendable {
         return try await tasks.list(.init()).tasks
     }
 
+    public func getContainer(
+        named: String
+    ) async throws -> Containerd_Services_Containers_V1_Container {
+        let containers = Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
+        return try await containers.get(
+            .with {
+                $0.id = named
+            }
+        ).container
+    }
+
+    public func mountsSnapshot(
+        named: String
+    ) async throws -> Containerd_Services_Snapshots_V1_MountsResponse {
+        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+        return try await snapshots.mounts(
+            .with {
+                $0.key = named
+                $0.snapshotter = "overlayfs"
+            }
+        )
+    }
+
     public func createTask(
         containerID: String,
         appName: String,
-        snapshotName: String,
         mounts: [Containerd_Types_Mount],
         stdout: String?,
         stderr: String?,
@@ -739,15 +827,20 @@ public struct Containerd: Sendable {
         }
     }
 
-    public func deleteTask(containerID: String) async throws {
+    /// Wait for a task to exit and then delete it.
+    /// This function will wait up to the specified timeout for the task to exit.
+    /// If the task is still running after the kill signal, it will wait for it to exit.
+    public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(5)) async throws {
         let tasks = Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
         let runningTasks = try await tasks.list(.init())
+
         for runningTask in runningTasks.tasks {
             logger.info(
-                "Found running task",
+                "Found task",
                 metadata: [
                     "container-id": .stringConvertible(runningTask.containerID),
                     "task-id": .stringConvertible(runningTask.id),
+                    "has-exited": .stringConvertible(runningTask.hasExitedAt),
                 ]
             )
 
@@ -763,28 +856,80 @@ public struct Containerd: Sendable {
                 continue
             }
 
-            if runningTask.hasExitedAt {
+            // If task hasn't exited yet, wait for it to exit
+            if !runningTask.hasExitedAt {
                 logger.debug(
-                    "Task has exited, deleting process",
+                    "Task is still running, waiting for it to exit",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
 
+                // Wait for task to exit with a timeout
+                let startTime = ContinuousClock.now
+                var hasExited = false
+
+                while !hasExited && (ContinuousClock.now - startTime) < waitTimeout {
+                    try await Task.sleep(for: .milliseconds(100))
+
+                    // Check if task has exited
+                    let updatedTasks = try await tasks.list(.init())
+                    if let updatedTask = updatedTasks.tasks.first(where: {
+                        $0.containerID == runningTask.containerID || $0.id == runningTask.id
+                    }) {
+                        hasExited = updatedTask.hasExitedAt
+                    } else {
+                        // Task no longer in list, consider it exited
+                        hasExited = true
+                    }
+                }
+
+                if !hasExited {
+                    logger.warning(
+                        "Task did not exit within timeout, attempting delete anyway",
+                        metadata: [
+                            "container-id": .stringConvertible(containerID),
+                            "task-id": .stringConvertible(runningTask.id),
+                            "timeout": .stringConvertible(waitTimeout),
+                        ]
+                    )
+                }
+            }
+
+            // Now delete the task
+            logger.debug(
+                "Deleting task",
+                metadata: [
+                    "container-id": .stringConvertible(containerID),
+                    "task-id": .stringConvertible(runningTask.id),
+                ]
+            )
+
+            do {
                 _ = try await tasks.delete(
                     .with {
                         $0.containerID = runningTask.id
                     }
                 )
-            } else {
                 logger.debug(
-                    "Task is still running, skipping",
+                    "Task deleted successfully",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
+            } catch let error as RPCError {
+                logger.error(
+                    "Failed to delete task",
+                    metadata: [
+                        "container-id": .stringConvertible(containerID),
+                        "task-id": .stringConvertible(runningTask.id),
+                        "error": .stringConvertible(error.message),
+                        "error-code": .stringConvertible(String(describing: error.code)),
+                    ]
+                )
+                throw error
             }
         }
     }
