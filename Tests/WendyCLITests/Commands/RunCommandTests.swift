@@ -137,4 +137,82 @@ struct RunCommandTests {
             #expect(cmd.isDetached == true)
         }
     }
+
+    // MARK: - Restart Policy Tests
+
+    @Suite("Restart Policy Building")
+    struct RestartPolicyTests {
+
+        @Test("Default mode builds 'no' restart policy")
+        func testDefaultRestartPolicy() throws {
+            let cmd = try RunCommand.parse([])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .no)
+            #expect(policy.onFailureMaxRetries == 0)
+        }
+
+        @Test("Deploy mode builds 'on-failure' with 5 retries")
+        func testDeployRestartPolicy() throws {
+            let cmd = try RunCommand.parse(["--deploy"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .onFailure)
+            #expect(policy.onFailureMaxRetries == 5)
+        }
+
+        @Test("No-restart flag builds 'no' restart policy")
+        func testNoRestartPolicy() throws {
+            let cmd = try RunCommand.parse(["--no-restart"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .no)
+            #expect(policy.onFailureMaxRetries == 0)
+        }
+
+        @Test("Restart-unless-stopped flag builds 'unless-stopped' policy")
+        func testRestartUnlessStoppedPolicy() throws {
+            let cmd = try RunCommand.parse(["--restart-unless-stopped"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .unlessStopped)
+        }
+
+        @Test("Restart-on-failure with custom retries builds correct policy")
+        func testRestartOnFailureWithCustomRetries() throws {
+            let cmd = try RunCommand.parse(["--restart-on-failure", "3"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .onFailure)
+            #expect(policy.onFailureMaxRetries == 3)
+        }
+
+        @Test("Restart-on-failure with 10 retries")
+        func testRestartOnFailureWith10Retries() throws {
+            let cmd = try RunCommand.parse(["--restart-on-failure", "10"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .onFailure)
+            #expect(policy.onFailureMaxRetries == 10)
+        }
+
+        @Test("Restart-on-failure with 1 retry")
+        func testRestartOnFailureWith1Retry() throws {
+            let cmd = try RunCommand.parse(["--restart-on-failure", "1"])
+            let policy = cmd.buildRestartPolicy()
+
+            #expect(policy.mode == .onFailure)
+            #expect(policy.onFailureMaxRetries == 1)
+        }
+
+        @Test("Priority: no-restart takes precedence (tested via validation)")
+        func testNoRestartTakesPrecedence() throws {
+            // This is validated by flag validation tests
+            // If multiple flags are set, validate() throws
+            // This test documents that priority is enforced by validation
+            #expect(throws: (any Error).self) {
+                try RunCommand.parse(["--no-restart", "--deploy"]).validate()
+            }
+        }
+    }
 }

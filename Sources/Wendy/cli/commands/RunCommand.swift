@@ -114,6 +114,33 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
     }
 
+    /// Build the restart policy based on the command flags
+    /// This determines how containers behave when they exit
+    func buildRestartPolicy() -> RestartPolicy {
+        if noRestart {
+            // Explicit no restart
+            return .with { $0.mode = .no }
+        } else if let retries = restartOnFailureRetries {
+            // Custom retry count on failure
+            return .with {
+                $0.mode = .onFailure
+                $0.onFailureMaxRetries = Int32(retries)
+            }
+        } else if restartUnlessStoppedFlag {
+            // Restart unless explicitly stopped
+            return .with { $0.mode = .unlessStopped }
+        } else if deploy {
+            // Deploy mode: retry up to 5 times on failure
+            return .with {
+                $0.mode = .onFailure
+                $0.onFailureMaxRetries = 5
+            }
+        } else {
+            // Default for development: no restarts
+            return .with { $0.mode = .no }
+        }
+    }
+
     func run() async throws {
         // Validate flags before proceeding
         try validate()
@@ -219,31 +246,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     $0.imageName = "\(appName):latest"
                     $0.appName = appName
                     $0.appConfig = appConfigData
-                    if noRestart {
-                        $0.restartPolicy = .with {
-                            $0.mode = .no
-                        }
-                    } else if let retries = restartOnFailureRetries {
-                        $0.restartPolicy = .with {
-                            $0.mode = .onFailure
-                            $0.onFailureMaxRetries = Int32(retries)
-                        }
-                    } else if restartUnlessStoppedFlag {
-                        $0.restartPolicy = .with {
-                            $0.mode = .unlessStopped
-                        }
-                    } else if deploy {
-                        // Deploy mode: retry up to 5 times on failure
-                        $0.restartPolicy = .with {
-                            $0.mode = .onFailure
-                            $0.onFailureMaxRetries = 5
-                        }
-                    } else {
-                        // Default for development: no restarts
-                        $0.restartPolicy = .with {
-                            $0.mode = .no
-                        }
-                    }
+                    $0.restartPolicy = buildRestartPolicy()
                 }
             )
         )
