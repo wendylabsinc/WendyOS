@@ -78,7 +78,46 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     // Deploy mode should always run detached
     var isDetached: Bool { detach || deploy }
 
+    /// Validate that flags are not conflicting
+    func validate() throws {
+        // Count how many restart policy flags are set
+        var restartPolicyFlags: [String] = []
+
+        if deploy {
+            restartPolicyFlags.append("--deploy")
+        }
+        if noRestart {
+            restartPolicyFlags.append("--no-restart")
+        }
+        if restartUnlessStoppedFlag {
+            restartPolicyFlags.append("--restart-unless-stopped")
+        }
+        if restartOnFailureRetries != nil {
+            restartPolicyFlags.append("--restart-on-failure")
+        }
+
+        // If more than one restart policy flag is set, show error
+        if restartPolicyFlags.count > 1 {
+            throw ValidationError(
+                """
+                Conflicting restart policy flags detected: \(restartPolicyFlags.joined(separator: ", "))
+
+                Please use only one of:
+                  --deploy                    (deploy mode with 5 retries on failure)
+                  --no-restart                (never restart)
+                  --restart-unless-stopped    (restart unless explicitly stopped)
+                  --restart-on-failure N      (restart N times on failure)
+
+                If no flag is provided, development mode is used (no restarts).
+                """
+            )
+        }
+    }
+
     func run() async throws {
+        // Validate flags before proceeding
+        try validate()
+
         let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
         let directory = try FileManager.default.contentsOfDirectory(
             atPath: FileManager.default.currentDirectoryPath
@@ -210,6 +249,52 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         )
     }
 
+    /// Gracefully stop a container with timeout
+    private func stopContainerWithTimeout(
+        imageName: String,
+        client: GRPCClient<HTTP2ClientTransport.Posix>,
+        timeout: TimeInterval = 5.0
+    ) async {
+        let logger = Logger(label: "sh.wendy.cli.run.containerd.stop")
+        let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+            wrapping: client
+        )
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    _ = try await agentContainers.stopContainer(
+                        request: .init(
+                            message: .with {
+                                $0.appName = imageName
+                            }
+                        )
+                    )
+                }
+
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    throw CancellationError()
+                }
+
+                // Wait for first task to complete (either stop succeeds or timeout)
+                try await group.next()
+                group.cancelAll()
+            }
+            logger.info("Container stopped successfully")
+        } catch is CancellationError {
+            logger.warning(
+                "Stop container operation timed out after \(timeout)s",
+                metadata: ["container": "\(imageName)"]
+            )
+        } catch {
+            logger.error(
+                "Failed to stop container",
+                metadata: ["container": "\(imageName)", "error": "\(error)"]
+            )
+        }
+    }
+
     func startContainerdContainer(
         imageName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>
@@ -252,30 +337,21 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     }
                 }
             }
-        } catch is CancellationError {
-            // Handle ctrl+c: stop the container when in development mode (not detached)
+        } catch {
+            // Handle any error (cancellation, network issues, etc.): stop the container when in development mode
             if !isDetached {
+                let isCancellation = error is CancellationError
                 logger.info(
-                    "Caught cancellation, stopping container",
-                    metadata: ["container": "\(imageName)"]
+                    "Container execution \(isCancellation ? "cancelled" : "failed"), stopping container",
+                    metadata: ["container": "\(imageName)", "error": "\(error)"]
                 )
-                do {
-                    _ = try await agentContainers.stopContainer(
-                        request: .init(
-                            message: .with {
-                                $0.appName = imageName
-                            }
-                        )
-                    )
-                    logger.info("Container stopped successfully")
-                } catch {
-                    logger.error(
-                        "Failed to stop container on cancellation",
-                        metadata: ["error": "\(error)"]
-                    )
-                }
+                await stopContainerWithTimeout(
+                    imageName: imageName,
+                    client: client,
+                    timeout: 5.0
+                )
             }
-            throw CancellationError()
+            throw error
         }
     }
 
