@@ -119,11 +119,15 @@
                     )
                 }
 
+                // Get link speed
+                let linkSpeed = networkInterfaceProvider.getLinkSpeed(interfaceName: name)
+
                 let ethernetInterface = EthernetInterface(
                     name: name,
                     displayName: displayName,
                     interfaceType: interfaceType,
-                    macAddress: macAddress
+                    macAddress: macAddress,
+                    linkSpeed: linkSpeed
                 )
 
                 interfaces.append(ethernetInterface)

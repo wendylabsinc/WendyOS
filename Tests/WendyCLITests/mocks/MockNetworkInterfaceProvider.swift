@@ -21,6 +21,7 @@
         var getBSDNameCalls: [(SCNetworkInterface)] = []
         var getLocalizedDisplayNameCalls: [(SCNetworkInterface)] = []
         var getHardwareAddressStringCalls: [(SCNetworkInterface)] = []
+        var getLinkSpeedCalls: [String] = []
 
         func copyAllNetworkInterfaces() -> [SCNetworkInterface]? {
             copyAllNetworkInterfacesCalls += 1
@@ -95,6 +96,17 @@
             return nil
         }
 
+        func getLinkSpeed(interfaceName: String) -> String? {
+            getLinkSpeedCalls.append(interfaceName)
+
+            // Find the mock interface by BSD name and return its link speed
+            if let mockInterface = mockInterfaces.first(where: { $0.bsdName == interfaceName }) {
+                return mockInterface.linkSpeed
+            }
+
+            return nil
+        }
+
         /// Reset all tracking data for a new test
         func reset() {
             mockInterfaces = []
@@ -104,6 +116,7 @@
             getBSDNameCalls = []
             getLocalizedDisplayNameCalls = []
             getHardwareAddressStringCalls = []
+            getLinkSpeedCalls = []
         }
     }
 
@@ -113,12 +126,20 @@
         let displayName: String
         let interfaceType: String
         let macAddress: String?
+        let linkSpeed: String?
 
-        init(bsdName: String, displayName: String, interfaceType: String, macAddress: String?) {
+        init(
+            bsdName: String,
+            displayName: String,
+            interfaceType: String,
+            macAddress: String?,
+            linkSpeed: String? = nil
+        ) {
             self.bsdName = bsdName
             self.displayName = displayName
             self.interfaceType = interfaceType
             self.macAddress = macAddress
+            self.linkSpeed = linkSpeed
         }
     }
 #endif

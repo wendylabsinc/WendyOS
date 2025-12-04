@@ -99,9 +99,24 @@ public struct DevicesCollection: Encodable, Sendable {
             let normalizedName = normalizeDeviceName(device.displayName)
             var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
+
+            // Build USB identifier with available details
+            var usbDetails: [String] = []
+            if let version = device.usbVersion {
+                usbDetails.append(version)
+            }
+            usbDetails.append("VID: \(device.vendorId)")
+            usbDetails.append("PID: \(device.productId)")
+            if let serial = device.serialNumber, !serial.isEmpty {
+                usbDetails.append("S/N: \(serial)")
+            }
+            if let power = device.maxPowerMilliamps {
+                usbDetails.append("\(power)mA")
+            }
+
             group.interfaces.append(InterfaceInfo(
                 type: "USB",
-                identifier: "Vendor: \(device.vendorId), Product: \(device.productId)",
+                identifier: usbDetails.joined(separator: ", "),
                 agentVersion: device.agentVersion
             ))
             deviceGroups[normalizedName] = group
@@ -112,13 +127,20 @@ public struct DevicesCollection: Encodable, Sendable {
             let normalizedName = normalizeDeviceName(device.displayName)
             var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
-            var identifier = "\(device.name)"
+
+            // Build Ethernet identifier with available details
+            var ethernetDetails: [String] = [device.name]
+            ethernetDetails.append(device.interfaceType)
             if let mac = device.macAddress {
-                identifier += " (MAC: \(mac))"
+                ethernetDetails.append("MAC: \(mac)")
             }
+            if let speed = device.linkSpeed {
+                ethernetDetails.append(speed)
+            }
+
             group.interfaces.append(InterfaceInfo(
                 type: "Ethernet",
-                identifier: identifier,
+                identifier: ethernetDetails.joined(separator: ", "),
                 agentVersion: device.agentVersion
             ))
             deviceGroups[normalizedName] = group
@@ -243,14 +265,22 @@ public struct EthernetInterface: Device, Encodable, Sendable {
     public let displayName: String
     public let interfaceType: String
     public let macAddress: String?
+    public let linkSpeed: String?
     public let isWendyDevice: Bool
     public var agentVersion: String?
 
-    public init(name: String, displayName: String, interfaceType: String, macAddress: String?) {
+    public init(
+        name: String,
+        displayName: String,
+        interfaceType: String,
+        macAddress: String?,
+        linkSpeed: String? = nil
+    ) {
         self.name = name
         self.displayName = displayName
         self.interfaceType = interfaceType
         self.macAddress = macAddress
+        self.linkSpeed = linkSpeed
         self.isWendyDevice = displayName.contains("Wendy") || name.contains("Wendy")
         self.agentVersion = nil
     }
@@ -287,14 +317,27 @@ public struct USBDevice: Device, Encodable, Sendable {
     public let displayName: String
     public let vendorId: String
     public let productId: String
+    public let usbVersion: String?
+    public let serialNumber: String?
+    public let maxPowerMilliamps: Int?
     public let isWendyDevice: Bool
     public var agentVersion: String?
 
-    public init(name: String, vendorId: Int, productId: Int) {
+    public init(
+        name: String,
+        vendorId: Int,
+        productId: Int,
+        usbVersion: String? = nil,
+        serialNumber: String? = nil,
+        maxPowerMilliamps: Int? = nil
+    ) {
         self.name = name
         self.displayName = name
         self.vendorId = String(format: "0x%04X", vendorId)
         self.productId = String(format: "0x%04X", productId)
+        self.usbVersion = usbVersion
+        self.serialNumber = serialNumber
+        self.maxPowerMilliamps = maxPowerMilliamps
         self.isWendyDevice = name.contains("Wendy")
         self.agentVersion = nil
     }
