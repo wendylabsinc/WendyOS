@@ -48,6 +48,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Run the container in the background")
     var detach: Bool = false
 
+    @Flag(name: .long, help: "Deploy mode with automatic restarts (up to 5 retries on failure)")
+    var deploy: Bool = false
+
     // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
     @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
     var noRestart: Bool = false
@@ -187,9 +190,16 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         $0.restartPolicy = .with {
                             $0.mode = .unlessStopped
                         }
-                    } else {
+                    } else if deploy {
+                        // Deploy mode: retry up to 5 times on failure
                         $0.restartPolicy = .with {
-                            $0.mode = .default
+                            $0.mode = .onFailure
+                            $0.onFailureMaxRetries = 5
+                        }
+                    } else {
+                        // Default for development: no restarts
+                        $0.restartPolicy = .with {
+                            $0.mode = .no
                         }
                     }
                 }
@@ -206,37 +216,63 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             wrapping: client
         )
 
-        _ = try await agentContainers.startContainer(
-            request: .init(
-                message: .with {
-                    $0.appName = imageName
-                }
-            )
-        ) { response in
-            for try await message in response.messages {
-                switch message.responseType {
-                case .started:
-                    if debug {
-                        Noora().success("Started container with debug port 4242")
-                    } else {
-                        Noora().success("Started app")
+        do {
+            _ = try await agentContainers.startContainer(
+                request: .init(
+                    message: .with {
+                        $0.appName = imageName
                     }
+                )
+            ) { response in
+                for try await message in response.messages {
+                    switch message.responseType {
+                    case .started:
+                        if debug {
+                            Noora().success("Started container with debug port 4242")
+                        } else {
+                            Noora().success("Started app")
+                        }
 
-                    if detach {
-                        return
+                        if detach {
+                            return
+                        }
+                    case .stdoutOutput(let stdoutOutput):
+                        stdoutOutput.data.withUnsafeBytes { data in
+                            _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                        }
+                    case .stderrOutput(let stderrOutput):
+                        stderrOutput.data.withUnsafeBytes { data in
+                            _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                        }
+                    default:
+                        logger.warning("Unknown message received from agent")
                     }
-                case .stdoutOutput(let stdoutOutput):
-                    stdoutOutput.data.withUnsafeBytes { data in
-                        _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
-                    }
-                case .stderrOutput(let stderrOutput):
-                    stderrOutput.data.withUnsafeBytes { data in
-                        _ = write(STDERR_FILENO, data.baseAddress!, data.count)
-                    }
-                default:
-                    logger.warning("Unknown message received from agent")
                 }
             }
+        } catch is CancellationError {
+            // Handle ctrl+c: stop the container when in development mode (not detached)
+            if !detach {
+                logger.info(
+                    "Caught cancellation, stopping container",
+                    metadata: ["container": "\(imageName)"]
+                )
+                do {
+                    _ = try await agentContainers.stopContainer(
+                        request: .init(
+                            message: .with {
+                                $0.appName = imageName
+                            }
+                        )
+                    )
+                    logger.info("Container stopped successfully")
+                } catch {
+                    logger.error(
+                        "Failed to stop container on cancellation",
+                        metadata: ["error": "\(error)"]
+                    )
+                }
+            }
+            throw CancellationError()
         }
     }
 
