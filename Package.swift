@@ -36,7 +36,6 @@ let package = Package(
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
-        .package(url: "https://github.com/apple/swift-async-algorithms.git", from: "1.0.4"),
         .package(
             url: "https://github.com/tuist/Noora.git",
             from: "0.51.0"
