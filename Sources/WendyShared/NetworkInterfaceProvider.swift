@@ -77,8 +77,9 @@
         /// Parses the link speed from ifconfig output
         private static func parseMediaSpeed(from output: String) -> String? {
             // Look for the media line
-            guard let mediaLine = output.split(separator: "\n")
-                .first(where: { $0.contains("media:") })
+            guard
+                let mediaLine = output.split(separator: "\n")
+                    .first(where: { $0.contains("media:") })
             else {
                 return nil
             }
@@ -91,10 +92,12 @@
             }
 
             // Regex captures: (number)(optional G)base
-            guard let regex = try? NSRegularExpression(
-                pattern: #"(\d+\.?\d*)(G)?base"#,
-                options: .caseInsensitive
-            ) else {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: #"(\d+\.?\d*)(G)?base"#,
+                    options: .caseInsensitive
+                )
+            else {
                 return nil
             }
 

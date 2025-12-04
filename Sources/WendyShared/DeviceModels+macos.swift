@@ -44,13 +44,14 @@
             }
 
             // Get optional serial number
-            let serialNumber = ioProvider.getRegistryEntryProperty(
-                device: device,
-                key: "kUSBSerialNumberString" as CFString
-            ) as? String ?? ioProvider.getRegistryEntryProperty(
-                device: device,
-                key: "USB Serial Number" as CFString
-            ) as? String
+            let serialNumber =
+                ioProvider.getRegistryEntryProperty(
+                    device: device,
+                    key: "kUSBSerialNumberString" as CFString
+                ) as? String ?? ioProvider.getRegistryEntryProperty(
+                    device: device,
+                    key: "USB Serial Number" as CFString
+                ) as? String
 
             // Get optional max power (in 2mA units for USB 2.0, 8mA for USB 3.0)
             let maxPowerMilliamps: Int?

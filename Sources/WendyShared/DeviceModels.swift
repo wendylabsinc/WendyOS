@@ -97,7 +97,8 @@ public struct DevicesCollection: Encodable, Sendable {
         // Group USB devices
         for device in usbDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            var group =
+                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
 
             // Build USB identifier with available details
@@ -114,18 +115,21 @@ public struct DevicesCollection: Encodable, Sendable {
                 usbDetails.append("\(power)mA")
             }
 
-            group.interfaces.append(InterfaceInfo(
-                type: "USB",
-                identifier: usbDetails.joined(separator: ", "),
-                agentVersion: device.agentVersion
-            ))
+            group.interfaces.append(
+                InterfaceInfo(
+                    type: "USB",
+                    identifier: usbDetails.joined(separator: ", "),
+                    agentVersion: device.agentVersion
+                )
+            )
             deviceGroups[normalizedName] = group
         }
 
         // Group Ethernet devices
         for device in ethernetDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            var group =
+                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
 
             // Build Ethernet identifier with available details
@@ -138,24 +142,29 @@ public struct DevicesCollection: Encodable, Sendable {
                 ethernetDetails.append(speed)
             }
 
-            group.interfaces.append(InterfaceInfo(
-                type: "Ethernet",
-                identifier: ethernetDetails.joined(separator: ", "),
-                agentVersion: device.agentVersion
-            ))
+            group.interfaces.append(
+                InterfaceInfo(
+                    type: "Ethernet",
+                    identifier: ethernetDetails.joined(separator: ", "),
+                    agentVersion: device.agentVersion
+                )
+            )
             deviceGroups[normalizedName] = group
         }
 
         // Group LAN devices
         for device in lanDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group = deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            var group =
+                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
-            group.interfaces.append(InterfaceInfo(
-                type: "LAN",
-                identifier: "\(device.hostname):\(device.port)",
-                agentVersion: device.agentVersion
-            ))
+            group.interfaces.append(
+                InterfaceInfo(
+                    type: "LAN",
+                    identifier: "\(device.hostname):\(device.port)",
+                    agentVersion: device.agentVersion
+                )
+            )
             deviceGroups[normalizedName] = group
         }
 
