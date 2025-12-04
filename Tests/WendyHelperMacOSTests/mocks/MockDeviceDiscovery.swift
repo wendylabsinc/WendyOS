@@ -149,7 +149,6 @@
             let interface = EthernetInterface(
                 name: bsdName,
                 displayName: name,
-                interfaceType: "Ethernet",
                 macAddress: "00:11:22:33:44:55"
             )
             await addMockEthernetInterface(interface)

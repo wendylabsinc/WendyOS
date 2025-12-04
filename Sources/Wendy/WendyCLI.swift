@@ -1,3 +1,4 @@
+import Analytics
 import ArgumentParser
 import Foundation
 import Logging
@@ -16,7 +17,20 @@ struct WendyCLI {
             return logger
         }
 
-        await WendyCommand.main()
+        // Initialize analytics service
+        let analytics = AnalyticsService.shared
+
+        // Track command execution with analytics
+        if let analytics = analytics {
+            await analytics.trackCommandExecution {
+                await WendyCommand.main()
+            }
+            // Ensure all events are sent before exiting
+            await analytics.flush()
+        } else {
+            // Analytics not available, run normally
+            await WendyCommand.main()
+        }
     }
 }
 
@@ -48,7 +62,9 @@ struct WendyCommand: AsyncParsableCommand {
             CommandGroup(
                 name: "Misc.",
                 subcommands: [
-                    HelperCommand.self
+                    HelperCommand.self,
+                    AnalyticsCommand.self,
+                    CacheCommand.self,
                 ]
             ),
         ]

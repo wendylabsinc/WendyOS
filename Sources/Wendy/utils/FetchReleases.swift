@@ -6,6 +6,30 @@ import NIOCore
 import NIOFoundationCompat
 import Subprocess
 
+/// Protocol for executing HTTP requests, enabling dependency injection for testing
+protocol HTTPExecutor {
+    func execute(
+        _ request: HTTPClientRequest,
+        deadline: NIODeadline
+    ) async throws -> HTTPClientResponse
+}
+
+/// Default implementation using HTTPClient.shared
+struct DefaultHTTPExecutor: HTTPExecutor {
+    private let client: HTTPClient
+
+    init(client: HTTPClient = .shared) {
+        self.client = client
+    }
+
+    func execute(
+        _ request: HTTPClientRequest,
+        deadline: NIODeadline
+    ) async throws -> HTTPClientResponse {
+        try await client.execute(request, deadline: deadline)
+    }
+}
+
 struct Release: Decodable {
     struct Asset: Decodable {
         let browser_download_url: String
@@ -23,8 +47,8 @@ enum ReleasesError: Error {
     case noAsset
 }
 
-func downloadLatestRelease() async throws -> URL {
-    let releases = try await fetchReleases()
+func downloadLatestRelease(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> URL {
+    let releases = try await fetchReleases(httpClient: httpClient)
     guard let latestRelease = releases.first else {
         throw ReleasesError.noReleases
     }
@@ -44,15 +68,18 @@ func downloadLatestRelease() async throws -> URL {
     return fileURL
 }
 
-func fetchReleases() async throws -> [Release] {
+func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
     let githubReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-agent/releases"
 
     // Fetch releases JSON
     let logger = Logger(label: "sh.wendy.utils.fetchReleases")
     logger.info("Fetching all releases...")
 
-    let request = HTTPClientRequest(url: githubReleasesURL)
-    let response = try await HTTPClient.shared.execute(
+    var request = HTTPClientRequest(url: githubReleasesURL)
+    request.headers.add(name: "Accept", value: "application/vnd.github+json")
+    request.headers.add(name: "X-GitHub-Api-Version", value: "2022-11-28")
+    request.headers.add(name: "User-Agent", value: "wendy-agent")
+    let response = try await httpClient.execute(
         request,
         deadline: NIODeadline.now() + .seconds(60)
     )

@@ -203,13 +203,14 @@ public struct DevicesCollection: Encodable, Sendable {
             for interface in interfaces {
                 result += "\n   \(interface.type): \(interface.identifier)"
             }
+            results.append(result)
         }
 
         return result
     }
 }
 
-public struct LANDevice: Device, Encodable, Sendable {
+public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
     public let id: String
     public let displayName: String
     public let hostname: String
@@ -244,9 +245,14 @@ public struct LANDevice: Device, Encodable, Sendable {
     }
 
     public func toHumanReadableString() -> String {
-        return
-            "\(displayName)\(agentVersion.map { " (\($0))" } ?? "") @ \(hostname):\(port) [\(id)]"
+        let version = agentVersion.map { "v\($0)" }
+        let metadata = [version].compactMap { $0 }.joined(separator: " ")
+        return "\(displayName) @ \(hostname):\(port) \(metadata)".trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
+
+    public var description: String { displayName }
 
     public static func formatCollection(
         _ interfaces: [LANDevice],
@@ -263,7 +269,6 @@ public struct LANDevice: Device, Encodable, Sendable {
 public struct EthernetInterface: Device, Encodable, Sendable {
     public let name: String
     public let displayName: String
-    public let interfaceType: String
     public let macAddress: String?
     public let linkSpeed: String?
     public let isWendyDevice: Bool
@@ -278,7 +283,6 @@ public struct EthernetInterface: Device, Encodable, Sendable {
     ) {
         self.name = name
         self.displayName = displayName
-        self.interfaceType = interfaceType
         self.macAddress = macAddress
         self.linkSpeed = linkSpeed
         self.isWendyDevice = displayName.contains("Wendy") || name.contains("Wendy")
@@ -293,11 +297,13 @@ public struct EthernetInterface: Device, Encodable, Sendable {
     }
 
     public func toHumanReadableString() -> String {
-        var result = "- \(displayName) (\(name)) [\(interfaceType)]"
-        if let mac = macAddress {
-            result += "\n  MAC Address: \(mac)"
-        }
-        return result
+        let version = agentVersion.map { " v\($0)" }
+        let mac = macAddress.map { "[\($0)]" }
+        let speed = linkSpeedMbps.map { "[\($0) Mbps]" }
+        let metadata = [version, mac, speed].compactMap { $0 }.joined(separator: " ")
+        return "\(displayName) @ \(name) \(metadata)".trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
 
     public static func formatCollection(
@@ -321,6 +327,7 @@ public struct USBDevice: Device, Encodable, Sendable {
     public let serialNumber: String?
     public let maxPowerMilliamps: Int?
     public let isWendyDevice: Bool
+    public let linkSpeedMbps: Int?
     public var agentVersion: String?
 
     public init(
@@ -340,6 +347,7 @@ public struct USBDevice: Device, Encodable, Sendable {
         self.maxPowerMilliamps = maxPowerMilliamps
         self.isWendyDevice = name.contains("Wendy")
         self.agentVersion = nil
+        self.linkSpeedMbps = linkSpeedMbps
     }
 
     public func toJSON() throws -> String {
@@ -350,8 +358,10 @@ public struct USBDevice: Device, Encodable, Sendable {
     }
 
     public func toHumanReadableString() -> String {
-        return
-            "\(name)\(agentVersion.map { " (\($0))" } ?? "") - Vendor ID: \(vendorId), Product ID: \(productId)"
+        let version = agentVersion.map { "v\($0)" }
+        let speed = linkSpeedMbps.map { "\($0) Mbps" }
+        let metadata = [version, speed].compactMap { $0 }.joined(separator: " ")
+        return "\(name) \(metadata)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public static func formatCollection(_ devices: [USBDevice], as format: OutputFormat) -> String {

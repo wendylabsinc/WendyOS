@@ -101,7 +101,8 @@ struct OSCommand: AsyncParsableCommand {
         commandName: "os",
         abstract: "Setup and manage your WendyOS images.",
         subcommands: [
-            OSInstallCommand.self
+            OSInstallCommand.self,
+            CacheCommand.self,
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -114,8 +115,6 @@ struct OSCommand: AsyncParsableCommand {
             )
         ]
     )
-
-    // Removed legacy SetupDiskCommand. Interactive write is now the default in WriteDeviceCommand.
 
     struct ListDrivesCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -428,15 +427,14 @@ struct OSCommand: AsyncParsableCommand {
 
             // Download and extract as separate progress bars when not using cache
             let imageDownloader = ImageDownloaderFactory.createImageDownloader()
-            let realDownloader = imageDownloader as! ImageDownloader
 
             var localImagePath: String
 
             // Check if cached image exists and matches the latest version
-            let cachedImagePath = await realDownloader.cachedImageIfValid(
+            let cachedImagePath = try await imageDownloader.cachedImageIfValid(
                 deviceName: selectedDeviceName
             )
-            let isCachedLatest = realDownloader.isCachedImageLatest(
+            let isCachedLatest = try imageDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
                 latestVersion: latestVersion
             )
@@ -459,7 +457,7 @@ struct OSCommand: AsyncParsableCommand {
                 ) { updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
-                    let result = try await realDownloader.downloadArchiveOnly(
+                    let result = try await imageDownloader.downloadArchiveOnly(
                         from: imageUrl,
                         deviceName: selectedDeviceName,
                         expectedSize: imageSize,
@@ -487,7 +485,7 @@ struct OSCommand: AsyncParsableCommand {
                 ) { updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
-                    let result = try await realDownloader.extractArchiveOnly(
+                    let result = try await imageDownloader.extractArchiveOnly(
                         deviceName: selectedDeviceName,
                         zipPath: zipPath,
                         version: latestVersion
@@ -541,6 +539,161 @@ struct OSCommand: AsyncParsableCommand {
             noora.success("🎉 Device \(selectedDeviceName) successfully imaged!")
         }
     }
+}
+
+// MARK: - Cache utilities
+
+private enum CachedImageStatus: String, Codable {
+    case ready
+    case incomplete
+    case empty
+
+    var displayValue: String {
+        switch self {
+        case .ready:
+            return "Ready"
+        case .incomplete:
+            return "Incomplete"
+        case .empty:
+            return "Empty"
+        }
+    }
+}
+
+private struct CachedImageEntry: Codable {
+    let device: String
+    let version: String?
+    let cachedAt: Date?
+    let imagePath: String?
+    let sizeBytes: Int64
+    let status: CachedImageStatus
+}
+
+private func cacheDirectory(fileManager: FileManager = .default) -> URL {
+    fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".wendy/cache/images")
+}
+
+private func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
+    let root = cacheDirectory(fileManager: fileManager)
+    guard fileManager.fileExists(atPath: root.path) else { return [] }
+
+    let contents: [URL]
+    do {
+        contents = try fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+    } catch {
+        throw ValidationError("Failed to read cache directory: \(error.localizedDescription)")
+    }
+
+    var entries: [CachedImageEntry] = []
+
+    for url in contents {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+        guard values?.isDirectory == true else { continue }
+
+        let (version, timestamp) = readCacheMetadata(at: url)
+        let imageURL = findImageFile(in: url, fileManager: fileManager)
+        let size = directorySize(of: url, fileManager: fileManager)
+
+        let status: CachedImageStatus
+        if imageURL != nil {
+            status = .ready
+        } else if size > 0 {
+            status = .incomplete
+        } else {
+            status = .empty
+        }
+
+        entries.append(
+            CachedImageEntry(
+                device: url.lastPathComponent,
+                version: version,
+                cachedAt: timestamp,
+                imagePath: imageURL?.path,
+                sizeBytes: size,
+                status: status
+            )
+        )
+    }
+
+    return entries.sorted { $0.device < $1.device }
+}
+
+private func readCacheMetadata(at url: URL) -> (String?, Date?) {
+    let metadataURL = url.appendingPathComponent("version.json")
+
+    guard let data = try? Data(contentsOf: metadataURL) else {
+        return (nil, nil)
+    }
+
+    struct CacheVersionMetadata: Codable {
+        let version: String
+        let timestamp: Date
+    }
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let metadata = try? decoder.decode(CacheVersionMetadata.self, from: data) else {
+        return (nil, nil)
+    }
+
+    return (metadata.version, metadata.timestamp)
+}
+
+private func directorySize(of url: URL, fileManager: FileManager = .default) -> Int64 {
+    guard
+        let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [
+                .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey,
+            ],
+            options: [.skipsHiddenFiles]
+        )
+    else { return 0 }
+
+    var total: Int64 = 0
+    for case let fileURL as URL in enumerator {
+        guard
+            let values = try? fileURL.resourceValues(
+                forKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey]
+            ),
+            values.isRegularFile == true
+        else { continue }
+
+        if let allocated = values.totalFileAllocatedSize {
+            total += Int64(allocated)
+        } else if let size = values.fileSize {
+            total += Int64(size)
+        }
+    }
+
+    return total
+}
+
+private func findImageFile(in url: URL, fileManager: FileManager = .default) -> URL? {
+    guard
+        let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+    else { return nil }
+
+    for case let fileURL as URL in enumerator {
+        guard
+            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+            values.isRegularFile == true
+        else { continue }
+
+        if fileURL.pathExtension.lowercased() == "img" {
+            return fileURL
+        }
+    }
+
+    return nil
 }
 
 // MARK: - Helpers

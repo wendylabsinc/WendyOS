@@ -101,19 +101,7 @@ public struct PullImage {
                     manifestSize: manifestSize
                 )
             }
-
-            let (snapshotKey, mounts) = try await containerd.createSnapshot(
-                imageName: appName,
-                appName: appName,
-                layers: manifest.layers.map { layer in
-                    .with {
-                        $0.diffID = layer.digest
-                        $0.digest = layer.digest
-                        $0.size = layer.size
-                        $0.gzip = layer.mediaType.contains("gzip")
-                    }
-                }
-            )
+            let (snapshotKey, mounts) = try await containerd.unpackImage(named: appName)
 
             // Decode the image config to extract entrypoint, cmd, env, etc.
             let decoder = JSONDecoder()
@@ -158,7 +146,8 @@ public struct PullImage {
                     imageName: appName,
                     appName: appName,
                     snapshotKey: snapshotKey ?? "",
-                    ociSpec: runtimeSpecData
+                    ociSpec: runtimeSpecData,
+                    labels: labels
                 )
             }
 
@@ -171,7 +160,6 @@ public struct PullImage {
                     try await containerd.createTask(
                         containerID: appName,
                         appName: appName,
-                        snapshotName: snapshotKey ?? "",
                         mounts: mounts,
                         stdout: stdout,
                         stderr: stderr
@@ -193,7 +181,6 @@ public struct PullImage {
                     try await containerd.createTask(
                         containerID: appName,
                         appName: appName,
-                        snapshotName: snapshotKey ?? "",
                         mounts: mounts,
                         stdout: stdout,
                         stderr: stderr

@@ -184,7 +184,6 @@ struct DeviceDiscoveryTests {
                 EthernetInterface(
                     name: "eth0",
                     displayName: "Test Ethernet Interface",
-                    interfaceType: "Ethernet",
                     macAddress: "00:11:22:33:44:55"
                 )
             ],

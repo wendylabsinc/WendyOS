@@ -87,8 +87,76 @@
         }
 
         public func findEthernetInterfaces() async -> [EthernetInterface] {
-            logger.error("Listing Ethernet interfaces on Linux is not implemented")
-            let interfaces: [EthernetInterface] = []
+            logger.info("Listing Ethernet interfaces on Linux")
+            var interfaces: [EthernetInterface] = []
+
+            do {
+                // Read interface list from /sys/class/net
+                let interfaceNames = try FileManager.default.contentsOfDirectory(
+                    atPath: "/sys/class/net"
+                )
+
+                for interfaceName in interfaceNames {
+                    // Skip loopback and virtual interfaces
+                    if interfaceName == "lo" || interfaceName.hasPrefix("veth")
+                        || interfaceName.hasPrefix("docker")
+                    {
+                        continue
+                    }
+
+                    // Read interface type
+                    let typePath = "/sys/class/net/\(interfaceName)/type"
+                    guard
+                        let typeStr = try? String(contentsOfFile: typePath, encoding: .utf8)
+                            .trimmingCharacters(in: .whitespacesAndNewlines),
+                        Int(typeStr) != nil
+                    else {
+                        continue
+                    }
+
+                    // Read MAC address
+                    let addressPath = "/sys/class/net/\(interfaceName)/address"
+                    let macAddress = try? String(contentsOfFile: addressPath, encoding: .utf8)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    // Read link speed (in Mbps, or -1 if unknown)
+                    let speedPath = "/sys/class/net/\(interfaceName)/speed"
+                    var linkSpeedMbps: Int? = nil
+                    if let speedStr = try? String(contentsOfFile: speedPath, encoding: .utf8)
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                        let speed = Int(speedStr), speed > 0
+                    {
+                        linkSpeedMbps = speed
+                    }
+
+                    // Only collect interfaces containing "Wendy" in their name
+                    if !interfaceName.contains("Wendy") {
+                        continue
+                    }
+
+                    let ethernetInterface = EthernetInterface(
+                        name: interfaceName,
+                        displayName: interfaceName,
+                        macAddress: macAddress,
+                        linkSpeedMbps: linkSpeedMbps
+                    )
+
+                    interfaces.append(ethernetInterface)
+                    logger.debug(
+                        "Found Wendy Ethernet interface: \(interfaceName)",
+                        metadata: [
+                            "speed": .string(linkSpeedMbps.map { "\($0) Mbps" } ?? "unknown")
+                        ]
+                    )
+                }
+
+                if interfaces.isEmpty {
+                    logger.info("No Wendy Ethernet interfaces found.")
+                }
+            } catch {
+                logger.error("Failed to list Ethernet interfaces: \(error)")
+            }
+
             return interfaces
         }
 
@@ -114,15 +182,6 @@
 
             var interfaces: [LANDevice] = []
             for case .some(let message) in messages {
-                let ptr = message.answers.compactMap { answer in
-                    switch answer {
-                    case .ptr(let ptr):
-                        return ptr
-                    default:
-                        return nil
-                    }
-                }.first
-
                 let srv = message.answers.compactMap { answer in
                     switch answer {
                     case .srv(let srv):
@@ -142,7 +201,7 @@
                 }.first
 
                 guard let srv = srv else {
-                    logger.debug("Got no SRV answer to PTR query")
+                    logger.debug("Got no SRV answer")
                     continue
                 }
 

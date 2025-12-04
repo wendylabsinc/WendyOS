@@ -25,8 +25,6 @@ RUN pip3 install --no-cache-dir \
     torchaudio==2.8.0 \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
-# Ensure host TensorRT libraries are found first
-ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}
 
 # Install scientific Python packages with pinned numpy version
 RUN pip3 install --no-cache-dir \

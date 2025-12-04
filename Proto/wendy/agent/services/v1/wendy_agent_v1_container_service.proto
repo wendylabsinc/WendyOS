@@ -7,7 +7,9 @@ import "wendy/agent/services/v1/shared.proto";
 service WendyContainerService {
     rpc ListLayers(ListLayersRequest) returns (stream LayerHeader);
     rpc WriteLayer(stream WriteLayerRequest) returns (stream WriteLayerResponse);
+    rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
     rpc RunContainer(RunContainerLayersRequest) returns (stream RunContainerLayersResponse);
+    rpc StartContainer(StartContainerRequest) returns (stream RunContainerLayersResponse);
     rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
     rpc ListContainers(ListContainersRequest) returns (stream ListContainersResponse);
 }
@@ -41,7 +43,7 @@ message RunContainerLayersRequest {
 
     string app_name = 2;
 
-    // The commavar d to run when the container starts.
+    // The command to run when the container starts.
     string cmd = 3;
     
     // The layers that will be uploaded to the agent.
@@ -54,6 +56,21 @@ message RunContainerLayersRequest {
     optional RestartPolicy restart_policy = 6;
 
     string working_dir = 7;
+}
+
+message CreateContainerRequest {
+    string image_name = 1;
+    string app_name = 2;
+    string cmd = 3;
+    bytes app_config = 4;
+    string working_dir = 5;
+    optional RestartPolicy restart_policy = 6;
+}
+
+message CreateContainerResponse {}
+
+message StartContainerRequest {
+    string app_name = 1;
 }
 
 message RunContainerLayerHeader {

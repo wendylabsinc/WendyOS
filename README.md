@@ -157,3 +157,37 @@ Then, from within LLDB's prompt run the following to connect to your app's debug
 ```
 
 Unfortunately, running expressions (e.g. `po`) doesn't work yet.
+
+## Analytics
+
+The Wendy CLI includes privacy-first anonymous usage analytics to help improve the developer experience. Analytics helps us understand which commands are used most, identify common errors, and prioritize improvements.
+
+### What's Collected
+
+- Command names and success/failure status
+- Sanitized error types (no sensitive data)
+- CLI version and operating system
+- Anonymous identifier (UUID)
+
+We **never** collect file paths, hostnames, project names, code, or any personally identifiable information.
+
+### Managing Analytics
+
+Check current analytics status:
+```bash
+wendy analytics status
+```
+
+Disable analytics:
+```bash
+wendy analytics disable
+# Or set environment variable
+export WENDY_ANALYTICS=false
+```
+
+Re-enable analytics:
+```bash
+wendy analytics enable
+```
+
+Analytics is automatically disabled in CI environments.
