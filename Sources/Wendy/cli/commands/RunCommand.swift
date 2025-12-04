@@ -48,6 +48,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Run the container in the background")
     var detach: Bool = false
 
+    @Flag(name: .long, help: "Deploy mode with automatic restarts (up to 5 retries on failure)")
+    var deploy: Bool = false
+
     // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
     @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
     var noRestart: Bool = false
@@ -72,7 +75,76 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var swiftVersion: String { "6.2.1" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
 
+    // Deploy mode should always run detached
+    var isDetached: Bool { detach || deploy }
+
+    /// Validate that flags are not conflicting
+    func validate() throws {
+        // Count how many restart policy flags are set
+        var restartPolicyFlags: [String] = []
+
+        if deploy {
+            restartPolicyFlags.append("--deploy")
+        }
+        if noRestart {
+            restartPolicyFlags.append("--no-restart")
+        }
+        if restartUnlessStoppedFlag {
+            restartPolicyFlags.append("--restart-unless-stopped")
+        }
+        if restartOnFailureRetries != nil {
+            restartPolicyFlags.append("--restart-on-failure")
+        }
+
+        // If more than one restart policy flag is set, show error
+        if restartPolicyFlags.count > 1 {
+            throw ValidationError(
+                """
+                Conflicting restart policy flags detected: \(restartPolicyFlags.joined(separator: ", "))
+
+                Please use only one of:
+                  --deploy                    (deploy mode with 5 retries on failure)
+                  --no-restart                (never restart)
+                  --restart-unless-stopped    (restart unless explicitly stopped)
+                  --restart-on-failure N      (restart N times on failure)
+
+                If no flag is provided, development mode is used (no restarts).
+                """
+            )
+        }
+    }
+
+    /// Build the restart policy based on the command flags
+    /// This determines how containers behave when they exit
+    func buildRestartPolicy() -> RestartPolicy {
+        if noRestart {
+            // Explicit no restart
+            return .with { $0.mode = .no }
+        } else if let retries = restartOnFailureRetries {
+            // Custom retry count on failure
+            return .with {
+                $0.mode = .onFailure
+                $0.onFailureMaxRetries = Int32(retries)
+            }
+        } else if restartUnlessStoppedFlag {
+            // Restart unless explicitly stopped
+            return .with { $0.mode = .unlessStopped }
+        } else if deploy {
+            // Deploy mode: retry up to 5 times on failure
+            return .with {
+                $0.mode = .onFailure
+                $0.onFailureMaxRetries = 5
+            }
+        } else {
+            // Default for development: no restarts
+            return .with { $0.mode = .no }
+        }
+    }
+
     func run() async throws {
+        // Validate flags before proceeding
+        try validate()
+
         let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
         let directory = try FileManager.default.contentsOfDirectory(
             atPath: FileManager.default.currentDirectoryPath
@@ -174,27 +246,56 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     $0.imageName = "\(appName):latest"
                     $0.appName = appName
                     $0.appConfig = appConfigData
-                    if noRestart {
-                        $0.restartPolicy = .with {
-                            $0.mode = .no
-                        }
-                    } else if let retries = restartOnFailureRetries {
-                        $0.restartPolicy = .with {
-                            $0.mode = .onFailure
-                            $0.onFailureMaxRetries = Int32(retries)
-                        }
-                    } else if restartUnlessStoppedFlag {
-                        $0.restartPolicy = .with {
-                            $0.mode = .unlessStopped
-                        }
-                    } else {
-                        $0.restartPolicy = .with {
-                            $0.mode = .default
-                        }
-                    }
+                    $0.restartPolicy = buildRestartPolicy()
                 }
             )
         )
+    }
+
+    /// Gracefully stop a container with timeout
+    private func stopContainerWithTimeout(
+        imageName: String,
+        client: GRPCClient<HTTP2ClientTransport.Posix>,
+        timeout: TimeInterval = 5.0
+    ) async {
+        let logger = Logger(label: "sh.wendy.cli.run.containerd.stop")
+        let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+            wrapping: client
+        )
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    _ = try await agentContainers.stopContainer(
+                        request: .init(
+                            message: .with {
+                                $0.appName = imageName
+                            }
+                        )
+                    )
+                }
+
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    throw CancellationError()
+                }
+
+                // Wait for first task to complete (either stop succeeds or timeout)
+                try await group.next()
+                group.cancelAll()
+            }
+            logger.info("Container stopped successfully")
+        } catch is CancellationError {
+            logger.warning(
+                "Stop container operation timed out after \(timeout)s",
+                metadata: ["container": "\(imageName)"]
+            )
+        } catch {
+            logger.error(
+                "Failed to stop container",
+                metadata: ["container": "\(imageName)", "error": "\(error)"]
+            )
+        }
     }
 
     func startContainerdContainer(
@@ -206,37 +307,54 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             wrapping: client
         )
 
-        _ = try await agentContainers.startContainer(
-            request: .init(
-                message: .with {
-                    $0.appName = imageName
-                }
-            )
-        ) { response in
-            for try await message in response.messages {
-                switch message.responseType {
-                case .started:
-                    if debug {
-                        Noora().success("Started container with debug port 4242")
-                    } else {
-                        Noora().success("Started app")
+        do {
+            _ = try await agentContainers.startContainer(
+                request: .init(
+                    message: .with {
+                        $0.appName = imageName
                     }
+                )
+            ) { response in
+                for try await message in response.messages {
+                    switch message.responseType {
+                    case .started:
+                        if debug {
+                            Noora().success("Started container with debug port 4242")
+                        } else {
+                            Noora().success("Started app")
+                        }
 
-                    if detach {
-                        return
+                        if isDetached {
+                            return
+                        }
+                    case .stdoutOutput(let stdoutOutput):
+                        stdoutOutput.data.withUnsafeBytes { data in
+                            _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                        }
+                    case .stderrOutput(let stderrOutput):
+                        stderrOutput.data.withUnsafeBytes { data in
+                            _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                        }
+                    default:
+                        logger.warning("Unknown message received from agent")
                     }
-                case .stdoutOutput(let stdoutOutput):
-                    stdoutOutput.data.withUnsafeBytes { data in
-                        _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
-                    }
-                case .stderrOutput(let stderrOutput):
-                    stderrOutput.data.withUnsafeBytes { data in
-                        _ = write(STDERR_FILENO, data.baseAddress!, data.count)
-                    }
-                default:
-                    logger.warning("Unknown message received from agent")
                 }
             }
+        } catch {
+            // Handle any error (cancellation, network issues, etc.): stop the container when in development mode
+            if !isDetached {
+                let isCancellation = error is CancellationError
+                logger.info(
+                    "Container execution \(isCancellation ? "cancelled" : "failed"), stopping container",
+                    metadata: ["container": "\(imageName)", "error": "\(error)"]
+                )
+                await stopContainerWithTimeout(
+                    imageName: imageName,
+                    client: client,
+                    timeout: 5.0
+                )
+            }
+            throw error
         }
     }
 
