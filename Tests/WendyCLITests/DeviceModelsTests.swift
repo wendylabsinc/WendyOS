@@ -509,9 +509,9 @@ struct DevicesCollectionTests {
 
         // Test that the human readable output contains all device types
         let humanReadable = collection1.toHumanReadableString()
-        #expect(humanReadable.contains("USB Devices:"))
-        #expect(humanReadable.contains("Ethernet Interfaces:"))
-        #expect(humanReadable.contains("LAN Devices:"))
+        #expect(humanReadable.contains("USB:"))
+        #expect(humanReadable.contains("Ethernet:"))
+        #expect(humanReadable.contains("LAN:"))
         #expect(humanReadable.contains("Wendy USB"))
         #expect(humanReadable.contains("Wendy Ethernet"))
         #expect(humanReadable.contains("Wendy LAN Device"))
@@ -598,9 +598,9 @@ struct DevicesCollectionTests {
 
         // Verify human readable output contains all devices properly grouped
         let humanReadable = collection.toHumanReadableString()
-        #expect(humanReadable.contains("USB Devices:"))
-        #expect(humanReadable.contains("Ethernet Interfaces:"))
-        #expect(humanReadable.contains("LAN Devices:"))
+        #expect(humanReadable.contains("USB:"))
+        #expect(humanReadable.contains("Ethernet:"))
+        #expect(humanReadable.contains("LAN:"))
         #expect(humanReadable.contains("Wendy USB 1"))
         #expect(humanReadable.contains("Wendy USB 2"))
         #expect(humanReadable.contains("Wendy Ethernet 1"))
