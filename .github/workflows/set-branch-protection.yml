@@ -3,6 +3,8 @@ name: Set Branch Protection
 on:
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   set-branch-protection:
     name: Configure Branch Protection
