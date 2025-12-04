@@ -21,8 +21,7 @@ The workflow requires a repository secret named `REPO_ADMIN_TOKEN` containing a 
 - **repo** (Full control of private repositories) scope
 
 ### For Organization Repositories
-- **repo** scope, OR
-- **admin:org** with **repo** scope
+- Both **admin:org** and **repo** scopes
 
 ### Creating the Personal Access Token
 

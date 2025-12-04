@@ -22,7 +22,8 @@ jobs:
           # Validate that REPO_ADMIN_TOKEN is set
           if [ -z "$GITHUB_TOKEN" ]; then
             echo "Error: REPO_ADMIN_TOKEN secret is not set."
-            echo "Please create a personal access token with 'repo' or 'admin:org_repo' permissions"
+            echo "Please create a personal access token with 'repo' permissions"
+            echo "(or 'admin:org' + 'repo' for organization repos)"
             echo "and add it as a repository secret named REPO_ADMIN_TOKEN."
             exit 1
           fi
@@ -89,7 +90,7 @@ jobs:
                 echo "Authentication failed. Please verify:"
                 echo "  1. REPO_ADMIN_TOKEN secret is correctly set"
                 echo "  2. The token has not expired"
-                echo "  3. The token has 'repo' or 'admin:org_repo' permissions"
+                echo "  3. The token has 'repo' permissions (or 'admin:org' + 'repo' for org repos)"
                 ;;
               403)
                 echo ""
