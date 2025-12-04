@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import wendy_agent
 
 /// Mock implementation of SystemctlService for testing
