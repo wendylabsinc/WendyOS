@@ -75,6 +75,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var swiftVersion: String { "6.2.1" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
 
+    // Deploy mode should always run detached
+    var isDetached: Bool { detach || deploy }
+
     func run() async throws {
         let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
         let directory = try FileManager.default.contentsOfDirectory(
@@ -233,7 +236,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                             Noora().success("Started app")
                         }
 
-                        if detach {
+                        if isDetached {
                             return
                         }
                     case .stdoutOutput(let stdoutOutput):
@@ -251,7 +254,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
         } catch is CancellationError {
             // Handle ctrl+c: stop the container when in development mode (not detached)
-            if !detach {
+            if !isDetached {
                 logger.info(
                     "Caught cancellation, stopping container",
                     metadata: ["container": "\(imageName)"]
