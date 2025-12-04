@@ -70,9 +70,15 @@ public struct DevicesCollection: Encodable, Sendable {
     /// Get unique device names across all interfaces (using normalized names)
     private var uniqueDeviceNames: Set<String> {
         var names = Set<String>()
-        usbDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
-        ethernetDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
-        lanDevices.forEach { names.insert(normalizeDeviceName($0.displayName)) }
+        for device in usbDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
+        for device in ethernetDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
+        for device in lanDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
         return names
     }
 
@@ -134,7 +140,6 @@ public struct DevicesCollection: Encodable, Sendable {
 
             // Build Ethernet identifier with available details
             var ethernetDetails: [String] = [device.name]
-            ethernetDetails.append(device.interfaceType)
             if let mac = device.macAddress {
                 ethernetDetails.append("MAC: \(mac)")
             }
@@ -212,7 +217,6 @@ public struct DevicesCollection: Encodable, Sendable {
             for interface in interfaces {
                 result += "\n   \(interface.type): \(interface.identifier)"
             }
-            results.append(result)
         }
 
         return result
@@ -308,7 +312,7 @@ public struct EthernetInterface: Device, Encodable, Sendable {
     public func toHumanReadableString() -> String {
         let version = agentVersion.map { " v\($0)" }
         let mac = macAddress.map { "[\($0)]" }
-        let speed = linkSpeedMbps.map { "[\($0) Mbps]" }
+        let speed = linkSpeed.map { "[\($0)]" }
         let metadata = [version, mac, speed].compactMap { $0 }.joined(separator: " ")
         return "\(displayName) @ \(name) \(metadata)".trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -336,7 +340,6 @@ public struct USBDevice: Device, Encodable, Sendable {
     public let serialNumber: String?
     public let maxPowerMilliamps: Int?
     public let isWendyDevice: Bool
-    public let linkSpeedMbps: Int?
     public var agentVersion: String?
 
     public init(
@@ -356,7 +359,6 @@ public struct USBDevice: Device, Encodable, Sendable {
         self.maxPowerMilliamps = maxPowerMilliamps
         self.isWendyDevice = name.contains("Wendy")
         self.agentVersion = nil
-        self.linkSpeedMbps = linkSpeedMbps
     }
 
     public func toJSON() throws -> String {
@@ -368,8 +370,7 @@ public struct USBDevice: Device, Encodable, Sendable {
 
     public func toHumanReadableString() -> String {
         let version = agentVersion.map { "v\($0)" }
-        let speed = linkSpeedMbps.map { "\($0) Mbps" }
-        let metadata = [version, speed].compactMap { $0 }.joined(separator: " ")
+        let metadata = [version].compactMap { $0 }.joined(separator: " ")
         return "\(name) \(metadata)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
