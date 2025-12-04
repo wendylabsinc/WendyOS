@@ -86,24 +86,26 @@ struct ConsentManagerEnvironmentTests {
 struct ConsentManagerAsyncTests {
 
     @Test("Analytics should be disabled when WENDY_ANALYTICS is false")
-    func isAnalyticsEnabledWithEnvironmentOverride() async {
-        let consentManager = ConsentManager()
+    func isAnalyticsEnabledWithEnvironmentOverride() {
+        // Use mock environment to avoid filesystem access
+        let mockEnv = MockEnvironmentProvider(["WENDY_ANALYTICS": "false"])
+        let consentManager = ConsentManager(environmentProvider: mockEnv)
 
-        setenv("WENDY_ANALYTICS", "false", 1)
-        let enabled = await consentManager.isAnalyticsEnabled()
-        #expect(enabled == false)
-        unsetenv("WENDY_ANALYTICS")
+        // Should be disabled when explicitly set to false
+        let shouldDisable = consentManager.shouldDisableAnalytics()
+        #expect(shouldDisable == true)
     }
 
     @Test("Analytics should be enabled by default (opt-out model)")
-    func isAnalyticsEnabledByDefault() async {
+    func isAnalyticsEnabledByDefault() {
         // Use mock environment with no CI variables set
         let mockEnv = MockEnvironmentProvider([:])
         let consentManager = ConsentManager(environmentProvider: mockEnv)
 
-        // Without any config or environment variables, should default to enabled
-        let enabled = await consentManager.isAnalyticsEnabled()
-        #expect(enabled == true)
+        // Without any environment variables, analytics should not be disabled
+        // This validates the opt-out model (enabled by default) without filesystem access
+        let shouldDisable = consentManager.shouldDisableAnalytics()
+        #expect(shouldDisable == false)
     }
 
     @Test("Get status should return appropriate message")
