@@ -64,9 +64,36 @@ Follow [Semantic Versioning 2.0.0](https://semver.org/):
 The semver release workflow:
 1. ✅ Validates the semver format
 2. 📦 Downloads all build artifacts from the specified pre-release
-3. 🚀 Creates a new GitHub release with the semver tag
-4. 🏷️ Marks it as "latest" (non-pre-release)
-5. 📝 Includes the original release notes + promotion note
+3. 🔄 Renames assets to use the semver tag (critical for download scripts!)
+4. 🚀 Creates a new GitHub release with the semver tag
+5. 🏷️ Marks it as "latest" (non-pre-release)
+6. 📝 Includes the original release notes + promotion note
+
+### Asset Naming
+
+**Pre-release assets** (timestamp-based):
+```
+wendy-agent-linux-static-musl-aarch64-2025.12.04-195108.tar.gz
+wendy-cli-macos-arm64-2025.12.04-195108.tar.gz
+```
+
+**Semver release assets** (renamed during promotion):
+```
+wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
+wendy-cli-macos-arm64-v0.2.0.tar.gz
+```
+
+**Download URL pattern:**
+```
+https://github.com/wendylabsinc/wendy-agent/releases/download/v0.2.0/wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
+```
+
+All five platform builds are included:
+- `wendy-agent-linux-static-musl-aarch64-${VERSION}.tar.gz`
+- `wendy-agent-linux-static-musl-x86_64-${VERSION}.tar.gz`
+- `wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz`
+- `wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz`
+- `wendy-cli-macos-arm64-${VERSION}.tar.gz`
 
 ## Automation
 

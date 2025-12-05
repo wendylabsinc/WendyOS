@@ -57,11 +57,45 @@ jobs:
           echo "📦 Downloading assets from $PRERELEASE_TAG..."
           gh release download "$PRERELEASE_TAG"
 
-          # List downloaded files
-          echo "Downloaded files:"
-          ls -lh *.tar.gz
+          # Expected asset patterns (based on build.yml matrix)
+          EXPECTED_ASSETS=(
+            "wendy-agent-linux-static-musl-aarch64"
+            "wendy-agent-linux-static-musl-x86_64"
+            "wendy-cli-linux-static-musl-aarch64"
+            "wendy-cli-linux-static-musl-x86_64"
+            "wendy-cli-macos-arm64"
+          )
 
-          # Create new semver release with the same assets
+          echo "📝 Renaming assets to use semver tag..."
+          RENAMED_FILES=()
+          for asset in "${EXPECTED_ASSETS[@]}"; do
+            OLD_NAME="${asset}-${PRERELEASE_TAG}.tar.gz"
+            NEW_NAME="${asset}-${VERSION}.tar.gz"
+
+            if [ -f "$OLD_NAME" ]; then
+              mv "$OLD_NAME" "$NEW_NAME"
+              RENAMED_FILES+=("$NEW_NAME")
+              echo "  ✓ $OLD_NAME → $NEW_NAME"
+            else
+              echo "  ⚠️  Warning: Expected asset $OLD_NAME not found"
+            fi
+          done
+
+          # Verify we got at least some assets
+          if [ ${#RENAMED_FILES[@]} -eq 0 ]; then
+            echo "❌ Error: No assets were downloaded/renamed"
+            echo "Available files:"
+            ls -la *.tar.gz || echo "No tar.gz files found"
+            exit 1
+          fi
+
+          # List renamed files with sizes
+          echo ""
+          echo "📦 Assets to upload:"
+          ls -lh "${RENAMED_FILES[@]}"
+
+          # Create new semver release with renamed assets
+          echo ""
           echo "🚀 Creating release $VERSION..."
           gh release create "$VERSION" \
             --title "Release $VERSION" \
@@ -70,10 +104,17 @@ jobs:
 ---
 *Promoted from pre-release $PRERELEASE_TAG*" \
             --latest \
-            *.tar.gz
+            "${RENAMED_FILES[@]}"
 
+          echo ""
           echo "✅ Successfully promoted $PRERELEASE_TAG to $VERSION"
+          echo "📦 Uploaded ${#RENAMED_FILES[@]} assets"
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/$VERSION"
+          echo ""
+          echo "Asset URLs:"
+          for file in "${RENAMED_FILES[@]}"; do
+            echo "  https://github.com/${{ github.repository }}/releases/download/$VERSION/$file"
+          done
 
       - name: Trigger Build from Main
         if: inputs.promote_prerelease == ''
