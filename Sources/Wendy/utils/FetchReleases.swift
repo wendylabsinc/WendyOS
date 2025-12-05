@@ -113,10 +113,13 @@ func downloadLatestRelease(
     // Build the expected asset name pattern
     // Format: wendy-agent-{platform}-{version}.tar.gz
     // Example: wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
-    let assetPattern = "wendy-agent-\(targetPlatform.rawValue)"
+    let assetPrefix = "wendy-agent-\(targetPlatform.rawValue)-"
+    let assetSuffix = ".tar.gz"
 
     guard
-        let asset = latestRelease.assets.first(where: { $0.name.contains(assetPattern) })
+        let asset = latestRelease.assets.first(where: { asset in
+            asset.name.hasPrefix(assetPrefix) && asset.name.hasSuffix(assetSuffix)
+        })
     else {
         throw ReleasesError.noAsset
     }
