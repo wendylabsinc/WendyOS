@@ -84,6 +84,8 @@
                 return interfaces
             }
 
+            let linkSpeeds = networkInterfaceProvider.getAllLinkSpeeds()
+
             for interface in scInterfaces {
                 // Check if it's an Ethernet interface
                 guard
@@ -119,8 +121,8 @@
                     )
                 }
 
-                // Get link speed
-                let linkSpeed = networkInterfaceProvider.getLinkSpeed(interfaceName: name)
+                // Look up link speed from pre-fetched data
+                let linkSpeed = linkSpeeds[name]
 
                 let ethernetInterface = EthernetInterface(
                     name: name,

@@ -19,8 +19,8 @@
         /// Gets the hardware address (MAC) of a network interface
         func getHardwareAddressString(interface: SCNetworkInterface) -> String?
 
-        /// Gets the link speed of a network interface (e.g., "1 Gbps", "100 Mbps")
-        func getLinkSpeed(interfaceName: String) -> String?
+        /// Gets link speeds for all network interfaces
+        func getAllLinkSpeeds() -> [String: String]
     }
 
     /// Default implementation that uses the real SystemConfiguration APIs
@@ -47,11 +47,11 @@
             return SCNetworkInterfaceGetHardwareAddressString(interface) as? String
         }
 
-        public func getLinkSpeed(interfaceName: String) -> String? {
-            // Use ifconfig to get media information
+        public func getAllLinkSpeeds() -> [String: String] {
+            // Run ifconfig -a once to get all interface information
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/sbin/ifconfig")
-            process.arguments = [interfaceName]
+            process.arguments = ["-a"]
 
             let pipe = Pipe()
             process.standardOutput = pipe
@@ -63,18 +63,65 @@
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 guard let output = String(data: data, encoding: .utf8) else {
-                    return nil
+                    return [:]
                 }
 
-                // Parse the media line, e.g., "media: autoselect (1000baseT <full-duplex>)"
-                // or "media: autoselect (100baseTX <full-duplex>)"
-                return Self.parseMediaSpeed(from: output)
+                return Self.parseAllMediaSpeeds(from: output)
             } catch {
-                return nil
+                return [:]
             }
         }
 
-        /// Parses the link speed from ifconfig output
+        /// Parses link speeds for all interfaces from ifconfig -a output
+        private static func parseAllMediaSpeeds(from output: String) -> [String: String] {
+            var speeds: [String: String] = [:]
+
+            // Split output into interface blocks
+            // Each block starts with "interfaceName: flags=..."
+            let interfacePattern = #"^(\w+):\s+flags="#
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: interfacePattern,
+                    options: .anchorsMatchLines
+                )
+            else {
+                return [:]
+            }
+
+            let lines = output.components(separatedBy: "\n")
+            var currentInterface: String?
+            var currentBlock: [String] = []
+
+            for line in lines {
+                let range = NSRange(line.startIndex..., in: line)
+                if let match = regex.firstMatch(in: line, options: [], range: range),
+                    let nameRange = Range(match.range(at: 1), in: line)
+                {
+                    // Process previous interface block
+                    if let interface = currentInterface {
+                        if let speed = parseMediaSpeed(from: currentBlock.joined(separator: "\n")) {
+                            speeds[interface] = speed
+                        }
+                    }
+                    // Start new interface block
+                    currentInterface = String(line[nameRange])
+                    currentBlock = [line]
+                } else {
+                    currentBlock.append(line)
+                }
+            }
+
+            // Process last interface block
+            if let interface = currentInterface {
+                if let speed = parseMediaSpeed(from: currentBlock.joined(separator: "\n")) {
+                    speeds[interface] = speed
+                }
+            }
+
+            return speeds
+        }
+
+        /// Parses the link speed from a single interface's ifconfig output
         private static func parseMediaSpeed(from output: String) -> String? {
             // Look for the media line
             guard
