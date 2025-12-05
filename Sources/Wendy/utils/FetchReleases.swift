@@ -209,6 +209,26 @@ func extract(
     print("Extracting tar.gz file...")
     let extractDir = tempDir.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+
+    // Ensure cleanup on failure
+    var shouldCleanup = true
+    defer {
+        if shouldCleanup {
+            do {
+                try FileManager.default.removeItem(at: extractDir)
+            } catch {
+                let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+                logger.warning(
+                    "Failed to clean up extraction directory on failure",
+                    metadata: [
+                        "path": "\(extractDir.path)",
+                        "error": "\(error)",
+                    ]
+                )
+            }
+        }
+    }
+
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["tar", "-xzf", url.path, "-C", extractDir.path]
@@ -223,6 +243,8 @@ func extract(
     let enumerator = FileManager.default.enumerator(at: extractDir, includingPropertiesForKeys: nil)
     while let file = enumerator?.nextObject() as? URL {
         if findExecutable(file) {
+            // Found the executable, don't clean up
+            shouldCleanup = false
             return file
         }
     }

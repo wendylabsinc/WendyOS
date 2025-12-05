@@ -91,15 +91,39 @@ struct DeviceCommand: AsyncParsableCommand {
         @Option(help: "The path to the new version of the Wendy agent.")
         var binary: String?
 
+        @Flag(help: "Download the latest pre-release version instead of stable release")
+        var prerelease: Bool = false
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
             let binary: String
+            let shouldCleanup: Bool
 
             if let location = self.binary {
                 binary = location
+                shouldCleanup = false  // Don't clean up user-provided files
             } else {
-                binary = try await downloadLatestRelease().path
+                binary = try await downloadLatestRelease(
+                    includePrerelease: prerelease
+                ).path
+                shouldCleanup = true  // Clean up downloaded files
+            }
+
+            // Ensure cleanup of downloaded binary after upload
+            defer {
+                if shouldCleanup {
+                    do {
+                        // Get the parent directory (the temp directory created by downloadLatestRelease)
+                        let binaryURL = URL(fileURLWithPath: binary)
+                        // Go up two levels: binary -> extract -> tempDir
+                        let tempDir = binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                        try FileManager.default.removeItem(at: tempDir)
+                    } catch {
+                        // Log but don't fail the operation if cleanup fails
+                        print("Warning: Failed to clean up temporary files at \(binary): \(error)")
+                    }
+                }
             }
 
             let success = try await withAgentGRPCClient(
@@ -245,6 +269,21 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 let binary = try await downloadLatestRelease().path
+
+                // Ensure cleanup of downloaded binary after upload
+                defer {
+                    do {
+                        // Get the parent directory (the temp directory created by downloadLatestRelease)
+                        let binaryURL = URL(fileURLWithPath: binary)
+                        // Go up two levels: binary -> extract -> tempDir
+                        let tempDir = binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                        try FileManager.default.removeItem(at: tempDir)
+                    } catch {
+                        // Log but don't fail the operation if cleanup fails
+                        print("Warning: Failed to clean up temporary files at \(binary): \(error)")
+                    }
+                }
+
                 let success = try await Noora().progressBarStep(message: "Updating Device") {
                     updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)
