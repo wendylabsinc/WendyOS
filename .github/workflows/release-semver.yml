@@ -97,12 +97,14 @@ jobs:
           # Create new semver release with renamed assets
           echo ""
           echo "🚀 Creating release $VERSION..."
+
+          # Build release notes (appending promotion note to original body)
+          PROMOTION_NOTE="Promoted from pre-release $PRERELEASE_TAG"
+          FULL_NOTES="$BODY"$'\n\n'"$PROMOTION_NOTE"
+
           gh release create "$VERSION" \
             --title "Release $VERSION" \
-            --notes "$BODY
-
----
-*Promoted from pre-release $PRERELEASE_TAG*" \
+            --notes "$FULL_NOTES" \
             --latest \
             "${RENAMED_FILES[@]}"
 
