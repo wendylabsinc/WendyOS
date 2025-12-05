@@ -161,7 +161,8 @@ public struct DockerCLI: Sendable {
                 error: .discarded
             )
             guard result.terminationStatus.isSuccess,
-                  let output = result.standardOutput else {
+                let output = result.standardOutput
+            else {
                 return nil
             }
             return output.trimmingCharacters(in: .whitespacesAndNewlines)
