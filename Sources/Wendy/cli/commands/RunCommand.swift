@@ -178,54 +178,41 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             endpoint,
             title: title
         ) { [name, dockerContext] client, endpoint in
-            // Bind to all interfaces for Docker Desktop compatibility
-            try await withTCPProxyServer(
-                localHostname: "0.0.0.0",
-                localPort: 50053,
-                remoteHostname: endpoint.host,
-                remotePort: 5000
-            ) { proxyAddress in
-                let port = proxyAddress?.port ?? 50053
-                let builderName = docker.builderName(forPort: port)
+            // Build additional properties for analytics
+            var buildPhaseProperties: [String: String] = [:]
+            if let dockerContext {
+                buildPhaseProperties["docker_context"] = dockerContext
+            }
 
-                // Build additional properties for analytics
-                var buildPhaseProperties: [String: String] = [:]
-                if let dockerContext {
-                    buildPhaseProperties["docker_context"] = dockerContext
+            // Create buildx builder with insecure registry support
+            try await executePhase(
+                phase: "builder_setup",
+                runtime: "dockerfile",
+                additionalProperties: buildPhaseProperties
+            ) {
+                try await Noora().progressStep(
+                    message: "Preparing builder",
+                    successMessage: "Builder ready",
+                    errorMessage: "Failed to create builder",
+                    showSpinner: true
+                ) { _ in
+                    try await docker.prepareBuildxBuilder(registryHostname: endpoint.host, registryPort: 5000)
                 }
+            }
 
-                if try await !docker.hasBuildxBuilder(builderName: builderName) {
-                    // Create buildx builder with insecure registry support
-                    try await executePhase(
-                        phase: "builder_setup",
-                        runtime: "dockerfile",
-                        additionalProperties: buildPhaseProperties
-                    ) {
-                        try await Noora().progressStep(
-                            message: "Setting up builder",
-                            successMessage: "Builder ready",
-                            errorMessage: "Failed to create builder",
-                            showSpinner: true
-                        ) { _ in
-                            try await docker.createBuildxBuilder(port: port)
-                        }
-                    }
-                }
-
-                // Build and push in a single operation for better performance
-                try await executePhase(
-                    phase: "build_upload",
-                    runtime: "dockerfile",
-                    additionalProperties: buildPhaseProperties
-                ) {
-                    try await Noora().progressStep(
-                        message: "Building and uploading container",
-                        successMessage: "Container built and uploaded successfully!",
-                        errorMessage: "Failed to build and upload container",
-                        showSpinner: true
-                    ) { _ in
-                        try await docker.buildxAndPush(name: name, port: port, builder: builderName)
-                    }
+            // Build and push in a single operation for better performance
+            try await executePhase(
+                phase: "build_upload",
+                runtime: "dockerfile",
+                additionalProperties: buildPhaseProperties
+            ) {
+                try await Noora().progressStep(
+                    message: "Building and uploading container",
+                    successMessage: "Container built and uploaded successfully!",
+                    errorMessage: "Failed to build and upload container",
+                    showSpinner: true
+                ) { _ in
+                    try await docker.buildxAndPush(name: name, registryHostname: endpoint.host, registryPort: 5000)
                 }
             }
 
