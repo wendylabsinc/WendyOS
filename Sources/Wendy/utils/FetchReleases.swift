@@ -95,13 +95,14 @@ enum Platform: String {
 func downloadLatestRelease(
     httpClient: HTTPExecutor = DefaultHTTPExecutor(),
     platform: Platform? = nil,
-    includePrerelease: Bool = false
+    includePrerelease: Bool = false,
+    repository: String = "wendylabsinc/wendy-agent"
 ) async throws -> DownloadedRelease {
     // Detect platform if not specified
     let targetPlatform = try platform ?? Platform.current()
 
     // Fetch all releases
-    let releases = try await fetchReleases(httpClient: httpClient)
+    let releases = try await fetchReleases(httpClient: httpClient, repository: repository)
 
     // Filter releases based on prerelease preference
     let filteredReleases: [Release]
@@ -180,12 +181,15 @@ func downloadLatestRelease(
     return DownloadedRelease(binaryURL: binaryURL, tempDirectory: tempDirectory)
 }
 
-func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
-    let githubReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-agent/releases"
+func fetchReleases(
+    httpClient: HTTPExecutor = DefaultHTTPExecutor(),
+    repository: String = "wendylabsinc/wendy-agent"
+) async throws -> [Release] {
+    let githubReleasesURL = "https://api.github.com/repos/\(repository)/releases"
 
     // Fetch releases JSON
     let logger = Logger(label: "sh.wendy.utils.fetchReleases")
-    logger.info("Fetching all releases...")
+    logger.info("Fetching all releases...", metadata: ["repository": "\(repository)"])
 
     var request = HTTPClientRequest(url: githubReleasesURL)
     request.headers.add(name: "Accept", value: "application/vnd.github+json")
