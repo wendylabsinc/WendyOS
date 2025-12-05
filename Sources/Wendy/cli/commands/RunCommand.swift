@@ -183,19 +183,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 remoteHostname: endpoint.host,
                 remotePort: 5000
             ) { proxyAddress in
-                let port = proxyAddress?.port ?? 50053
-                let builderName = docker.builderName(forPort: port)
-
-                if try await !docker.hasBuildxBuilder(builderName: builderName) {
-                    // Create buildx builder with insecure registry support
-                    try await Noora().progressStep(
-                        message: "Setting up builder",
-                        successMessage: "Builder ready",
-                        errorMessage: "Failed to create builder",
-                        showSpinner: true
-                    ) { _ in
-                        try await docker.createBuildxBuilder(port: port)
-                    }
+                // Create buildx builder with insecure registry support
+                try await Noora().progressStep(
+                    message: "Preparing builder",
+                    successMessage: "Builder ready",
+                    errorMessage: "Failed to create builder",
+                    showSpinner: true
+                ) { _ in
+                    try await docker.prepareBuildxBuilder(registryHostname: endpoint.host, registryPort: 5000)
                 }
 
                 // Build and push in a single operation for better performance
@@ -205,7 +200,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     errorMessage: "Failed to build and upload container",
                     showSpinner: true
                 ) { _ in
-                    try await docker.buildxAndPush(name: name, port: port, builder: builderName)
+                    try await docker.buildxAndPush(name: name, registryHostname: endpoint.host, registryPort: 5000)
                 }
             }
 
