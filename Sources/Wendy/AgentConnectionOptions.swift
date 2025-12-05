@@ -94,11 +94,16 @@ struct AgentConnectionOptions: ParsableArguments {
             errorMessage: nil,
             showSpinner: true
         ) { _ in
-            try await discovery.findLANDevices()
-        }
+            while true {
+                try Task.checkCancellation()
+                let devices = try await discovery.findLANDevices()
 
-        if lanDevices.isEmpty {
-            throw NoDevicesFound()
+                if !devices.isEmpty {
+                    return devices
+                }
+
+                try await Task.sleep(for: .seconds(1))
+            }
         }
 
         let device = Noora().singleChoicePrompt(
