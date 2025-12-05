@@ -6,6 +6,12 @@ import NIOCore
 import NIOFoundationCompat
 import Subprocess
 
+#if os(macOS)
+    import Darwin
+#elseif os(Linux)
+    import Glibc
+#endif
+
 /// Protocol for executing HTTP requests, enabling dependency injection for testing
 protocol HTTPExecutor {
     func execute(
@@ -45,22 +51,79 @@ enum ReleasesError: Error {
     case invalidResponse
     case noReleases
     case noAsset
+    case unsupportedPlatform(String)
+    case invalidDownloadURL(String)
 }
 
-func downloadLatestRelease(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> URL {
+/// Supported platforms and architectures
+enum Platform: String {
+    case linuxAarch64 = "linux-static-musl-aarch64"
+    case linuxX86_64 = "linux-static-musl-x86_64"
+    case macosArm64 = "macos-arm64"
+
+    /// Detects the current platform
+    static func current() throws -> Platform {
+        #if os(macOS)
+            #if arch(arm64)
+                return .macosArm64
+            #else
+                throw ReleasesError.unsupportedPlatform("macOS x86_64 is not supported")
+            #endif
+        #elseif os(Linux)
+            #if arch(arm64)
+                return .linuxAarch64
+            #elseif arch(x86_64)
+                return .linuxX86_64
+            #else
+                throw ReleasesError.unsupportedPlatform(
+                    "Linux platform not supported: unknown architecture"
+                )
+            #endif
+        #else
+            throw ReleasesError.unsupportedPlatform("Platform not supported")
+        #endif
+    }
+}
+
+func downloadLatestRelease(
+    httpClient: HTTPExecutor = DefaultHTTPExecutor(),
+    platform: Platform? = nil,
+    includePrerelease: Bool = false
+) async throws -> URL {
+    // Detect platform if not specified
+    let targetPlatform = try platform ?? Platform.current()
+
+    // Fetch all releases
     let releases = try await fetchReleases(httpClient: httpClient)
-    guard let latestRelease = releases.first else {
+
+    // Filter releases based on prerelease preference
+    let filteredReleases: [Release]
+    if includePrerelease {
+        // Include all releases (both stable and pre-releases)
+        filteredReleases = releases
+    } else {
+        // Only include stable releases (non-prerelease)
+        filteredReleases = releases.filter { !$0.prerelease }
+    }
+
+    guard let latestRelease = filteredReleases.first else {
         throw ReleasesError.noReleases
     }
+
+    // Build the expected asset name pattern
+    // Format: wendy-agent-{platform}-{version}.tar.gz
+    // Example: wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
+    let assetPattern = "wendy-agent-\(targetPlatform.rawValue)"
+
     guard
-        let asset = latestRelease.assets.first(where: {
-            $0.name.contains("wendy-agent-linux-static-musl-aarch64")
-        })
+        let asset = latestRelease.assets.first(where: { $0.name.contains(assetPattern) })
     else {
         throw ReleasesError.noAsset
     }
+
     let downloadedFileURL = try await downloadAsset(asset)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+
     let fileURL = try await extract(at: downloadedFileURL, to: directory) { file in
         file.lastPathComponent == "wendy-agent"
     }
@@ -103,7 +166,9 @@ func downloadAsset(_ asset: Release.Asset) async throws -> URL {
         .appendingPathComponent(UUID().uuidString)
     try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
-    let downloadURL = URL(string: asset.browser_download_url)!
+    guard let downloadURL = URL(string: asset.browser_download_url) else {
+        throw ReleasesError.invalidDownloadURL(asset.browser_download_url)
+    }
     let downloadedFileURL = tempDir.appendingPathComponent(asset.name)
     try await downloadFile(from: downloadURL, to: downloadedFileURL.path) { _ in }
     print("Downloaded wendy-agent: \(downloadedFileURL.path)")
