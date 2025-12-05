@@ -54,7 +54,12 @@ enum ReleasesError: Error {
     case unsupportedPlatform(String)
     case invalidDownloadURL(String)
     case fileTooLarge(actual: Int64, maximum: Int64)
-    case rateLimitExceeded(resetTime: Date)
+}
+
+/// Result of downloading a release containing the binary and temp directory for cleanup
+struct DownloadedRelease {
+    let binaryURL: URL
+    let tempDirectory: URL
 }
 
 /// Supported platforms and architectures
@@ -91,7 +96,7 @@ func downloadLatestRelease(
     httpClient: HTTPExecutor = DefaultHTTPExecutor(),
     platform: Platform? = nil,
     includePrerelease: Bool = false
-) async throws -> URL {
+) async throws -> DownloadedRelease {
     // Detect platform if not specified
     let targetPlatform = try platform ?? Platform.current()
 
@@ -127,13 +132,52 @@ func downloadLatestRelease(
     }
 
     let downloadedFileURL = try await downloadAsset(asset)
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    // Create root temp directory for this download
+    let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString
+    )
 
-    let fileURL = try await extract(at: downloadedFileURL, to: directory) { file in
+    // Track if we should clean up on failure
+    var shouldCleanupOnFailure = true
+    defer {
+        if shouldCleanupOnFailure {
+            // Clean up temp directory if we failed before completing
+            do {
+                try FileManager.default.removeItem(at: tempDirectory)
+            } catch {
+                let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+                logger.warning(
+                    "Failed to clean up temp directory on failure",
+                    metadata: [
+                        "path": "\(tempDirectory.path)",
+                        "error": "\(error)",
+                    ]
+                )
+            }
+        }
+    }
+
+    let binaryURL = try await extract(at: downloadedFileURL, to: tempDirectory) { file in
         file.lastPathComponent == "wendy-agent"
     }
-    try? FileManager.default.removeItem(at: downloadedFileURL)
-    return fileURL
+
+    // Clean up downloaded archive
+    do {
+        try FileManager.default.removeItem(at: downloadedFileURL)
+    } catch {
+        let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+        logger.warning(
+            "Failed to remove downloaded archive",
+            metadata: [
+                "path": "\(downloadedFileURL.path)",
+                "error": "\(error)",
+            ]
+        )
+    }
+
+    // Success - don't clean up, let caller handle it
+    shouldCleanupOnFailure = false
+    return DownloadedRelease(binaryURL: binaryURL, tempDirectory: tempDirectory)
 }
 
 func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
@@ -154,43 +198,8 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
 
     // Check for successful response
     guard response.status == .ok else {
-        // Check for rate limiting (HTTP 403)
-        if response.status.code == 403 {
-            // Check if this is a rate limit error
-            if let rateLimitRemaining = response.headers.first(name: "X-RateLimit-Remaining"),
-                rateLimitRemaining == "0",
-                let rateLimitReset = response.headers.first(name: "X-RateLimit-Reset"),
-                let resetTimestamp = TimeInterval(rateLimitReset)
-            {
-                let resetDate = Date(timeIntervalSince1970: resetTimestamp)
-                let timeUntilReset = resetDate.timeIntervalSinceNow
-
-                logger.error(
-                    "GitHub API rate limit exceeded",
-                    metadata: [
-                        "reset_time": "\(resetDate)",
-                        "minutes_until_reset": "\(Int(timeUntilReset / 60))",
-                    ]
-                )
-                throw ReleasesError.rateLimitExceeded(resetTime: resetDate)
-            }
-        }
-
         logger.error("Failed to fetch releases: HTTP error - status \(response.status)")
         throw ReleasesError.invalidResponse
-    }
-
-    // Log rate limit info for monitoring
-    if let rateLimitRemaining = response.headers.first(name: "X-RateLimit-Remaining"),
-        let rateLimitLimit = response.headers.first(name: "X-RateLimit-Limit")
-    {
-        logger.debug(
-            "GitHub API rate limit status",
-            metadata: [
-                "remaining": "\(rateLimitRemaining)",
-                "limit": "\(rateLimitLimit)",
-            ]
-        )
     }
 
     // Collect response body
@@ -261,6 +270,7 @@ func downloadAsset(_ asset: Release.Asset) async throws -> URL {
 enum ExtractError: Error {
     case failedToExtract
     case executableNotFound
+    case maliciousArchive(String)
 }
 
 func extract(
@@ -268,32 +278,184 @@ func extract(
     to tempDir: URL,
     findExecutable: (URL) -> Bool
 ) async throws -> URL {
+    let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+
     // Determine if it's a tar.gz or a binary
     let isTarGz = url.pathExtension == "gz" || url.lastPathComponent.contains("tar.gz")
     guard isTarGz else {
-        print("File is not a tar.gz file")
+        logger.debug(
+            "File is not a tar.gz file, returning as-is",
+            metadata: ["path": "\(url.path)"]
+        )
         return url
     }
 
-    print("Extracting tar.gz file...")
+    logger.info("Extracting tar.gz archive", metadata: ["path": "\(url.path)"])
     let extractDir = tempDir.appendingPathComponent("extract")
     try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+
+    // Validate tar contents before extraction to prevent path traversal attacks
+    logger.debug("Validating tar archive contents")
+    let listProcess = Process()
+    listProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    listProcess.arguments = ["tar", "-tzf", url.path]
+
+    let pipe = Pipe()
+    listProcess.standardOutput = pipe
+    let errorPipe = Pipe()
+    listProcess.standardError = errorPipe
+
+    try listProcess.run()
+    listProcess.waitUntilExit()
+
+    guard listProcess.terminationStatus == 0 else {
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorMessage = String(data: errorData, encoding: .utf8) ?? "unknown error"
+        logger.error(
+            "Failed to list tar archive contents",
+            metadata: [
+                "exit_code": "\(listProcess.terminationStatus)",
+                "archive": "\(url.path)",
+                "error": "\(errorMessage)",
+            ]
+        )
+        throw ExtractError.failedToExtract
+    }
+
+    let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: outputData, encoding: .utf8) ?? ""
+    let files = output.components(separatedBy: .newlines).filter { !$0.isEmpty }
+
+    // Check each file path for security issues
+    for filePath in files {
+        // Check for absolute paths
+        if filePath.hasPrefix("/") {
+            logger.error(
+                "Archive contains absolute path",
+                metadata: [
+                    "archive": "\(url.path)",
+                    "malicious_path": "\(filePath)",
+                ]
+            )
+            throw ExtractError.maliciousArchive("Archive contains absolute path: \(filePath)")
+        }
+
+        // Check for path traversal attempts
+        if filePath.contains("../") || filePath.contains("/..") {
+            logger.error(
+                "Archive contains path traversal attempt",
+                metadata: [
+                    "archive": "\(url.path)",
+                    "malicious_path": "\(filePath)",
+                ]
+            )
+            throw ExtractError.maliciousArchive(
+                "Archive contains path traversal: \(filePath)"
+            )
+        }
+
+        // Check for paths that would escape extraction directory when normalized
+        let normalizedPath = (filePath as NSString).standardizingPath
+        if normalizedPath.hasPrefix("/") || normalizedPath.contains("..") {
+            logger.error(
+                "Archive contains normalized path that escapes extraction directory",
+                metadata: [
+                    "archive": "\(url.path)",
+                    "original_path": "\(filePath)",
+                    "normalized_path": "\(normalizedPath)",
+                ]
+            )
+            throw ExtractError.maliciousArchive(
+                "Archive contains escaping path: \(filePath)"
+            )
+        }
+    }
+
+    logger.debug(
+        "Tar archive validation passed",
+        metadata: [
+            "file_count": "\(files.count)"
+        ]
+    )
+
+    // Ensure cleanup on failure
+    var shouldCleanup = true
+    defer {
+        if shouldCleanup {
+            do {
+                try FileManager.default.removeItem(at: extractDir)
+            } catch {
+                let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+                logger.warning(
+                    "Failed to clean up extraction directory on failure",
+                    metadata: [
+                        "path": "\(extractDir.path)",
+                        "error": "\(error)",
+                    ]
+                )
+            }
+        }
+    }
+
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["tar", "-xzf", url.path, "-C", extractDir.path]
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
-        print("Failed to extract tar.gz archive")
+        logger.error(
+            "Failed to extract tar.gz archive",
+            metadata: [
+                "exit_code": "\(process.terminationStatus)",
+                "archive": "\(url.path)",
+            ]
+        )
         throw ExtractError.failedToExtract
     }
 
-    // Find the binary in the extracted directory
-    let enumerator = FileManager.default.enumerator(at: extractDir, includingPropertiesForKeys: nil)
+    // Find the binary in the extracted directory with depth limit
+    // Limit to 5 levels deep to prevent malicious archives from causing excessive traversal
+    let maxDepth = 5
+    let enumerator = FileManager.default.enumerator(
+        at: extractDir,
+        includingPropertiesForKeys: [.isDirectoryKey]
+    )
+
     while let file = enumerator?.nextObject() as? URL {
+        // Calculate depth relative to extraction directory
+        let relativePath = file.path.replacingOccurrences(
+            of: extractDir.path + "/",
+            with: ""
+        )
+        let depth = relativePath.components(separatedBy: "/").count
+
+        // Skip if exceeding depth limit
+        if depth > maxDepth {
+            logger.debug(
+                "Skipping file beyond depth limit",
+                metadata: [
+                    "file": "\(file.path)",
+                    "depth": "\(depth)",
+                    "max_depth": "\(maxDepth)",
+                ]
+            )
+            enumerator?.skipDescendants()
+            continue
+        }
+
         if findExecutable(file) {
+            // Found the executable, don't clean up
+            shouldCleanup = false
             return file
         }
     }
+
+    logger.error(
+        "Executable not found in archive",
+        metadata: [
+            "extract_dir": "\(extractDir.path)",
+            "max_depth": "\(maxDepth)",
+        ]
+    )
     throw ExtractError.executableNotFound
 }
