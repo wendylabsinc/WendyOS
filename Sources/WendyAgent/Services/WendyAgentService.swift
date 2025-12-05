@@ -97,11 +97,57 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             }
 
             logger.info("Applying update to \(currentBinary)")
-            try await filesystem.removeItem(at: currentBinary)
-            try await filesystem.moveItem(at: updateFile, to: currentBinary)
 
-            logger.info("Restarting agent")
-            try await shouldRestart()
+            // Create backup of current binary before replacement
+            let backupFile = currentBinary.appending(".backup")
+            logger.info("Creating backup at \(backupFile)")
+
+            // Remove any existing backup to ensure clean state
+            if try await filesystem.info(forFileAt: backupFile) != nil {
+                try await filesystem.removeItem(at: backupFile)
+            }
+
+            // Copy current binary to backup (not move, to keep original during replacement)
+            try await filesystem.copyItem(at: currentBinary, to: backupFile)
+
+            // Perform atomic replacement with error recovery
+            do {
+                // Remove current binary then immediately move new one into place
+                // This is still racy, but we have a backup to recover from
+                try await filesystem.removeItem(at: currentBinary)
+                try await filesystem.moveItem(at: updateFile, to: currentBinary)
+
+                logger.info("Update applied successfully, backup kept at \(backupFile)")
+                logger.info("Restarting agent")
+
+                // Attempt restart - if this throws, we'll restore from backup
+                try await shouldRestart()
+
+                // Note: If restart succeeds, this code won't execute as the process will exit
+                // The backup file will remain and should be cleaned up on next successful start
+            } catch {
+                // If move failed or restart failed, restore from backup
+                logger.error("Update failed: \(error), attempting to restore from backup")
+
+                // Remove the potentially corrupt/incomplete new binary if it exists
+                if (try? await filesystem.info(forFileAt: currentBinary)) != nil {
+                    _ = try? await filesystem.removeItem(at: currentBinary)
+                }
+
+                // Restore from backup
+                do {
+                    try await filesystem.moveItem(at: backupFile, to: currentBinary)
+                    logger.info("Successfully restored from backup")
+                } catch {
+                    logger.critical("Failed to restore from backup: \(error). System may be in inconsistent state.")
+                }
+
+                // Re-throw the original error
+                throw RPCError(
+                    code: .internalError,
+                    message: "Update failed: \(error.localizedDescription). Restored from backup."
+                )
+            }
 
             try await writer.write(
                 .with {
