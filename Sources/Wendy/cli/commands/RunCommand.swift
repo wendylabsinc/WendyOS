@@ -347,17 +347,31 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     func runSwiftApp() async throws {
         let swiftPM = SwiftPM()
-        try await swiftPM.addDependency(
-            url: "https://github.com/apple/swift-container-plugin",
-            from: "1.0.0"
-        )
-        let package = try await swiftPM.dumpPackage()
+        let package = try await swiftPM.showDependencies()
+
+        if !package.dependencies.contains(where: {
+            $0.url == "https://github.com/apple/swift-container-plugin"
+        }) {
+            Noora().info("Container plugin is not installed. Do you want to install it?")
+
+            guard Noora().yesOrNoChoicePrompt(question: "Do you want to install it?") else {
+                Noora().error(
+                    "Container plugin is required to build and run Swift packages. Please install it manually."
+                )
+                return
+            }
+
+            try await swiftPM.addDependency(
+                url: "https://github.com/apple/swift-container-plugin",
+                from: "1.0.0"
+            )
+        }
 
         // Get all executable targets
-        let executableTargets = package.targets.filter { $0.type == "executable" }
+        let executableTargets = try await swiftPM.showExecutables()
 
         // Use specified executable or handle multiple executable targets
-        let executableTarget: SwiftPM.Package.Target
+        let executableTarget: SwiftPM.Executable
         if let executableName = executable {
             guard let target = executableTargets.first(where: { $0.name == executableName }) else {
                 throw Error.invalidExecutableTarget(executableName)

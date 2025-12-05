@@ -157,7 +157,7 @@ public struct SwiftPM: Sendable {
 
     public func buildAndPushContainer(
         swiftSDK: String,
-        product: SwiftPM.Package.Target,
+        product: Executable,
         device: String
     ) async throws {
         let args = arguments([
@@ -215,18 +215,17 @@ public struct SwiftPM: Sendable {
         }
     }
 
-    public func dumpPackage(_ options: BuildOption...) async throws -> Package {
-        let args = arguments(["package", "dump-package"] + options.flatMap(\.arguments))
-
+    public func showDependencies() async throws -> Dependency {
+        let args = arguments(["package", "show-dependencies", "--format", "json"])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,
-            output: .string(limit: 100_000),
-            error: .string(limit: 100_000)
+            output: .string(limit: 1_000_000),
+            error: .standardError
         )
 
         if result.terminationStatus.isSuccess, let output = result.standardOutput {
-            return try JSONDecoder().decode(Package.self, from: Data(output.utf8))
+            return try JSONDecoder().decode(Dependency.self, from: Data(output.utf8))
         } else {
             let exitCode: Int
             switch result.terminationStatus {
@@ -237,7 +236,33 @@ public struct SwiftPM: Sendable {
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
-                error: result.standardError ?? ""
+                error: ""
+            )
+        }
+    }
+
+    public func showExecutables() async throws -> [Executable] {
+        let args = arguments(["package", "show-executables", "--format", "json"])
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(executableName),
+            arguments: args,
+            output: .string(limit: 1_000_000),
+            error: .standardError
+        )
+
+        if result.terminationStatus.isSuccess, let output = result.standardOutput {
+            return try JSONDecoder().decode([Executable].self, from: Data(output.utf8))
+        } else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: ""
             )
         }
     }
@@ -258,18 +283,21 @@ public struct SwiftPM: Sendable {
         }
     }
 
-    /// The return type of the `dumpPackage` method.
-    /// Currently incomplete.
-    public struct Package: Decodable, Sendable {
-        public var targets: [Target]
+    public struct Executable: Codable, Sendable, Hashable, CustomStringConvertible {
+        public var package: String
+        public var name: String
 
-        public struct Target: Decodable, Sendable, Hashable, CustomStringConvertible {
-            public var name: String
-            public var type: String
-
-            public var description: String {
-                return name
-            }
+        public var description: String {
+            return name
         }
+    }
+
+    public struct Dependency: Codable, Sendable, Hashable {
+        public var identity: String
+        public var name: String
+        public var url: String
+        public var version: String
+        public var path: String
+        public var dependencies: [Dependency]
     }
 }
