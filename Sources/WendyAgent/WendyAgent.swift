@@ -217,25 +217,58 @@ struct WendyAgent: AsyncParsableCommand {
 /// Cleans up old backup files from previous successful updates
 /// Keeps the most recent .backup file only if it's from a recent update (< 48 hours old)
 /// This prevents accumulation of backup files while maintaining a safety net
+/// Also handles automatic recovery if current binary is missing (e.g., power loss during update)
 func cleanupOldBackupFiles(logger: Logger) async {
     let filesystem = FileSystem.shared
     let currentBinaryPath = FilePath(ProcessInfo.processInfo.arguments[0])
     let backupPath = currentBinaryPath.appending(".backup")
 
     do {
+        // Check if current binary exists
+        let currentInfo = try await filesystem.info(forFileAt: currentBinaryPath)
+
+        // Check if backup exists
         guard let backupInfo = try await filesystem.info(forFileAt: backupPath) else {
             // No backup file exists, nothing to clean up
             return
         }
 
-        // Get current binary modification time
-        guard let currentInfo = try await filesystem.info(forFileAt: currentBinaryPath) else {
-            logger.warning("Could not get info for current binary at \(currentBinaryPath)")
-            return
+        // If we get here, both current binary and backup exist
+        guard let currentFileInfo = currentInfo else {
+            // Current binary is missing but backup exists - RECOVERY MODE
+            logger.warning(
+                "Current binary missing but backup exists - attempting automatic recovery",
+                metadata: [
+                    "current_path": "\(currentBinaryPath)",
+                    "backup_path": "\(backupPath)",
+                ]
+            )
+
+            do {
+                // Restore from backup
+                try await filesystem.moveItem(at: backupPath, to: currentBinaryPath)
+                logger.info("Successfully recovered binary from backup", metadata: [
+                    "restored_to": "\(currentBinaryPath)"
+                ])
+                // After recovery, no backup remains so we're done
+                return
+            } catch {
+                logger.critical(
+                    "Failed to recover binary from backup - system may be broken",
+                    metadata: [
+                        "error": "\(error)",
+                        "backup_path": "\(backupPath)",
+                    ]
+                )
+                // Don't delete backup if recovery failed
+                return
+            }
         }
 
         // Check if backup is older than current binary (indicates successful update)
-        if backupInfo.lastDataModificationTime.seconds < currentInfo.lastDataModificationTime.seconds {
+        if backupInfo.lastDataModificationTime.seconds
+            < currentFileInfo.lastDataModificationTime.seconds
+        {
             // Calculate age of backup
             let backupAge = Date().timeIntervalSince(
                 Date(timeIntervalSince1970: TimeInterval(backupInfo.lastDataModificationTime.seconds))
@@ -268,7 +301,7 @@ func cleanupOldBackupFiles(logger: Logger) async {
                 metadata: [
                     "backup_path": "\(backupPath)",
                     "backup_modified": "\(backupInfo.lastDataModificationTime)",
-                    "current_modified": "\(currentInfo.lastDataModificationTime)",
+                    "current_modified": "\(currentFileInfo.lastDataModificationTime)",
                 ]
             )
         }
