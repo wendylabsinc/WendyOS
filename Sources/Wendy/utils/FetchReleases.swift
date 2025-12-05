@@ -54,6 +54,7 @@ enum ReleasesError: Error {
     case unsupportedPlatform(String)
     case invalidDownloadURL(String)
     case fileTooLarge(actual: Int64, maximum: Int64)
+    case rateLimitExceeded(resetTime: Date)
 }
 
 /// Supported platforms and architectures
@@ -153,8 +154,43 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
 
     // Check for successful response
     guard response.status == .ok else {
+        // Check for rate limiting (HTTP 403)
+        if response.status.code == 403 {
+            // Check if this is a rate limit error
+            if let rateLimitRemaining = response.headers.first(name: "X-RateLimit-Remaining"),
+                rateLimitRemaining == "0",
+                let rateLimitReset = response.headers.first(name: "X-RateLimit-Reset"),
+                let resetTimestamp = TimeInterval(rateLimitReset)
+            {
+                let resetDate = Date(timeIntervalSince1970: resetTimestamp)
+                let timeUntilReset = resetDate.timeIntervalSinceNow
+
+                logger.error(
+                    "GitHub API rate limit exceeded",
+                    metadata: [
+                        "reset_time": "\(resetDate)",
+                        "minutes_until_reset": "\(Int(timeUntilReset / 60))",
+                    ]
+                )
+                throw ReleasesError.rateLimitExceeded(resetTime: resetDate)
+            }
+        }
+
         logger.error("Failed to fetch releases: HTTP error - status \(response.status)")
         throw ReleasesError.invalidResponse
+    }
+
+    // Log rate limit info for monitoring
+    if let rateLimitRemaining = response.headers.first(name: "X-RateLimit-Remaining"),
+        let rateLimitLimit = response.headers.first(name: "X-RateLimit-Limit")
+    {
+        logger.debug(
+            "GitHub API rate limit status",
+            metadata: [
+                "remaining": "\(rateLimitRemaining)",
+                "limit": "\(rateLimitLimit)",
+            ]
+        )
     }
 
     // Collect response body
