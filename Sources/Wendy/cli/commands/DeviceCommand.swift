@@ -91,15 +91,41 @@ struct DeviceCommand: AsyncParsableCommand {
         @Option(help: "The path to the new version of the Wendy agent.")
         var binary: String?
 
+        @Flag(help: "Download the latest pre-release version instead of stable release")
+        var prerelease: Bool = false
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
             let binary: String
+            let tempDirectoryToCleanup: URL?
 
             if let location = self.binary {
                 binary = location
+                tempDirectoryToCleanup = nil  // Don't clean up user-provided files
             } else {
-                binary = try await downloadLatestRelease().path
+                let download = try await downloadLatestRelease(includePrerelease: prerelease)
+                binary = download.binaryURL.path
+                tempDirectoryToCleanup = download.tempDirectory  // Clean up downloaded files
+            }
+
+            // Ensure cleanup of downloaded binary after upload
+            defer {
+                if let tempDir = tempDirectoryToCleanup {
+                    do {
+                        try FileManager.default.removeItem(at: tempDir)
+                    } catch {
+                        // Log but don't fail the operation if cleanup fails
+                        let logger = Logger(label: "sh.wendy.cli.device")
+                        logger.warning(
+                            "Failed to clean up temporary files",
+                            metadata: [
+                                "path": "\(tempDir.path)",
+                                "error": "\(error)",
+                            ]
+                        )
+                    }
+                }
             }
 
             let success = try await withAgentGRPCClient(
@@ -244,7 +270,26 @@ struct DeviceCommand: AsyncParsableCommand {
                     return
                 }
 
-                let binary = try await downloadLatestRelease().path
+                let download = try await downloadLatestRelease()
+                let binary = download.binaryURL.path
+
+                // Ensure cleanup of downloaded binary after upload
+                defer {
+                    do {
+                        try FileManager.default.removeItem(at: download.tempDirectory)
+                    } catch {
+                        // Log but don't fail the operation if cleanup fails
+                        let logger = Logger(label: "sh.wendy.cli.device")
+                        logger.warning(
+                            "Failed to clean up temporary files",
+                            metadata: [
+                                "path": "\(download.tempDirectory.path)",
+                                "error": "\(error)",
+                            ]
+                        )
+                    }
+                }
+
                 let success = try await Noora().progressBarStep(message: "Updating Device") {
                     updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)
