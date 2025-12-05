@@ -219,10 +219,10 @@ public struct DockerCLI: Sendable {
         // Create buildkitd.toml configuration
         // Include multiple registry configurations to handle different networking scenarios
         let configContent = """
-        [registry."\(registryHostname):\(registryPort)"]
-            http = true
-            insecure = true
-        """
+            [registry."\(registryHostname):\(registryPort)"]
+                http = true
+                insecure = true
+            """
 
         let configPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wendy")
@@ -230,9 +230,7 @@ public struct DockerCLI: Sendable {
             .path
 
         var updatedConfig = false
-        if
-            var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8)
-        {
+        if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
             if !existingConfig.contains("\(registryHostname):5000") {
                 existingConfig += "\n\n" + configContent
                 try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -252,7 +250,7 @@ public struct DockerCLI: Sendable {
             let cpArguments: Subprocess.Arguments = [
                 "cp",
                 configPath,
-                "\(containerName):/etc/buildkit/buildkitd.toml"
+                "\(containerName):/etc/buildkit/buildkitd.toml",
             ]
             let cpResult = try await Subprocess.run(
                 Subprocess.Executable.name(self.command),
@@ -277,7 +275,7 @@ public struct DockerCLI: Sendable {
             }
 
             let restartArguments: Subprocess.Arguments = [
-                "restart", containerName
+                "restart", containerName,
             ]
             let restartResult = try await Subprocess.run(
                 Subprocess.Executable.name(self.command),

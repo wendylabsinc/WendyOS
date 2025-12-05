@@ -196,7 +196,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     errorMessage: "Failed to create builder",
                     showSpinner: true
                 ) { _ in
-                    try await docker.prepareBuildxBuilder(registryHostname: endpoint.host, registryPort: 5000)
+                    try await docker.prepareBuildxBuilder(
+                        registryHostname: endpoint.host,
+                        registryPort: 5000
+                    )
                 }
             }
 
@@ -212,7 +215,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     errorMessage: "Failed to build and upload container",
                     showSpinner: true
                 ) { _ in
-                    try await docker.buildxAndPush(name: name, registryHostname: endpoint.host, registryPort: 5000)
+                    try await docker.buildxAndPush(
+                        name: name,
+                        registryHostname: endpoint.host,
+                        registryPort: 5000
+                    )
                 }
             }
 
