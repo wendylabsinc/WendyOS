@@ -127,7 +127,21 @@ func downloadLatestRelease(
     let fileURL = try await extract(at: downloadedFileURL, to: directory) { file in
         file.lastPathComponent == "wendy-agent"
     }
-    try? FileManager.default.removeItem(at: downloadedFileURL)
+
+    // Clean up downloaded archive
+    do {
+        try FileManager.default.removeItem(at: downloadedFileURL)
+    } catch {
+        let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+        logger.warning(
+            "Failed to remove downloaded archive",
+            metadata: [
+                "path": "\(downloadedFileURL.path)",
+                "error": "\(error)",
+            ]
+        )
+    }
+
     return fileURL
 }
 
