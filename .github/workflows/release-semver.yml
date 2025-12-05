@@ -98,18 +98,13 @@ jobs:
           echo ""
           echo "🚀 Creating release $VERSION..."
 
-          # Create release notes with proper escaping
-          NOTES=$(cat <<EOF
-$BODY
-
----
-*Promoted from pre-release $PRERELEASE_TAG*
-EOF
-)
+          # Build release notes (appending promotion note to original body)
+          PROMOTION_NOTE="Promoted from pre-release $PRERELEASE_TAG"
+          FULL_NOTES="$BODY"$'\n\n'"$PROMOTION_NOTE"
 
           gh release create "$VERSION" \
             --title "Release $VERSION" \
-            --notes "$NOTES" \
+            --notes "$FULL_NOTES" \
             --latest \
             "${RENAMED_FILES[@]}"
 
