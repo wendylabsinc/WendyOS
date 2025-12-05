@@ -400,14 +400,23 @@ func extract(
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["tar", "-xzf", url.path, "-C", extractDir.path]
+
+    // Capture stderr for better debugging
+    let extractErrorPipe = Pipe()
+    process.standardError = extractErrorPipe
+
     try process.run()
     process.waitUntilExit()
+
     guard process.terminationStatus == 0 else {
+        let errorData = extractErrorPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorMessage = String(data: errorData, encoding: .utf8) ?? "unknown error"
         logger.error(
             "Failed to extract tar.gz archive",
             metadata: [
                 "exit_code": "\(process.terminationStatus)",
                 "archive": "\(url.path)",
+                "error": "\(errorMessage)",
             ]
         )
         throw ExtractError.failedToExtract
