@@ -49,6 +49,9 @@ struct WendyAgent: AsyncParsableCommand {
 
         logger.info("Starting Wendy Agent version \(Version.current) on port \(port)")
 
+        // Clean up old backup files from previous successful updates
+        await cleanupOldBackupFiles(logger: logger)
+
         let (signal, continuation) = AsyncStream<Void>.makeStream()
 
         let provisioning: WendyProvisioningService
@@ -208,5 +211,73 @@ struct WendyAgent: AsyncParsableCommand {
             defer { taskGroup.cancelAll() }
             try await taskGroup.next()
         }
+    }
+}
+
+/// Cleans up old backup files from previous successful updates
+/// Keeps the most recent .backup file only if it's from a recent update (< 48 hours old)
+/// This prevents accumulation of backup files while maintaining a safety net
+func cleanupOldBackupFiles(logger: Logger) async {
+    let filesystem = FileSystem.shared
+    let currentBinaryPath = FilePath(ProcessInfo.processInfo.arguments[0])
+    let backupPath = currentBinaryPath.appending(".backup")
+
+    do {
+        guard let backupInfo = try await filesystem.info(forFileAt: backupPath) else {
+            // No backup file exists, nothing to clean up
+            return
+        }
+
+        // Get current binary modification time
+        guard let currentInfo = try await filesystem.info(forFileAt: currentBinaryPath) else {
+            logger.warning("Could not get info for current binary at \(currentBinaryPath)")
+            return
+        }
+
+        // Check if backup is older than current binary (indicates successful update)
+        if backupInfo.lastDataModificationTime.seconds < currentInfo.lastDataModificationTime.seconds {
+            // Calculate age of backup
+            let backupAge = Date().timeIntervalSince(
+                Date(timeIntervalSince1970: TimeInterval(backupInfo.lastDataModificationTime.seconds))
+            )
+
+            // Keep backup for 48 hours as safety net
+            if backupAge > (48 * 3600) {
+                logger.info(
+                    "Removing old backup file from successful update",
+                    metadata: [
+                        "path": "\(backupPath)",
+                        "age_hours": "\(Int(backupAge / 3600))",
+                    ]
+                )
+                try await filesystem.removeItem(at: backupPath)
+            } else {
+                logger.debug(
+                    "Keeping recent backup file",
+                    metadata: [
+                        "path": "\(backupPath)",
+                        "age_hours": "\(Int(backupAge / 3600))",
+                    ]
+                )
+            }
+        } else {
+            // Backup is newer than current binary - this is unusual
+            // Keep it for manual inspection/recovery
+            logger.warning(
+                "Backup file is newer than current binary - keeping for manual inspection",
+                metadata: [
+                    "backup_path": "\(backupPath)",
+                    "backup_modified": "\(backupInfo.lastDataModificationTime)",
+                    "current_modified": "\(currentInfo.lastDataModificationTime)",
+                ]
+            )
+        }
+    } catch {
+        logger.warning(
+            "Failed to clean up backup files",
+            metadata: [
+                "error": "\(error)"
+            ]
+        )
     }
 }
