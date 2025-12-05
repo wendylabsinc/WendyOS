@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift --version:*)",
+      "Bash(git tag:*)",
+      "Bash(gh release list:*)",
+      "Bash(gh release view:*)",
+      "Bash(yamllint:*)",
+      "Bash(python3:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

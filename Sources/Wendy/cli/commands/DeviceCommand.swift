@@ -117,7 +117,8 @@ struct DeviceCommand: AsyncParsableCommand {
                         // Get the parent directory (the temp directory created by downloadLatestRelease)
                         let binaryURL = URL(fileURLWithPath: binary)
                         // Go up two levels: binary -> extract -> tempDir
-                        let tempDir = binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                        let tempDir = binaryURL.deletingLastPathComponent()
+                            .deletingLastPathComponent()
                         try FileManager.default.removeItem(at: tempDir)
                     } catch {
                         // Log but don't fail the operation if cleanup fails
@@ -276,7 +277,8 @@ struct DeviceCommand: AsyncParsableCommand {
                         // Get the parent directory (the temp directory created by downloadLatestRelease)
                         let binaryURL = URL(fileURLWithPath: binary)
                         // Go up two levels: binary -> extract -> tempDir
-                        let tempDir = binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                        let tempDir = binaryURL.deletingLastPathComponent()
+                            .deletingLastPathComponent()
                         try FileManager.default.removeItem(at: tempDir)
                     } catch {
                         // Log but don't fail the operation if cleanup fails
