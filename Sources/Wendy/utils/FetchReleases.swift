@@ -53,6 +53,7 @@ enum ReleasesError: Error {
     case noAsset
     case unsupportedPlatform(String)
     case invalidDownloadURL(String)
+    case fileTooLarge(actual: Int64, maximum: Int64)
 }
 
 /// Supported platforms and architectures
@@ -172,9 +173,52 @@ func downloadAsset(_ asset: Release.Asset) async throws -> URL {
     guard let downloadURL = URL(string: asset.browser_download_url) else {
         throw ReleasesError.invalidDownloadURL(asset.browser_download_url)
     }
+
+    // Check file size before downloading (500MB limit)
+    let maxFileSize: Int64 = 500 * 1024 * 1024  // 500MB in bytes
+    let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+
+    // Make HEAD request to get Content-Length
+    var headRequest = HTTPClientRequest(url: downloadURL.absoluteString)
+    headRequest.method = .HEAD
+    let headResponse = try await HTTPClient.shared.execute(
+        headRequest,
+        deadline: NIODeadline.now() + .seconds(30)
+    )
+
+    if let contentLength = headResponse.headers.first(name: "Content-Length"),
+        let fileSize = Int64(contentLength)
+    {
+        if fileSize > maxFileSize {
+            logger.error(
+                "Asset file too large",
+                metadata: [
+                    "asset": "\(asset.name)",
+                    "size_mb": "\(fileSize / 1024 / 1024)",
+                    "max_mb": "\(maxFileSize / 1024 / 1024)",
+                ]
+            )
+            throw ReleasesError.fileTooLarge(actual: fileSize, maximum: maxFileSize)
+        }
+        logger.info(
+            "Downloading asset",
+            metadata: [
+                "asset": "\(asset.name)",
+                "size_mb": "\(fileSize / 1024 / 1024)",
+            ]
+        )
+    } else {
+        logger.warning(
+            "Could not determine file size before download",
+            metadata: [
+                "asset": "\(asset.name)"
+            ]
+        )
+    }
+
     let downloadedFileURL = tempDir.appendingPathComponent(asset.name)
     try await downloadFile(from: downloadURL, to: downloadedFileURL.path) { _ in }
-    print("Downloaded wendy-agent: \(downloadedFileURL.path)")
+    logger.info("Downloaded asset", metadata: ["path": "\(downloadedFileURL.path)"])
     return downloadedFileURL
 }
 
