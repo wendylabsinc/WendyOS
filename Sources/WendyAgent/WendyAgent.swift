@@ -247,9 +247,12 @@ func cleanupOldBackupFiles(logger: Logger) async {
             do {
                 // Restore from backup
                 try await filesystem.moveItem(at: backupPath, to: currentBinaryPath)
-                logger.info("Successfully recovered binary from backup", metadata: [
-                    "restored_to": "\(currentBinaryPath)"
-                ])
+                logger.info(
+                    "Successfully recovered binary from backup",
+                    metadata: [
+                        "restored_to": "\(currentBinaryPath)"
+                    ]
+                )
                 // After recovery, no backup remains so we're done
                 return
             } catch {
@@ -271,7 +274,9 @@ func cleanupOldBackupFiles(logger: Logger) async {
         {
             // Calculate age of backup
             let backupAge = Date().timeIntervalSince(
-                Date(timeIntervalSince1970: TimeInterval(backupInfo.lastDataModificationTime.seconds))
+                Date(
+                    timeIntervalSince1970: TimeInterval(backupInfo.lastDataModificationTime.seconds)
+                )
             )
 
             // Keep backup for 48 hours as safety net

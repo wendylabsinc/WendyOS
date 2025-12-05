@@ -139,7 +139,9 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     try await filesystem.moveItem(at: backupFile, to: currentBinary)
                     logger.info("Successfully restored from backup")
                 } catch {
-                    logger.critical("Failed to restore from backup: \(error). System may be in inconsistent state.")
+                    logger.critical(
+                        "Failed to restore from backup: \(error). System may be in inconsistent state."
+                    )
                 }
 
                 // Re-throw the original error
