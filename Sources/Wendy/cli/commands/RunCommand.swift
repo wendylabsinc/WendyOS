@@ -170,13 +170,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let name = url.lastPathComponent.lowercased()
 
         let docker = DockerCLI()
+        let dockerContext = await docker.currentContext()
 
         let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
         let endpoint = try await agentConnectionOptions.read(title: title)
         try await _withAgentGRPCClient(
             endpoint,
             title: title
-        ) { [name] client, endpoint in
+        ) { [name, dockerContext] client, endpoint in
             // Bind to all interfaces for Docker Desktop compatibility
             try await withTCPProxyServer(
                 localHostname: "0.0.0.0",
@@ -187,9 +188,19 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 let port = proxyAddress?.port ?? 50053
                 let builderName = docker.builderName(forPort: port)
 
+                // Build additional properties for analytics
+                var buildPhaseProperties: [String: String] = [:]
+                if let dockerContext {
+                    buildPhaseProperties["docker_context"] = dockerContext
+                }
+
                 if try await !docker.hasBuildxBuilder(builderName: builderName) {
                     // Create buildx builder with insecure registry support
-                    try await executePhase(phase: "builder_setup", appType: "dockerfile") {
+                    try await executePhase(
+                        phase: "builder_setup",
+                        runtime: "dockerfile",
+                        additionalProperties: buildPhaseProperties
+                    ) {
                         try await Noora().progressStep(
                             message: "Setting up builder",
                             successMessage: "Builder ready",
@@ -202,7 +213,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 }
 
                 // Build and push in a single operation for better performance
-                try await executePhase(phase: "build_upload", appType: "dockerfile") {
+                try await executePhase(
+                    phase: "build_upload",
+                    runtime: "dockerfile",
+                    additionalProperties: buildPhaseProperties
+                ) {
                     try await Noora().progressStep(
                         message: "Building and uploading container",
                         successMessage: "Container built and uploaded successfully!",
@@ -214,7 +229,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 }
             }
 
-            try await executePhase(phase: "prepare_container", appType: "dockerfile") {
+            try await executePhase(phase: "prepare_container", runtime: "dockerfile") {
                 try await Noora().progressStep(
                     message: "Preparing app",
                     successMessage: "App ready to start",
@@ -228,7 +243,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 }
             }
 
-            try await executePhase(phase: "start_container", appType: "dockerfile") {
+            try await executePhase(phase: "start_container", runtime: "dockerfile") {
                 try await startContainerdContainer(
                     imageName: name,
                     client: client
@@ -403,7 +418,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             title: "Which device do you want to run this app on?"
         ) { client, endpoint in
             Noora().info("Building Swift app")
-            try await executePhase(phase: "build_swift_app", appType: "swift") {
+            try await executePhase(phase: "build_swift_app", runtime: "swift") {
                 try await swiftPM.buildAndPushContainer(
                     swiftSDK: swiftSDK,
                     product: executableTarget,
@@ -412,7 +427,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
 
             Noora().info("Creating Container")
-            try await executePhase(phase: "create_container", appType: "swift") {
+            try await executePhase(phase: "create_container", runtime: "swift") {
                 try await createContainerdContainer(
                     appName: appName,
                     client: client
@@ -420,7 +435,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
 
             Noora().info("Starting Container")
-            try await executePhase(phase: "start_container", appType: "swift") {
+            try await executePhase(phase: "start_container", runtime: "swift") {
                 try await startContainerdContainer(imageName: appName, client: client)
             }
         }
@@ -529,34 +544,45 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     /// Track a phase failure for analytics
     private func trackPhaseFailure(
         phase: String,
-        appType: String,
-        error: Swift.Error
+        runtime: String,
+        error: Swift.Error,
+        additionalProperties: [String: String] = [:]
     ) async {
         guard let analytics = AnalyticsService.shared else { return }
         let sanitizedError = ErrorSanitizer.sanitize(error)
+        var properties: [String: String] = [
+            "phase": phase,
+            "runtime": runtime,
+            "command_name": "wendy run",
+            "error_type": sanitizedError.type,
+            "error_name": sanitizedError.name,
+            "error_domain": sanitizedError.domain,
+        ]
+        for (key, value) in additionalProperties {
+            properties[key] = value
+        }
         await analytics.trackEvent(
             name: "run_phase_failed",
-            properties: [
-                "phase": phase,
-                "app_type": appType,
-                "command_name": "wendy run",
-                "error_type": sanitizedError.type,
-                "error_name": sanitizedError.name,
-                "error_domain": sanitizedError.domain,
-            ]
+            properties: properties
         )
     }
 
     /// Execute a phase with failure tracking
     private func executePhase<T: Sendable>(
         phase: String,
-        appType: String,
+        runtime: String,
+        additionalProperties: [String: String] = [:],
         operation: @Sendable () async throws -> T
     ) async throws -> T {
         do {
             return try await operation()
         } catch {
-            await trackPhaseFailure(phase: phase, appType: appType, error: error)
+            await trackPhaseFailure(
+                phase: phase,
+                runtime: runtime,
+                error: error,
+                additionalProperties: additionalProperties
+            )
             throw error
         }
     }

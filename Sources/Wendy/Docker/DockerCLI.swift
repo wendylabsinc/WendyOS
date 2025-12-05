@@ -150,6 +150,26 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// Returns the current Docker context name
+    public func currentContext() async -> String? {
+        let arguments = ["context", "show"]
+        do {
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 1000, encoding: UTF8.self),
+                error: .discarded
+            )
+            guard result.terminationStatus.isSuccess,
+                  let output = result.standardOutput else {
+                return nil
+            }
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return nil
+        }
+    }
+
     public func listBuildxBuilders() async throws -> [String] {
         let arguments = ["buildx", "ls", "--format", "{{.Name}}"]
         let result = try await Subprocess.run(
