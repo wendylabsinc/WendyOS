@@ -176,32 +176,24 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             endpoint,
             title: title
         ) { [name] client, endpoint in
-            // Bind to all interfaces for Docker Desktop compatibility
-            try await withTCPProxyServer(
-                localHostname: "0.0.0.0",
-                localPort: 50053,
-                remoteHostname: endpoint.host,
-                remotePort: 5000
-            ) { proxyAddress in
-                // Create buildx builder with insecure registry support
-                try await Noora().progressStep(
-                    message: "Preparing builder",
-                    successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.prepareBuildxBuilder(registryHostname: endpoint.host, registryPort: 5000)
-                }
+            // Create buildx builder with insecure registry support
+            try await Noora().progressStep(
+                message: "Preparing builder",
+                successMessage: "Builder ready",
+                errorMessage: "Failed to create builder",
+                showSpinner: true
+            ) { _ in
+                try await docker.prepareBuildxBuilder(registryHostname: endpoint.host, registryPort: 5000)
+            }
 
-                // Build and push in a single operation for better performance
-                try await Noora().progressStep(
-                    message: "Building and uploading container",
-                    successMessage: "Container built and uploaded successfully!",
-                    errorMessage: "Failed to build and upload container",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.buildxAndPush(name: name, registryHostname: endpoint.host, registryPort: 5000)
-                }
+            // Build and push in a single operation for better performance
+            try await Noora().progressStep(
+                message: "Building and uploading container",
+                successMessage: "Container built and uploaded successfully!",
+                errorMessage: "Failed to build and upload container",
+                showSpinner: true
+            ) { _ in
+                try await docker.buildxAndPush(name: name, registryHostname: endpoint.host, registryPort: 5000)
             }
 
             try await Noora().progressStep(
@@ -403,91 +395,6 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
             Noora().info("Starting Container")
             try await startContainerdContainer(imageName: appName, client: client)
-        }
-    }
-
-    private func withTCPProxyServer<T: Sendable>(
-        localHostname: String,
-        localPort: Int,
-        remoteHostname: String,
-        remotePort: Int,
-        _ withPort: @escaping @Sendable (NIOCore.SocketAddress?) async throws -> T
-    ) async throws -> T {
-        let server = try await ServerBootstrap(group: .singletonMultiThreadedEventLoopGroup)
-            .serverChannelOption(ChannelOptions.backlog, value: numericCast(256))
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-            .bind(
-                host: localHostname,
-                port: localPort,
-                serverBackPressureStrategy: nil
-            ) { channel in
-                return channel.eventLoop.makeCompletedFuture {
-                    try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                        wrappingChannelSynchronously: channel,
-                        configuration: .init()
-                    )
-                }
-            }
-
-        func makeClient() async throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
-            try await ClientBootstrap(group: .singletonMultiThreadedEventLoopGroup)
-                .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-                .connect(host: remoteHostname, port: remotePort) { channel in
-                    return channel.eventLoop.makeCompletedFuture {
-                        try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-                            wrappingChannelSynchronously: channel,
-                            configuration: .init()
-                        )
-                    }
-                }
-        }
-
-        let logger = Logger(label: "sh.wendy.cli.run.tcp-proxy-server")
-
-        func handleClient(client: NIOAsyncChannel<ByteBuffer, ByteBuffer>) async throws {
-            do {
-                try await client.executeThenClose { serverInbound, serverOutbound in
-                    try await makeClient().executeThenClose { clientInbound, clientOutbound in
-                        try await withThrowingTaskGroup { group in
-                            group.addTask {
-                                for try await buffer in serverInbound {
-                                    try await clientOutbound.write(buffer)
-                                }
-                            }
-                            group.addTask {
-                                for try await buffer in clientInbound {
-                                    try await serverOutbound.write(buffer)
-                                }
-                            }
-                            try await group.waitForAll()
-                        }
-                    }
-                }
-            } catch is CancellationError {
-                // Connection was cancelled (normal when buildx completes)
-                logger.trace("Client connection cancelled")
-            } catch {
-                logger.error("Failed to handle client", metadata: ["error": .string("\(error)")])
-            }
-        }
-
-        return try await server.executeThenClose { clients in
-            try await withThrowingTaskGroup { group in
-                group.addTask {
-                    try await withThrowingDiscardingTaskGroup { group in
-                        for try await client in clients {
-                            group.addTask {
-                                try await handleClient(client: client)
-                            }
-                        }
-                    }
-                }
-
-                defer { group.cancelAll() }
-                return try await withPort(server.channel.localAddress)
-            }
         }
     }
 
