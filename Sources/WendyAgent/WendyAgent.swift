@@ -49,6 +49,9 @@ struct WendyAgent: AsyncParsableCommand {
 
         logger.info("Starting Wendy Agent version \(Version.current) on port \(port)")
 
+        // Clean up old backup files from previous successful updates
+        await cleanupOldBackupFiles(logger: logger)
+
         let (signal, continuation) = AsyncStream<Void>.makeStream()
 
         let provisioning: WendyProvisioningService
@@ -208,5 +211,150 @@ struct WendyAgent: AsyncParsableCommand {
             defer { taskGroup.cancelAll() }
             try await taskGroup.next()
         }
+    }
+}
+
+/// Resolves all symlinks in a file path to get the actual file location
+/// This handles symlink chains (A -> B -> C) and ensures backups are created next to the real binary
+func resolveSymlinks(_ path: FilePath) -> FilePath {
+    // Use URL's resolvingSymlinksInPath which resolves the entire chain
+    let url = URL(fileURLWithPath: path.string)
+    let resolvedURL = url.resolvingSymlinksInPath()
+    return FilePath(resolvedURL.path)
+}
+
+/// Cleans up old backup files from previous successful updates
+/// Keeps the most recent .backup file only if it's from a recent update (< 48 hours old)
+/// This prevents accumulation of backup files while maintaining a safety net
+/// Also handles automatic recovery if current binary is missing (e.g., power loss during update)
+func cleanupOldBackupFiles(logger: Logger) async {
+    let filesystem = FileSystem.shared
+
+    // Resolve symlinks to get the actual binary location
+    let rawBinaryPath = FilePath(ProcessInfo.processInfo.arguments[0])
+    let currentBinaryPath = resolveSymlinks(rawBinaryPath)
+    let backupPath = currentBinaryPath.appending(".backup")
+
+    // Use try? to handle missing files gracefully instead of throwing
+    let currentInfo = try? await filesystem.info(forFileAt: currentBinaryPath)
+    let backupInfo = try? await filesystem.info(forFileAt: backupPath)
+
+    // If no backup exists, nothing to clean up
+    guard let backupInfo = backupInfo else {
+        return
+    }
+
+    // If current binary is missing but backup exists - RECOVERY MODE
+    if currentInfo == nil {
+        logger.warning(
+            "Current binary missing but backup exists - attempting automatic recovery",
+            metadata: [
+                "current_path": "\(currentBinaryPath)",
+                "backup_path": "\(backupPath)",
+            ]
+        )
+
+        do {
+            // Capture backup permissions before moving
+            let fileManager = FileManager.default
+            let backupAttributes = try fileManager.attributesOfItem(atPath: backupPath.string)
+            let backupPermissions = backupAttributes[.posixPermissions] as? NSNumber
+
+            // Restore from backup
+            try await filesystem.moveItem(at: backupPath, to: currentBinaryPath)
+
+            // Ensure executable permissions are preserved
+            if let permissions = backupPermissions {
+                try fileManager.setAttributes(
+                    [.posixPermissions: permissions],
+                    ofItemAtPath: currentBinaryPath.string
+                )
+                logger.debug(
+                    "Restored permissions from backup",
+                    metadata: [
+                        "path": "\(currentBinaryPath)",
+                        "permissions": "\(String(format: "%o", permissions.uint16Value))",
+                    ]
+                )
+            }
+
+            logger.info(
+                "Successfully recovered binary from backup",
+                metadata: [
+                    "restored_to": "\(currentBinaryPath)"
+                ]
+            )
+            // After recovery, no backup remains so we're done
+            return
+        } catch {
+            logger.critical(
+                "Failed to recover binary from backup - system may be broken",
+                metadata: [
+                    "error": "\(error)",
+                    "backup_path": "\(backupPath)",
+                ]
+            )
+            // Don't delete backup if recovery failed
+            return
+        }
+    }
+
+    // If we get here, current binary exists, so unwrap safely
+    guard let currentFileInfo = currentInfo else {
+        // This should never happen since we checked currentInfo != nil above
+        return
+    }
+
+    // Check if backup is older than current binary (indicates successful update)
+    if backupInfo.lastDataModificationTime.seconds
+        < currentFileInfo.lastDataModificationTime.seconds
+    {
+        // Calculate age of backup
+        let backupAge = Date().timeIntervalSince(
+            Date(
+                timeIntervalSince1970: TimeInterval(backupInfo.lastDataModificationTime.seconds)
+            )
+        )
+
+        // Keep backup for 48 hours as safety net
+        if backupAge > (48 * 3600) {
+            logger.info(
+                "Removing old backup file from successful update",
+                metadata: [
+                    "path": "\(backupPath)",
+                    "age_hours": "\(Int(backupAge / 3600))",
+                ]
+            )
+            do {
+                try await filesystem.removeItem(at: backupPath)
+            } catch {
+                logger.warning(
+                    "Failed to remove old backup file",
+                    metadata: [
+                        "path": "\(backupPath)",
+                        "error": "\(error)",
+                    ]
+                )
+            }
+        } else {
+            logger.debug(
+                "Keeping recent backup file",
+                metadata: [
+                    "path": "\(backupPath)",
+                    "age_hours": "\(Int(backupAge / 3600))",
+                ]
+            )
+        }
+    } else {
+        // Backup is newer than current binary - this is unusual
+        // Keep it for manual inspection/recovery
+        logger.warning(
+            "Backup file is newer than current binary - keeping for manual inspection",
+            metadata: [
+                "backup_path": "\(backupPath)",
+                "backup_modified": "\(backupInfo.lastDataModificationTime)",
+                "current_modified": "\(currentFileInfo.lastDataModificationTime)",
+            ]
+        )
     }
 }

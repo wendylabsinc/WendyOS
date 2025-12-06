@@ -1,3 +1,4 @@
+import Analytics
 import AppConfig
 import ArgumentParser
 import ContainerRegistry
@@ -169,13 +170,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let name = url.lastPathComponent.lowercased()
 
         let docker = DockerCLI()
+        let dockerContext = await docker.currentContext()
 
         let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
         let endpoint = try await agentConnectionOptions.read(title: title)
         try await _withAgentGRPCClient(
             endpoint,
             title: title
-        ) { [name] client, endpoint in
+        ) { [name, dockerContext] client, endpoint in
             // Bind to all interfaces for Docker Desktop compatibility
             try await withTCPProxyServer(
                 localHostname: "0.0.0.0",
@@ -186,45 +188,67 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 let port = proxyAddress?.port ?? 50053
                 let builderName = docker.builderName(forPort: port)
 
+                // Build additional properties for analytics
+                var buildPhaseProperties: [String: String] = [:]
+                if let dockerContext {
+                    buildPhaseProperties["docker_context"] = dockerContext
+                }
+
                 if try await !docker.hasBuildxBuilder(builderName: builderName) {
                     // Create buildx builder with insecure registry support
-                    try await Noora().progressStep(
-                        message: "Setting up builder",
-                        successMessage: "Builder ready",
-                        errorMessage: "Failed to create builder",
-                        showSpinner: true
-                    ) { _ in
-                        try await docker.createBuildxBuilder(port: port)
+                    try await executePhase(
+                        phase: "builder_setup",
+                        runtime: "dockerfile",
+                        additionalProperties: buildPhaseProperties
+                    ) {
+                        try await Noora().progressStep(
+                            message: "Setting up builder",
+                            successMessage: "Builder ready",
+                            errorMessage: "Failed to create builder",
+                            showSpinner: true
+                        ) { _ in
+                            try await docker.createBuildxBuilder(port: port)
+                        }
                     }
                 }
 
                 // Build and push in a single operation for better performance
-                try await Noora().progressStep(
-                    message: "Building and uploading container",
-                    successMessage: "Container built and uploaded successfully!",
-                    errorMessage: "Failed to build and upload container",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.buildxAndPush(name: name, port: port, builder: builderName)
+                try await executePhase(
+                    phase: "build_upload",
+                    runtime: "dockerfile",
+                    additionalProperties: buildPhaseProperties
+                ) {
+                    try await Noora().progressStep(
+                        message: "Building and uploading container",
+                        successMessage: "Container built and uploaded successfully!",
+                        errorMessage: "Failed to build and upload container",
+                        showSpinner: true
+                    ) { _ in
+                        try await docker.buildxAndPush(name: name, port: port, builder: builderName)
+                    }
                 }
             }
 
-            try await Noora().progressStep(
-                message: "Preparing app",
-                successMessage: "App ready to start",
-                errorMessage: "Failed to prepare app",
-                showSpinner: true
-            ) { _ in
-                try await createContainerdContainer(
-                    appName: name,
+            try await executePhase(phase: "prepare_container", runtime: "dockerfile") {
+                try await Noora().progressStep(
+                    message: "Preparing app",
+                    successMessage: "App ready to start",
+                    errorMessage: "Failed to prepare app",
+                    showSpinner: true
+                ) { _ in
+                    try await createContainerdContainer(
+                        appName: name,
+                        client: client
+                    )
+                }
+            }
+
+            try await executePhase(phase: "start_container", runtime: "dockerfile") {
+                try await startContainerdContainer(
+                    imageName: name,
                     client: client
                 )
             }
-
-            try await startContainerdContainer(
-                imageName: name,
-                client: client
-            )
         }
     }
 
@@ -410,20 +434,26 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             title: "Which device do you want to run this app on?"
         ) { client, endpoint in
             Noora().info("Building Swift app")
-            try await swiftPM.buildAndPushContainer(
-                swiftSDK: swiftSDK,
-                product: executableTarget,
-                device: endpoint.host
-            )
+            try await executePhase(phase: "build_swift_app", runtime: "swift") {
+                try await swiftPM.buildAndPushContainer(
+                    swiftSDK: swiftSDK,
+                    product: executableTarget,
+                    device: endpoint.host
+                )
+            }
 
             Noora().info("Creating Container")
-            try await createContainerdContainer(
-                appName: appName,
-                client: client
-            )
+            try await executePhase(phase: "create_container", runtime: "swift") {
+                try await createContainerdContainer(
+                    appName: appName,
+                    client: client
+                )
+            }
 
             Noora().info("Starting Container")
-            try await startContainerdContainer(imageName: appName, client: client)
+            try await executePhase(phase: "start_container", runtime: "swift") {
+                try await startContainerdContainer(imageName: appName, client: client)
+            }
         }
     }
 
@@ -522,6 +552,54 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             logger.debug("Failed to decode app config", metadata: ["error": .string("\(error)")])
             Noora().info("No valid wendy.json was found. Using default settings.")
             return Data()
+        }
+    }
+
+    // MARK: - Phase Analytics
+
+    /// Track a phase failure for analytics
+    private func trackPhaseFailure(
+        phase: String,
+        runtime: String,
+        error: Swift.Error,
+        additionalProperties: [String: String] = [:]
+    ) async {
+        guard let analytics = AnalyticsService.shared else { return }
+        let sanitizedError = ErrorSanitizer.sanitize(error)
+        var properties: [String: String] = [
+            "phase": phase,
+            "runtime": runtime,
+            "command_name": "wendy run",
+            "error_type": sanitizedError.type,
+            "error_name": sanitizedError.name,
+            "error_domain": sanitizedError.domain,
+        ]
+        for (key, value) in additionalProperties {
+            properties[key] = value
+        }
+        await analytics.trackEvent(
+            name: "run_phase_failed",
+            properties: properties
+        )
+    }
+
+    /// Execute a phase with failure tracking
+    private func executePhase<T: Sendable>(
+        phase: String,
+        runtime: String,
+        additionalProperties: [String: String] = [:],
+        operation: @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch {
+            await trackPhaseFailure(
+                phase: phase,
+                runtime: runtime,
+                error: error,
+                additionalProperties: additionalProperties
+            )
+            throw error
         }
     }
 }
