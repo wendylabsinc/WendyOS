@@ -45,11 +45,15 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 let containers = try await client.listContainers()
 
                 for container in containers {
+                    guard let appVersion = container.labels["sh.wendy/app.version"] else {
+                        // If a container is not managed by Wendy Agent, skip it
+                        continue
+                    }
+
                     try await writer.write(
                         .with {
                             $0.container.appName = container.id
-                            $0.container.appVersion =
-                                container.labels["sh.wendy/app.version"] ?? "0.0.0"
+                            $0.container.appVersion = appVersion
 
                             if let restartCount = container.labels["containerd.io/restart.count"],
                                 let restartCount = UInt32(restartCount)
