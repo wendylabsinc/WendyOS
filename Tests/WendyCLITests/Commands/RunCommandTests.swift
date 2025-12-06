@@ -91,14 +91,17 @@ struct RunCommandTests {
         @Test("Reject conflicting flags: restart-unless-stopped + restart-on-failure")
         func testConflictingRestartUnlessStoppedAndRestartOnFailure() throws {
             #expect(throws: (any Error).self) {
-                try RunCommand.parse(["--restart-unless-stopped", "--restart-on-failure", "3"]).validate()
+                try RunCommand.parse(["--restart-unless-stopped", "--restart-on-failure", "3"])
+                    .validate()
             }
         }
 
         @Test("Reject three conflicting flags")
         func testThreeConflictingFlags() throws {
             #expect(throws: (any Error).self) {
-                let cmd = try RunCommand.parse(["--deploy", "--no-restart", "--restart-unless-stopped"])
+                let cmd = try RunCommand.parse([
+                    "--deploy", "--no-restart", "--restart-unless-stopped",
+                ])
                 try cmd.validate()
             }
         }
