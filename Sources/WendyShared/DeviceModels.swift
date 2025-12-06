@@ -82,8 +82,22 @@ public struct DevicesCollection: Encodable, Sendable {
         return names
     }
 
+    public struct GroupedDevice: Sendable, Hashable, CustomStringConvertible {
+        public let name: String
+        public let interfaces: [InterfaceInfo]
+
+        public var description: String {
+            return "\(name) [\(interfaces.map(\.type).joined(separator: ", "))]"
+        }
+
+        public init(name: String, interfaces: [InterfaceInfo]) {
+            self.name = name
+            self.interfaces = interfaces
+        }
+    }
+
     /// Groups all devices by their normalized name
-    private func groupedDevices() -> [(name: String, interfaces: [InterfaceInfo])] {
+    public func groupedDevices() -> [GroupedDevice] {
         // Use normalized names as keys, but track the best display name
         var deviceGroups: [String: (displayName: String, interfaces: [InterfaceInfo])] = [:]
 
@@ -107,27 +121,7 @@ public struct DevicesCollection: Encodable, Sendable {
                 deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
 
-            // Build USB identifier with available details
-            var usbDetails: [String] = []
-            if let version = device.usbVersion {
-                usbDetails.append(version)
-            }
-            usbDetails.append("VID: \(device.vendorId)")
-            usbDetails.append("PID: \(device.productId)")
-            if let serial = device.serialNumber, !serial.isEmpty {
-                usbDetails.append("S/N: \(serial)")
-            }
-            if let power = device.maxPowerMilliamps {
-                usbDetails.append("\(power)mA")
-            }
-
-            group.interfaces.append(
-                InterfaceInfo(
-                    type: "USB",
-                    identifier: usbDetails.joined(separator: ", "),
-                    agentVersion: device.agentVersion
-                )
-            )
+            group.interfaces.append(.usb(device))
             deviceGroups[normalizedName] = group
         }
 
@@ -138,22 +132,7 @@ public struct DevicesCollection: Encodable, Sendable {
                 deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
 
-            // Build Ethernet identifier with available details
-            var ethernetDetails: [String] = [device.name]
-            if let mac = device.macAddress {
-                ethernetDetails.append("MAC: \(mac)")
-            }
-            if let speed = device.linkSpeed {
-                ethernetDetails.append(speed)
-            }
-
-            group.interfaces.append(
-                InterfaceInfo(
-                    type: "Ethernet",
-                    identifier: ethernetDetails.joined(separator: ", "),
-                    agentVersion: device.agentVersion
-                )
-            )
+            group.interfaces.append(.ethernet(device))
             deviceGroups[normalizedName] = group
         }
 
@@ -163,24 +142,73 @@ public struct DevicesCollection: Encodable, Sendable {
             var group =
                 deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
             group.displayName = betterDisplayName(group.displayName, device.displayName)
-            group.interfaces.append(
-                InterfaceInfo(
-                    type: "LAN",
-                    identifier: "\(device.hostname):\(device.port)",
-                    agentVersion: device.agentVersion
-                )
-            )
+            group.interfaces.append(.lan(device))
             deviceGroups[normalizedName] = group
         }
 
         // Sort by display name for consistent output
-        return deviceGroups.map { ($1.displayName, $1.interfaces) }.sorted { $0.0 < $1.0 }
+        return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }.sorted { $0.name < $1.name }
     }
+
     /// Information about a specific interface for a device
-    private struct InterfaceInfo {
-        let type: String
-        let identifier: String
-        let agentVersion: String?
+    public enum InterfaceInfo: Sendable, Hashable, CustomStringConvertible {
+        case usb(USBDevice)
+        case ethernet(EthernetInterface)
+        case lan(LANDevice)
+
+        public var type: String {
+            switch self {
+            case .usb: return "USB"
+            case .ethernet: return "Ethernet"
+            case .lan: return "LAN"
+            }
+        }
+
+        public var description: String {
+            var string = ""
+            switch self {
+            case .usb(let device):
+                if let usbVersion = device.usbVersion {
+                    string += "\(usbVersion):"
+                } else {
+                    string += "USB:"
+                }
+                string += " VID: \(device.vendorId), PID: \(device.productId)"
+                if let serialNumber = device.serialNumber {
+                    string += ", S/N: \(serialNumber)"
+                }
+                if let maxPowerMilliamps = device.maxPowerMilliamps {
+                    string += " (Max Power: \(maxPowerMilliamps)mA)"
+                }
+                return string
+            case .ethernet(let device):
+                string += "Ethernet: \(device.name)"
+
+                if let speed = device.linkSpeed {
+                    string += ", \(speed)"
+                }
+                return string
+            case .lan(let device):
+                string += "LAN: \(device.hostname):\(device.port)"
+                return string
+            }
+        }
+
+        public var identifier: String {
+            switch self {
+            case .usb(let device): return device.displayName
+            case .ethernet(let device): return device.displayName
+            case .lan(let device): return device.displayName
+            }
+        }
+
+        public var agentVersion: String? {
+            switch self {
+            case .usb(let device): return device.agentVersion
+            case .ethernet(let device): return device.agentVersion
+            case .lan(let device): return device.agentVersion
+            }
+        }
     }
 
     public func toJSON() throws -> String {
@@ -199,23 +227,23 @@ public struct DevicesCollection: Encodable, Sendable {
 
         var result = ""
 
-        for (deviceName, interfaces) in grouped {
+        for device in grouped {
             if !result.isEmpty {
                 result += "\n"
             }
 
             // Get the first available agent version (should be the same across interfaces)
-            let agentVersion = interfaces.first(where: { $0.agentVersion != nil })?.agentVersion
+            let agentVersion = device.interfaces.first(where: { $0.agentVersion != nil })?.agentVersion
 
             // Add device name with agent version if available
-            result += "\n\(deviceName)"
+            result += "\n\(device.name)"
             if let version = agentVersion {
-                result += " (Agent: \(version))"
+                result += " (version: \(version))"
             }
 
             // List all interfaces for this device
-            for interface in interfaces {
-                result += "\n   \(interface.type): \(interface.identifier)"
+            for interface in device.interfaces {
+                result += "\n   \(interface.description)"
             }
         }
 
@@ -265,7 +293,9 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         )
     }
 
-    public var description: String { displayName }
+    public var description: String { 
+        displayName
+    }
 
     public static func formatCollection(
         _ interfaces: [LANDevice],
