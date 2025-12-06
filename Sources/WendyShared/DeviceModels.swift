@@ -210,7 +210,7 @@ public struct DevicesCollection: Encodable, Sendable {
             // Add device name with agent version if available
             result += "\n\(deviceName)"
             if let version = agentVersion {
-                result += " (Agent: \(version))"
+                result += " (version: \(version))"
             }
 
             // List all interfaces for this device
