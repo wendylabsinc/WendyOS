@@ -82,6 +82,25 @@ public struct Containerd: Sendable {
     let logger = Logger(label: "Containerd")
     let fifoManager: FIFOManager
 
+    // Protocol-based dependencies for testing (optional, default to wrapping client)
+    private let _containersClient:
+        (any Containerd_Services_Containers_V1_Containers.ClientProtocol)?
+    private let _snapshotsClient: (any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol)?
+    private let _tasksClient: (any Containerd_Services_Tasks_V1_Tasks.ClientProtocol)?
+
+    // Computed properties that return either injected protocols or create from client
+    private var containersClient: any Containerd_Services_Containers_V1_Containers.ClientProtocol {
+        _containersClient ?? Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
+    }
+
+    private var snapshotsClient: any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol {
+        _snapshotsClient ?? Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+    }
+
+    private var tasksClient: any Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
+        _tasksClient ?? Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
+    }
+
     /// Initialize a Containerd client
     /// - Parameters:
     ///   - client: The gRPC client for containerd
@@ -92,6 +111,30 @@ public struct Containerd: Sendable {
     ) {
         self.client = client
         self.fifoManager = fifoManager
+        self._containersClient = nil
+        self._snapshotsClient = nil
+        self._tasksClient = nil
+    }
+
+    /// Initialize a Containerd client with injected protocol dependencies (for testing)
+    /// - Parameters:
+    ///   - client: The gRPC client (not used when mocks are injected, but required for initialization)
+    ///   - containersClient: Mock or real containers client
+    ///   - snapshotsClient: Mock or real snapshots client
+    ///   - tasksClient: Mock or real tasks client
+    ///   - fifoManager: The FIFO manager (defaults to SystemFIFOManager for production)
+    internal init(
+        client: GRPCClient<HTTP2ClientTransport.Posix>,
+        containersClient: any Containerd_Services_Containers_V1_Containers.ClientProtocol,
+        snapshotsClient: any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol,
+        tasksClient: any Containerd_Services_Tasks_V1_Tasks.ClientProtocol,
+        fifoManager: FIFOManager = SystemFIFOManager()
+    ) {
+        self.client = client
+        self.fifoManager = fifoManager
+        self._containersClient = containersClient
+        self._snapshotsClient = snapshotsClient
+        self._tasksClient = tasksClient
     }
 
     public static func withClient<R: Sendable>(
@@ -302,13 +345,228 @@ public struct Containerd: Sendable {
         }
     }
 
+    /// Deletes a container and its associated ephemeral snapshot.
+    ///
+    /// This method ensures complete cleanup following containerd's proper lifecycle:
+    /// 1. Retrieving the container's snapshot key and snapshotter before deletion
+    /// 2. Deleting any associated task (if running)
+    /// 3. Deleting the container from containerd
+    /// 4. Attempting to remove the ephemeral snapshot from the snapshotter
+    ///
+    /// ## Snapshot Cleanup Behavior
+    ///
+    /// - **Ephemeral snapshots (UUID keys)**: Deleted when container is removed
+    /// - **Image layer snapshots (ChainID keys)**: Preserved (shared across containers)
+    /// - **Missing snapshots**: Handled gracefully (logged at debug level, operation succeeds)
+    /// - **Missing containers**: Returns early without error (idempotent operation)
+    /// - **Snapshot deletion failures**: Logged as warnings (containerd's GC will clean up orphans)
+    ///
+    /// ## Safety Validations
+    ///
+    /// Before attempting snapshot deletion, this method validates:
+    /// - The snapshot key is a valid UUID (ephemeral), not a ChainID (shared layer)
+    ///
+    /// Containerd itself enforces additional safety checks:
+    /// - Rejects deletion if snapshot has children (shouldn't happen for ephemeral snapshots)
+    /// - Rejects deletion if snapshot is in use by another container
+    ///
+    /// ## Snapshot Types
+    ///
+    /// - **Image layer snapshots**: Identified by ChainID (deterministic hash of layer content).
+    ///   These are shared across containers and should NOT be deleted.
+    /// - **Ephemeral container snapshots**: Identified by UUID. These are the writable layer
+    ///   for each container and SHOULD be deleted when the container is removed.
+    ///
+    /// ## Error Handling Philosophy
+    ///
+    /// Once the container is deleted, snapshot deletion errors are logged as warnings rather
+    /// than thrown. This prevents partial cleanup failures from propagating. Orphaned snapshots
+    /// will be cleaned up by containerd's garbage collector.
+    ///
+    /// ## Manual Testing
+    ///
+    /// To manually verify snapshot cleanup behavior:
+    ///
+    /// ```bash
+    /// # 1. Create and run a container
+    /// wendy run
+    ///
+    /// # 2. List snapshots before deletion (note UUID-based snapshot)
+    /// ctr snapshots ls
+    ///
+    /// # 3. Delete the container
+    /// ctr containers rm <container-id>
+    ///
+    /// # 4. Verify ephemeral snapshot was removed
+    /// ctr snapshots ls  # UUID snapshot gone, ChainID snapshots remain
+    /// ```
+    ///
+    /// - Parameter name: The container ID to delete
+    /// - Throws: RPCError if task or container deletion fails (snapshot errors are logged only)
     public func deleteContainer(named name: String) async throws {
-        let containers = Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
-        _ = try await containers.delete(
-            .with {
-                $0.id = name
+        let containers = containersClient
+        let snapshots = snapshotsClient
+
+        // First, get the container to retrieve its snapshot key
+        let container: Containerd_Services_Containers_V1_Container
+        do {
+            container = try await containers.get(
+                .with {
+                    $0.id = name
+                }
+            ).container
+        } catch let error as RPCError where error.code == .notFound {
+            // Container doesn't exist, nothing to delete
+            logger.debug(
+                "Container not found, nothing to delete",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+            return
+        }
+
+        let snapshotKey = container.snapshotKey
+        let snapshotter = container.snapshotter
+
+        // Delete any associated task first (proper containerd lifecycle)
+        // Catch all errors and log warnings - a stuck task shouldn't prevent container cleanup
+        do {
+            try await deleteTask(containerID: name)
+            logger.debug(
+                "Deleted task before container",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+        } catch let error as RPCError where error.code == .notFound {
+            // No task exists, this is fine - container might not be running
+            logger.debug(
+                "No task to delete",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+        } catch let error as RPCError {
+            // Task deletion failed for other reasons (timeout, stuck process, permissions)
+            // Log warning but continue with container deletion
+            logger.warning(
+                "Failed to delete task before container deletion, continuing anyway",
+                metadata: [
+                    "container-id": .stringConvertible(name),
+                    "error-code": .stringConvertible(String(describing: error.code)),
+                    "error-message": .stringConvertible(error.message),
+                ]
+            )
+        }
+
+        // Delete the container
+        do {
+            _ = try await containers.delete(
+                .with {
+                    $0.id = name
+                }
+            )
+            logger.debug(
+                "Deleted container",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+        } catch let error as RPCError where error.code == .notFound {
+            // Container was deleted between get and delete (race condition)
+            // Continue to snapshot cleanup - another process may have failed to clean it up
+            logger.debug(
+                "Container already deleted, will still attempt snapshot cleanup",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+        }
+
+        // Delete the associated ephemeral snapshot if it exists
+        // Only delete if the snapshot key is not empty
+        if !snapshotKey.isEmpty {
+            // Validate snapshotter is also set (data consistency check)
+            // Per containerd spec: snapshotKey empty means no snapshot, so snapshotter should also be set
+            guard !snapshotter.isEmpty else {
+                logger.warning(
+                    "Container has snapshot key but missing snapshotter field (data inconsistency)",
+                    metadata: [
+                        "container-id": .stringConvertible(name),
+                        "snapshot-key": .stringConvertible(snapshotKey),
+                    ]
+                )
+                return
             }
-        )
+
+            // Validate that this is an ephemeral snapshot (UUID), not a shared layer (ChainID)
+            guard Self.isEphemeralSnapshotKey(snapshotKey) else {
+                logger.warning(
+                    "Snapshot key does not appear to be ephemeral (UUID), skipping deletion to preserve shared layers",
+                    metadata: [
+                        "container-id": .stringConvertible(name),
+                        "snapshot-key": .stringConvertible(snapshotKey),
+                        "snapshotter": .stringConvertible(snapshotter),
+                    ]
+                )
+                return
+            }
+
+            // Try to delete the ephemeral snapshot
+            // Containerd will reject the deletion if the snapshot:
+            // - Has children (should never happen for ephemeral/active snapshots)
+            // - Is in use by another container
+            // - Has other restrictions
+            do {
+                _ = try await snapshots.remove(
+                    .with {
+                        $0.key = snapshotKey
+                        $0.snapshotter = snapshotter
+                    }
+                )
+                logger.debug(
+                    "Deleted ephemeral snapshot",
+                    metadata: [
+                        "container-id": .stringConvertible(name),
+                        "snapshot-key": .stringConvertible(snapshotKey),
+                        "snapshotter": .stringConvertible(snapshotter),
+                    ]
+                )
+            } catch let error as RPCError where error.code == .notFound {
+                // Snapshot was already deleted (race condition) - this is OK
+                logger.debug(
+                    "Ephemeral snapshot not found during cleanup",
+                    metadata: [
+                        "container-id": .stringConvertible(name),
+                        "snapshot-key": .stringConvertible(snapshotKey),
+                        "snapshotter": .stringConvertible(snapshotter),
+                    ]
+                )
+            } catch let error as RPCError {
+                // Other errors (failedPrecondition, invalidArgument, permissionDenied, etc.)
+                // Log a warning but don't fail - container is already deleted
+                // Note: Snapshot is now orphaned but containerd's GC should eventually clean it up
+                logger.warning(
+                    "Failed to delete ephemeral snapshot after container deletion",
+                    metadata: [
+                        "container-id": .stringConvertible(name),
+                        "snapshot-key": .stringConvertible(snapshotKey),
+                        "snapshotter": .stringConvertible(snapshotter),
+                        "error-code": .stringConvertible(String(describing: error.code)),
+                        "error-message": .stringConvertible(error.message),
+                    ]
+                )
+            }
+        } else {
+            logger.debug(
+                "Container has no snapshot key, skipping snapshot cleanup",
+                metadata: ["container-id": .stringConvertible(name)]
+            )
+        }
+    }
+
+    /// Validates that a snapshot key is an ephemeral snapshot (UUID format).
+    ///
+    /// Ephemeral snapshots use UUID keys (e.g., "550e8400-e29b-41d4-a716-446655440000").
+    /// Image layer snapshots use ChainID format (e.g., "sha256:abc123...").
+    ///
+    /// - Parameter key: The snapshot key to validate
+    /// - Returns: true if the key is a valid UUID (ephemeral), false otherwise
+    internal static func isEphemeralSnapshotKey(_ key: String) -> Bool {
+        // Use Foundation's UUID parser for robust validation
+        // This handles case-insensitivity and proper UUID format validation
+        return UUID(uuidString: key) != nil
     }
 
     public func readJSONContent<D: Decodable & Sendable>(
@@ -831,7 +1089,7 @@ public struct Containerd: Sendable {
     /// This function will wait up to the specified timeout for the task to exit.
     /// If the task is still running after the kill signal, it will wait for it to exit.
     public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(5)) async throws {
-        let tasks = Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
+        let tasks = tasksClient
         let runningTasks = try await tasks.list(.init())
 
         for runningTask in runningTasks.tasks {

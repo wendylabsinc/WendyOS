@@ -24,8 +24,9 @@ struct WendyAgentServiceSetupTests {
             systemctl: mockSystemctl
         )
 
-        // Verify the service can be created and conforms to Service protocol
-        #expect(registryService is any Service)
+        // Verify the service can be created (type already conforms to Service protocol)
+        // Type system guarantees conformance, so just verify it's not nil
+        #expect(type(of: registryService) == RegistryContainerService.self)
 
         // Start the service in a task and quickly cancel to verify it initializes
         let task = Task {
