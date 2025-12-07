@@ -54,7 +54,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: generated-protos
-          path: Sources/
+          # Downloads to current directory, preserving Sources/ structure
 
       - name: Cache SPM dependencies
         uses: actions/cache@v4
