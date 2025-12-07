@@ -224,8 +224,13 @@ public struct DockerCLI: Sendable {
                 insecure = true
             """
 
-        let configPath = FileManager.default.homeDirectoryForCurrentUser
+        let wendyDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wendy")
+
+        try FileManager.default.createDirectory(at: wendyDir, withIntermediateDirectories: true)
+
+        let configPath =
+            wendyDir
             .appendingPathComponent("buildkit-config.toml")
             .path
 
