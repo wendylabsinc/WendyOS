@@ -11,7 +11,7 @@ else
   PLATFORM := unknown
 endif
 
-.PHONY: all clean wendy wendy-agent help format setup-hooks build proto deps build-network-daemon build-app-bundle
+.PHONY: all clean wendy wendy-agent help format setup-hooks build proto deps build-network-daemon build-app-bundle force-protos
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -25,8 +25,24 @@ all: build-cli build-helper build-network-daemon build-agent ## Build all execut
 install-deps: ## Install dependencies needed for building
 	brew install protoc-gen-grpc-swift
 
-_protos:
-	./scripts/generate-proto.sh
+# Collect all proto source files
+PROTO_SOURCES := $(shell find Proto -name "*.proto" 2>/dev/null)
+
+# Sentinel file to track when protos were last generated
+PROTO_SENTINEL := .proto-generated
+
+# Only regenerate protos if proto files have changed
+_protos: $(PROTO_SENTINEL)
+
+$(PROTO_SENTINEL): $(PROTO_SOURCES)
+	@echo "Proto files changed, regenerating..."
+	./Scripts/Generate-Proto.sh
+	@touch $(PROTO_SENTINEL)
+
+# Force proto regeneration (useful for debugging)
+force-protos: ## Force regeneration of proto files
+	@rm -f $(PROTO_SENTINEL)
+	@$(MAKE) _protos
 
 build-cli: _protos ## Build the wendy CLI executable
 	swiftly run swift build --product wendy
@@ -123,7 +139,7 @@ setup-hooks: ## Install git hooks
 
 clean: ## Clean build artifacts and remove executables
 	swiftly run swift package clean
-	rm -f wendy WendyAgent
+	rm -f wendy WendyAgent $(PROTO_SENTINEL)
 
 # Default build target
 build:

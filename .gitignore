@@ -16,3 +16,6 @@ Examples/HelloHTTP/HelloHTTP-container.tar
 WendyCLI.app/
 *.profraw
 .agent
+
+# Proto generation sentinel
+.proto-generated

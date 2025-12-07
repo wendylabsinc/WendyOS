@@ -36,8 +36,33 @@ jobs:
           echo "Setting version to $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+  generate-protos:
+    name: Generate Protocol Buffers
+    runs-on: [self-hosted, Linux, X64]
+    container: swift:6.2.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate protos
+        run: |
+          chmod +x ./Scripts/Generate-Proto.sh
+          ./Scripts/Generate-Proto.sh
+
+      - name: Upload generated protos
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-protos
+          path: |
+            Sources/WendyAgentGRPC/Proto/
+            Sources/WendyCloudGRPC/Proto/
+            Sources/ContainerdGRPC/Proto/
+            Sources/ContainerdGRPCTypes/Proto/
+            Sources/OpenTelemetryGRPC/Proto/
+            Sources/OpenTelemetryGRPCTypes/Proto/
+          retention-days: 1
+
   build:
-    needs: determine-version
+    needs: [determine-version, generate-protos]
     strategy:
       matrix:
         include:
@@ -80,6 +105,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download generated protos
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-protos
+          # Downloads to current directory, preserving Sources/ structure
+
+      - name: Cache Swift SDK
+        if: ${{ matrix.swift-sdk-url != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.swiftpm/swift-sdks
+          key: swift-sdk-${{ matrix.swift-sdk }}-${{ matrix.swift-sdk-checksum }}
+
+      - name: Cache SPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/repositories
+            .build/checkouts
+          key: ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-
+
       - name: Install Static Linux SDK
         if: ${{ matrix.swift-sdk-url != '' }}
         run: |
