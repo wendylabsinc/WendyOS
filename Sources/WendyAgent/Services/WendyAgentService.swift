@@ -242,7 +242,10 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             // Use atomic rename by moving new binary to temp location first,
             // then renaming it to replace the current binary.
             // On POSIX systems, rename() is atomic when source and dest are on same filesystem.
-            let tempNewBinary = currentBinary.appending(".new")
+            let tempNewBinary =
+                currentBinary
+                .removingLastComponent()
+                .appending(binaryName + ".new")
 
             // First, move update file to temp location next to target
             // This ensures we're on the same filesystem for atomic rename
@@ -275,7 +278,10 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             logger.error("Update failed: \(error), attempting to restore from backup")
 
             // Clean up temp files
-            let tempNewBinary = currentBinary.appending(".new")
+            let tempNewBinary =
+                currentBinary
+                .removingLastComponent()
+                .appending(binaryName + ".new")
             if (try? await filesystem.info(forFileAt: tempNewBinary)) != nil {
                 _ = try? await filesystem.removeItem(at: tempNewBinary)
             }
