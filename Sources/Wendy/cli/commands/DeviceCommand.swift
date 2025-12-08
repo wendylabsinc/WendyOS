@@ -269,6 +269,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     return
                 }
 
+                // TODO: Detect platform of remote device
                 // Default to Linux aarch64 for device updates during setup
                 let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
                 let success = try await Noora().progressBarStep(message: "Updating Device") {
