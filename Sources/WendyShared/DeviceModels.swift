@@ -147,7 +147,8 @@ public struct DevicesCollection: Encodable, Sendable {
         }
 
         // Sort by display name for consistent output
-        return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }.sorted { $0.name < $1.name }
+        return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }
+            .sorted { $0.name < $1.name }
     }
 
     /// Information about a specific interface for a device
@@ -233,7 +234,8 @@ public struct DevicesCollection: Encodable, Sendable {
             }
 
             // Get the first available agent version (should be the same across interfaces)
-            let agentVersion = device.interfaces.first(where: { $0.agentVersion != nil })?.agentVersion
+            let agentVersion = device.interfaces.first(where: { $0.agentVersion != nil })?
+                .agentVersion
 
             // Add device name with agent version if available
             result += "\n\(device.name)"
@@ -293,7 +295,7 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         )
     }
 
-    public var description: String { 
+    public var description: String {
         displayName
     }
 
