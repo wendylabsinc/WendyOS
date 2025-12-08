@@ -104,6 +104,7 @@ struct EthernetInterfaceTests {
         let wendyInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
+            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -116,6 +117,7 @@ struct EthernetInterfaceTests {
         let nonWendyInterface = EthernetInterface(
             name: "en0",
             displayName: "Wi-Fi",
+            interfaceType: "Ethernet",
             macAddress: "aa:bb:cc:dd:ee:ff"
         )
 
@@ -131,6 +133,7 @@ struct EthernetInterfaceTests {
         let interface1 = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
+            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -143,6 +146,7 @@ struct EthernetInterfaceTests {
         let interface2 = EthernetInterface(
             name: "wendy1",
             displayName: "Wendy PPP",
+            interfaceType: "Ethernet",
             macAddress: nil
         )
 
@@ -155,6 +159,7 @@ struct EthernetInterfaceTests {
         let interface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
+            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
 
@@ -190,11 +195,13 @@ struct EthernetInterfaceTests {
             EthernetInterface(
                 name: "wendy0",
                 displayName: "Wendy Ethernet",
+                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "wendy1",
                 displayName: "Wendy Wi-Fi",
+                interfaceType: "Ethernet",
                 macAddress: "aa:bb:cc:dd:ee:ff"
             ),
         ]
@@ -457,6 +464,7 @@ struct DevicesCollectionTests {
         let ethernetInterface = EthernetInterface(
             name: "wendy0",
             displayName: "Wendy Ethernet",
+            interfaceType: "Ethernet",
             macAddress: "11:22:33:44:55:66"
         )
         let lanDevice = LANDevice(
@@ -501,9 +509,9 @@ struct DevicesCollectionTests {
 
         // Test that the human readable output contains all device types
         let humanReadable = collection1.toHumanReadableString()
-        #expect(humanReadable.contains("USB Devices:"))
-        #expect(humanReadable.contains("Ethernet Interfaces:"))
-        #expect(humanReadable.contains("LAN Devices:"))
+        #expect(humanReadable.contains("USB:"))
+        #expect(humanReadable.contains("Ethernet:"))
+        #expect(humanReadable.contains("LAN:"))
         #expect(humanReadable.contains("Wendy USB"))
         #expect(humanReadable.contains("Wendy Ethernet"))
         #expect(humanReadable.contains("Wendy LAN Device"))
@@ -539,11 +547,13 @@ struct DevicesCollectionTests {
             EthernetInterface(
                 name: "Wendy0",
                 displayName: "Wendy Ethernet 1",
+                interfaceType: "Ethernet",
                 macAddress: "11:22:33:44:55:66"
             ),
             EthernetInterface(
                 name: "Wendy1",
                 displayName: "Wendy Ethernet 2",
+                interfaceType: "Ethernet",
                 macAddress: "AA:BB:CC:DD:EE:FF"
             ),
         ]
@@ -588,9 +598,9 @@ struct DevicesCollectionTests {
 
         // Verify human readable output contains all devices properly grouped
         let humanReadable = collection.toHumanReadableString()
-        #expect(humanReadable.contains("USB Devices:"))
-        #expect(humanReadable.contains("Ethernet Interfaces:"))
-        #expect(humanReadable.contains("LAN Devices:"))
+        #expect(humanReadable.contains("USB:"))
+        #expect(humanReadable.contains("Ethernet:"))
+        #expect(humanReadable.contains("LAN:"))
         #expect(humanReadable.contains("Wendy USB 1"))
         #expect(humanReadable.contains("Wendy USB 2"))
         #expect(humanReadable.contains("Wendy Ethernet 1"))

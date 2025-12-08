@@ -96,7 +96,9 @@ struct AgentConnectionOptions: ParsableArguments {
         ) { _ in
             while true {
                 try Task.checkCancellation()
-                let devices = try await discovery.findLANDevices()
+                let devices = try await discovery.findAllDevices()
+                    .groupedDevices()
+                    .filter { $0.interfaces.contains(where: { $0.type == "LAN" }) }
 
                 if !devices.isEmpty {
                     return devices
@@ -112,10 +114,16 @@ struct AgentConnectionOptions: ParsableArguments {
             options: lanDevices
         )
 
-        return Endpoint(
-            host: device.hostname,
-            port: device.port
-        )
+        for interface in device.interfaces {
+            if case .lan(let lanDevice) = interface {
+                return Endpoint(
+                    host: lanDevice.hostname,
+                    port: lanDevice.port
+                )
+            }
+        }
+
+        throw InvalidEndpoint()
     }
 
     var endpoint: Endpoint {

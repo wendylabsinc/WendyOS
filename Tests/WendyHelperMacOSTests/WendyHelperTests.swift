@@ -108,6 +108,7 @@
             let mockInterface = EthernetInterface(
                 name: "en5",
                 displayName: "Wendy Ethernet",  // Must contain "Wendy" for isWendyDevice
+                interfaceType: "Ethernet",
                 macAddress: "02:00:00:00:00:01"
             )
             await mockDiscovery.addMockEthernetInterface(mockInterface)
