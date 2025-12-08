@@ -274,7 +274,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     private func stopContainerWithTimeout(
         imageName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>,
-        timeout: TimeInterval = 5.0
+        timeout: Duration = .seconds(5)
     ) async {
         let logger = Logger(label: "sh.wendy.cli.run.containerd.stop")
         let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
@@ -294,7 +294,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 }
 
                 group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    try await Task.sleep(for: timeout)
                     throw CancellationError()
                 }
 
@@ -305,7 +305,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             logger.info("Container stopped successfully")
         } catch is CancellationError {
             logger.warning(
-                "Stop container operation timed out after \(timeout)s",
+                "Stop container operation timed out after \(timeout)",
                 metadata: ["container": "\(imageName)"]
             )
         } catch {
@@ -369,8 +369,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 // Wait for container to stop before re-throwing
                 await stopContainerWithTimeout(
                     imageName: imageName,
-                    client: client,
-                    timeout: 5.0
+                    client: client
                 )
             }
             throw error

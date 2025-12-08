@@ -2,6 +2,7 @@ import Analytics
 import ArgumentParser
 import Foundation
 import Logging
+import ServiceLifecycle
 import WendyShared
 
 @main
@@ -20,16 +21,21 @@ struct WendyCLI {
         // Initialize analytics service
         let analytics = AnalyticsService.shared
 
-        // Track command execution with analytics
-        if let analytics = analytics {
-            await analytics.trackCommandExecution {
+        // Install signal handlers at top level to handle Ctrl+C gracefully
+        try await withGracefulShutdownHandler {
+            // Track command execution with analytics
+            if let analytics = analytics {
+                await analytics.trackCommandExecution {
+                    await WendyCommand.main()
+                }
+                // Ensure all events are sent before exiting
+                await analytics.flush()
+            } else {
+                // Analytics not available, run normally
                 await WendyCommand.main()
             }
-            // Ensure all events are sent before exiting
-            await analytics.flush()
-        } else {
-            // Analytics not available, run normally
-            await WendyCommand.main()
+        } onGracefulShutdown: {
+            print("\nReceived shutdown signal, cleaning up...")
         }
     }
 }
