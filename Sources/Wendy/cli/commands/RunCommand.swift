@@ -334,6 +334,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 )
             ) { response in
                 for try await message in response.messages {
+                    // Explicitly check for cancellation on each iteration
+                    // This ensures we respond immediately to Ctrl+C even if gRPC-Swift
+                    // doesn't check Task.isCancelled internally
+                    try Task.checkCancellation()
+
                     switch message.responseType {
                     case .started:
                         if debug {

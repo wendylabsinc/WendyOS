@@ -22,7 +22,14 @@ struct WendyCLI {
         let analytics = AnalyticsService.shared
 
         // Install signal handlers at top level to handle Ctrl+C gracefully
-        try await withGracefulShutdownHandler {
+        // withGracefulShutdownHandler will:
+        // 1. Install SIGINT/SIGTERM handlers
+        // 2. Cancel the task when signal received
+        // 3. Call onGracefulShutdown closure
+        // 4. Wait for task to complete (including all cleanup in catch blocks)
+        // 5. Handle CancellationError gracefully and exit with success code
+        // Note: This function does NOT propagate errors - it handles them internally
+        await withGracefulShutdownHandler {
             // Track command execution with analytics
             if let analytics = analytics {
                 await analytics.trackCommandExecution {
