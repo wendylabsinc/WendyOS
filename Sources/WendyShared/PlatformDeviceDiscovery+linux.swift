@@ -121,12 +121,22 @@
 
                     // Read link speed (in Mbps, or -1 if unknown)
                     let speedPath = "/sys/class/net/\(interfaceName)/speed"
-                    var linkSpeedMbps: Int? = nil
+                    var linkSpeed: String? = nil
                     if let speedStr = try? String(contentsOfFile: speedPath, encoding: .utf8)
                         .trimmingCharacters(in: .whitespacesAndNewlines),
                         let speed = Int(speedStr), speed > 0
                     {
-                        linkSpeedMbps = speed
+                        // Format speed as human-readable string
+                        if speed >= 1000 {
+                            let gbps = Double(speed) / 1000.0
+                            if gbps == floor(gbps) {
+                                linkSpeed = "\(Int(gbps)) Gbps"
+                            } else {
+                                linkSpeed = "\(gbps) Gbps"
+                            }
+                        } else {
+                            linkSpeed = "\(speed) Mbps"
+                        }
                     }
 
                     // Only collect interfaces containing "Wendy" in their name
@@ -137,15 +147,16 @@
                     let ethernetInterface = EthernetInterface(
                         name: interfaceName,
                         displayName: interfaceName,
+                        interfaceType: "Ethernet",
                         macAddress: macAddress,
-                        linkSpeedMbps: linkSpeedMbps
+                        linkSpeed: linkSpeed
                     )
 
                     interfaces.append(ethernetInterface)
                     logger.debug(
                         "Found Wendy Ethernet interface: \(interfaceName)",
                         metadata: [
-                            "speed": .string(linkSpeedMbps.map { "\($0) Mbps" } ?? "unknown")
+                            "speed": .string(linkSpeed ?? "unknown")
                         ]
                     )
                 }
