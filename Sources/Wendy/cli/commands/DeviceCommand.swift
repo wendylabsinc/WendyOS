@@ -91,6 +91,12 @@ struct DeviceCommand: AsyncParsableCommand {
         @Option(help: "The path to the new version of the Wendy agent.")
         var binary: String?
 
+        @Option(
+            help:
+                "Target platform for the agent binary (linux-aarch64 or linux-x86_64). Defaults to linux-aarch64."
+        )
+        var platform: String?
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
@@ -99,7 +105,26 @@ struct DeviceCommand: AsyncParsableCommand {
             if let location = self.binary {
                 binary = location
             } else {
-                binary = try await downloadLatestRelease().path
+                // Determine target platform (devices are always Linux)
+                let targetPlatform: Platform
+                if let platformStr = platform {
+                    switch platformStr.lowercased() {
+                    case "linux-aarch64", "aarch64", "arm64":
+                        targetPlatform = .linuxAarch64
+                    case "linux-x86_64", "x86_64", "amd64":
+                        targetPlatform = .linuxX86_64
+                    default:
+                        Noora().error(
+                            "Invalid platform '\(platformStr)'. Use 'linux-aarch64' or 'linux-x86_64'"
+                        )
+                        Self.exit(withError: nil)
+                    }
+                } else {
+                    // Default to aarch64 (most common for devices)
+                    targetPlatform = .linuxAarch64
+                }
+
+                binary = try await downloadLatestRelease(platform: targetPlatform).path
             }
 
             let success = try await withAgentGRPCClient(
@@ -244,7 +269,8 @@ struct DeviceCommand: AsyncParsableCommand {
                     return
                 }
 
-                let binary = try await downloadLatestRelease().path
+                // Default to Linux aarch64 for device updates during setup
+                let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
                 let success = try await Noora().progressBarStep(message: "Updating Device") {
                     updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)

@@ -113,17 +113,17 @@ public struct DockerCLI: Sendable {
     public func buildxAndPush(
         name: String,
         directory: String = ".",
-        port: Int = 5000,
-        builder: String
+        registryHostname: String = "host.docker.internal",
+        registryPort: Int = 5000
     ) async throws {
         let arguments = [
             "buildx", "build",
-            "--builder", builder,
+            "--builder", defaultBuilderName,
             "--platform", "linux/arm64",
             "--provenance=false",
             "--sbom=false",
             "--push",
-            "-t", "host.docker.internal:\(port)/\(name):latest",
+            "-t", "\(registryHostname):\(registryPort)/\(name):latest",
             directory,
         ]
 
@@ -201,8 +201,8 @@ public struct DockerCLI: Sendable {
         return output.split(separator: "\n").map { String($0) }
     }
 
-    public func builderName(forPort port: Int) -> String {
-        return "wendy-builder-\(port)"
+    public var defaultBuilderName: String {
+        return "wendy-builder"
     }
 
     public func hasBuildxBuilder(builderName: String) async throws -> Bool {
@@ -212,43 +212,113 @@ public struct DockerCLI: Sendable {
 
     /// Creates a buildx builder with insecure registry support for the specified port.
     /// Returns the name of the created builder.
-    public func createBuildxBuilder(
-        port: Int
+    public func prepareBuildxBuilder(
+        registryHostname: String,
+        registryPort: Int
     ) async throws {
-        let builderName = builderName(forPort: port)
-
         // Create buildkitd.toml configuration
         // Include multiple registry configurations to handle different networking scenarios
         let configContent = """
-            [registry."host.docker.internal:\(port)"]
-              http = true
-              insecure = true
-
-            [registry."localhost:\(port)"]
-              http = true
-              insecure = true
-
-            [registry."127.0.0.1:\(port)"]
-              http = true
-              insecure = true
+            [registry."\(registryHostname):\(registryPort)"]
+                http = true
+                insecure = true
             """
 
-        let tempDir = FileManager.default.temporaryDirectory
-        let configPath = tempDir.appendingPathComponent("buildkitd-\(builderName).toml")
-        try configContent.write(to: configPath, atomically: true, encoding: .utf8)
+        let wendyDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wendy")
+
+        try FileManager.default.createDirectory(at: wendyDir, withIntermediateDirectories: true)
+
+        let configPath =
+            wendyDir
+            .appendingPathComponent("buildkit-config.toml")
+            .path
+
+        var updatedConfig = false
+        if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
+            if !existingConfig.contains("\(registryHostname):5000") {
+                existingConfig += "\n\n" + configContent
+                try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
+                updatedConfig = true
+            }
+        } else {
+            try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            updatedConfig = true
+        }
+
+        if try await hasBuildxBuilder(builderName: defaultBuilderName) {
+            if !updatedConfig {
+                return
+            }
+
+            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+            let cpArguments: Subprocess.Arguments = [
+                "cp",
+                configPath,
+                "\(containerName):/etc/buildkit/buildkitd.toml",
+            ]
+            let cpResult = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: cpArguments,
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            )
+
+            guard cpResult.terminationStatus.isSuccess else {
+                let exitCode: Int
+                switch cpResult.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    exitCode = Int(code)
+                }
+                throw SubprocessError.nonZeroExit(
+                    command: cpArguments.description,
+                    exitCode: exitCode,
+                    terminationReason: cpResult.terminationStatus.description,
+                    output: "",
+                    error: ""
+                )
+            }
+
+            let restartArguments: Subprocess.Arguments = [
+                "restart", containerName,
+            ]
+            let restartResult = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: restartArguments,
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            )
+
+            guard restartResult.terminationStatus.isSuccess else {
+                let exitCode: Int
+                switch restartResult.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    exitCode = Int(code)
+                }
+                throw SubprocessError.nonZeroExit(
+                    command: restartArguments.description,
+                    exitCode: exitCode,
+                    terminationReason: restartResult.terminationStatus.description,
+                    output: "",
+                    error: ""
+                )
+            }
+
+            return
+        }
 
         // Create builder with configuration
-        let createArguments = [
+        let createArguments: Subprocess.Arguments = [
             "buildx", "create",
-            "--name", builderName,
+            "--name", defaultBuilderName,
             "--driver", "docker-container",
-            "--config", configPath.path,
+            "--config", configPath,
             "--bootstrap",  // Start the builder immediately to load config
         ]
 
         let createResult = try await Subprocess.run(
             Subprocess.Executable.name(self.command),
-            arguments: Subprocess.Arguments(createArguments),
+            arguments: createArguments,
             output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
             error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
         )
@@ -260,16 +330,13 @@ public struct DockerCLI: Sendable {
                 exitCode = Int(code)
             }
             throw SubprocessError.nonZeroExit(
-                command: ([self.command] + createArguments).joined(separator: " "),
+                command: createArguments.description,
                 exitCode: exitCode,
                 terminationReason: createResult.terminationStatus.description,
                 output: "",
                 error: ""
             )
         }
-
-        // Config has been loaded into builder container, safe to delete now
-        try? FileManager.default.removeItem(at: configPath)
     }
 
     /// Removes a buildx builder.
