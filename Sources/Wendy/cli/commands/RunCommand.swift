@@ -327,8 +327,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         do {
             _ = try await agentContainers.startContainer(
-                request: .init(
-                    message: .with {
+                request: ClientRequest<Wendy_Agent_Services_V1_StartContainerRequest>(
+                    message: Wendy_Agent_Services_V1_StartContainerRequest.with {
                         $0.appName = imageName
                     }
                 )
@@ -366,6 +366,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     "Container execution \(isCancellation ? "cancelled" : "failed"), stopping container",
                     metadata: ["container": "\(imageName)", "error": "\(error)"]
                 )
+                // Wait for container to stop before re-throwing
                 await stopContainerWithTimeout(
                     imageName: imageName,
                     client: client,
