@@ -247,40 +247,6 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 }
             ).image
 
-            let manifest: ImageManifest
-            switch image.target.mediaType {
-            case "application/vnd.oci.image.manifest.v1+json",
-                "application/vnd.docker.distribution.manifest.v2+json":
-                manifest = try await client.readJSONContent(
-                    digest: image.target.digest,
-                    as: ImageManifest.self
-                )
-            case "application/vnd.oci.image.index.v1+json":
-                let index = try await client.readJSONContent(
-                    digest: image.target.digest,
-                    as: ImageIndex.self
-                )
-                guard
-                    let manifestDescriptor = index.manifests.first(where: {
-                        $0.mediaType == "application/vnd.oci.image.manifest.v1+json"
-                    })
-                else {
-                    throw RPCError(
-                        code: .invalidArgument,
-                        message: "No manifest descriptor found in index"
-                    )
-                }
-                manifest = try await client.readJSONContent(
-                    digest: manifestDescriptor.digest,
-                    as: ImageManifest.self
-                )
-            default:
-                throw RPCError(
-                    code: .invalidArgument,
-                    message: "Unsupported media type: \(image.target.mediaType)"
-                )
-            }
-
             do {
                 let restartPolicy = request.restartPolicy
                 let restartPolicyLabel = "containerd.io/restart.policy"
@@ -331,6 +297,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             // Infer command and workingDir from the image config, if not provided in the request.
 
             // Assume manifest.config.digest is the reference to the image config blob
+            let manifest = try await client.readImageManifest(image: image)
             let configDescriptor = manifest.config
             let configData = try await client.fetchBlob(digest: configDescriptor.digest)
             let imageConfig = try JSONDecoder().decode(
