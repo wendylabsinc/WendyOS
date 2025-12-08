@@ -210,7 +210,16 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         logger.info("Applying update to \(currentBinary)")
 
         // Create backup of current binary before replacement
-        let backupFile = currentBinary.appending(".backup")
+        guard let binaryName = currentBinary.lastComponent?.string else {
+            throw RPCError(
+                code: .internalError,
+                message: "Failed to get binary name from \(currentBinary)"
+            )
+        }
+        let backupFile =
+            currentBinary
+            .removingLastComponent()
+            .appending(binaryName + ".backup")
         logger.info("Creating backup at \(backupFile)")
 
         // Remove any existing backup to ensure clean state
