@@ -85,11 +85,16 @@ public struct Containerd: Sendable {
     // Protocol-based dependencies for testing (optional, default to wrapping client)
     private let _containersClient:
         (any Containerd_Services_Containers_V1_Containers.ClientProtocol)?
+    private let _snapshotsClient: (any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol)?
     private let _tasksClient: (any Containerd_Services_Tasks_V1_Tasks.ClientProtocol)?
 
     // Computed properties that return either injected protocols or create from client
     private var containersClient: any Containerd_Services_Containers_V1_Containers.ClientProtocol {
         _containersClient ?? Containerd_Services_Containers_V1_Containers.Client(wrapping: client)
+    }
+
+    private var snapshotsClient: any Containerd_Services_Snapshots_V1_Snapshots.ClientProtocol {
+        _snapshotsClient ?? Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
     }
 
     private var tasksClient: any Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
@@ -792,7 +797,9 @@ public struct Containerd: Sendable {
                     ]
                 )
                 do {
-                    let snapshotsClient = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
+                    let snapshotsClient = Containerd_Services_Snapshots_V1_Snapshots.Client(
+                        wrapping: client
+                    )
                     _ = try await snapshotsClient.remove(
                         .with {
                             $0.key = tmpKey

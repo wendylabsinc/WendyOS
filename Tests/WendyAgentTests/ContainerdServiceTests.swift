@@ -252,7 +252,7 @@ struct UnpackImageTests {
             diffsService: diffs
         )
 
-        try await containerd.unpackImage(named: imageName)
+        _ = try await containerd.unpackImage(named: imageName)
 
         // Then: All snapshots were checked
         let statCalls = await snapshots.statCalls
@@ -326,7 +326,7 @@ struct UnpackImageTests {
             diffsService: diffs
         )
 
-        try await containerd.unpackImage(named: imageName)
+        _ = try await containerd.unpackImage(named: imageName)
 
         // Then: All snapshots were checked (stat should be called 3 times)
         let statCalls = await snapshots.statCalls
@@ -409,7 +409,7 @@ struct UnpackImageTests {
             diffsService: diffs
         )
 
-        try await containerd.unpackImage(named: imageName)
+        _ = try await containerd.unpackImage(named: imageName)
 
         // Then: All snapshots were checked (stat called 3 times)
         let statCalls = await snapshots.statCalls
@@ -487,7 +487,7 @@ struct UnpackImageTests {
             diffsService: diffs
         )
 
-        try await containerd.unpackImage(named: imageName)
+        _ = try await containerd.unpackImage(named: imageName)
 
         // Then: Verify layer 3 used the digest as fallback
         let statCalls = await snapshots.statCalls
@@ -545,7 +545,7 @@ struct UnpackImageTests {
 
         // Then: Should throw notFound error
         await #expect(throws: RPCError.self) {
-            try await containerd.unpackImage(named: imageName)
+            _ = try await containerd.unpackImage(named: imageName)
         }
     }
 
