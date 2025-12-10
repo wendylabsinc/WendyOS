@@ -1,0 +1,14 @@
+{
+    "appId": "sh.wendy.examples.hellollm",
+    "version": "1.0.0",
+    "language": "python",
+    "entitlements": [
+        {
+            "type": "gpu"
+        },
+        {
+            "type": "network",
+            "mode": "host"
+        }
+    ]
+}
