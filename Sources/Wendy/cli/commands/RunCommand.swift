@@ -75,6 +75,12 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     var swiftVersion: String { "6.2.1" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
+    var sdkDownloadURL: String {
+        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/6.2.1-RELEASE_wendyos_aarch64.artifactbundle.zip"
+    }
+    var sdkChecksum: String {
+        "d1f198fe5ce827e4f7f0d812a4c180c0b09831affafe520a254d4f0ce0c53ae9"
+    }
 
     // Deploy mode should always run detached
     var isDetached: Bool { detach || deploy }
@@ -376,7 +382,63 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
     }
 
+    func checkSwiftRequirements() async throws {
+        let swiftPM = SwiftPM()
+
+        let (installedSDKs, installedSwiftVersions) = try await Noora().progressStep(
+            message: "Checking Swift requirements",
+            successMessage: nil,
+            errorMessage: "Failed to check Swift requirements",
+            showSpinner: true
+        ) { changeStatus in
+            async let installedSDKs = try await swiftPM.listSDKs()
+            async let installedSwiftVersions = try await swiftPM.listSwiftVersions()
+            return try await (installedSDKs, installedSwiftVersions)
+        }
+
+        if !installedSDKs.contains(swiftSDK) {
+            let installSDK = Noora().yesOrNoChoicePrompt(
+                question: "Do you want to install the WendyOS Swift SDK?"
+            )
+
+            if installSDK {
+                try await Noora().progressStep(
+                    message: "Installing SDK",
+                    successMessage: "WendyOS SDK ready to use",
+                    errorMessage: "Failed to install SDK",
+                    showSpinner: true
+                ) { _ in
+                    try await swiftPM.installSDK(from: sdkDownloadURL, checksum: sdkChecksum)
+                }
+            }
+        }
+
+        if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
+            let installSwift = Noora().yesOrNoChoicePrompt(
+                title: "Swift \(swiftVersion) version is not installed yet",
+                question: "Do you want to install Swift \(swiftVersion)?",
+                description: """
+                    WendyOS development is tied to a specific Swift toolchain.
+                    We update this version from time to time to ensure compatibility with the latest features.
+                    """
+            )
+
+            if installSwift {
+                try await Noora().progressStep(
+                    message: "Installing Swift \(swiftVersion)",
+                    successMessage: "Swift \(swiftVersion) Installed",
+                    errorMessage: "Failed to install Swift \(swiftVersion)",
+                    showSpinner: true
+                ) { _ in
+                    try await swiftPM.installSDK(from: sdkDownloadURL, checksum: sdkChecksum)
+                }
+            }
+        }
+    }
+
     func runSwiftApp() async throws {
+        try await checkSwiftRequirements()
+
         let swiftPM = SwiftPM()
         let package = try await swiftPM.showDependencies()
 
