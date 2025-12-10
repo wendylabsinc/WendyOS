@@ -16,6 +16,36 @@ public struct DockerCLI: Sendable {
         self.command = command
     }
 
+    public func getServerVersion() async throws -> String {
+        let arguments = ["info", "--format", "{{.ServerVersion}}"]
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .string(limit: 1000, encoding: UTF8.self),
+            error: .discarded
+        )
+
+        guard
+            result.terminationStatus.isSuccess,
+            let output = result.standardOutput
+        else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+            throw SubprocessError.nonZeroExit(
+                command: arguments.description,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
+                output: "",
+                error: ""
+            )
+        }
+
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Build a Docker container.
     public func build(
         name: String,
