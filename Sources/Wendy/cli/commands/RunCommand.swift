@@ -14,7 +14,7 @@ import Subprocess
 import WendyAgentGRPC
 
 #if os(macOS)
-import AppKit
+    import AppKit
 #endif
 
 struct RunCommand: AsyncParsableCommand, Sendable {
@@ -387,7 +387,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             throw error
         }
     }
-    
+
     func checkDockerIsRunning() async throws {
         let docker = DockerCLI()
 
@@ -399,63 +399,79 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 Noora().warning("Docker is not running")
 
                 #if os(macOS)
-                // Check if Docker.app, OrbStack.app is installed
-                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.docker.docker") {
-                    Noora().info("Docker Desktop is installed")
+                    // Check if Docker.app, OrbStack.app is installed
+                    if let url = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.docker.docker"
+                    ) {
+                        Noora().info("Docker Desktop is installed")
 
-                    guard Noora().yesOrNoChoicePrompt(
-                        question: "Do you want to open Docker Desktop?"
-                    ) else {
-                        return
-                    }
-
-                    if NSWorkspace.shared.open(url) {
-                        Noora().info("Opening Docker.app")
-                        while true {
-                            do {
-                                _ = try await docker.getServerVersion()
-                                return
-                            } catch {}
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open Docker Desktop?"
+                            )
+                        else {
+                            return
                         }
-                    } else {
-                        Noora().info("Failed to open Docker Desktop automatically, please open it manually")
-                    }
-                    return
-                } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.orbstack.orbstack") {
-                    Noora().info("OrbStack.app is installed")
 
-                    guard Noora().yesOrNoChoicePrompt(
-                        question: "Do you want to open OrbStack?"
-                    ) else {
-                        return
-                    }
-
-                    if NSWorkspace.shared.open(url) {
-                        Noora().info("Opening OrbStack")
-                        while true {
-                            do {
-                                _ = try await docker.getServerVersion()
-                                return
-                            } catch {}
+                        if NSWorkspace.shared.open(url) {
+                            Noora().info("Opening Docker.app")
+                            while true {
+                                do {
+                                    _ = try await docker.getServerVersion()
+                                    return
+                                } catch {}
+                            }
+                        } else {
+                            Noora().info(
+                                "Failed to open Docker Desktop automatically, please open it manually"
+                            )
                         }
-                    } else {
-                        Noora().info("Failed to open OrbStack automatically, please open it manually")
-                    }
-                    return
-                } else {
-                    Noora().warning("Docker.app or OrbStack.app is not installed")
-                    guard Noora().yesOrNoChoicePrompt(
-                        question: "Do you want to open the installation guide?"
-                    ) else {
                         return
-                    }
-                    
-                    if NSWorkspace.shared.open(URL(string: "https://docs.docker.com/get-docker/")!) {
-                        Noora().info("Opening Docker documentation")
+                    } else if let url = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.orbstack.orbstack"
+                    ) {
+                        Noora().info("OrbStack.app is installed")
+
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open OrbStack?"
+                            )
+                        else {
+                            return
+                        }
+
+                        if NSWorkspace.shared.open(url) {
+                            Noora().info("Opening OrbStack")
+                            while true {
+                                do {
+                                    _ = try await docker.getServerVersion()
+                                    return
+                                } catch {}
+                            }
+                        } else {
+                            Noora().info(
+                                "Failed to open OrbStack automatically, please open it manually"
+                            )
+                        }
+                        return
                     } else {
-                        Noora().error("Failed to open Docker documentation")
+                        Noora().warning("Docker.app or OrbStack.app is not installed")
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open the installation guide?"
+                            )
+                        else {
+                            return
+                        }
+
+                        if NSWorkspace.shared.open(
+                            URL(string: "https://docs.docker.com/get-docker/")!
+                        ) {
+                            Noora().info("Opening Docker documentation")
+                        } else {
+                            Noora().error("Failed to open Docker documentation")
+                        }
                     }
-                }
                 #endif
             }
         }

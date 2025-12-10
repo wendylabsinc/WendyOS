@@ -25,7 +25,7 @@ public struct DockerCLI: Sendable {
             error: .discarded
         )
 
-        guard 
+        guard
             result.terminationStatus.isSuccess,
             let output = result.standardOutput
         else {
