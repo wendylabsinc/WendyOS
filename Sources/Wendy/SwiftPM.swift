@@ -88,6 +88,108 @@ public struct SwiftPM: Sendable {
         }
     }
 
+    private struct InstalledToolchains: Sendable, Codable {
+        let toolchains: [InstalledToolchain]
+    }
+
+    public struct InstalledToolchain: Sendable, Codable {
+        public struct Version: Sendable, Codable {
+            let major: Int?
+            let minor: Int?
+            let patch: Int?
+
+            let name: String
+            let type: String
+        }
+
+        let inUse: Bool
+        let isDefault: Bool
+        let version: Version
+    }
+
+    public func listSwiftVersions() async throws -> [InstalledToolchain] {
+        let args = Arguments(["list", "--format", "json"])
+        let result = try await Subprocess.run(
+            .name("swiftly"),
+            arguments: args,
+            output: .string(limit: 10_000),
+            error: .string(limit: 10_000)
+        )
+
+        guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
+            let exitCode =
+                switch result.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    Int(code)
+                }
+
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: result.standardError ?? ""
+            )
+        }
+
+        return try JSONDecoder().decode(InstalledToolchains.self, from: Data(output.utf8))
+            .toolchains
+    }
+
+    public func installSDK(
+        from url: String,
+        checksum: String
+    ) async throws {
+        let args = arguments(["sdk", "install", url, "--checksum", checksum])
+        let result = try await Subprocess.run(
+            .name(executableName),
+            arguments: args,
+            output: .string(limit: 10_000),
+            error: .string(limit: 10_000)
+        )
+
+        guard result.terminationStatus.isSuccess else {
+            let exitCode =
+                switch result.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    Int(code)
+                }
+
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: result.standardError ?? ""
+            )
+        }
+    }
+
+    public func listSDKs() async throws -> [String] {
+        let args = arguments(["sdk", "list"])
+        let result = try await Subprocess.run(
+            .name(executableName),
+            arguments: args,
+            output: .string(limit: 10_000),
+            error: .string(limit: 10_000)
+        )
+
+        guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
+            let exitCode =
+                switch result.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    Int(code)
+                }
+
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: result.standardError ?? ""
+            )
+        }
+
+        return output.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).map(String.init)
+    }
+
     /// Build the Swift package.
     public func buildWithOutput(_ options: BuildOption...) async throws -> String {
         let version = swiftVersion.map { ["+\($0)"] } ?? []

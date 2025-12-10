@@ -13,6 +13,10 @@ import Noora
 import Subprocess
 import WendyAgentGRPC
 
+#if os(macOS)
+    import AppKit
+#endif
+
 struct RunCommand: AsyncParsableCommand, Sendable {
     enum Error: Swift.Error, CustomStringConvertible {
         case failedToUploadLayers(Int)
@@ -75,6 +79,12 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     var swiftVersion: String { "6.2.1" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
+    var sdkDownloadURL: String {
+        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/6.2.1-RELEASE_wendyos_aarch64.artifactbundle.zip"
+    }
+    var sdkChecksum: String {
+        "d1f198fe5ce827e4f7f0d812a4c180c0b09831affafe520a254d4f0ce0c53ae9"
+    }
 
     // Deploy mode should always run detached
     var isDetached: Bool { detach || deploy }
@@ -166,6 +176,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     }
 
     func runDockerfileApp() async throws {
+        try await checkDockerIsRunning()
+
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
 
@@ -376,7 +388,152 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
     }
 
+    func checkDockerIsRunning() async throws {
+        let docker = DockerCLI()
+
+        while true {
+            do {
+                _ = try await docker.getServerVersion()
+                return
+            } catch {
+                Noora().warning("Docker is not running")
+
+                #if os(macOS)
+                    // Check if Docker.app, OrbStack.app is installed
+                    if let url = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.docker.docker"
+                    ) {
+                        Noora().info("Docker Desktop is installed")
+
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open Docker Desktop?"
+                            )
+                        else {
+                            return
+                        }
+
+                        if NSWorkspace.shared.open(url) {
+                            Noora().info("Opening Docker.app")
+                            while true {
+                                do {
+                                    _ = try await docker.getServerVersion()
+                                    return
+                                } catch {}
+                            }
+                        } else {
+                            Noora().info(
+                                "Failed to open Docker Desktop automatically, please open it manually"
+                            )
+                        }
+                        return
+                    } else if let url = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.orbstack.orbstack"
+                    ) {
+                        Noora().info("OrbStack.app is installed")
+
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open OrbStack?"
+                            )
+                        else {
+                            return
+                        }
+
+                        if NSWorkspace.shared.open(url) {
+                            Noora().info("Opening OrbStack")
+                            while true {
+                                do {
+                                    _ = try await docker.getServerVersion()
+                                    return
+                                } catch {}
+                            }
+                        } else {
+                            Noora().info(
+                                "Failed to open OrbStack automatically, please open it manually"
+                            )
+                        }
+                        return
+                    } else {
+                        Noora().warning("Docker.app or OrbStack.app is not installed")
+                        guard
+                            Noora().yesOrNoChoicePrompt(
+                                question: "Do you want to open the installation guide?"
+                            )
+                        else {
+                            return
+                        }
+
+                        if NSWorkspace.shared.open(
+                            URL(string: "https://docs.docker.com/get-docker/")!
+                        ) {
+                            Noora().info("Opening Docker documentation")
+                        } else {
+                            Noora().error("Failed to open Docker documentation")
+                        }
+                    }
+                #endif
+            }
+        }
+    }
+
+    func checkSwiftRequirements() async throws {
+        let swiftPM = SwiftPM()
+
+        let (installedSDKs, installedSwiftVersions) = try await Noora().progressStep(
+            message: "Checking Swift requirements",
+            successMessage: nil,
+            errorMessage: "Failed to check Swift requirements",
+            showSpinner: true
+        ) { changeStatus in
+            async let installedSDKs = try await swiftPM.listSDKs()
+            async let installedSwiftVersions = try await swiftPM.listSwiftVersions()
+            return try await (installedSDKs, installedSwiftVersions)
+        }
+
+        if !installedSDKs.contains(swiftSDK) {
+            let installSDK = Noora().yesOrNoChoicePrompt(
+                question: "Do you want to install the WendyOS Swift SDK?"
+            )
+
+            if installSDK {
+                try await Noora().progressStep(
+                    message: "Installing SDK",
+                    successMessage: "WendyOS SDK ready to use",
+                    errorMessage: "Failed to install SDK",
+                    showSpinner: true
+                ) { _ in
+                    try await swiftPM.installSDK(from: sdkDownloadURL, checksum: sdkChecksum)
+                }
+            }
+        }
+
+        if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
+            let installSwift = Noora().yesOrNoChoicePrompt(
+                title: "Swift \(swiftVersion) version is not installed yet",
+                question: "Do you want to install Swift \(swiftVersion)?",
+                description: """
+                    WendyOS development is tied to a specific Swift toolchain.
+                    We update this version from time to time to ensure compatibility with the latest features.
+                    """
+            )
+
+            if installSwift {
+                try await Noora().progressStep(
+                    message: "Installing Swift \(swiftVersion)",
+                    successMessage: "Swift \(swiftVersion) Installed",
+                    errorMessage: "Failed to install Swift \(swiftVersion)",
+                    showSpinner: true
+                ) { _ in
+                    try await swiftPM.installSDK(from: sdkDownloadURL, checksum: sdkChecksum)
+                }
+            }
+        }
+    }
+
     func runSwiftApp() async throws {
+        try await checkSwiftRequirements()
+
         let swiftPM = SwiftPM()
         let package = try await swiftPM.showDependencies()
 

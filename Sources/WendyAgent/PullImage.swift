@@ -69,7 +69,7 @@ public struct PullImage {
                 }
                 // Add labels to prevent garbage collection of pulled layers
                 let labels = [
-                    "containerd.io/gc.root": "true",
+                    "containerd.io/gc.root": Date().rfc3339Formatted(),
                     "sh.wendy.layer": "true",
                     "sh.wendy.source": "registry",
                 ]
