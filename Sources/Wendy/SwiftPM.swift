@@ -24,6 +24,15 @@ public struct SwiftPM: Sendable {
         return Subprocess.Arguments(runArgs + arguments)
     }
 
+    #if os(Windows)
+    public init(
+        path: String = "swift",
+        swiftVersion: String? = SwiftPM.defaultSwiftVersion
+    ) {
+        self.path = path
+        self.swiftVersion = swiftVersion
+    }
+    #else
     public init(
         path: String = "swiftly run swift",
         swiftVersion: String? = SwiftPM.defaultSwiftVersion
@@ -31,6 +40,7 @@ public struct SwiftPM: Sendable {
         self.path = path
         self.swiftVersion = swiftVersion
     }
+    #endif
 
     public enum BuildOption: Sendable {
         /// Filter for selecting a specific Swift SDK to build with.
@@ -108,31 +118,35 @@ public struct SwiftPM: Sendable {
     }
 
     public func listSwiftVersions() async throws -> [InstalledToolchain] {
-        let args = Arguments(["list", "--format", "json"])
-        let result = try await Subprocess.run(
-            .name("swiftly"),
-            arguments: args,
-            output: .string(limit: 10_000),
-            error: .string(limit: 10_000)
-        )
-
-        guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
-            let exitCode =
-                switch result.terminationStatus {
-                case .exited(let code), .unhandledException(let code):
-                    Int(code)
-                }
-
-            throw SubprocessError.nonZeroExit(
-                command: args.description,
-                exitCode: exitCode,
-                output: result.standardOutput ?? "",
-                error: result.standardError ?? ""
+        #if os(Windows)
+            return []
+        #else
+            let args = Arguments(["list", "--format", "json"])
+            let result = try await Subprocess.run(
+                .name("swiftly"),
+                arguments: args,
+                output: .string(limit: 10_000),
+                error: .string(limit: 10_000)
             )
-        }
 
-        return try JSONDecoder().decode(InstalledToolchains.self, from: Data(output.utf8))
-            .toolchains
+            guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
+                let exitCode =
+                    switch result.terminationStatus {
+                    case .exited(let code), .unhandledException(let code):
+                        Int(code)
+                    }
+
+                throw SubprocessError.nonZeroExit(
+                    command: args.description,
+                    exitCode: exitCode,
+                    output: result.standardOutput ?? "",
+                    error: result.standardError ?? ""
+                )
+            }
+
+            return try JSONDecoder().decode(InstalledToolchains.self, from: Data(output.utf8))
+                .toolchains
+        #endif
     }
 
     public func installSDK(

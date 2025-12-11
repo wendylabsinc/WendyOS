@@ -1,3 +1,4 @@
+#if !os(Windows)
 import AsyncHTTPClient
 import Foundation
 import NIOCore
@@ -52,3 +53,4 @@ public func downloadFile(
     progress.completedUnitCount = totalSize
     progressHandler(progress)
 }
+#endif

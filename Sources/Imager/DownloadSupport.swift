@@ -2,7 +2,6 @@ import AsyncHTTPClient
 import DownloadSupport
 import Foundation
 import NIOCore
-import _NIOFileSystem
 
 #if os(macOS)
     import Darwin
@@ -37,6 +36,7 @@ private struct ImageVersionMetadata: Codable {
     let timestamp: Date
 }
 
+#if !os(Windows)
 /// Manages downloading device images from GCS
 public final class ImageDownloader: ImageDownloading {
     private var fileManager: FileManager { .default }
@@ -429,9 +429,11 @@ public final class ImageDownloader: ImageDownloading {
         return resultPath
     }
 }
+#endif
 
 // MARK: - Factory
 
+#if !os(Windows)
 /// Factory for creating ImageDownloader instances
 public enum ImageDownloaderFactory {
     /// Creates and returns a default ImageDownloader instance
@@ -439,6 +441,7 @@ public enum ImageDownloaderFactory {
         return ImageDownloader()
     }
 }
+#endif
 
 // MARK: - Errors
 

@@ -89,6 +89,7 @@ enum Platform: String {
     }
 }
 
+#if !os(Windows)
 func downloadLatestRelease(
     httpClient: HTTPExecutor = DefaultHTTPExecutor(),
     platform: Platform = .linuxAarch64,
@@ -134,6 +135,7 @@ func downloadLatestRelease(
     try? FileManager.default.removeItem(at: downloadedFileURL)
     return fileURL
 }
+#endif
 
 func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
     let githubReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-agent/releases"
@@ -199,6 +201,7 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
     return try JSONDecoder().decode([Release].self, from: data)
 }
 
+#if !os(Windows)
 func downloadAsset(_ asset: Release.Asset) async throws -> URL {
     let fileManager = FileManager.default
     let tempDir = fileManager.temporaryDirectory
@@ -256,6 +259,7 @@ func downloadAsset(_ asset: Release.Asset) async throws -> URL {
     logger.debug("Downloaded asset", metadata: ["path": "\(downloadedFileURL.path)"])
     return downloadedFileURL
 }
+#endif
 
 enum ExtractError: Error {
     case failedToExtract

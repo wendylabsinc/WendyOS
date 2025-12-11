@@ -8,7 +8,6 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIO
-import NIOFileSystem
 import Noora
 import Subprocess
 import WendyAgentGRPC
@@ -221,18 +220,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 runtime: "dockerfile",
                 additionalProperties: buildPhaseProperties
             ) {
-                try await Noora().progressStep(
-                    message: "Building and uploading container",
-                    successMessage: "Container built and uploaded successfully!",
-                    errorMessage: "Failed to build and upload container",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.buildxAndPush(
-                        name: name,
-                        registryHostname: endpoint.host,
-                        registryPort: 5000
-                    )
-                }
+                try await docker.buildxAndPush(
+                    name: name,
+                    registryHostname: endpoint.host,
+                    registryPort: 5000
+                )
             }
 
             try await executePhase(phase: "prepare_container", runtime: "dockerfile") {
@@ -359,11 +351,19 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         }
                     case .stdoutOutput(let stdoutOutput):
                         stdoutOutput.data.withUnsafeBytes { data in
+                            #if os(Windows)
+                            _ = write(STDOUT_FILENO, data.baseAddress!, UInt32(data.count))
+                            #else
                             _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                            #endif
                         }
                     case .stderrOutput(let stderrOutput):
                         stderrOutput.data.withUnsafeBytes { data in
+                            #if os(Windows)
+                            _ = write(STDERR_FILENO, data.baseAddress!, UInt32(data.count))
+                            #else
                             _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                            #endif
                         }
                     default:
                         logger.warning("Unknown message received from agent")
@@ -472,6 +472,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                             Noora().error("Failed to open Docker documentation")
                         }
                     }
+                #else
+                return
                 #endif
             }
         }
@@ -479,7 +481,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     func checkSwiftRequirements() async throws {
         let swiftPM = SwiftPM()
-
+        
         let (installedSDKs, installedSwiftVersions) = try await Noora().progressStep(
             message: "Checking Swift requirements",
             successMessage: nil,
@@ -508,6 +510,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
         }
 
+        #if !os(Windows)
         if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
             let installSwift = Noora().yesOrNoChoicePrompt(
                 title: "Swift \(swiftVersion) version is not installed yet",
@@ -529,6 +532,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 }
             }
         }
+        #endif
     }
 
     func runSwiftApp() async throws {

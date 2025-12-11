@@ -5,7 +5,9 @@ import Logging
 import Noora
 import WendyAgentGRPC
 import WendySDK
+#if !os(Windows)
 import _NIOFileSystem
+#endif
 
 struct Agent {
     let client: GRPCClient<GRPCTransport>
@@ -79,6 +81,7 @@ struct Agent {
         )
     }
 
+    #if !os(Windows)
     func update(
         fromBinary path: String,
         onProgress: (Double) -> Void = { _ in }
@@ -166,4 +169,5 @@ struct Agent {
             return result
         }
     }
+    #endif
 }

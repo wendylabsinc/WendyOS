@@ -10,7 +10,6 @@ import WendyAgentGRPC
 import WendyCloudGRPC
 import WendySDK
 import X509
-import _NIOFileSystem
 
 struct DeviceCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -100,6 +99,9 @@ struct DeviceCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
+            #if os(Windows)
+            Noora().error("Device update is not supported on Windows hosts")
+            #else
             let binary: String
 
             if let location = self.binary {
@@ -144,6 +146,7 @@ struct DeviceCommand: AsyncParsableCommand {
             }
 
             Noora().success("Agent updated successfully")
+            #endif
         }
     }
 
@@ -260,6 +263,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     }
                 }
 
+                #if !os(Windows)
                 let shouldUpdate = Noora().yesOrNoChoicePrompt(
                     question: "Do you want to update the agent?",
                     collapseOnSelection: false
@@ -283,6 +287,7 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 Noora().success("Agent updated successfully")
+                #endif
             }
         }
     }

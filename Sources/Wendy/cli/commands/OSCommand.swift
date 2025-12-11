@@ -274,6 +274,11 @@ struct OSCommand: AsyncParsableCommand {
         var redownload: Bool = false
 
         func run() async throws {
+            #if os(Windows)
+            Noora().warning(
+                "⚠️  WendyOS imaging on Windows is experimental. Ensure you have sufficient privileges and that no other applications are accessing the target drive."
+            )
+            #else
             let logger = Logger(label: "wendy.imager")
             let manifestManager = ManifestManagerFactory.createManifestManager()
             let diskLister = DiskListerFactory.createDiskLister()
@@ -537,6 +542,7 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             noora.success("🎉 Device \(selectedDeviceName) successfully imaged!")
+            #endif
         }
     }
 }
