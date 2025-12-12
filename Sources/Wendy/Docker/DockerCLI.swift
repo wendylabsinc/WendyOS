@@ -249,10 +249,10 @@ public struct DockerCLI: Sendable {
         // Create buildkitd.toml configuration
         // Include multiple registry configurations to handle different networking scenarios
         let configContent = """
-
             [registry."\(registryHostname):\(registryPort)"]
                 http = true
                 insecure = true
+
             """
 
         let wendyDir = FileManager.default.homeDirectoryForCurrentUser
