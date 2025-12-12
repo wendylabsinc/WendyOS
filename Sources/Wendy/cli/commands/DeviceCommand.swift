@@ -97,6 +97,9 @@ struct DeviceCommand: AsyncParsableCommand {
         )
         var platform: String?
 
+        @Flag(help: "Download the latest pre-release version instead of stable release")
+        var prerelease: Bool = false
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
@@ -124,7 +127,10 @@ struct DeviceCommand: AsyncParsableCommand {
                     targetPlatform = .linuxAarch64
                 }
 
-                binary = try await downloadLatestRelease(platform: targetPlatform).path
+                binary = try await downloadLatestRelease(
+                    platform: targetPlatform,
+                    includePrerelease: prerelease
+                ).path
             }
 
             let success = try await withAgentGRPCClient(
