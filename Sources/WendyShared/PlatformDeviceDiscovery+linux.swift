@@ -176,7 +176,7 @@
                 on: .singletonMultiThreadedEventLoopGroup
             ).get()
             async let wendyPTR = try? await dns.sendQuery(
-                forHost: "_wendy._udp.local",
+                forHost: "_wendyos._udp.local",
                 type: .any,
                 timeout: .seconds(5)
             ).get()
