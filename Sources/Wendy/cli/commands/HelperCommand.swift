@@ -14,6 +14,7 @@ struct HelperCommand: AsyncParsableCommand {
             The helper daemon runs in the background and automatically configures network
             interfaces when Wendy USB devices are connected to the system.
             """,
+        shouldDisplay: false,
         subcommands: [Install.self, Uninstall.self, Start.self, Stop.self, Status.self, Logs.self]
     )
 }

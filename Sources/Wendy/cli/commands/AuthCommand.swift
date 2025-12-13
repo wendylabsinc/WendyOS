@@ -11,6 +11,7 @@ struct AuthCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "auth",
         abstract: "Managed authentication to cloud services",
+        shouldDisplay: false,
         subcommands: [
             LoginCommand.self,
             LogoutCommand.self,
