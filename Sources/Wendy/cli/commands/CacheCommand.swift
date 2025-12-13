@@ -6,7 +6,7 @@ import Noora
 struct CacheCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "cache",
-        abstract: "Inspect cached WendyOS images.",
+        abstract: "Inspect and clear caches",
         subcommands: [
             ListCommand.self,
             ClearCommand.self,

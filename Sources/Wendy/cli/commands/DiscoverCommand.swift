@@ -8,7 +8,7 @@ import WendyShared
 struct DiscoverCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "discover",
-        abstract: "List USB and Ethernet devices connected to the system"
+        abstract: "Find connected Wendy devices"
     )
 
     enum DeviceType: String, ExpressibleByArgument {
@@ -142,7 +142,7 @@ struct DiscoverCommand: AsyncParsableCommand {
                     )
                 )
             } else {
-                Noora().success("Found \(collection.deviceCount) Wendy devices")
+                Noora().success("Found \(collection.deviceCount) Wendy \(collection.deviceCount == 1 ? "device" : "devices")")
                 print(collection.toHumanReadableString())
             }
         }

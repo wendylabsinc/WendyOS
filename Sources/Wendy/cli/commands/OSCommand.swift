@@ -99,7 +99,7 @@ struct OSCommand: AsyncParsableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "os",
-        abstract: "Setup and manage your WendyOS images.",
+        abstract: "Download and install WendyOS",
         subcommands: [
             OSInstallCommand.self,
             CacheCommand.self,
@@ -166,7 +166,7 @@ struct OSCommand: AsyncParsableCommand {
 
         static let configuration = CommandConfiguration(
             commandName: "supported-devices",
-            abstract: "List supported device images."
+            abstract: "List supported device images"
         )
 
         @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")

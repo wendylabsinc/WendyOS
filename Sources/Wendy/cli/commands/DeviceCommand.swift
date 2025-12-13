@@ -15,7 +15,7 @@ import _NIOFileSystem
 struct DeviceCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "device",
-        abstract: "Manage the Wendy device.",
+        abstract: "Control your Wendy device.",
         subcommands: [
             SetDefaultCommand.self,
             UnsetDefaultCommand.self

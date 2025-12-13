@@ -14,7 +14,7 @@ import SystemPackage
 struct InitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "init",
-        abstract: "Initialize a new Wendy project in the current directory."
+        abstract: "Create a new Wendy project"
     )
 
     @Option(
