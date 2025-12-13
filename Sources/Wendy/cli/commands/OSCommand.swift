@@ -192,11 +192,13 @@ struct OSCommand: AsyncParsableCommand {
                     headers: [
                         "Device",
                         "Latest Version",
+                        "Latest Nightly",
                     ],
                     rows: deviceList.map { device in
                         [
                             device.name,
                             device.latestVersion.isEmpty ? "Not Available" : device.latestVersion,
+                            device.latestNightlyVersion ?? "—",
                         ]
                     }
                 )

@@ -37,10 +37,12 @@ public struct MainManifest: Codable {
 public struct DeviceInfo: Codable {
     public let name: String
     public let latestVersion: String
+    public let latestNightlyVersion: String?
 
-    public init(name: String, latestVersion: String) {
+    public init(name: String, latestVersion: String, latestNightlyVersion: String? = nil) {
         self.name = name
         self.latestVersion = latestVersion
+        self.latestNightlyVersion = latestNightlyVersion
     }
 }
 
@@ -165,10 +167,53 @@ public final class ManifestManager: ManifestManaging {
         let mainManifestData = try await fetchData(from: mainManifestUrl)
         let mainManifest = try JSONDecoder().decode(MainManifest.self, from: mainManifestData)
 
-        // Convert devices dictionary to DeviceInfo array
-        return mainManifest.devices.map { (name, info) in
-            DeviceInfo(name: name, latestVersion: info.latest)
-        }.sorted { $0.name < $1.name }
+        // Fetch device manifests to get nightly versions
+        var deviceInfos: [DeviceInfo] = []
+        for (name, info) in mainManifest.devices {
+            var latestNightlyVersion: String? = nil
+
+            // Only fetch device manifest if it has a manifest path
+            if !info.manifest_path.isEmpty {
+                do {
+                    let deviceManifestUrl = URL(string: "\(baseUrl)/\(info.manifest_path)")!
+                    let deviceManifestData = try await fetchData(from: deviceManifestUrl)
+                    let deviceManifest = try JSONDecoder().decode(
+                        DeviceManifest.self,
+                        from: deviceManifestData
+                    )
+
+                    // Find the latest nightly build
+                    let nightlyVersions = deviceManifest.versions.filter {
+                        $0.key.contains("-nightly")
+                    }
+                    if !nightlyVersions.isEmpty {
+                        let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
+                            let lhsDate =
+                                ISO8601DateFormatter().date(from: lhs.value.release_date)
+                                ?? Date.distantPast
+                            let rhsDate =
+                                ISO8601DateFormatter().date(from: rhs.value.release_date)
+                                ?? Date.distantPast
+                            return lhsDate > rhsDate
+                        }
+                        latestNightlyVersion = sortedNightlyVersions.first?.key
+                    }
+                } catch {
+                    // If we can't fetch the device manifest, just skip the nightly version
+                    latestNightlyVersion = nil
+                }
+            }
+
+            deviceInfos.append(
+                DeviceInfo(
+                    name: name,
+                    latestVersion: info.latest,
+                    latestNightlyVersion: latestNightlyVersion
+                )
+            )
+        }
+
+        return deviceInfos.sorted { $0.name < $1.name }
     }
 }
 
