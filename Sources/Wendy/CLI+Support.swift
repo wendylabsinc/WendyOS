@@ -12,7 +12,12 @@ public func withErrorTracking(
         try await deviceUnreachable()
         return
     } catch {
-        print(error)
+        Noora().error(.alert(
+            "An unexpected error occurred: \(error.localizedDescription)",
+            takeaways: [
+                "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
+            ]
+        ))
         throw error
     }
 }
@@ -43,6 +48,7 @@ private func deviceUnreachable(source: DeviceSource) async throws {
         "Connect to the device directly over USB",
         "Check the device is powered on and running.",
         "Discover devices with \("wendy discover".underline)",
+        "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
     ]
 
     switch source {
