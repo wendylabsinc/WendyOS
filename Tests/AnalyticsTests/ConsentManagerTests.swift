@@ -120,13 +120,11 @@ struct ConsentManagerAsyncTests {
         unsetenv("JENKINS_URL")
         unsetenv("GITHUB_ACTIONS")
         unsetenv("GITLAB_CI")
-        var status = await consentManager.getStatus()
-        #expect(status.contains("Analytics:"))
+        #expect(consentManager.shouldDisableAnalytics())
 
         // Test with WENDY_ANALYTICS=false
         setenv("WENDY_ANALYTICS", "false", 1)
-        status = await consentManager.getStatus()
-        #expect(status.contains("Disabled") && status.contains("environment variable"))
+        #expect(consentManager.shouldDisableAnalytics())
         unsetenv("WENDY_ANALYTICS")
     }
 }
@@ -136,25 +134,12 @@ struct ConsentManagerAsyncTests {
 @Suite("Consent Manager Config Operations")
 struct ConsentManagerConfigTests {
 
-    @Test("Disable analytics should not throw")
+    @Test("Toggling analytics should work")
     func disableAnalytics() throws {
-        let consentManager = ConsentManager()
-        do {
-            try consentManager.disableAnalytics()
-        } catch {
-            // Expected to potentially fail without proper file system setup
-            // But the method should not crash
-        }
-    }
-
-    @Test("Enable analytics should not throw")
-    func enableAnalytics() throws {
-        let consentManager = ConsentManager()
-        do {
-            try consentManager.enableAnalytics()
-        } catch {
-            // Expected to potentially fail without proper file system setup
-            // But the method should not crash
-        }
+        var config = WendyAnalyticsConfig()
+        config.disableAnalytics()
+        #expect(config.enabled == false)
+        config.enableAnalytics()
+        #expect(config.enabled == true)
     }
 }

@@ -5,38 +5,26 @@ import WendyShared
 
 // MARK: - Config Types
 
-/// Wendy configuration file structure
-private struct WendyConfig: Codable {
-    let analytics: WendyAnalyticsConfig?
-}
-
 /// Analytics configuration
-private struct WendyAnalyticsConfig: Codable {
-    let enabled: Bool?
-    let anonymousId: String?
-    let optOutDate: String?
-    let isInternal: Bool?
+public struct WendyAnalyticsConfig: Codable, Sendable {
+    public let anonymousId: String
+    public var enabled: Bool
+    public var optOutDate: Date?
+    public let isInternal: Bool
+
+    public init() {
+        self.enabled = true
+        self.anonymousId = UUID().uuidString
+        self.optOutDate = nil
+        self.isInternal = false
+    }
 }
 
 // MARK: - Analytics Service
 
 /// Main service for coordinating analytics tracking
 public actor AnalyticsService {
-    /// Shared instance of the analytics service
-    public static let shared: AnalyticsService? = {
-        // Check if analytics should be disabled
-        guard !ConsentManager.shouldDisableAnalytics() else {
-            return nil
-        }
-
-        // Try to create the service
-        do {
-            return try AnalyticsService()
-        } catch {
-            // If we can't create the service for whatever reason, analytics is disabled
-            return nil
-        }
-    }()
+    @TaskLocal public static var current: AnalyticsService?
 
     private let client: PostHogClient?
     private let consentManager: ConsentManager
@@ -46,11 +34,15 @@ public actor AnalyticsService {
     private let isInternalUser: Bool
 
     /// Initialize the analytics service
-    public init() throws {
+    public init?(config: WendyAnalyticsConfig) throws {
+        // Check if analytics should be disabled
+        if ConsentManager.shouldDisableAnalytics() {
+            return nil
+        }
+
         self.consentManager = ConsentManager()
 
         // Load config values
-        let config = Self.loadAnalyticsConfig()
         self.anonymousId = config.anonymousId
         self.isInternalUser = config.isInternal
 
@@ -59,51 +51,23 @@ public actor AnalyticsService {
         self.client = PostHogClient(apiKey: "phc_DCgbsvbGPdGhU6GW3CQnEwGCsNNrAHYwMhj4HkhjU4f")
     }
 
-    /// Loads analytics configuration from the config file
-    private static func loadAnalyticsConfig() -> (anonymousId: String, isInternal: Bool) {
-        do {
-            let configURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".wendy")
-                .appendingPathComponent("config.json")
-
-            if FileManager.default.fileExists(atPath: configURL.path) {
-                let data = try Data(contentsOf: configURL)
-                let config = try JSONDecoder().decode(WendyConfig.self, from: data)
-                return (
-                    anonymousId: config.analytics?.anonymousId ?? UUID().uuidString,
-                    isInternal: config.analytics?.isInternal ?? false
-                )
-            }
-        } catch {
-            // Ignore errors, use defaults
-        }
-
-        return (anonymousId: UUID().uuidString, isInternal: false)
-    }
-
     /// The user type for analytics events
     private var userType: String {
         isInternalUser ? "internal" : "user"
     }
 
     /// Tracks command execution with timing and error handling
-    public func trackCommandExecution<T>(
+    public func trackCommandExecution<T: Sendable>(
         _ commandExecution: @Sendable () async throws -> T
     ) async rethrows -> T {
-        // Check if analytics is enabled
-        guard await consentManager.isAnalyticsEnabled(),
-            client != nil
-        else {
-            // Analytics disabled, just run the command
-            return try await commandExecution()
-        }
-
         let startTime = Date()
         let commandName = extractCommandName()
 
         do {
             // Execute the command
-            let result = try await commandExecution()
+            let result = try await AnalyticsService.$current.withValue(self) {
+                try await commandExecution()
+            }
 
             // Track success
             let duration = Date().timeIntervalSince(startTime)
@@ -219,9 +183,7 @@ public actor AnalyticsService {
         name: String,
         properties: [String: String] = [:]
     ) async {
-        guard await consentManager.isAnalyticsEnabled(),
-            let client = client
-        else {
+        guard let client else {
             return
         }
 

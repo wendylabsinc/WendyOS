@@ -630,7 +630,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         error: Swift.Error,
         additionalProperties: [String: String] = [:]
     ) async {
-        guard let analytics = AnalyticsService.shared else { return }
+        guard let analytics = AnalyticsService.current else { return }
         let sanitizedError = ErrorSanitizer.sanitize(error)
         var properties: [String: String] = [
             "phase": phase,

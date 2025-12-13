@@ -17,11 +17,8 @@ struct WendyCLI {
             return logger
         }
 
-        // Initialize analytics service
-        let analytics = AnalyticsService.shared
-
         // Track command execution with analytics
-        if let analytics = analytics {
+        if let analytics = try? AnalyticsService(config: getConfig().analytics) {
             await analytics.trackCommandExecution {
                 await WendyCommand.main()
             }

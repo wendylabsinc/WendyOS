@@ -8,6 +8,7 @@ import Synchronization
 import WendyCloudGRPC
 import WendySDK
 import X509
+import Analytics
 
 #if os(macOS)
     import AppKit
@@ -39,9 +40,11 @@ public struct Config: Sendable, Codable {
     }
 
     public var auth: [Auth]
+    public var analytics: WendyAnalyticsConfig
 
     public init() {
         self.auth = []
+        self.defaultDevice = nil
     }
 
     public mutating func addAuth(_ newAuth: Auth) {
@@ -70,7 +73,7 @@ var configURL: URL {
     }
 }
 
-func getConfig() throws -> Config {
+func getConfig() -> Config {
     do {
         let data = try Data(contentsOf: configURL)
         return try JSONDecoder().decode(Config.self, from: data)
@@ -145,7 +148,7 @@ func withAuth<R: Sendable>(
     title: TerminalText,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
-    let config = try getConfig()
+    let config = getConfig()
 
     if config.auth.isEmpty {
         return try await authenticate(title: title, perform: perform)
