@@ -190,7 +190,11 @@ public struct DevicesCollection: Encodable, Sendable {
                 }
                 return string
             case .lan(let device):
-                string += "LAN: \(device.hostname):\(device.port)"
+                if device.port == 50051 {
+                    string += "LAN: \(device.hostname)"
+                } else {
+                    string += "LAN: \(device.hostname):\(device.port)"
+                }
                 return string
             }
         }
