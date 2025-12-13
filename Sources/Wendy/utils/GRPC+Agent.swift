@@ -188,7 +188,7 @@ func _withAgentGRPCClient<R: Sendable>(
             }
         }
     } catch let error as RPCError where error.code == .unavailable {
-        logger.warning(
+        logger.debug(
             "Could not connect to host",
             metadata: [
                 "host": "\(endpoint.host)",
@@ -198,7 +198,7 @@ func _withAgentGRPCClient<R: Sendable>(
         throw error
     } catch let error as ChannelError {
         // This is the error we expect, but gRPC kicks off its own error
-        logger.warning(
+        logger.debug(
             "Could not connect to host",
             metadata: [
                 "host": "\(endpoint.host)",

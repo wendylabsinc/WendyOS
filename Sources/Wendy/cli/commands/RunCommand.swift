@@ -153,25 +153,27 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     }
 
     func run() async throws {
-        // Validate flags before proceeding
-        try validate()
+        try await withErrorTracking {
+            // Validate flags before proceeding
+            try validate()
 
-        let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
-        let directory = try FileManager.default.contentsOfDirectory(
-            atPath: FileManager.default.currentDirectoryPath
-        )
-
-        for item in directory where item.lowercased().contains("dockerfile") {
-            try await runDockerfileApp()
-            return
-        }
-
-        if isSwiftPackage {
-            try await runSwiftApp()
-        } else {
-            Noora().error(
-                "Directory is not a Swift Package, nor can it be built as a docker container"
+            let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
+            let directory = try FileManager.default.contentsOfDirectory(
+                atPath: FileManager.default.currentDirectoryPath
             )
+
+            for item in directory where item.lowercased().contains("dockerfile") {
+                try await runDockerfileApp()
+                return
+            }
+
+            if isSwiftPackage {
+                try await runSwiftApp()
+            } else {
+                Noora().error(
+                    "Directory is not a Swift Package, nor can it be built as a docker container"
+                )
+            }
         }
     }
 
