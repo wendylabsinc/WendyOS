@@ -17,12 +17,30 @@ struct DeviceCommand: AsyncParsableCommand {
         commandName: "device",
         abstract: "Manage the Wendy device.",
         subcommands: [
-            SetupCommand.self,
-            AppsCommand.self,
-            HardwareCommand.self,
-            WiFiCommand.self,
-            VersionCommand.self,
-            UpdateCommand.self,
+        ],
+        groupedSubcommands: [
+            CommandGroup(
+                name: "Device Management",
+                subcommands: [
+                    SetupCommand.self,
+                    HardwareCommand.self,
+                    WiFiCommand.self,
+                    AppsCommand.self,
+                ]
+            ),
+            CommandGroup(
+                name: "Debugging",
+                subcommands: [
+                    HardwareCommand.self,
+                ]
+            ),
+            CommandGroup(
+                name: "Update",
+                subcommands: [
+                    VersionCommand.self,
+                    UpdateCommand.self
+                ]
+            )
         ]
     )
 
