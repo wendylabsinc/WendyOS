@@ -41,10 +41,12 @@ public struct Config: Sendable, Codable {
 
     public var auth: [Auth]
     public var analytics: WendyAnalyticsConfig
+    public var defaultDevice: String?
 
     public init() {
         self.auth = []
         self.defaultDevice = nil
+        self.analytics = WendyAnalyticsConfig()
     }
 
     public mutating func addAuth(_ newAuth: Auth) {

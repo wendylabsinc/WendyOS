@@ -17,6 +17,8 @@ struct DeviceCommand: AsyncParsableCommand {
         commandName: "device",
         abstract: "Manage the Wendy device.",
         subcommands: [
+            SetDefaultCommand.self,
+            UnsetDefaultCommand.self
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -100,6 +102,46 @@ struct DeviceCommand: AsyncParsableCommand {
         }
     }
 
+    struct SetDefaultCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "set-default",
+            abstract: "Set the default device."
+        )
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        
+        func run() async throws {
+            let endpoint = try await agentConnectionOptions.read(
+                title: "Set default device",
+                readDefault: false
+            )
+            
+            var config = getConfig()
+            config.defaultDevice = endpoint.host
+            try config.save()
+
+            Noora().success("Default device set to \(endpoint.host)")
+        }
+    }
+
+
+    struct UnsetDefaultCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "unset-default",
+            abstract: "Unset the default device."
+        )
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        
+        func run() async throws {
+            var config = getConfig()
+            config.defaultDevice = nil
+            try config.save()
+
+            Noora().success("Default device unset")
+        }
+    }
+    
     struct UpdateCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "update",
