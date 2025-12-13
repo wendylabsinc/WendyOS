@@ -49,9 +49,14 @@ public struct DeviceInfo: Codable {
 /// Protocol defining manifest management functionality
 public protocol ManifestManaging: Sendable {
     /// Fetches the latest image information for a specific device
-    /// - Parameter deviceName: The name of the device
-    /// - Returns: The image URL and size
-    func getLatestImageInfo(for deviceName: String) async throws -> (url: URL, size: Int)
+    /// - Parameters:
+    ///   - deviceName: The name of the device
+    ///   - nightly: If true, fetches the latest nightly build; otherwise fetches the latest stable release
+    /// - Returns: The image URL, size, and version string
+    func getLatestImageInfo(
+        for deviceName: String,
+        nightly: Bool
+    ) async throws -> (url: URL, size: Int, version: String)
 
     /// Fetches all available devices from the manifest
     /// - Returns: Array of available device information
@@ -89,7 +94,10 @@ public final class ManifestManager: ManifestManaging {
         return Data(buffer: body)
     }
 
-    public func getLatestImageInfo(for deviceName: String) async throws -> (url: URL, size: Int) {
+    public func getLatestImageInfo(
+        for deviceName: String,
+        nightly: Bool = false
+    ) async throws -> (url: URL, size: Int, version: String) {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
@@ -110,17 +118,45 @@ public final class ManifestManager: ManifestManaging {
         let deviceManifestData = try await fetchData(from: deviceManifestUrl)
         let deviceManifest = try JSONDecoder().decode(DeviceManifest.self, from: deviceManifestData)
 
-        // Find the latest version
-        guard !deviceInfo.latest.isEmpty,
-            let versionInfo = deviceManifest.versions[deviceInfo.latest]
-        else {
-            throw ManifestError.noLatestVersion(deviceName)
+        let versionInfo: DeviceManifest.VersionInfo
+        let versionString: String
+
+        if nightly {
+            // Find the latest nightly build
+            let nightlyVersions = deviceManifest.versions.filter { $0.key.contains("-nightly") }
+
+            guard !nightlyVersions.isEmpty else {
+                throw ManifestError.noNightlyVersion(deviceName)
+            }
+
+            // Sort by release date to find the most recent nightly
+            let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
+                // Parse release dates and compare
+                let lhsDate =
+                    ISO8601DateFormatter().date(from: lhs.value.release_date) ?? Date.distantPast
+                let rhsDate =
+                    ISO8601DateFormatter().date(from: rhs.value.release_date) ?? Date.distantPast
+                return lhsDate > rhsDate
+            }
+
+            let latestNightly = sortedNightlyVersions.first!
+            versionInfo = latestNightly.value
+            versionString = latestNightly.key
+        } else {
+            // Find the latest stable version
+            guard !deviceInfo.latest.isEmpty,
+                let stableVersionInfo = deviceManifest.versions[deviceInfo.latest]
+            else {
+                throw ManifestError.noLatestVersion(deviceName)
+            }
+            versionInfo = stableVersionInfo
+            versionString = deviceInfo.latest
         }
 
         // Get the image URL
         let imageUrl = URL(string: "\(baseUrl)/\(versionInfo.path)")!
 
-        return (imageUrl, versionInfo.size_bytes)
+        return (imageUrl, versionInfo.size_bytes, versionString)
     }
 
     public func getAvailableDevices() async throws -> [DeviceInfo] {
@@ -155,6 +191,7 @@ public enum ManifestError: Error, LocalizedError {
     case deviceNotFound(String)
     case noManifestForDevice(String)
     case noLatestVersion(String)
+    case noNightlyVersion(String)
     case httpFailure(UInt)
 
     public var errorDescription: String? {
@@ -165,6 +202,8 @@ public enum ManifestError: Error, LocalizedError {
             return "No manifest available for device '\(deviceName)'"
         case .noLatestVersion(let deviceName):
             return "No latest version found for device '\(deviceName)'"
+        case .noNightlyVersion(let deviceName):
+            return "No nightly version found for device '\(deviceName)'"
         case .httpFailure(let status):
             return "HTTP request failed with status code: '\(status)'"
         }

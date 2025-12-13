@@ -273,6 +273,9 @@ struct OSCommand: AsyncParsableCommand {
         @Flag(name: .long, help: "Force redownload and write the image")
         var redownload: Bool = false
 
+        @Flag(name: .long, help: "Install the latest nightly build instead of stable release")
+        var nightly: Bool = false
+
         func run() async throws {
             let logger = Logger(label: "wendy.imager")
             let manifestManager = ManifestManagerFactory.createManifestManager()
@@ -405,17 +408,17 @@ struct OSCommand: AsyncParsableCommand {
                 }
             }
 
-            noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
+            if nightly {
+                noora.info("🔍 Finding latest nightly image for \(selectedDeviceName)...")
+            } else {
+                noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
+            }
 
             // Get the latest image information for the device
-            let (imageUrl, imageSize) = try await manifestManager.getLatestImageInfo(
-                for: selectedDeviceName
+            let (imageUrl, imageSize, latestVersion) = try await manifestManager.getLatestImageInfo(
+                for: selectedDeviceName,
+                nightly: nightly
             )
-
-            // Also get the latest version string from manifest
-            let devices = try await manifestManager.getAvailableDevices()
-            let latestVersion =
-                devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
 
             noora.info(
                 """
