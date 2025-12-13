@@ -193,12 +193,23 @@ struct OSCommand: AsyncParsableCommand {
                         "Device",
                         "Latest Version",
                         "Latest Nightly",
+                        "Stability",
                     ],
                     rows: deviceList.map { device in
-                        [
+                        let stabilityIcon: String
+                        switch device.stability {
+                        case .stable:
+                            stabilityIcon = "✓ Stable"
+                        case .experimental:
+                            stabilityIcon = "⚠ Experimental"
+                        case .deprecated:
+                            stabilityIcon = "⚠ Deprecated"
+                        }
+                        return [
                             device.name,
                             device.latestVersion.isEmpty ? "Not Available" : device.latestVersion,
                             device.latestNightlyVersion ?? "—",
+                            stabilityIcon,
                         ]
                     }
                 )
