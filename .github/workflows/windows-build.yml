@@ -24,8 +24,59 @@ jobs:
           swift-build: 6.2.1-RELEASE
     
       # 2. Checkout
-      - name: Checkout Repository
+      - name: Checkout Wendy-Agent Repository
         uses: actions/checkout@v4
+        with:
+            path: wendy-agent
+
+      - name: Checkout Custom AsyncHTTPClient
+        uses: actions/checkout@v4
+        with:
+          repository: swift-server/async-http-client
+          ref: main
+          path: async-http-client
+
+      - name: Checkout Custom Hummingbird
+        uses: actions/checkout@v4
+        with:
+          repository: hummingbird-project/hummingbird
+          ref: jo/windows-support
+          path: hummingbird
+
+      - name: Checkout Custom SwiftNIO
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio
+          ref: main
+          path: swift-nio
+        
+      - name: Checkout Custom SwiftNIO-SSL
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio-ssl
+          ref: jo/windows-support
+          path: swift-nio-ssl
+        
+      - name: Checkout Custom SwiftNIO-Extras
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio-extras
+          ref: jo/windows-ucrt
+          path: swift-nio-extras
+    
+      - name: Checkout Custom DNSClient
+        uses: actions/checkout@v4
+        with:
+          repository: orlandos-nl/DNSClient
+          ref: jo/windows-support
+          path: DNSClient
+    
+      - name: Checkout Custom GRPC SwiftNIO Transport
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/grpc-swift-nio-transport
+          ref: jo/windows-support
+          path: grpc-swift-nio-transport
 
       # 2. Provision Zlib (Check Vcpkg)
       - name: Provision Dependencies
