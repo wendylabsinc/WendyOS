@@ -193,12 +193,23 @@ struct OSCommand: AsyncParsableCommand {
                         "Device",
                         "Latest Version",
                         "Latest Nightly",
+                        "Stability",
                     ],
                     rows: deviceList.map { device in
-                        [
+                        let stabilityIcon: String
+                        switch device.stability {
+                        case .stable:
+                            stabilityIcon = "✓ Stable"
+                        case .experimental:
+                            stabilityIcon = "⚠ Experimental"
+                        case .deprecated:
+                            stabilityIcon = "⚠ Deprecated"
+                        }
+                        return [
                             device.name,
                             device.latestVersion.isEmpty ? "Not Available" : device.latestVersion,
                             device.latestNightlyVersion ?? "—",
+                            stabilityIcon,
                         ]
                     }
                 )
@@ -313,7 +324,12 @@ struct OSCommand: AsyncParsableCommand {
                 let devices = familyOptions[familyIndex].1
 
                 let deviceRows = devices.map { device -> [String] in
-                    let version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    let version: String
+                    if nightly {
+                        version = device.latestNightlyVersion ?? "—"
+                    } else {
+                        version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    }
                     return [
                         device.name,
                         version,
@@ -323,7 +339,7 @@ struct OSCommand: AsyncParsableCommand {
                 let deviceIndex = try await noora.selectableTable(
                     headers: [
                         "Device",
-                        "Latest Version",
+                        nightly ? "Latest Nightly" : "Latest Version",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count

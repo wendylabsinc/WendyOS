@@ -9,6 +9,13 @@ import NIOFoundationCompat
 
 // MARK: - Data Models
 
+/// Stability level for a device
+public enum DeviceStability: String, Codable {
+    case stable = "stable"
+    case experimental = "experimental"
+    case deprecated = "deprecated"
+}
+
 /// Represents device manifest information
 public struct DeviceManifest: Codable {
     public struct VersionInfo: Codable {
@@ -27,6 +34,7 @@ public struct MainManifest: Codable {
     public struct DeviceInfo: Codable {
         public let latest: String
         public let manifest_path: String
+        public let stability: DeviceStability?
     }
 
     public let last_updated: String
@@ -38,11 +46,18 @@ public struct DeviceInfo: Codable {
     public let name: String
     public let latestVersion: String
     public let latestNightlyVersion: String?
+    public let stability: DeviceStability
 
-    public init(name: String, latestVersion: String, latestNightlyVersion: String? = nil) {
+    public init(
+        name: String,
+        latestVersion: String,
+        latestNightlyVersion: String? = nil,
+        stability: DeviceStability = .stable
+    ) {
         self.name = name
         self.latestVersion = latestVersion
         self.latestNightlyVersion = latestNightlyVersion
+        self.stability = stability
     }
 }
 
@@ -208,7 +223,8 @@ public final class ManifestManager: ManifestManaging {
                 DeviceInfo(
                     name: name,
                     latestVersion: info.latest,
-                    latestNightlyVersion: latestNightlyVersion
+                    latestNightlyVersion: latestNightlyVersion,
+                    stability: info.stability ?? .stable
                 )
             )
         }
