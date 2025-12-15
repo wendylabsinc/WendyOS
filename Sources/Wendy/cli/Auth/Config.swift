@@ -1,3 +1,4 @@
+import Analytics
 import Crypto
 import Foundation
 import Hummingbird
@@ -8,7 +9,6 @@ import Synchronization
 import WendyCloudGRPC
 import WendySDK
 import X509
-import Analytics
 
 #if os(macOS)
     import AppKit

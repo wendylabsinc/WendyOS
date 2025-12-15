@@ -18,7 +18,7 @@ struct DeviceCommand: AsyncParsableCommand {
         abstract: "Control your Wendy device.",
         subcommands: [
             SetDefaultCommand.self,
-            UnsetDefaultCommand.self
+            UnsetDefaultCommand.self,
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -33,16 +33,16 @@ struct DeviceCommand: AsyncParsableCommand {
             CommandGroup(
                 name: "Debugging",
                 subcommands: [
-                    HardwareCommand.self,
+                    HardwareCommand.self
                 ]
             ),
             CommandGroup(
                 name: "Update",
                 subcommands: [
                     VersionCommand.self,
-                    UpdateCommand.self
+                    UpdateCommand.self,
                 ]
-            )
+            ),
         ]
     )
 
@@ -109,13 +109,13 @@ struct DeviceCommand: AsyncParsableCommand {
         )
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
-        
+
         func run() async throws {
             let endpoint = try await agentConnectionOptions.read(
                 title: "Set default device",
                 readDefault: false
             )
-            
+
             var config = getConfig()
             config.defaultDevice = endpoint.host
             try config.save()
@@ -124,7 +124,6 @@ struct DeviceCommand: AsyncParsableCommand {
         }
     }
 
-
     struct UnsetDefaultCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "unset-default",
@@ -132,7 +131,7 @@ struct DeviceCommand: AsyncParsableCommand {
         )
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
-        
+
         func run() async throws {
             var config = getConfig()
             config.defaultDevice = nil
@@ -141,7 +140,7 @@ struct DeviceCommand: AsyncParsableCommand {
             Noora().success("Default device unset")
         }
     }
-    
+
     struct UpdateCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "update",

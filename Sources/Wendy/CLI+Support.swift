@@ -1,7 +1,7 @@
-import NIOCore
-import GRPCCore
-import Noora
 import Foundation
+import GRPCCore
+import NIOCore
+import Noora
 
 public func withErrorTracking(
     _ body: @Sendable () async throws -> Void
@@ -12,12 +12,14 @@ public func withErrorTracking(
         try await deviceUnreachable()
         return
     } catch {
-        Noora().error(.alert(
-            "An unexpected error occurred: \(error.localizedDescription)",
-            takeaways: [
-                "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
-            ]
-        ))
+        Noora().error(
+            .alert(
+                "An unexpected error occurred: \(error.localizedDescription)",
+                takeaways: [
+                    "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
+                ]
+            )
+        )
         throw error
     }
 }
@@ -48,25 +50,39 @@ private func deviceUnreachable(source: DeviceSource) async throws {
         "Connect to the device directly over USB",
         "Check the device is powered on and running.",
         "Discover devices with \("wendy discover".underline)",
-        "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
+        "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)",
     ]
 
     switch source {
     case .commandLine(let value):
-        Noora().error(.alert("""
-        Device is unreachable: \(value.underline)
-        The hostname was provided in the command line arguments.
-        """, takeaways: takeaways))
+        Noora().error(
+            .alert(
+                """
+                Device is unreachable: \(value.underline)
+                The hostname was provided in the command line arguments.
+                """,
+                takeaways: takeaways
+            )
+        )
     case .environment(let key, let value):
-        Noora().error(.alert("""
-        Device is unreachable: \(value.underline)
-        The hostname was found in the environment variable \(key.underline).
-        """, takeaways: takeaways))
+        Noora().error(
+            .alert(
+                """
+                Device is unreachable: \(value.underline)
+                The hostname was found in the environment variable \(key.underline).
+                """,
+                takeaways: takeaways
+            )
+        )
     case .selected:
-        Noora().error(.alert("""
-        Selected device is unreachable.
-        The hostname was found in the selected device.
-        """, 
-        takeaways: takeaways))
+        Noora().error(
+            .alert(
+                """
+                Selected device is unreachable.
+                The hostname was found in the selected device.
+                """,
+                takeaways: takeaways
+            )
+        )
     }
 }

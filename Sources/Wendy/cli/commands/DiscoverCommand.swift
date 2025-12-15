@@ -142,7 +142,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                     )
                 )
             } else {
-                Noora().success("Found \(collection.deviceCount) Wendy \(collection.deviceCount == 1 ? "device" : "devices")")
+                Noora().success(
+                    "Found \(collection.deviceCount) Wendy \(collection.deviceCount == 1 ? "device" : "devices")"
+                )
                 print(collection.toHumanReadableString())
             }
         }
