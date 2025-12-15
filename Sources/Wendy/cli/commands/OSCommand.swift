@@ -324,7 +324,12 @@ struct OSCommand: AsyncParsableCommand {
                 let devices = familyOptions[familyIndex].1
 
                 let deviceRows = devices.map { device -> [String] in
-                    let version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    let version: String
+                    if nightly {
+                        version = device.latestNightlyVersion ?? "—"
+                    } else {
+                        version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    }
                     return [
                         device.name,
                         version,
@@ -334,7 +339,7 @@ struct OSCommand: AsyncParsableCommand {
                 let deviceIndex = try await noora.selectableTable(
                     headers: [
                         "Device",
-                        "Latest Version",
+                        nightly ? "Latest Nightly" : "Latest Version",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count
