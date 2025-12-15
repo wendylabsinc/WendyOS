@@ -120,7 +120,7 @@ struct ConsentManagerAsyncTests {
         unsetenv("JENKINS_URL")
         unsetenv("GITHUB_ACTIONS")
         unsetenv("GITLAB_CI")
-        #expect(consentManager.shouldDisableAnalytics())
+        #expect(!consentManager.shouldDisableAnalytics())
 
         // Test with WENDY_ANALYTICS=false
         setenv("WENDY_ANALYTICS", "false", 1)
