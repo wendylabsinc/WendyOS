@@ -265,77 +265,82 @@ public struct DockerCLI: Sendable {
             .appendingPathComponent("buildkit-config.toml")
             .path
 
-        var updatedConfig = false
+        // Check if we need to update the local config file
         if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            if !existingConfig.contains("\(registryHostname):5000") {
+            if !existingConfig.contains("\(registryHostname):\(registryPort)") {
                 existingConfig += "\n\n" + configContent
                 try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
-                updatedConfig = true
             }
         } else {
             try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-            updatedConfig = true
         }
 
         if try await hasBuildxBuilder(builderName: defaultBuilderName) {
-            if !updatedConfig {
+            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+
+            // Check if the builder container is actually running
+            let isRunning = await isContainerRunning(containerName: containerName)
+
+            if !isRunning {
+                // If it isn't, remove stale builder and recreate
+                try? await removeBuildxBuilder(name: defaultBuilderName)
+                // Fall through to create a new builder below
+            } else {
+                // If it is, copy config and restart to ensure it's applied
+                let cpArguments: Subprocess.Arguments = [
+                    "cp",
+                    configPath,
+                    "\(containerName):/etc/buildkit/buildkitd.toml",
+                ]
+                let cpResult = try await Subprocess.run(
+                    Subprocess.Executable.name(self.command),
+                    arguments: cpArguments,
+                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+                )
+
+                guard cpResult.terminationStatus.isSuccess else {
+                    let exitCode: Int
+                    switch cpResult.terminationStatus {
+                    case .exited(let code), .unhandledException(let code):
+                        exitCode = Int(code)
+                    }
+                    throw SubprocessError.nonZeroExit(
+                        command: cpArguments.description,
+                        exitCode: exitCode,
+                        terminationReason: cpResult.terminationStatus.description,
+                        output: "",
+                        error: ""
+                    )
+                }
+
+                let restartArguments: Subprocess.Arguments = [
+                    "restart", containerName,
+                ]
+                let restartResult = try await Subprocess.run(
+                    Subprocess.Executable.name(self.command),
+                    arguments: restartArguments,
+                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+                )
+
+                guard restartResult.terminationStatus.isSuccess else {
+                    let exitCode: Int
+                    switch restartResult.terminationStatus {
+                    case .exited(let code), .unhandledException(let code):
+                        exitCode = Int(code)
+                    }
+                    throw SubprocessError.nonZeroExit(
+                        command: restartArguments.description,
+                        exitCode: exitCode,
+                        terminationReason: restartResult.terminationStatus.description,
+                        output: "",
+                        error: ""
+                    )
+                }
+
                 return
             }
-
-            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
-            let cpArguments: Subprocess.Arguments = [
-                "cp",
-                configPath,
-                "\(containerName):/etc/buildkit/buildkitd.toml",
-            ]
-            let cpResult = try await Subprocess.run(
-                Subprocess.Executable.name(self.command),
-                arguments: cpArguments,
-                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
-            )
-
-            guard cpResult.terminationStatus.isSuccess else {
-                let exitCode: Int
-                switch cpResult.terminationStatus {
-                case .exited(let code), .unhandledException(let code):
-                    exitCode = Int(code)
-                }
-                throw SubprocessError.nonZeroExit(
-                    command: cpArguments.description,
-                    exitCode: exitCode,
-                    terminationReason: cpResult.terminationStatus.description,
-                    output: "",
-                    error: ""
-                )
-            }
-
-            let restartArguments: Subprocess.Arguments = [
-                "restart", containerName,
-            ]
-            let restartResult = try await Subprocess.run(
-                Subprocess.Executable.name(self.command),
-                arguments: restartArguments,
-                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
-            )
-
-            guard restartResult.terminationStatus.isSuccess else {
-                let exitCode: Int
-                switch restartResult.terminationStatus {
-                case .exited(let code), .unhandledException(let code):
-                    exitCode = Int(code)
-                }
-                throw SubprocessError.nonZeroExit(
-                    command: restartArguments.description,
-                    exitCode: exitCode,
-                    terminationReason: restartResult.terminationStatus.description,
-                    output: "",
-                    error: ""
-                )
-            }
-
-            return
         }
 
         // Create builder with configuration
@@ -367,6 +372,27 @@ public struct DockerCLI: Sendable {
                 output: "",
                 error: ""
             )
+        }
+    }
+
+    /// Checks if a Docker container is currently running
+    private func isContainerRunning(containerName: String) async -> Bool {
+        let arguments = ["inspect", "-f", "{{.State.Running}}", containerName]
+        do {
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100, encoding: UTF8.self),
+                error: .discarded
+            )
+            guard result.terminationStatus.isSuccess,
+                let output = result.standardOutput
+            else {
+                return false
+            }
+            return output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        } catch {
+            return false
         }
     }
 
