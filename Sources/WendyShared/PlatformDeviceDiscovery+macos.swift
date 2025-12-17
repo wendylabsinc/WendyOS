@@ -148,8 +148,7 @@
 
             let resolver = try AsyncDNSResolver()
             let ptrWendy = try await resolver.queryPTR(name: "_wendyos._udp.local")
-            let ptrEdge = try await resolver.queryPTR(name: "_edgeos._udp.local")
-            for name in (ptrWendy.names + ptrEdge.names) {
+            for name in ptrWendy.names {
                 guard let srv = try await resolver.querySRV(name: name).first else {
                     continue
                 }
