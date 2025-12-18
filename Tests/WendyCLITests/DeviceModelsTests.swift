@@ -608,4 +608,22 @@ struct DevicesCollectionTests {
         #expect(humanReadable.contains("Wendy LAN 1"))
         #expect(humanReadable.contains("Wendy LAN 2"))
     }
+
+    @Test("GroupedDevice description includes LAN hostname")
+    func testGroupedDeviceDescriptionIncludesHostname() throws {
+        let lanDevice = LANDevice(
+            id: "device123",
+            displayName: "Lively Cinnamon",
+            hostname: "wendyos-lively-cinnamon.local",
+            port: 50051,
+            interfaceType: "LAN",
+            isWendyDevice: true
+        )
+
+        let collection = DevicesCollection(lan: [lanDevice])
+        let groupedDevices = collection.groupedDevices()
+
+        #expect(groupedDevices.count == 1)
+        #expect(groupedDevices[0].description == "Lively Cinnamon (wendyos-lively-cinnamon.local) [LAN]")
+    }
 }

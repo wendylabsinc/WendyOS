@@ -125,6 +125,8 @@ struct AgentConnectionOptions: ParsableArguments {
             options: lanDevices
         )
 
+        printDeviceDetails(device)
+
         for interface in device.interfaces {
             if case .lan(let lanDevice) = interface {
                 return Endpoint(
@@ -155,6 +157,39 @@ struct AgentConnectionOptions: ParsableArguments {
 
             return Endpoint(host: "edgeos-device.local", port: 50051)
         }
+    }
+
+    // MARK: - Device presentation helpers
+
+    private func printDeviceDetails(_ device: DevicesCollection.GroupedDevice) {
+        // Show the selected device name and version (if available)
+        if let version = device.interfaces.compactMap(\.agentVersion).first {
+            Noora().info(.alert("\(device.name) (version: \(version))"))
+        } else {
+            Noora().info(.alert("\(device.name)"))
+        }
+
+        let rows = device.interfaces.map { interface -> [String] in
+            let parts = interface.description.split(
+                separator: ":",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+
+            let interfaceLabel = parts.first.map(String.init)?.trimmingCharacters(
+                in: .whitespaces
+            ) ?? ""
+            let details = parts.count > 1
+                ? parts[1].trimmingCharacters(in: .whitespaces)
+                : ""
+
+            return [interfaceLabel, details]
+        }
+
+        Noora().table(
+            headers: ["Interface", "Details"],
+            rows: rows
+        )
     }
 }
 
