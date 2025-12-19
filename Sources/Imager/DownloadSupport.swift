@@ -36,7 +36,6 @@ private struct ImageVersionMetadata: Codable {
     let timestamp: Date
 }
 
-#if !os(Windows)
 /// Manages downloading device images from GCS
 public final class ImageDownloader: ImageDownloading {
     private var fileManager: FileManager { .default }
@@ -213,8 +212,7 @@ public final class ImageDownloader: ImageDownloading {
             let downloadWeight: Double = 0.98
             let extractWeight: Double = 1.0 - downloadWeight
 
-            @inline(__always)
-            func reportFraction(_ f: Double) {
+            @Sendable func reportFraction(_ f: Double) {
                 let clamped = max(0.0, min(f, 1.0))
                 let p = Progress(totalUnitCount: 10_000)
                 p.completedUnitCount = Int64((clamped * 10_000.0).rounded())
@@ -281,14 +279,16 @@ public final class ImageDownloader: ImageDownloading {
             || FileManager.default.contentsOfDirectory(atPath: extractionDirectoryURL.path).isEmpty)
 
         if redownload || isValidCache {
-            return (try await redownloadImage(), cached: false)
+            let extractionPath = try await redownloadImage()
+            Noora().info("Downloaded new image for \(deviceName)")
+            return (extractionPath, cached: false)
         } else {
-            print("Using cached image for \(deviceName)")
+            Noora().info("Using cached image for \(deviceName)")
 
             do {
                 return (try await validateImage(at: extractionDirectoryURL.path), cached: true)
             } catch {
-                print("Invalid image found in cache, redownloading...")
+                Noora().warning("Invalid image found in cache, redownloading...")
 
                 return (try await redownloadImage(), cached: false)
             }
@@ -429,11 +429,9 @@ public final class ImageDownloader: ImageDownloading {
         return resultPath
     }
 }
-#endif
 
 // MARK: - Factory
 
-#if !os(Windows)
 /// Factory for creating ImageDownloader instances
 public enum ImageDownloaderFactory {
     /// Creates and returns a default ImageDownloader instance
@@ -441,7 +439,6 @@ public enum ImageDownloaderFactory {
         return ImageDownloader()
     }
 }
-#endif
 
 // MARK: - Errors
 

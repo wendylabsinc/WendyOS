@@ -129,9 +129,13 @@ public struct RegistryClient: Sendable {
             throw RegistryClientError.registryParseError(registry)
         }
 
+        #if os(Windows) || os(macOS)
+        let httpClient = URLSession.shared
+        #else
         // Use AsyncHTTPClient instead of URLSession to resolve SSL certificate issues on Linux
-        let asyncHttpClient = AsyncHTTPClientWrapper()
-        try await self.init(registry: registryURL, client: asyncHttpClient, auth: auth)
+        let httpClient = AsyncHTTPClientWrapper()
+        #endif
+        try await self.init(registry: registryURL, client: httpClient, auth: auth)
     }
 }
 

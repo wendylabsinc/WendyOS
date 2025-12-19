@@ -10,6 +10,8 @@ public enum DiskWriterFactory {
             return MacOSDiskWriter()
         #elseif os(Linux)
             return LinuxDiskWriter()
+        #elseif os(Windows)
+            return WindowsDiskWriter()
         #else
             fatalError("DiskWriter is not implemented for this platform")
         #endif
