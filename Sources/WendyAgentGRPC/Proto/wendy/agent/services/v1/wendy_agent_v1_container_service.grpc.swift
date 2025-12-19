@@ -92,6 +92,18 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
                 method: "StopContainer"
             )
         }
+        /// Namespace for "DeleteContainer" metadata.
+        public enum DeleteContainer {
+            /// Request type for "DeleteContainer".
+            public typealias Input = Wendy_Agent_Services_V1_DeleteContainerRequest
+            /// Response type for "DeleteContainer".
+            public typealias Output = Wendy_Agent_Services_V1_DeleteContainerResponse
+            /// Descriptor for "DeleteContainer".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "DeleteContainer"
+            )
+        }
         /// Namespace for "ListContainers" metadata.
         public enum ListContainers {
             /// Request type for "ListContainers".
@@ -112,6 +124,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             RunContainer.descriptor,
             StartContainer.descriptor,
             StopContainer.descriptor,
+            DeleteContainer.descriptor,
             ListContainers.descriptor
         ]
     }
@@ -222,6 +235,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StopContainerResponse>
 
+        /// Handle the "DeleteContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_DeleteContainerRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_DeleteContainerResponse` messages.
+        func deleteContainer(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>
+
         /// Handle the "ListContainers" method.
         ///
         /// - Parameters:
@@ -328,6 +355,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StopContainerRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_StopContainerResponse>
+
+        /// Handle the "DeleteContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DeleteContainerRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_DeleteContainerResponse` message.
+        func deleteContainer(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>
 
         /// Handle the "ListContainers" method.
         ///
@@ -438,6 +479,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_StopContainerResponse
 
+        /// Handle the "DeleteContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_DeleteContainerRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_DeleteContainerResponse` to respond with.
+        func deleteContainer(
+            request: Wendy_Agent_Services_V1_DeleteContainerRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_DeleteContainerResponse
+
         /// Handle the "ListContainers" method.
         ///
         /// - Parameters:
@@ -526,6 +581,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.DeleteContainer.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_DeleteContainerRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_DeleteContainerResponse>(),
+            handler: { request, context in
+                try await self.deleteContainer(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.ListContainers.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListContainersRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListContainersResponse>(),
@@ -591,6 +657,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StopContainerResponse> {
         let response = try await self.stopContainer(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func deleteContainer(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse> {
+        let response = try await self.deleteContainer(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -699,6 +776,19 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_StopContainerResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_StopContainerResponse>(
             message: try await self.stopContainer(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func deleteContainer(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>(
+            message: try await self.deleteContainer(
                 request: request.message,
                 context: context
             ),
@@ -845,6 +935,25 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_StopContainerResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_StopContainerResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "DeleteContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DeleteContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DeleteContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DeleteContainerResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func deleteContainer<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_DeleteContainerResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
         /// Call the "ListContainers" method.
@@ -1055,6 +1164,36 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
 
+        /// Call the "DeleteContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DeleteContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DeleteContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DeleteContainerResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func deleteContainer<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_DeleteContainerResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.DeleteContainer.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
         /// Call the "ListContainers" method.
         ///
         /// - Parameters:
@@ -1225,6 +1364,31 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_StopContainerRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_StopContainerResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DeleteContainer" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_DeleteContainerRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func deleteContainer<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.deleteContainer(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_DeleteContainerRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_DeleteContainerResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -1418,6 +1582,35 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             metadata: metadata
         )
         return try await self.stopContainer(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DeleteContainer" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func deleteContainer<Result>(
+        _ message: Wendy_Agent_Services_V1_DeleteContainerRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DeleteContainerResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.deleteContainer(
             request: request,
             options: options,
             onResponse: handleResponse

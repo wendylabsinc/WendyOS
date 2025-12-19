@@ -597,4 +597,72 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             return ServerResponse(message: .init())
         }
     }
+
+    func deleteContainer(
+        request: ServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse> {
+        let request = request.message
+        let appName = request.appName
+        let deleteImage = request.deleteImage
+
+        return try await Containerd.withClient { client in
+            logger.info(
+                "Deleting container",
+                metadata: [
+                    "container-id": .stringConvertible(appName),
+                    "delete-image": .stringConvertible(deleteImage)
+                ]
+            )
+
+            // Capture image name before deletion so we can optionally remove it
+            var imageName: String? = nil
+            do {
+                let container = try await client.getContainer(named: appName)
+                imageName = container.image
+            } catch let error as RPCError where error.code == .notFound {
+                logger.info(
+                    "Container not found prior to delete, continuing",
+                    metadata: ["container-id": .stringConvertible(appName)]
+                )
+            }
+
+            // Stop and delete the container and its ephemeral snapshot
+            do {
+                try await client.deleteContainer(named: appName)
+            } catch let error as RPCError where error.code == .notFound {
+                logger.info(
+                    "Container already deleted",
+                    metadata: ["container-id": .stringConvertible(appName)]
+                )
+            }
+
+            // Optionally remove the image to free disk space
+            if deleteImage, let imageName {
+                do {
+                    try await client.deleteImage(named: imageName)
+                    logger.info(
+                        "Deleted container image",
+                        metadata: [
+                            "container-id": .stringConvertible(appName),
+                            "image": .stringConvertible(imageName)
+                        ]
+                    )
+                } catch let error as RPCError where error.code == .notFound {
+                    logger.info(
+                        "Image already deleted",
+                        metadata: [
+                            "container-id": .stringConvertible(appName),
+                            "image": .stringConvertible(imageName)
+                        ]
+                    )
+                }
+            }
+
+            // Ensure monitor won't auto-restart it
+            await ContainerMonitor.shared.markContainerStopped(appName)
+
+            return ServerResponse(message: .init())
+        }
+    }
 }
