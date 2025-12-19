@@ -49,14 +49,14 @@
             let diskNumber = drive.id.replacingOccurrences(of: "Disk", with: "")
 
             do {
-                // Use PowerShell to write the image using direct file I/O
+                // Use PowerShell to write the image using raw disk access
                 // This approach reads the image and writes directly to the physical disk device
                 let escapedImagePath = imagePath.replacingOccurrences(of: "\\", with: "\\\\")
                 
                 let powerShellScript = #"""
                     $imagePath = '\#(escapedImagePath)'
                     $diskNumber = \#(diskNumber)
-                    $diskPath = '\\\\\.\\PhysicalDrive$diskNumber'
+                    $diskPath = "\\.\PhysicalDrive$diskNumber"
                     $chunkSize = 4MB
                     
                     try {
@@ -64,8 +64,13 @@
                         $imageFile = [System.IO.File]::OpenRead($imagePath)
                         $totalBytes = $imageFile.Length
                         
-                        # Open the disk for writing (requires admin)
-                        $diskFile = [System.IO.File]::OpenWrite($diskPath)
+                        # Open the disk device using FileStream with access to raw device
+                        $fileStream = [System.IO.FileStream]::new(
+                            $diskPath,
+                            [System.IO.FileMode]::Open,
+                            [System.IO.FileAccess]::Write,
+                            [System.IO.FileShare]::None
+                        )
                         
                         # Read and write in chunks
                         $buffer = New-Object byte[] $chunkSize
@@ -75,12 +80,12 @@
                             $bytesRead = $imageFile.Read($buffer, 0, $chunkSize)
                             if ($bytesRead -eq 0) { break }
                             
-                            $diskFile.Write($buffer, 0, $bytesRead)
+                            $fileStream.Write($buffer, 0, $bytesRead)
                             $bytesWritten += $bytesRead
                         }
                         
-                        $diskFile.Flush()
-                        $diskFile.Close()
+                        $fileStream.Flush()
+                        $fileStream.Close()
                         $imageFile.Close()
                         
                         exit 0
@@ -90,9 +95,25 @@
                     }
                     """#
 
+                // Create a temporary file to store the script
+                let tempDir = NSTemporaryDirectory()
+                let scriptFileName = "wendy_write_\(UUID().uuidString).ps1"
+                let scriptPath = (tempDir as NSString).appendingPathComponent(scriptFileName)
+                
+                try powerShellScript.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+                defer {
+                    try? FileManager.default.removeItem(atPath: scriptPath)
+                }
+
+                // Use Start-Process with -Verb RunAs to elevate PowerShell and execute the script
+                let elevationScript = #"""
+                    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "\#(scriptPath)" -Verb RunAs -Wait
+                    exit $LASTEXITCODE
+                    """#
+
                 let result = try await Subprocess.run(
                     Subprocess.Executable.name("powershell.exe"),
-                    arguments: ["-NoProfile", "-Command", powerShellScript],
+                    arguments: ["-NoProfile", "-Command", elevationScript],
                     output: .discarded,
                     error: .string(limit: .max)
                 )
