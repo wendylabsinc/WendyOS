@@ -333,7 +333,37 @@ public final class ImageDownloader: ImageDownloading {
 
     /// Returns a valid cached .img path if available, else nil.
     public func cachedImageIfValid(deviceName: String) async throws -> String? {
-        return try FileManager.default.cacheDirectory(.images).path
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
+        let deviceCacheDir = cacheDir.appendingPathComponent(deviceName)
+
+        // Check if device cache directory exists
+        guard fileManager.fileExists(atPath: deviceCacheDir.path) else {
+            return nil
+        }
+
+        // Search for .img file in the device cache directory
+        guard
+            let enumerator = fileManager.enumerator(
+                at: deviceCacheDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return nil
+        }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+
+            if fileURL.pathExtension.lowercased() == "img" {
+                return fileURL.path
+            }
+        }
+
+        return nil
     }
 
     /// Checks if cached image version matches the latest version
