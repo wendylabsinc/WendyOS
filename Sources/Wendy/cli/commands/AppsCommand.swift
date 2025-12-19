@@ -98,10 +98,10 @@ struct AppsCommand: AsyncParsableCommand {
                 Noora().table(
                     headers: [
                         "",
-                        "",
-                        "",
-                        "",
-                        "",
+                        "App",
+                        "Version",
+                        "State",
+                        "Failures",
                     ],
                     rows: rows
                 )
