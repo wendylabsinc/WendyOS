@@ -8,7 +8,7 @@ permissions:
 jobs:
   format-check:
     name: Swift Format Check
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [Linux, X64]
     container: swift:6.2.0
 
     steps:

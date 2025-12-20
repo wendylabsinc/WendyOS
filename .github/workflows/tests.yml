@@ -11,7 +11,7 @@ concurrency:
 jobs:
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [Linux]
     container: swift:6.2.0
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: [self-hosted, Linux, X64]
+          - os: [Linux]
             container: swift:6.2.0
           - os: macos-15
             xcode-select: /Applications/Xcode_26.0.app
