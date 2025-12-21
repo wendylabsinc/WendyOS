@@ -87,7 +87,11 @@ public struct DevicesCollection: Encodable, Sendable {
         public let interfaces: [InterfaceInfo]
 
         public var description: String {
-            return "\(name) [\(interfaces.map(\.type).joined(separator: ", "))]"
+            let interfaceSummary = interfaces.map(\.type).joined(separator: ", ")
+            if let hostname = interfaces.compactMap(\.lanHostname).first {
+                return "\(name) (\(hostname)) [\(interfaceSummary)]"
+            }
+            return "\(name) [\(interfaceSummary)]"
         }
 
         public init(name: String, interfaces: [InterfaceInfo]) {
@@ -213,6 +217,11 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet(let device): return device.agentVersion
             case .lan(let device): return device.agentVersion
             }
+        }
+
+        public var lanHostname: String? {
+            guard case .lan(let device) = self else { return nil }
+            return device.hostname
         }
     }
 
