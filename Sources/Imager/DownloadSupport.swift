@@ -1,13 +1,16 @@
 import AsyncHTTPClient
 import DownloadSupport
 import Foundation
+import Logging
 import NIOCore
 import _NIOFileSystem
 
 #if os(macOS)
     import Darwin
-#elseif os(Linux)
-    // No explicit libc import needed when using musl
+#elseif canImport(Glibc)
+    import Glibc
+#elseif canImport(Musl)
+    import Musl
 #endif
 
 // MARK: - Protocols
@@ -40,6 +43,163 @@ private struct ImageVersionMetadata: Codable {
 /// Manages downloading device images from GCS
 public final class ImageDownloader: ImageDownloading {
     private var fileManager: FileManager { .default }
+    private let logger = Logger(label: "wendy.imager.download")
+
+    /// Constructs the cache directory path for a device, separating stable and nightly versions
+    private nonisolated func cacheDirectoryForDevice(
+        _ deviceName: String,
+        nightly: Bool
+    ) throws -> URL {
+        let baseCache = try FileManager.default.cacheDirectory(.images)
+        let versionType = nightly ? "nightly" : "stable"
+        return
+            baseCache
+            .appendingPathComponent(deviceName)
+            .appendingPathComponent(versionType)
+    }
+
+    /// Migrates old cache structure (device/*.img) to new structure (device/stable/*.img)
+    /// Returns true if migration was performed
+    private func migrateOldCacheIfNeeded(deviceName: String) -> Bool {
+        let baseCache: URL
+        do {
+            baseCache = try FileManager.default.cacheDirectory(.images)
+        } catch {
+            return false
+        }
+
+        let oldDeviceDir = baseCache.appendingPathComponent(deviceName)
+        let newStableDir = oldDeviceDir.appendingPathComponent("stable")
+        let tempDir = oldDeviceDir.appendingPathComponent(".stable.tmp")
+        let lockFileURL = oldDeviceDir.appendingPathComponent(".migration.lock")
+
+        // Check if old structure exists (has .img files directly in device directory)
+        guard fileManager.fileExists(atPath: oldDeviceDir.path) else {
+            return false
+        }
+
+        // Check if new structure already exists - if so, no migration needed
+        if fileManager.fileExists(atPath: newStableDir.path) {
+            return false
+        }
+
+        // Use file locking to prevent concurrent migration
+        let lockFile: Foundation.FileHandle
+        do {
+            // Create lock file if it doesn't exist
+            if !fileManager.fileExists(atPath: lockFileURL.path) {
+                fileManager.createFile(atPath: lockFileURL.path, contents: nil, attributes: nil)
+            }
+            lockFile = try Foundation.FileHandle(forUpdating: lockFileURL)
+        } catch {
+            logger.warning(
+                "Failed to create migration lock file for \(deviceName): \(error.localizedDescription)"
+            )
+            return false
+        }
+
+        defer {
+            try? lockFile.close()
+            // Clean up lock file after migration
+            try? fileManager.removeItem(at: lockFileURL)
+        }
+
+        // Acquire exclusive lock
+        #if os(macOS) || canImport(Glibc) || canImport(Musl)
+            let fd = lockFile.fileDescriptor
+            if flock(fd, LOCK_EX) != 0 {
+                logger.warning("Failed to acquire migration lock for \(deviceName)")
+                return false
+            }
+            defer {
+                flock(fd, LOCK_UN)
+            }
+        #endif
+
+        // Check again if new structure exists (another process may have migrated while we waited for lock)
+        if fileManager.fileExists(atPath: newStableDir.path) {
+            return false
+        }
+
+        // Find .img files in the old location
+        guard
+            let enumerator = fileManager.enumerator(
+                at: oldDeviceDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+        else {
+            return false
+        }
+
+        var hasOldFiles = false
+        var filesToMigrate: [URL] = []
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+
+            // Collect .img files and version.json for migration
+            if fileURL.pathExtension.lowercased() == "img"
+                || fileURL.lastPathComponent == "version.json"
+            {
+                hasOldFiles = true
+                filesToMigrate.append(fileURL)
+            }
+        }
+
+        guard hasOldFiles else {
+            return false
+        }
+
+        // Atomic migration using temporary directory
+        do {
+            // Step 1: Create temporary directory
+            try fileManager.createDirectory(
+                at: tempDir,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+
+            // Step 2: Move files to temporary location
+            for fileURL in filesToMigrate {
+                let destinationURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
+                try fileManager.moveItem(at: fileURL, to: destinationURL)
+            }
+
+            // Step 3: Atomic rename of temporary directory to final location
+            try fileManager.moveItem(at: tempDir, to: newStableDir)
+
+            logger.info(
+                "Migrated cache for \(deviceName) from old structure to stable/ subdirectory"
+            )
+            return true
+        } catch {
+            // Rollback: try to restore files from temp directory if it exists
+            if fileManager.fileExists(atPath: tempDir.path) {
+                if let rollbackEnum = fileManager.enumerator(
+                    at: tempDir,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                ) {
+                    for case let fileURL as URL in rollbackEnum {
+                        let originalURL = oldDeviceDir.appendingPathComponent(
+                            fileURL.lastPathComponent
+                        )
+                        try? fileManager.moveItem(at: fileURL, to: originalURL)
+                    }
+                }
+                try? fileManager.removeItem(at: tempDir)
+            }
+
+            logger.warning(
+                "Failed to migrate old cache structure for \(deviceName): \(error.localizedDescription)"
+            )
+            return false
+        }
+    }
 
     private func extractImage(
         from path: String,
@@ -298,11 +458,13 @@ public final class ImageDownloader: ImageDownloading {
     // MARK: - New phased APIs
 
     /// Stores version metadata for a cached image
-    private func storeVersionMetadata(deviceName: String, version: String) throws {
-        let cacheDir = try FileManager.default.cacheDirectory(.images)
-        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
-            "version.json"
-        )
+    private func storeVersionMetadata(
+        deviceName: String,
+        version: String,
+        nightly: Bool
+    ) throws {
+        let cacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+        let metadataURL = cacheDir.appendingPathComponent("version.json")
 
         let metadata = ImageVersionMetadata(version: version, timestamp: Date())
         let encoder = JSONEncoder()
@@ -313,11 +475,12 @@ public final class ImageDownloader: ImageDownloading {
     }
 
     /// Reads version metadata for a cached image
-    private nonisolated func readVersionMetadata(deviceName: String) throws -> String? {
-        let cacheDir = try FileManager.default.cacheDirectory(.images)
-        let metadataURL = cacheDir.appendingPathComponent(deviceName).appendingPathComponent(
-            "version.json"
-        )
+    private nonisolated func readVersionMetadata(
+        deviceName: String,
+        nightly: Bool
+    ) throws -> String? {
+        let cacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+        let metadataURL = cacheDir.appendingPathComponent("version.json")
 
         guard let data = try? Data(contentsOf: metadataURL) else {
             return nil
@@ -332,16 +495,55 @@ public final class ImageDownloader: ImageDownloading {
     }
 
     /// Returns a valid cached .img path if available, else nil.
-    public func cachedImageIfValid(deviceName: String) async throws -> String? {
-        return try FileManager.default.cacheDirectory(.images).path
+    public func cachedImageIfValid(
+        deviceName: String,
+        nightly: Bool
+    ) async throws -> String? {
+        // Try to migrate old cache structure if this is a stable version check
+        if !nightly {
+            _ = migrateOldCacheIfNeeded(deviceName: deviceName)
+        }
+
+        let deviceCacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+
+        // Check if device cache directory exists
+        guard fileManager.fileExists(atPath: deviceCacheDir.path) else {
+            return nil
+        }
+
+        // Search for .img file in the device cache directory
+        guard
+            let enumerator = fileManager.enumerator(
+                at: deviceCacheDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return nil
+        }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+
+            if fileURL.pathExtension.lowercased() == "img" {
+                return fileURL.path
+            }
+        }
+
+        return nil
     }
 
     /// Checks if cached image version matches the latest version
     public nonisolated func isCachedImageLatest(
         deviceName: String,
-        latestVersion: String
+        latestVersion: String,
+        nightly: Bool
     ) throws -> Bool {
-        guard let cachedVersion = try readVersionMetadata(deviceName: deviceName) else {
+        guard let cachedVersion = try readVersionMetadata(deviceName: deviceName, nightly: nightly)
+        else {
             return false
         }
         return cachedVersion == latestVersion
@@ -354,10 +556,10 @@ public final class ImageDownloader: ImageDownloading {
         expectedSize: Int,
         redownload: Bool,
         version: String? = nil,
+        nightly: Bool = false,
         progressHandler: @escaping @Sendable (Progress) -> Void
     ) async throws -> (zipPath: String, extractionDir: String) {
-        let cacheDir = try FileManager.default.cacheDirectory(.images)
-        let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
+        let extractionDirectoryURL = try cacheDirectoryForDevice(deviceName, nightly: nightly)
         let temporaryDirectory = fileManager.temporaryDirectory
         let tempFilename = UUID().uuidString
         let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
@@ -377,12 +579,54 @@ public final class ImageDownloader: ImageDownloading {
         deviceName: String,
         zipPath: String,
         version: String? = nil,
+        nightly: Bool = false,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
-        let cacheDir = try FileManager.default.cacheDirectory(.images)
-        let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
+        let extractionDirectoryURL = try cacheDirectoryForDevice(deviceName, nightly: nightly)
 
-        // Prepare extraction dir: clear if exists, then recreate
+        // Create parent directory if needed for lock file
+        let parentDir = extractionDirectoryURL.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: parentDir.path) {
+            try fileManager.createDirectory(
+                at: parentDir,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+        }
+
+        // Use a lock file to prevent concurrent extraction to the same directory
+        let lockFileURL = parentDir.appendingPathComponent(".extraction-\(deviceName).lock")
+        let lockFile: Foundation.FileHandle
+
+        // Create lock file if it doesn't exist
+        if !fileManager.fileExists(atPath: lockFileURL.path) {
+            fileManager.createFile(atPath: lockFileURL.path, contents: nil, attributes: nil)
+        }
+
+        do {
+            lockFile = try Foundation.FileHandle(forUpdating: lockFileURL)
+        } catch {
+            throw DownloadError.extractionFailed(
+                "Failed to create lock file: \(error.localizedDescription)"
+            )
+        }
+
+        defer {
+            try? lockFile.close()
+        }
+
+        // Acquire exclusive lock (blocks if another process holds the lock)
+        #if os(macOS) || os(Linux)
+            let fd = lockFile.fileDescriptor
+            if flock(fd, LOCK_EX) != 0 {
+                throw DownloadError.extractionFailed("Failed to acquire extraction lock")
+            }
+            defer {
+                flock(fd, LOCK_UN)
+            }
+        #endif
+
+        // Now that we have the lock, prepare extraction dir: clear if exists, then recreate
         if fileManager.fileExists(atPath: extractionDirectoryURL.path) {
             try? fileManager.removeItem(at: extractionDirectoryURL)
         }
@@ -423,7 +667,13 @@ public final class ImageDownloader: ImageDownloading {
 
         // Store version metadata after successful extraction
         if let version = version {
-            try? storeVersionMetadata(deviceName: deviceName, version: version)
+            do {
+                try storeVersionMetadata(deviceName: deviceName, version: version, nightly: nightly)
+            } catch {
+                logger.warning(
+                    "Failed to store version metadata for \(deviceName): \(error.localizedDescription)"
+                )
+            }
         }
 
         return resultPath
