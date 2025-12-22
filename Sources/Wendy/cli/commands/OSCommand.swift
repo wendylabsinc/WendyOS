@@ -453,11 +453,13 @@ struct OSCommand: AsyncParsableCommand {
 
             // Check if cached image exists and matches the latest version
             let cachedImagePath = try await imageDownloader.cachedImageIfValid(
-                deviceName: selectedDeviceName
+                deviceName: selectedDeviceName,
+                nightly: nightly
             )
             let isCachedLatest = try imageDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
-                latestVersion: latestVersion
+                latestVersion: latestVersion,
+                nightly: nightly
             )
             let shouldUseCache = !redownload && cachedImagePath != nil && isCachedLatest
 
@@ -483,7 +485,8 @@ struct OSCommand: AsyncParsableCommand {
                         deviceName: selectedDeviceName,
                         expectedSize: imageSize,
                         redownload: redownload,
-                        version: latestVersion
+                        version: latestVersion,
+                        nightly: nightly
                     ) { progress in
                         let totalUnits = max(1, progress.totalUnitCount)
                         let fraction = clampProgress(
@@ -509,7 +512,8 @@ struct OSCommand: AsyncParsableCommand {
                     let result = try await imageDownloader.extractArchiveOnly(
                         deviceName: selectedDeviceName,
                         zipPath: zipPath,
-                        version: latestVersion
+                        version: latestVersion,
+                        nightly: nightly
                     ) { p in
                         let total = max(1, p.totalUnitCount)
                         let fraction = clampProgress(Double(p.completedUnitCount) / Double(total))
