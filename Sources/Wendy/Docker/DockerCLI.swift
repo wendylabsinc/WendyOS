@@ -265,7 +265,7 @@ public struct DockerCLI: Sendable {
             .appendingPathComponent("buildkit-config.toml")
             .path
 
-        // Check if we need to update the local config file
+        // Update the local config file if this registry isn't configured yet
         if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
             if !existingConfig.contains("\(registryHostname):\(registryPort)") {
                 existingConfig += "\n\n" + configContent
@@ -275,6 +275,9 @@ public struct DockerCLI: Sendable {
             try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
         }
 
+        // Read the desired config from local file
+        let desiredConfig = try String(contentsOfFile: configPath, encoding: .utf8)
+
         if try await hasBuildxBuilder(builderName: defaultBuilderName) {
             let containerName = "buildx_buildkit_\(defaultBuilderName)0"
 
@@ -282,65 +285,98 @@ public struct DockerCLI: Sendable {
             let isRunning = await isContainerRunning(containerName: containerName)
 
             if !isRunning {
-                // If it isn't, remove stale builder and recreate
-                try? await removeBuildxBuilder(name: defaultBuilderName)
-                // Fall through to create a new builder below
-            } else {
-                // If it is, copy config and restart to ensure it's applied
-                let cpArguments: Subprocess.Arguments = [
-                    "cp",
-                    configPath,
-                    "\(containerName):/etc/buildkit/buildkitd.toml",
+                // If it isn't, start it with bootstrap
+                let bootstrapArguments: Subprocess.Arguments = [
+                    "buildx", "inspect", "--bootstrap", defaultBuilderName,
                 ]
-                let cpResult = try await Subprocess.run(
+                let bootstrapResult = try await Subprocess.run(
                     Subprocess.Executable.name(self.command),
-                    arguments: cpArguments,
+                    arguments: bootstrapArguments,
                     output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
                     error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
                 )
 
-                guard cpResult.terminationStatus.isSuccess else {
+                guard bootstrapResult.terminationStatus.isSuccess else {
                     let exitCode: Int
-                    switch cpResult.terminationStatus {
+                    switch bootstrapResult.terminationStatus {
                     case .exited(let code), .unhandledException(let code):
                         exitCode = Int(code)
                     }
                     throw SubprocessError.nonZeroExit(
-                        command: cpArguments.description,
+                        command: bootstrapArguments.description,
                         exitCode: exitCode,
-                        terminationReason: cpResult.terminationStatus.description,
+                        terminationReason: bootstrapResult.terminationStatus.description,
                         output: "",
                         error: ""
                     )
                 }
+            }
 
-                let restartArguments: Subprocess.Arguments = [
-                    "restart", containerName,
-                ]
-                let restartResult = try await Subprocess.run(
-                    Subprocess.Executable.name(self.command),
-                    arguments: restartArguments,
-                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
-                )
+            // Get the container's current config
+            let containerConfig = await getContainerFileContents(
+                containerName: containerName,
+                filePath: "/etc/buildkit/buildkitd.toml"
+            )
 
-                guard restartResult.terminationStatus.isSuccess else {
-                    let exitCode: Int
-                    switch restartResult.terminationStatus {
-                    case .exited(let code), .unhandledException(let code):
-                        exitCode = Int(code)
-                    }
-                    throw SubprocessError.nonZeroExit(
-                        command: restartArguments.description,
-                        exitCode: exitCode,
-                        terminationReason: restartResult.terminationStatus.description,
-                        output: "",
-                        error: ""
-                    )
-                }
-
+            if containerConfig == desiredConfig {
                 return
             }
+
+            // If there is a change, copy the updated config to the container
+            let cpArguments: Subprocess.Arguments = [
+                "cp",
+                configPath,
+                "\(containerName):/etc/buildkit/buildkitd.toml",
+            ]
+            let cpResult = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: cpArguments,
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            )
+
+            guard cpResult.terminationStatus.isSuccess else {
+                let exitCode: Int
+                switch cpResult.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    exitCode = Int(code)
+                }
+                throw SubprocessError.nonZeroExit(
+                    command: cpArguments.description,
+                    exitCode: exitCode,
+                    terminationReason: cpResult.terminationStatus.description,
+                    output: "",
+                    error: ""
+                )
+            }
+
+            // Restart to apply the new config
+            let restartArguments: Subprocess.Arguments = [
+                "restart", containerName,
+            ]
+            let restartResult = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: restartArguments,
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            )
+
+            guard restartResult.terminationStatus.isSuccess else {
+                let exitCode: Int
+                switch restartResult.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    exitCode = Int(code)
+                }
+                throw SubprocessError.nonZeroExit(
+                    command: restartArguments.description,
+                    exitCode: exitCode,
+                    terminationReason: restartResult.terminationStatus.description,
+                    output: "",
+                    error: ""
+                )
+            }
+
+            return
         }
 
         // Create builder with configuration
@@ -393,6 +429,30 @@ public struct DockerCLI: Sendable {
             return output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
         } catch {
             return false
+        }
+    }
+
+    /// Gets the contents of a file inside a Docker container using docker exec cat
+    private func getContainerFileContents(
+        containerName: String,
+        filePath: String
+    ) async -> String? {
+        let arguments = ["exec", containerName, "cat", filePath]
+        do {
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100_000, encoding: UTF8.self),
+                error: .discarded
+            )
+            guard result.terminationStatus.isSuccess,
+                let output = result.standardOutput
+            else {
+                return nil
+            }
+            return output
+        } catch {
+            return nil
         }
     }
 
