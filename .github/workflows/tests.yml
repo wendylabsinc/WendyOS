@@ -11,7 +11,7 @@ concurrency:
 jobs:
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container: swift:6.2.0
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: [self-hosted, Linux, X64]
+          - os: ubuntu-latest
             container: swift:6.2.0
           - os: macos-15
             xcode-select: /Applications/Xcode_26.0.app
@@ -83,12 +83,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: xcode-select
         if: ${{ matrix.xcode-select != '' }}
         run: |
           sudo xcode-select --switch ${{ matrix.xcode-select }}
 
       - name: Run Tests
+        env:
+          CC: "sccache clang"
+          CXX: "sccache clang++"
         run: |
           # Use parallel compilation and testing
           NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
