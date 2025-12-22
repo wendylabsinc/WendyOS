@@ -43,7 +43,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache generated protos
+        id: cache-protos
+        uses: actions/cache@v5
+        with:
+          path: |
+            Sources/WendyAgentGRPC/Proto/
+            Sources/WendyCloudGRPC/Proto/
+            Sources/ContainerdGRPC/Proto/
+            Sources/ContainerdGRPCTypes/Proto/
+            Sources/OpenTelemetryGRPC/Proto/
+            Sources/OpenTelemetryGRPCTypes/Proto/
+          key: protos-${{ hashFiles('Protos/**/*.proto', 'Scripts/Generate-Proto.sh') }}
+          restore-keys: protos-
+
       - name: Generate protos
+        if: steps.cache-protos.outputs.cache-hit != 'true'
         run: |
           chmod +x ./Scripts/Generate-Proto.sh
           ./Scripts/Generate-Proto.sh
@@ -114,13 +129,13 @@ jobs:
 
       - name: Cache Swift SDK
         if: ${{ matrix.swift-sdk-url != '' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.swiftpm/swift-sdks
           key: swift-sdk-${{ matrix.swift-sdk }}-${{ matrix.swift-sdk-checksum }}
 
       - name: Cache SPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .build/repositories
@@ -160,6 +175,10 @@ jobs:
             args+=(-Xlinker --gc-sections)
             args+=(-Xlinker --strip-all)
           fi
+
+          # Use parallel compilation
+          NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+          args+=(--jobs "$NCPU")
 
           swift build "${args[@]}"
 
