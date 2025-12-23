@@ -33,6 +33,7 @@ let package = Package(
         .package(path: "../swift-nio"),
         .package(path: "../swift-nio-ssl"),
         .package(path: "../swift-nio-extras"),
+        .package(path: "../Rainbow"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
        .package(
