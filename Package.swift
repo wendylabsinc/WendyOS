@@ -47,11 +47,6 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.10.3"),
-        .package(
-            url: "https://github.com/swift-server/swift-openapi-async-http-client.git",
-            from: "1.1.0"
-        ),
         .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
@@ -82,7 +77,6 @@ let package = Package(
                 .target(name: "AppConfig"),
                 .target(name: "CliXPCProtocol"),
                 .target(name: "WendySDK"),
-                .target(name: "DockerOpenAPI"),
                 .target(name: "Analytics"),
             ],
             path: "Sources/Wendy",
@@ -104,22 +98,6 @@ let package = Package(
             ]
         ),
 
-        .target(
-            name: "DockerOpenAPI",
-            dependencies: [
-                .product(
-                    name: "OpenAPIAsyncHTTPClient",
-                    package: "swift-openapi-async-http-client"
-                ),
-                .product(name: "AsyncHTTPClient", package: "async-http-client"),
-                .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "Logging", package: "swift-log"),
-            ],
-            plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
-        ),
-
         /// The main executable provided by wendy-agent.
         .executableTarget(
             name: "wendy-agent",
@@ -138,7 +116,6 @@ let package = Package(
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
-                .target(name: "DockerOpenAPI"),
                 .target(name: "WendyShared"),
                 .target(name: "AppConfig"),
                 .target(name: "ContainerRegistry"),
