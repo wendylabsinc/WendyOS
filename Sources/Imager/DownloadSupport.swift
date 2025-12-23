@@ -595,7 +595,8 @@ public final class ImageDownloader: ImageDownloading {
         }
 
         // Use a lock file to prevent concurrent extraction to the same directory
-        let lockFileURL = parentDir.appendingPathComponent(".extraction-\(deviceName).lock")
+        let lockSuffix = nightly ? "-nightly" : ""
+        let lockFileURL = parentDir.appendingPathComponent(".extraction-\(deviceName)\(lockSuffix).lock")
         let lockFile: Foundation.FileHandle
 
         // Create lock file if it doesn't exist
