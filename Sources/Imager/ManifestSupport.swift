@@ -19,7 +19,7 @@ public enum DeviceStability: String, Codable {
 /// Represents device manifest information
 public struct DeviceManifest: Codable {
     public struct VersionInfo: Codable {
-        public let release_date: String
+        public let release_date: Date
         public let path: String
         public let size_bytes: Int
         public let is_latest: Bool
@@ -149,7 +149,9 @@ public final class ManifestManager: ManifestManaging {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
-        let mainManifest = try JSONDecoder().decode(MainManifest.self, from: mainManifestData)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let mainManifest = try decoder.decode(MainManifest.self, from: mainManifestData)
 
         // Find the device in the main manifest
         guard let deviceInfo = mainManifest.devices[deviceName] else {
@@ -164,7 +166,7 @@ public final class ManifestManager: ManifestManaging {
         // Fetch the device-specific manifest
         let deviceManifestUrl = URL(string: "\(baseUrl)/\(deviceInfo.manifest_path)")!
         let deviceManifestData = try await fetchData(from: deviceManifestUrl)
-        let deviceManifest = try JSONDecoder().decode(DeviceManifest.self, from: deviceManifestData)
+        let deviceManifest = try decoder.decode(DeviceManifest.self, from: deviceManifestData)
 
         let versionInfo: DeviceManifest.VersionInfo
         let versionString: String
@@ -178,14 +180,9 @@ public final class ManifestManager: ManifestManaging {
             }
 
             // Sort by release date first, then by semantic version as a tiebreaker
-            let dateFormatter = ISO8601DateFormatter()
             let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
-                // Parse release dates and compare
-                let lhsDate = dateFormatter.date(from: lhs.value.release_date) ?? Date.distantPast
-                let rhsDate = dateFormatter.date(from: rhs.value.release_date) ?? Date.distantPast
-
-                if lhsDate != rhsDate {
-                    return lhsDate > rhsDate
+                if lhs.value.release_date != rhs.value.release_date {
+                    return lhs.value.release_date > rhs.value.release_date
                 }
 
                 // Dates are equal, use semantic version as tiebreaker
@@ -216,7 +213,9 @@ public final class ManifestManager: ManifestManaging {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
-        let mainManifest = try JSONDecoder().decode(MainManifest.self, from: mainManifestData)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let mainManifest = try decoder.decode(MainManifest.self, from: mainManifestData)
 
         // Fetch device manifests to get nightly versions
         var deviceInfos: [DeviceInfo] = []
@@ -228,7 +227,7 @@ public final class ManifestManager: ManifestManaging {
                 do {
                     let deviceManifestUrl = URL(string: "\(baseUrl)/\(info.manifest_path)")!
                     let deviceManifestData = try await fetchData(from: deviceManifestUrl)
-                    let deviceManifest = try JSONDecoder().decode(
+                    let deviceManifest = try decoder.decode(
                         DeviceManifest.self,
                         from: deviceManifestData
                     )
@@ -238,17 +237,9 @@ public final class ManifestManager: ManifestManaging {
                         $0.key.contains("-nightly")
                     }
                     if !nightlyVersions.isEmpty {
-                        let dateFormatter = ISO8601DateFormatter()
                         let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
-                            let lhsDate =
-                                dateFormatter.date(from: lhs.value.release_date)
-                                ?? Date.distantPast
-                            let rhsDate =
-                                dateFormatter.date(from: rhs.value.release_date)
-                                ?? Date.distantPast
-
-                            if lhsDate != rhsDate {
-                                return lhsDate > rhsDate
+                            if lhs.value.release_date != rhs.value.release_date {
+                                return lhs.value.release_date > rhs.value.release_date
                             }
 
                             // Dates are equal, use semantic version as tiebreaker
