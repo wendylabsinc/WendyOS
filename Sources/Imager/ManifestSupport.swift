@@ -63,6 +63,26 @@ public struct DeviceInfo: Codable {
 
 // MARK: - Protocols
 
+/// Protocol for HTTP client operations
+public protocol HTTPClientProtocol: Sendable {
+    func execute(
+        _ request: HTTPClientRequest,
+        deadline: NIODeadline
+    ) async throws -> HTTPClientResponse
+}
+
+/// Default implementation using AsyncHTTPClient
+public struct DefaultHTTPClient: HTTPClientProtocol {
+    public init() {}
+
+    public func execute(
+        _ request: HTTPClientRequest,
+        deadline: NIODeadline
+    ) async throws -> HTTPClientResponse {
+        try await HTTPClient.shared.execute(request, deadline: deadline)
+    }
+}
+
 /// Protocol defining manifest management functionality
 public protocol ManifestManaging: Sendable {
     /// Fetches the latest image information for a specific device
@@ -85,12 +105,14 @@ public protocol ManifestManaging: Sendable {
 /// Manages fetching and parsing device manifests from GCS
 public final class ManifestManager: ManifestManaging {
     private let baseUrl: String
+    private let httpClient: HTTPClientProtocol
 
     public init(
         baseUrl: String,
-        urlSession: URLSession = .shared
+        httpClient: HTTPClientProtocol = DefaultHTTPClient()
     ) {
         self.baseUrl = baseUrl
+        self.httpClient = httpClient
     }
 
     /// Compares two semantic version strings (e.g., "0.9.10-nightly" vs "0.10.0-nightly")
@@ -127,7 +149,7 @@ public final class ManifestManager: ManifestManaging {
     /// Helper method to fetch JSON data using AsyncHTTPClient
     private func fetchData(from url: URL) async throws -> Data {
         let request = HTTPClientRequest(url: url.absoluteString)
-        let response = try await HTTPClient.shared.execute(
+        let response = try await httpClient.execute(
             request,
             deadline: NIODeadline.now() + .seconds(60)
         )

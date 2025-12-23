@@ -32,6 +32,55 @@ public protocol ImageDownloading: Sendable {
     ) async throws -> (String, cached: Bool)
 }
 
+/// Protocol for file system operations
+public protocol FileManaging: Sendable {
+    func cacheDirectory(_ type: CacheType) throws -> URL
+    func fileExists(atPath path: String) -> Bool
+    func contentsOfDirectory(atPath path: String) throws -> [String]
+    func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any]
+    func url(
+        for directory: FileManager.SearchPathDirectory,
+        in domain: FileManager.SearchPathDomainMask,
+        appropriateFor url: URL?,
+        create shouldCreate: Bool
+    ) throws -> URL
+}
+
+/// Default implementation using FileManager
+public struct DefaultFileManager: FileManaging {
+    public init() {}
+
+    public func cacheDirectory(_ type: CacheType) throws -> URL {
+        try FileManager.default.cacheDirectory(type)
+    }
+
+    public func fileExists(atPath path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    public func contentsOfDirectory(atPath path: String) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: path)
+    }
+
+    public func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        try FileManager.default.attributesOfItem(atPath: path)
+    }
+
+    public func url(
+        for directory: FileManager.SearchPathDirectory,
+        in domain: FileManager.SearchPathDomainMask,
+        appropriateFor url: URL?,
+        create shouldCreate: Bool
+    ) throws -> URL {
+        try FileManager.default.url(
+            for: directory,
+            in: domain,
+            appropriateFor: url,
+            create: shouldCreate
+        )
+    }
+}
+
 // MARK: - Implementations
 
 /// Represents cached image version metadata
