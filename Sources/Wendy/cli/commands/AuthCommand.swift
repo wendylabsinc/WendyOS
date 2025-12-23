@@ -92,7 +92,7 @@ struct RefreshCertsCommand: AsyncParsableCommand {
                         }
                     )
                 }
-                var config = try getConfig()
+                var config = getConfig()
                 config.addAuth(auth)
                 try config.save()
                 Noora().success("Refreshed certificates")
@@ -118,7 +118,7 @@ struct LogoutCommand: AsyncParsableCommand {
     )
 
     func run() async throws {
-        var config = try getConfig()
+        var config = getConfig()
 
         if config.auth.isEmpty {
             Noora().error("No accounts found")

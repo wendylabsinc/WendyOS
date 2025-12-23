@@ -55,24 +55,47 @@ struct AppsCommand: AsyncParsableCommand {
                 agentConnectionOptions,
                 title: "Listing applications"
             ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
-                try await agent.listContainers(.init()) { containers in
-                    for try await container in containers.messages {
-                        let status =
-                            switch container.container.runningState {
-                            case .running: "✅"
-                            case .stopped: "🛑"
-                            case .UNRECOGNIZED: "❓"
-                            }
+                let rows: [[String]] =
+                    try await Wendy_Agent_Services_V1_WendyContainerService.Client(
+                        wrapping: client
+                    )
+                    .listContainers(.init()) { containers in
+                        var rows: [[String]] = []
 
-                        let failures =
-                            container.container.failureCount > 0
-                            ? " (failures=\(container.container.failureCount))" : ""
-                        print(
-                            "\(status) \(container.container.appName) @ \(container.container.appVersion)\(failures)"
-                        )
+                        for try await container in containers.messages {
+                            let state =
+                                switch container.container.runningState {
+                                case .running: "Running"
+                                case .stopped: "Stopped"
+                                case .UNRECOGNIZED: "Unknown"
+                                }
+                            let failures = "\(container.container.failureCount)"
+
+                            rows.append([
+                                container.container.appName,
+                                container.container.appVersion,
+                                state,
+                                failures,
+                            ])
+                        }
+
+                        return rows
                     }
+
+                guard !rows.isEmpty else {
+                    Noora().info("No applications found.")
+                    return
                 }
+
+                Noora().table(
+                    headers: [
+                        "App",
+                        "Version",
+                        "State",
+                        "Failures",
+                    ],
+                    rows: rows
+                )
             }
         }
     }
