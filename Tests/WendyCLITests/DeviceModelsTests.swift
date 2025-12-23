@@ -624,6 +624,8 @@ struct DevicesCollectionTests {
         let groupedDevices = collection.groupedDevices()
 
         #expect(groupedDevices.count == 1)
-        #expect(groupedDevices[0].description == "Lively Cinnamon (wendyos-lively-cinnamon.local) [LAN]")
+        #expect(
+            groupedDevices[0].description == "Lively Cinnamon (wendyos-lively-cinnamon.local) [LAN]"
+        )
     }
 }
