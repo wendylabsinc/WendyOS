@@ -38,12 +38,27 @@ jobs:
 
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container: swift:6.2.0
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache generated protos
+        id: cache-protos
+        uses: actions/cache@v5
+        with:
+          path: |
+            Sources/WendyAgentGRPC/Proto/
+            Sources/WendyCloudGRPC/Proto/
+            Sources/ContainerdGRPC/Proto/
+            Sources/ContainerdGRPCTypes/Proto/
+            Sources/OpenTelemetryGRPC/Proto/
+            Sources/OpenTelemetryGRPCTypes/Proto/
+          key: protos-${{ hashFiles('Proto/**/*.proto', 'Scripts/Generate-Proto.sh') }}
+          restore-keys: protos-
+
       - name: Generate protos
+        if: steps.cache-protos.outputs.cache-hit != 'true'
         run: |
           chmod +x ./Scripts/Generate-Proto.sh
           ./Scripts/Generate-Proto.sh
@@ -67,28 +82,28 @@ jobs:
       matrix:
         include:
           - artifact-name: wendy-agent-linux-static-musl-aarch64
-            os: [self-hosted, Linux, X64]
+            os: ubuntu-latest
             container: swift:6.2.0
             swift-sdk: aarch64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
             product: wendy-agent
           - artifact-name: wendy-agent-linux-static-musl-x86_64
-            os: [self-hosted, Linux, X64]
+            os: ubuntu-latest
             container: swift:6.2.0
             swift-sdk: x86_64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
             product: wendy-agent
           - artifact-name: wendy-cli-linux-static-musl-aarch64
-            os: [self-hosted, Linux, X64]
+            os: ubuntu-latest
             container: swift:6.2.0
             swift-sdk: aarch64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
             product: wendy
           - artifact-name: wendy-cli-linux-static-musl-x86_64
-            os: [self-hosted, Linux, X64]
+            os: ubuntu-latest
             container: swift:6.2.0
             swift-sdk: x86_64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
@@ -114,13 +129,13 @@ jobs:
 
       - name: Cache Swift SDK
         if: ${{ matrix.swift-sdk-url != '' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.swiftpm/swift-sdks
           key: swift-sdk-${{ matrix.swift-sdk }}-${{ matrix.swift-sdk-checksum }}
 
       - name: Cache SPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .build/repositories
@@ -128,6 +143,9 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install Static Linux SDK
         if: ${{ matrix.swift-sdk-url != '' }}
@@ -144,6 +162,9 @@ jobs:
           ./Scripts/inject-version.sh "${{ needs.determine-version.outputs.version }}"
       - name: Build
         shell: bash
+        env:
+          CC: "sccache clang"
+          CXX: "sccache clang++"
         run: |
           args=(
             --configuration release
@@ -160,6 +181,10 @@ jobs:
             args+=(-Xlinker --gc-sections)
             args+=(-Xlinker --strip-all)
           fi
+
+          # Use parallel compilation
+          NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+          args+=(--jobs "$NCPU")
 
           swift build "${args[@]}"
 
