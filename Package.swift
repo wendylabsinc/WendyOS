@@ -1,12 +1,6 @@
 // swift-tools-version: 6.1.2
 import PackageDescription
 
-#if compiler(>=6.2.1)
-    let hasSpan = true
-#else
-    let hasSpan = false
-#endif
-
 let package = Package(
     name: "wendy-agent",
     platforms: [
@@ -43,7 +37,7 @@ let package = Package(
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
             exact: "0.2.1",
-            traits: hasSpan ? [.trait(name: "SubprocessSpan")] : []
+            traits: [.trait(name: "SubprocessSpan")]
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),

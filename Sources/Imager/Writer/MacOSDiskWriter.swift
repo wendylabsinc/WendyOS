@@ -128,13 +128,12 @@
 
                         // Write to dd's stdin (async) and propagate any write error
                         do {
-                            _ = try await stdinWriter.write(Array(data))
+                            totalWritten += try await Int64(stdinWriter.write(data.bytes))
                         } catch {
                             throw DiskWriterError.writeFailed(
                                 reason: "Failed piping data to dd: \(error.localizedDescription)"
                             )
                         }
-                        totalWritten += Int64(data.count)
                         if let totalBytes, totalBytes > 0 {
                             progressHandler(
                                 DiskWriteProgress(
