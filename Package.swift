@@ -38,7 +38,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         .package(
             url: "https://github.com/tuist/Noora.git",
-            from: "0.51.0"
+            from: "0.52.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
