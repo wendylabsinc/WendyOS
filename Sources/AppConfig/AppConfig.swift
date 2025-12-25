@@ -37,6 +37,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
     case bluetooth(BluetoothEntitlements)
     case video(VideoEntitlements)
     case gpu(GPUEntitlements)
+    case persist(PersistenceEntitlements)
     case audio
 
     public func encode(to encoder: Encoder) throws {
@@ -57,6 +58,9 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .gpu(let entitlement):
             try container.encode(EntitlementType.gpu, forKey: .type)
             try entitlement.encode(to: encoder)
+        case .persist(let entitlement):
+            try container.encode(EntitlementType.persist, forKey: .type)
+            try entitlement.encode(to: encoder)
         }
     }
 
@@ -75,6 +79,8 @@ public enum Entitlement: Codable, Sendable, Hashable {
             self = .gpu(try GPUEntitlements(from: decoder))
         case .audio:
             self = .audio
+        case .persist:
+            self = .persist(try PersistenceEntitlements(from: decoder))
         }
     }
 
@@ -89,6 +95,20 @@ public enum EntitlementType: String, Codable, CaseIterable, ExpressibleByArgumen
     case audio
     case bluetooth
     case gpu
+    case persist
+}
+
+public struct PersistenceEntitlements: Codable, Sendable, Hashable {
+    /// The name of the volume to persist
+    public let name: String
+
+    /// The path inside the container to mount the persisted volume at
+    public let path: String
+
+    public init(name: String, path: String) {
+        self.name = name
+        self.path = path
+    }
 }
 
 public struct BluetoothEntitlements: Codable, Sendable, Hashable {

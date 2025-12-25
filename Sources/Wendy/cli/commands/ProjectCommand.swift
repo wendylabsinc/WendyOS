@@ -158,6 +158,9 @@ struct ListCommand: ModifyProjectCommand {
             print("   No additional configuration")
         case .gpu:
             print("   No additional configuration")
+        case .persist(let persistenceEntitlement):
+            print("   Name: \(persistenceEntitlement.name)")
+            print("   Path: \(persistenceEntitlement.path)")
         }
     }
 }
@@ -175,6 +178,12 @@ struct AddCommand: ModifyProjectCommand {
 
     @Option(name: [.customShort("m"), .long], help: "Mode for the entitlement")
     var mode: String?
+
+    @Option(help: "Name of the volume to persist")
+    var name: String?
+
+    @Option(help: "Path of the directory to persist")
+    var path: String?
 
     @Option(
         help: "Path to the project directory (defaults to current directory)"
@@ -215,8 +224,13 @@ struct AddCommand: ModifyProjectCommand {
             // Create new entitlement based on type and mode
             newEntitlement = try createEntitlement(type: entitlementType, mode: mode)
         } else {
-            let availableEntitlementTypes = EntitlementType.allCases.filter { entitlement in
+            var availableEntitlementTypes = EntitlementType.allCases.filter { entitlement in
                 !config.entitlements.contains { $0.type == entitlement }
+            }
+
+            if !availableEntitlementTypes.contains(.persist) {
+                // Persist entitlement is always available, add it to the list regardless
+                availableEntitlementTypes.append(.persist)
             }
 
             if availableEntitlementTypes.isEmpty {
@@ -300,6 +314,16 @@ struct AddCommand: ModifyProjectCommand {
                 newEntitlement = .audio
             case .gpu:
                 newEntitlement = .gpu(GPUEntitlements())
+            case .persist:
+                let name = Noora().textPrompt(
+                    prompt: "Enter the name of the volume to persist"
+                )
+                let path = Noora().textPrompt(
+                    prompt: "Enter the path of the directory to persist"
+                )
+
+                // TODO: Validate `path` is a valid UNIX path?
+                newEntitlement = .persist(PersistenceEntitlements(name: name, path: path))
             }
         }
 
@@ -354,6 +378,13 @@ struct AddCommand: ModifyProjectCommand {
 
         case .gpu:
             return .gpu(GPUEntitlements())
+
+        case .persist:
+            guard let name, let path else {
+                throw ProjectError.missingPersistArguments
+            }
+
+            return .persist(PersistenceEntitlements(name: name, path: path))
         }
     }
 }
@@ -447,6 +478,8 @@ extension Entitlement {
             return .audio
         case .gpu:
             return .gpu
+        case .persist:
+            return .persist
         }
     }
 }
@@ -457,6 +490,7 @@ enum ProjectError: Error {
     case configNotFound(path: String)
     case invalidMode(mode: String, for: EntitlementType)
     case saveFailed(path: String, error: String)
+    case missingPersistArguments
 
     var localizedDescription: String {
         switch self {
@@ -466,6 +500,8 @@ enum ProjectError: Error {
             return "Invalid mode '\(mode)' for entitlement type '\(type.rawValue)'"
         case .saveFailed(let path, let error):
             return "Failed to save configuration to '\(path)': \(error)"
+        case .missingPersistArguments:
+            return "Missing arguments for persist entitlement. `--name` and `--path` are required"
         }
     }
 }

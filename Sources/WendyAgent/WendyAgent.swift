@@ -28,6 +28,9 @@ struct WendyAgent: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "The directory to store configuration files in.")
     var configDir: String = "/etc/wendy-agent"
 
+    @Option(help: "The directory to store persisted volumes in.")
+    var storage: String = "/var/lib/wendy-agent/storage"
+
     func run() async throws {
         LoggingSystem.bootstrap { label in
             #if DEBUG
@@ -133,7 +136,7 @@ struct WendyAgent: AsyncParsableCommand {
         }
 
         let authenticatedServices: [any GRPCCore.RegistrableRPCService] = [
-            WendyContainerService(),
+            WendyContainerService(persistenceBasePath: URL(filePath: storage)),
             WendyAgentService(shouldRestart: {
                 print("Shutting down server")
                 continuation.yield()

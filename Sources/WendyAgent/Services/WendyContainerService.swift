@@ -11,6 +11,7 @@ import _NIOFileSystem
 
 struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
     let logger = Logger(label: "WendyContainerService")
+    let persistenceBasePath: URL
 
     func listLayers(
         request: ServerRequest<Wendy_Agent_Services_V1_ListLayersRequest>,
@@ -353,11 +354,19 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 appName: request.appName
             )
 
-            spec.applyEntitlements(
+            let dependencies = spec.applyEntitlements(
                 entitlements: appConfig.entitlements,
                 appName: request.appName,
-                availableDevices: try OCI.AvailableDevices.detect()
+                availableDevices: try OCI.AvailableDevices.detect(),
+                persistenceBasePath: persistenceBasePath
             )
+
+            for directory in dependencies.directoriesToCreate {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+            }
 
             // Apply CDI for GPU if requested
 

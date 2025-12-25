@@ -2,6 +2,10 @@ import AppConfig
 import Foundation
 import Logging
 
+struct OCIDependencies: Sendable {
+    var directoriesToCreate = [URL]()
+}
+
 extension OCI {
     mutating func setDeviceCapabilities(appName: String) {
         let deviceCapabilities = [
@@ -89,11 +93,13 @@ extension OCI {
         }
     }
 
+    @discardableResult
     mutating func applyEntitlements(
         entitlements: [Entitlement],
         appName: String,
-        availableDevices: AvailableDevices
-    ) {
+        availableDevices: AvailableDevices,
+        persistenceBasePath: URL
+    ) -> OCIDependencies {
         let logger = Logger(label: #file)
         logger.debug(
             "applyEntitlements called",
@@ -103,6 +109,7 @@ extension OCI {
             ]
         )
         var didSetDeviceCapabilities = false
+        var dependencies = OCIDependencies()
 
         for entitlement in entitlements {
             logger.trace(
@@ -110,6 +117,24 @@ extension OCI {
                 metadata: ["entitlement": .string("\(entitlement)")]
             )
             switch entitlement {
+            case .persist(let persistenceEntitlements):
+                let source = persistenceBasePath.appending(component: persistenceEntitlements.name)
+                dependencies.directoriesToCreate.append(source)
+
+                self.mounts.append(
+                    .init(
+                        destination: persistenceEntitlements.path,
+                        type: "bind",
+                        source: source.path,
+                        options: ["rbind", "nosuid", "noexec"]
+                    )
+                )
+                logger.debug(
+                    "Added persist mount",
+                    metadata: [
+                        "mount": .string("\(persistenceEntitlements.path)")
+                    ]
+                )
             case .gpu(_):
                 logger.info("GPU entitlement detected - adding video group")
                 // Add video group (gid 44) for access to GPU devices
@@ -333,5 +358,7 @@ extension OCI {
                 }
             }
         }
+
+        return dependencies
     }
 }

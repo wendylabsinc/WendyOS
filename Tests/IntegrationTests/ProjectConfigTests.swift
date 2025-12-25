@@ -38,6 +38,8 @@ struct ProjectConfigTests {
         command.project = projectDir.path()
 
         switch entitlement {
+        case .persist:
+            command.entitlementType = .persist
         case .network:
             command.entitlementType = .network
         case .bluetooth:
@@ -66,6 +68,10 @@ struct ProjectConfigTests {
         command.project = projectDir.path()
 
         switch entitlement {
+        case .persist(let persistenceEntitlements):
+            command.entitlementType = .persist
+            command.name = persistenceEntitlements.name
+            command.path = persistenceEntitlements.path
         case .gpu:
             command.entitlementType = .gpu
         case .network(let networkEntitlements):
