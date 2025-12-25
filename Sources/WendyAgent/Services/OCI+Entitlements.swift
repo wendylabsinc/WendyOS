@@ -251,34 +251,65 @@ extension OCI {
                     self.setDeviceCapabilities(appName: appName)
                 }
             case .video:
-                self.linux.devices.append(
-                    .init(
-                        path: "/dev/video0",
-                        type: "c",
-                        major: 81,
-                        minor: 17,
-                        fileMode: 0o666,
-                        uid: 0,
-                        gid: 0
-                    )
-                )
+                let fm = FileManager.default
 
-                self.mounts.append(
-                    .init(
-                        destination: "/dev/video0",
-                        type: "bind",
-                        source: "/dev/video0",
-                        options: ["rbind", "nosuid", "noexec"]
-                    )
-                )
+                // Find all video devices in /dev
+                do {
+                    let devContents = try fm.contentsOfDirectory(atPath: "/dev")
+                    let videoDevices = devContents.filter { $0.hasPrefix("video") }.sorted()
 
-                self.linux.resources?.devices?.append(
-                    DeviceAllowance(allow: true, type: "c", major: 81, minor: 17, access: "rw")
-                )
+                    for device in videoDevices {
+                        let devicePath = "/dev/\(device)"
 
-                if !didSetDeviceCapabilities {
-                    didSetDeviceCapabilities = true
-                    self.setDeviceCapabilities(appName: appName)
+                        // Get device info using stat to find major/minor numbers
+                        var statInfo = stat()
+                        guard stat(devicePath, &statInfo) == 0 else { continue }
+
+                        // Extract major/minor numbers from st_rdev
+                        // On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & ~0xff)
+                        let rdev = UInt64(statInfo.st_rdev)
+                        let deviceMajor = Int((rdev >> 8) & 0xfff)
+                        let deviceMinor = Int((rdev & 0xff) | ((rdev >> 12) & ~0xff))
+
+                        self.linux.devices.append(
+                            Device(
+                                path: devicePath,
+                                type: "c",
+                                major: deviceMajor,
+                                minor: deviceMinor,
+                                fileMode: 0o666,
+                                uid: 0,
+                                gid: 0
+                            )
+                        )
+
+                        self.mounts.append(
+                            .init(
+                                destination: devicePath,
+                                type: "bind",
+                                source: devicePath,
+                                options: ["rbind", "nosuid", "noexec"]
+                            )
+                        )
+                    }
+
+                    if !videoDevices.isEmpty {
+                        // Allow all video4linux devices (major 81)
+                        self.linux.resources?.devices?.append(
+                            DeviceAllowance(allow: true, type: "c", major: 81, access: "rw")
+                        )
+
+                        if !didSetDeviceCapabilities {
+                            didSetDeviceCapabilities = true
+                            self.setDeviceCapabilities(appName: appName)
+                        }
+                    } else {
+                        logger.warning(
+                            "Video entitlement requested but no /dev/video* devices found"
+                        )
+                    }
+                } catch {
+                    logger.warning("Failed to enumerate /dev for video devices: \(error)")
                 }
             }
         }
