@@ -287,11 +287,15 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
             labels["sh.wendy/app.version"] = appConfig.version
 
+            let hostname = try await String(contentsOf: FilePath("/etc/hostname"), maximumSizeAllowed: .bytes(256))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
             // Build base environment variables
             // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
             // handled by CDI and added during applyCDIDevice()
             let env = [
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "WENDY_HOSTNAME=\(hostname).local"
             ]
 
             // Infer command and workingDir from the image config, if not provided in the request.
