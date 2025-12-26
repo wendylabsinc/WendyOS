@@ -354,7 +354,7 @@ jobs:
     name: Publish Linux Repositories
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     needs: [determine-version, package-linux]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -542,7 +542,7 @@ jobs:
     name: Release
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64
     needs: [determine-version, build, package-linux]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -669,7 +669,7 @@ jobs:
     name: Publish AUR Packages
     runs-on: ubuntu-latest
     needs: [determine-version, release]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
