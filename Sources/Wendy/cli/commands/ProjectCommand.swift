@@ -142,8 +142,12 @@ struct ListCommand: ModifyProjectCommand {
             print("   Mode: \(networkEntitlement.mode.rawValue)")
         case .bluetooth(let bluetoothEntitlement):
             print("   Mode: \(bluetoothEntitlement.mode.rawValue)")
-        case .video:
-            print("   No additional configuration")
+        case .video(let videoEntitlement):
+            print("   Mode: \(videoEntitlement.mode.rawValue)")
+            if videoEntitlement.mode == .whitelist {
+                let devices = videoEntitlement.devices.joined(separator: ", ")
+                print("   Devices: \(devices)")
+            }
         case .audio:
             print("   No additional configuration")
         case .gpu:
@@ -301,7 +305,16 @@ struct AddCommand: ModifyProjectCommand {
             return .bluetooth(BluetoothEntitlements(mode: bluetoothMode))
 
         case .video:
-            return .video(VideoEntitlements())
+            let videoMode: VideoEntitlements.VideoMode
+            if let modeString = mode {
+                guard let parsedMode = VideoEntitlements.VideoMode(rawValue: modeString) else {
+                    throw ProjectError.invalidMode(mode: modeString, for: type)
+                }
+                videoMode = parsedMode
+            } else {
+                videoMode = .whitelist
+            }
+            return .video(VideoEntitlements(mode: videoMode))
 
         case .audio:
             return .audio

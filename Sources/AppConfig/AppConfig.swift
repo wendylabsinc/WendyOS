@@ -37,6 +37,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
     case bluetooth(BluetoothEntitlements)
     case video(VideoEntitlements)
     case gpu(GPUEntitlements)
+    /// Grants access to host audio devices and runtime sockets.
     case audio
 
     public func encode(to encoder: Encoder) throws {
@@ -108,9 +109,43 @@ public struct GPUEntitlements: Codable, Sendable, Hashable {
 }
 
 public struct VideoEntitlements: Codable, Sendable, Hashable {
-    public init() {}
+    /// Video entitlement modes for V4L2 device access.
+    public enum VideoMode: String, Codable, Sendable, Hashable {
+        /// Bind and allow all detected V4L2 device nodes.
+        case all
+        /// Bind and allow only the explicit device list.
+        case whitelist
+    }
+
+    public var mode: VideoMode
+    public var devices: [String]
+
+    /// Defaults to `.all` mode and a single `/dev/video0` whitelist entry.
+    public init(mode: VideoMode = .all, devices: [String] = ["/dev/video0"]) {
+        self.mode = mode
+        self.devices = devices
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case devices
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decodeIfPresent(VideoMode.self, forKey: .mode) ?? .all
+        self.devices =
+            try container.decodeIfPresent([String].self, forKey: .devices) ?? ["/dev/video0"]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(devices, forKey: .devices)
+    }
 }
 
+/// Audio entitlement configuration (currently no options).
 public struct AudioEntitlements: Codable, Sendable, Hashable {
     public init() {}
 }

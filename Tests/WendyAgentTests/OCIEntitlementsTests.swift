@@ -1,4 +1,5 @@
 import AppConfig
+import Foundation
 import Testing
 
 @testable import wendy_agent
@@ -214,7 +215,7 @@ struct OCIEntitlementsTests {
 
     // MARK: - Video Entitlement Tests
 
-    @Test("Video entitlement adds device and mount")
+    @Test("Video entitlement adds device and mount when present")
     func applyVideoEntitlement_AddsDeviceAndMount() {
         // Given: An OCI spec
         var ociSpec = createBaseOCISpec()
@@ -223,15 +224,33 @@ struct OCIEntitlementsTests {
         let entitlements: [Entitlement] = [.video(VideoEntitlements())]
         ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
 
-        // Then: Video device should be added
-        let videoDevice = ociSpec.linux.devices.first(where: { $0.path == "/dev/video0" })
-        #expect(videoDevice != nil)
-        #expect(videoDevice?.major == 81)
-        #expect(videoDevice?.minor == 17)
+        // Then: Video device and mount should be added if the node exists
+        if FileManager.default.fileExists(atPath: "/dev/video0") {
+            let videoDevice = ociSpec.linux.devices.first(where: { $0.path == "/dev/video0" })
+            #expect(videoDevice != nil)
+            #expect(videoDevice?.major == 81)
 
-        // Video device mount should be added
-        let videoMount = ociSpec.mounts.first(where: { $0.destination == "/dev/video0" })
-        #expect(videoMount != nil)
+            let videoMount = ociSpec.mounts.first(where: { $0.destination == "/dev/video0" })
+            #expect(videoMount != nil)
+        }
+    }
+
+    @Test("Video entitlement in all mode allows V4L2 devices")
+    func applyVideoEntitlement_AllMode_AddsCgroupAllowance() {
+        // Given: An OCI spec
+        var ociSpec = createBaseOCISpec()
+
+        // When: Applying video entitlement with all mode
+        let entitlements: [Entitlement] = [
+            .video(VideoEntitlements(mode: .all))
+        ]
+        ociSpec.applyEntitlements(entitlements: entitlements, appName: "test-app")
+
+        // Then: Cgroup allowance for V4L2 major should be added
+        let allowance = ociSpec.linux.resources?.devices?.first(where: { device in
+            device.type == "c" && device.major == 81 && device.minor == nil
+        })
+        #expect(allowance != nil)
     }
 
     // MARK: - Empty Entitlements Tests
