@@ -611,7 +611,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 "Deleting container",
                 metadata: [
                     "container-id": .stringConvertible(appName),
-                    "delete-image": .stringConvertible(deleteImage)
+                    "delete-image": .stringConvertible(deleteImage),
                 ]
             )
 
@@ -637,6 +637,9 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 )
             }
 
+            // Ensure monitor won't auto-restart it
+            await ContainerMonitor.shared.markContainerStopped(appName)
+
             // Optionally remove the image to free disk space
             if deleteImage, let imageName {
                 do {
@@ -645,7 +648,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         "Deleted container image",
                         metadata: [
                             "container-id": .stringConvertible(appName),
-                            "image": .stringConvertible(imageName)
+                            "image": .stringConvertible(imageName),
                         ]
                     )
                 } catch let error as RPCError where error.code == .notFound {
@@ -653,14 +656,11 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         "Image already deleted",
                         metadata: [
                             "container-id": .stringConvertible(appName),
-                            "image": .stringConvertible(imageName)
+                            "image": .stringConvertible(imageName),
                         ]
                     )
                 }
             }
-
-            // Ensure monitor won't auto-restart it
-            await ContainerMonitor.shared.markContainerStopped(appName)
 
             return ServerResponse(message: .init())
         }
