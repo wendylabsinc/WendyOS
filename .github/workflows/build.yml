@@ -18,7 +18,7 @@ permissions:
 jobs:
   determine-version:
     name: Determine Version
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
     outputs:
       version: ${{ steps.set-version.outputs.version }}
     steps:
@@ -38,8 +38,8 @@ jobs:
 
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: ubuntu-latest
-    container: swift:6.2.0
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+    container: swift:6.2.3
     steps:
       - uses: actions/checkout@v4
 
@@ -82,32 +82,32 @@ jobs:
       matrix:
         include:
           - artifact-name: wendy-agent-linux-static-musl-aarch64
-            os: ubuntu-latest
-            container: swift:6.2.0
+            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            container: swift:6.2.3
             swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
+            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
+            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy-agent
           - artifact-name: wendy-agent-linux-static-musl-x86_64
-            os: ubuntu-latest
-            container: swift:6.2.0
+            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+            container: swift:6.2.3
             swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
+            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
+            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy-agent
           - artifact-name: wendy-cli-linux-static-musl-aarch64
-            os: ubuntu-latest
-            container: swift:6.2.0
+            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            container: swift:6.2.3
             swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
+            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
+            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy
           - artifact-name: wendy-cli-linux-static-musl-x86_64
-            os: ubuntu-latest
-            container: swift:6.2.0
+            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+            container: swift:6.2.3
             swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2-release/static-sdk/swift-6.2-RELEASE/swift-6.2-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: d2225840e592389ca517bbf71652f7003dbf45ac35d1e57d98b9250368769378
+            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
+            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy
           - artifact-name: wendy-cli-macos-arm64
             os: macos-15
@@ -234,7 +234,7 @@ jobs:
 
   release:
     name: Release
-    runs-on: ubuntu-22.04-arm
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64
     needs: [determine-version, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:

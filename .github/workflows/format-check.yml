@@ -8,8 +8,8 @@ permissions:
 jobs:
   format-check:
     name: Swift Format Check
-    runs-on: [self-hosted, Linux, X64]
-    container: swift:6.2.0
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    container: swift:6.2.3
 
     steps:
       - name: Checkout Code
