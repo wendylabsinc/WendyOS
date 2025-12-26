@@ -126,7 +126,25 @@ extension OCI {
             case .bluetooth(let bluetooth):
                 switch bluetooth.mode {
                 case .bluez:
-                    ()  // TODO: Unsupported for now
+                    // Mount D-Bus for BlueZ daemon communication
+                    self.mounts.append(
+                        .init(
+                            destination: "/run/dbus",
+                            type: "bind",
+                            source: "/run/dbus",
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
+
+                    // Also mount /var/run/dbus as some systems use this path
+                    self.mounts.append(
+                        .init(
+                            destination: "/var/run/dbus",
+                            type: "bind",
+                            source: "/var/run/dbus",
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
                 case .kernel:
                     for entitlement in entitlements {
                         if case .network(let networkEntitlements) = entitlement,

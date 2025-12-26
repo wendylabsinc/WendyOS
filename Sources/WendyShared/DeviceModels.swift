@@ -169,6 +169,14 @@ public struct DevicesCollection: Encodable, Sendable {
             }
         }
 
+        public var shortDescription: String {
+            switch self {
+            case .usb(let usb): return usb.usbVersion ?? "USB"
+            case .ethernet: return "Ethernet"
+            case .lan: return "LAN"
+            }
+        }
+
         public var description: String {
             var string = ""
             switch self {

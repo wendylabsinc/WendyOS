@@ -10,7 +10,7 @@ struct WendyCLI {
         LoggingSystem.bootstrap { label in
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? .info
+                .flatMap(Logger.Level.init(rawValue:)) ?? .info
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
