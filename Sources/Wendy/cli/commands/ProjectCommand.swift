@@ -167,10 +167,10 @@ struct AddCommand: ModifyProjectCommand {
     )
 
     @Option(help: "Type of entitlement to add (network, bluetooth, video)")
-    var entitlementType: EntitlementType?
+    var entitlementType: EntitlementType? = nil
 
     @Option(name: [.customShort("m"), .long], help: "Mode for the entitlement")
-    var mode: String?
+    var mode: String? = nil
 
     @Option(
         help: "Path to the project directory (defaults to current directory)"
@@ -353,7 +353,7 @@ struct RemoveCommand: ModifyProjectCommand {
     )
 
     @Option(help: "Type of entitlement to remove (network, bluetooth, video)")
-    var entitlementType: EntitlementType?
+    var entitlementType: EntitlementType? = nil
 
     @Option(
         help: "Path to the project directory (defaults to current directory)"

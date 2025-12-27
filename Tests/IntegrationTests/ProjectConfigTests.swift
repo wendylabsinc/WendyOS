@@ -48,6 +48,8 @@ struct ProjectConfigTests {
             command.entitlementType = .audio
         case .gpu:
             command.entitlementType = .gpu
+        case .peripherals:
+            command.entitlementType = .peripherals
         }
 
         try await command.run()
@@ -68,6 +70,7 @@ struct ProjectConfigTests {
         switch entitlement {
         case .gpu:
             command.entitlementType = .gpu
+            command.mode = nil
         case .network(let networkEntitlements):
             command.entitlementType = .network
             command.mode = networkEntitlements.mode.rawValue
@@ -79,6 +82,10 @@ struct ProjectConfigTests {
             command.mode = nil
         case .audio:
             command.entitlementType = .audio
+            command.mode = nil
+        case .peripherals(let peripherals):
+            command.entitlementType = .peripherals
+            command.mode = peripherals.usbBus ? "all" : nil
         }
 
         try await command.run()
@@ -97,6 +104,8 @@ struct ProjectConfigTests {
             Entitlement.bluetooth(BluetoothEntitlements(mode: .bluez)),
             Entitlement.network(NetworkEntitlements(mode: .host)),
             Entitlement.network(NetworkEntitlements(mode: .none)),
+            Entitlement.audio,
+            Entitlement.peripherals(PeripheralEntitlements(usbBus: true)),
             Entitlement.video(VideoEntitlements()),
         ]
     )
@@ -113,6 +122,8 @@ struct ProjectConfigTests {
             Entitlement.bluetooth(BluetoothEntitlements(mode: .bluez)),
             Entitlement.network(NetworkEntitlements(mode: .host)),
             Entitlement.network(NetworkEntitlements(mode: .none)),
+            Entitlement.audio,
+            Entitlement.peripherals(PeripheralEntitlements(usbBus: true)),
             Entitlement.video(VideoEntitlements()),
         ]
     )
