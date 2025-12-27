@@ -58,10 +58,6 @@ extension OCI {
     struct AvailableDevices: Sendable {
         let devices: [Device]
 
-        init(devices: [Device]) {
-            self.devices = devices
-        }
-
         static func detect() throws -> AvailableDevices {
             let fm = FileManager.default
             let devContents = try fm.contentsOfDirectory(atPath: "/dev")
