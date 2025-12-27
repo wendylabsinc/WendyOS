@@ -462,8 +462,8 @@ jobs:
           # For now, create PKGBUILD with version placeholder updated
 
           # Update wendy PKGBUILD
-          sed -i "s/pkgver=VERSION_PLACEHOLDER/pkgver=${VERSION}/" packaging/arch/wendy/PKGBUILD
-          sed -i "s/pkgver=VERSION_PLACEHOLDER/pkgver=${VERSION}/" packaging/arch/wendy-agent/PKGBUILD
+          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy/PKGBUILD
+          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy-agent/PKGBUILD
 
           # Copy PKGBUILDs to repo directory for publishing
           mkdir -p repo/arch/wendy repo/arch/wendy-agent
@@ -711,7 +711,7 @@ jobs:
           PKGBUILD="${{ matrix.pkgbuild_path }}"
 
           # Update version
-          sed -i "s/pkgver=.*/pkgver=${VERSION}/" "$PKGBUILD"
+          sed -i "s/^_pkgver=.*/_pkgver=${VERSION}/" "$PKGBUILD"
 
           # Update checksums
           sed -i "s/sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.x86_64_sha }}')/" "$PKGBUILD"

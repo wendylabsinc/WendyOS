@@ -1,6 +1,7 @@
 # Maintainer: Wendy Labs Inc. <support@wendy.sh>
 pkgname=wendy
-pkgver=VERSION_PLACEHOLDER
+_pkgver=VERSION_PLACEHOLDER
+pkgver=${_pkgver//-/_}
 pkgrel=1
 pkgdesc="Wendy CLI - Remote device debugging and deployment for Raspberry Pi, NVIDIA Jetson, and other Linux devices"
 arch=('x86_64' 'aarch64')
@@ -9,8 +10,8 @@ license=('custom:proprietary')
 provides=('wendy')
 conflicts=('wendy-git')
 
-source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${pkgver}/wendy-cli-linux-static-musl-x86_64-${pkgver}.tar.gz")
-source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${pkgver}/wendy-cli-linux-static-musl-aarch64-${pkgver}.tar.gz")
+source_x86_64=("${pkgname}-${_pkgver}-x86_64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${_pkgver}/wendy-cli-linux-static-musl-x86_64-${_pkgver}.tar.gz")
+source_aarch64=("${pkgname}-${_pkgver}-aarch64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${_pkgver}/wendy-cli-linux-static-musl-aarch64-${_pkgver}.tar.gz")
 
 # Checksums will be updated by CI
 sha256sums_x86_64=('SKIP')
