@@ -38,6 +38,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
     case video(VideoEntitlements)
     case gpu(GPUEntitlements)
     case audio
+    case peripherals(PeripheralEntitlements)
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -57,6 +58,9 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .gpu(let entitlement):
             try container.encode(EntitlementType.gpu, forKey: .type)
             try entitlement.encode(to: encoder)
+        case .peripherals(let entitlement):
+            try container.encode(EntitlementType.peripherals, forKey: .type)
+            try entitlement.encode(to: encoder)
         }
     }
 
@@ -75,6 +79,8 @@ public enum Entitlement: Codable, Sendable, Hashable {
             self = .gpu(try GPUEntitlements(from: decoder))
         case .audio:
             self = .audio
+        case .peripherals:
+            self = .peripherals(try PeripheralEntitlements(from: decoder))
         }
     }
 
@@ -89,6 +95,7 @@ public enum EntitlementType: String, Codable, CaseIterable, ExpressibleByArgumen
     case audio
     case bluetooth
     case gpu
+    case peripherals
 }
 
 public struct BluetoothEntitlements: Codable, Sendable, Hashable {
@@ -126,4 +133,31 @@ public struct NetworkEntitlements: Codable, Sendable, Hashable {
 public enum NetworkMode: String, Codable, Sendable, Hashable {
     case host
     case none
+}
+
+public struct PeripheralEntitlements: Codable, Sendable, Hashable {
+    public let gpio: Bool
+    public let spi: Bool
+    public let i2c: Bool
+    public let usbSerial: Bool
+    public let usbBus: Bool
+
+    public init(
+        gpio: Bool = true,
+        spi: Bool = true,
+        i2c: Bool = true,
+        usbSerial: Bool = true,
+        usbBus: Bool = false
+    ) {
+        self.gpio = gpio
+        self.spi = spi
+        self.i2c = i2c
+        self.usbSerial = usbSerial
+        self.usbBus = usbBus
+    }
+
+    /// Convenience initializer for all peripherals enabled
+    public static var all: PeripheralEntitlements {
+        PeripheralEntitlements(gpio: true, spi: true, i2c: true, usbSerial: true, usbBus: true)
+    }
 }

@@ -280,6 +280,98 @@ extension OCI {
                     didSetDeviceCapabilities = true
                     self.setDeviceCapabilities(appName: appName)
                 }
+
+            case .peripherals(let peripherals):
+                logger.info(
+                    "Peripherals entitlement detected",
+                    metadata: [
+                        "gpio": .stringConvertible(peripherals.gpio),
+                        "spi": .stringConvertible(peripherals.spi),
+                        "i2c": .stringConvertible(peripherals.i2c),
+                        "usbSerial": .stringConvertible(peripherals.usbSerial),
+                        "usbBus": .stringConvertible(peripherals.usbBus),
+                    ]
+                )
+
+                if !didSetDeviceCapabilities {
+                    didSetDeviceCapabilities = true
+                    self.setDeviceCapabilities(appName: appName)
+                }
+
+                // GPIO access (major 254: /dev/gpiochip*)
+                if peripherals.gpio {
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 254, access: "rwm")
+                    )
+                    // Add gpio group (gid 997 on Jetson/Ubuntu) for GPIO access
+                    if !self.process.user.additionalGids.contains(997) {
+                        self.process.user.additionalGids.append(997)
+                        logger.debug("Added gpio group (gid 997) for GPIO access")
+                    }
+                }
+
+                // SPI access (major 153: /dev/spidev*)
+                if peripherals.spi {
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 153, access: "rwm")
+                    )
+                    // Add spi group (gid 999 on Jetson/Ubuntu) for SPI access
+                    if !self.process.user.additionalGids.contains(999) {
+                        self.process.user.additionalGids.append(999)
+                        logger.debug("Added spi group (gid 999) for SPI access")
+                    }
+                }
+
+                // I2C access (major 89: /dev/i2c-*)
+                if peripherals.i2c {
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 89, access: "rwm")
+                    )
+                    // Add i2c group (gid 998 on Jetson/Ubuntu) for I2C access
+                    if !self.process.user.additionalGids.contains(998) {
+                        self.process.user.additionalGids.append(998)
+                        logger.debug("Added i2c group (gid 998) for I2C access")
+                    }
+                }
+
+                // USB serial devices
+                if peripherals.usbSerial {
+                    // USB serial converters (major 188: /dev/ttyUSB*)
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 188, access: "rwm")
+                    )
+                    // ACM devices (major 166: /dev/ttyACM*)
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 166, access: "rwm")
+                    )
+                    // Add dialout group (gid 20) for serial port access
+                    if !self.process.user.additionalGids.contains(20) {
+                        self.process.user.additionalGids.append(20)
+                        logger.debug("Added dialout group (gid 20) for serial access")
+                    }
+                }
+
+                // Full USB bus access
+                if peripherals.usbBus {
+                    // Mount entire USB bus for full USB device access
+                    self.mounts.append(
+                        .init(
+                            destination: "/dev/bus/usb",
+                            type: "bind",
+                            source: "/dev/bus/usb",
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
+                    // Allow USB devices (major 189: /dev/bus/usb/*)
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 189, access: "rwm")
+                    )
+                    // Add plugdev group (gid 46) for pluggable device access
+                    if !self.process.user.additionalGids.contains(46) {
+                        self.process.user.additionalGids.append(46)
+                        logger.debug("Added plugdev group (gid 46) for USB device access")
+                    }
+                }
             }
         }
     }

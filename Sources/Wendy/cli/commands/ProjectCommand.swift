@@ -148,6 +148,12 @@ struct ListCommand: ModifyProjectCommand {
             print("   No additional configuration")
         case .gpu:
             print("   No additional configuration")
+        case .peripherals(let peripherals):
+            print("   GPIO: \(peripherals.gpio ? "enabled" : "disabled")")
+            print("   SPI: \(peripherals.spi ? "enabled" : "disabled")")
+            print("   I2C: \(peripherals.i2c ? "enabled" : "disabled")")
+            print("   USB Serial: \(peripherals.usbSerial ? "enabled" : "disabled")")
+            print("   USB Bus: \(peripherals.usbBus ? "enabled" : "disabled")")
         }
     }
 }
@@ -254,6 +260,19 @@ struct AddCommand: ModifyProjectCommand {
                 newEntitlement = .audio
             case .gpu:
                 newEntitlement = .gpu(GPUEntitlements())
+            case .peripherals:
+                let usbBus = Noora().yesOrNoChoicePrompt(
+                    question: TerminalText("Do you want full USB bus access (/dev/bus/usb)?")
+                )
+                newEntitlement = .peripherals(
+                    PeripheralEntitlements(
+                        gpio: true,
+                        spi: true,
+                        i2c: true,
+                        usbSerial: true,
+                        usbBus: usbBus
+                    )
+                )
             }
         }
 
@@ -308,6 +327,17 @@ struct AddCommand: ModifyProjectCommand {
 
         case .gpu:
             return .gpu(GPUEntitlements())
+
+        case .peripherals:
+            // Mode can be "all" or "default" - "all" enables usbBus
+            let usbBus = mode == "all"
+            return .peripherals(PeripheralEntitlements(
+                gpio: true,
+                spi: true,
+                i2c: true,
+                usbSerial: true,
+                usbBus: usbBus
+            ))
         }
     }
 }
@@ -401,6 +431,8 @@ extension Entitlement {
             return .audio
         case .gpu:
             return .gpu
+        case .peripherals:
+            return .peripherals
         }
     }
 }
