@@ -27,6 +27,24 @@ service WendyAgentService {
     
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
+
+    // List available Bluetooth devices (uses BlueZ)
+    rpc ListBluetoothDevices(ListBluetoothDevicesRequest) returns (ListBluetoothDevicesResponse);
+
+    // Start Bluetooth discovery scan
+    rpc StartBluetoothScan(StartBluetoothScanRequest) returns (StartBluetoothScanResponse);
+
+    // Stop Bluetooth discovery scan
+    rpc StopBluetoothScan(StopBluetoothScanRequest) returns (StopBluetoothScanResponse);
+
+    // Connect to a Bluetooth device
+    rpc ConnectBluetoothDevice(ConnectBluetoothDeviceRequest) returns (ConnectBluetoothDeviceResponse);
+
+    // Disconnect from a Bluetooth device
+    rpc DisconnectBluetoothDevice(DisconnectBluetoothDeviceRequest) returns (DisconnectBluetoothDeviceResponse);
+
+    // Forget (remove) a Bluetooth device
+    rpc ForgetBluetoothDevice(ForgetBluetoothDeviceRequest) returns (ForgetBluetoothDeviceResponse);
 }
 
 message RunContainerRequest {
@@ -235,4 +253,123 @@ message ListHardwareCapabilitiesResponse {
         // Additional properties as key-value pairs
         map<string, string> properties = 4;
     }
+}
+
+// Request message for listing Bluetooth devices
+message ListBluetoothDevicesRequest {
+    // If true, only return paired devices
+    bool paired_only = 1;
+}
+
+// Response message for listing Bluetooth devices
+message ListBluetoothDevicesResponse {
+    // List of discovered Bluetooth devices
+    repeated BluetoothDevice devices = 1;
+
+    // Information about a Bluetooth device
+    message BluetoothDevice {
+        // Device name (e.g., "AirPods Pro")
+        string name = 1;
+
+        // MAC address (e.g., "A4:C3:F0:12:34:56")
+        string address = 2;
+
+        // RSSI signal strength in dBm (e.g., -45)
+        optional int32 rssi = 3;
+
+        // Whether the device is currently paired
+        bool paired = 4;
+
+        // Whether the device is currently connected
+        bool connected = 5;
+
+        // Device type/class (e.g., "audio-headset", "keyboard", "mouse")
+        string device_type = 6;
+
+        // Whether the device is trusted
+        bool trusted = 7;
+
+        // Device icon hint from BlueZ (e.g., "audio-headphones", "input-keyboard")
+        optional string icon = 8;
+    }
+}
+
+// Request message for starting Bluetooth scan
+message StartBluetoothScanRequest {
+    // Scan timeout in seconds (0 = indefinite until StopBluetoothScan is called)
+    uint32 timeout_seconds = 1;
+}
+
+// Response message for starting Bluetooth scan
+message StartBluetoothScanResponse {
+    // Whether the scan was started successfully
+    bool success = 1;
+
+    // Optional error message if scan failed to start
+    optional string error_message = 2;
+}
+
+// Request message for stopping Bluetooth scan
+message StopBluetoothScanRequest {
+    // Empty request - no parameters needed
+}
+
+// Response message for stopping Bluetooth scan
+message StopBluetoothScanResponse {
+    // Whether the scan was stopped successfully
+    bool success = 1;
+
+    // Optional error message if stopping scan failed
+    optional string error_message = 2;
+}
+
+// Request message for connecting to a Bluetooth device
+message ConnectBluetoothDeviceRequest {
+    // MAC address of the device to connect to (e.g., "A4:C3:F0:12:34:56")
+    string address = 1;
+
+    // If true, pair the device before connecting
+    bool pair = 2;
+
+    // If true, trust the device before connecting
+    bool trust = 3;
+}
+
+// Response message for connecting to a Bluetooth device
+message ConnectBluetoothDeviceResponse {
+    // Whether the connection was successful
+    bool success = 1;
+
+    // Optional error message if connection failed
+    optional string error_message = 2;
+}
+
+// Request message for disconnecting from a Bluetooth device
+message DisconnectBluetoothDeviceRequest {
+    // MAC address of the device to disconnect from
+    string address = 1;
+}
+
+// Response message for disconnecting from a Bluetooth device
+message DisconnectBluetoothDeviceResponse {
+    // Whether the disconnection was successful
+    bool success = 1;
+
+    // Optional error message if disconnection failed
+    optional string error_message = 2;
+}
+
+// Request message for forgetting a Bluetooth device
+message ForgetBluetoothDeviceRequest {
+    // MAC address of the device to forget
+    string address = 1;
+}
+
+// Response message for forgetting a Bluetooth device
+message ForgetBluetoothDeviceResponse {
+    // Whether the removal was successful
+    bool success = 1;
+
+    // Optional error message if removal failed
+    optional string error_message = 2;
 }

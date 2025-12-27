@@ -561,4 +561,215 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
         }
     }
+
+    // MARK: - Bluetooth Methods (BlueZ)
+
+    func listBluetoothDevices(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListBluetoothDevicesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListBluetoothDevicesResponse>
+    {
+        logger.info(
+            "Listing Bluetooth devices",
+            metadata: ["pairedOnly": "\(request.message.pairedOnly)"]
+        )
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            let devices = try await bluetoothManager.listDevices(
+                pairedOnly: request.message.pairedOnly
+            )
+
+            logger.info("Found \(devices.count) Bluetooth devices")
+
+            return ServerResponse(
+                message: .with { response in
+                    response.devices = devices.map { device in
+                        .with { proto in
+                            proto.name = device.name
+                            proto.address = device.address
+                            if let rssi = device.rssi {
+                                proto.rssi = Int32(rssi)
+                            }
+                            proto.paired = device.paired
+                            proto.connected = device.connected
+                            proto.trusted = device.trusted
+                            proto.deviceType = device.deviceType
+                            if let icon = device.icon {
+                                proto.icon = icon
+                            }
+                        }
+                    }
+                }
+            )
+        } catch {
+            logger.error("Failed to list Bluetooth devices: \(error)")
+            throw RPCError(
+                code: .internalError,
+                message: "Failed to list Bluetooth devices: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    func startBluetoothScan(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StartBluetoothScanRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_StartBluetoothScanResponse> {
+        logger.info(
+            "Starting Bluetooth scan",
+            metadata: ["timeout": "\(request.message.timeoutSeconds)"]
+        )
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            try await bluetoothManager.startScan(timeoutSeconds: request.message.timeoutSeconds)
+
+            return ServerResponse(
+                message: .with { $0.success = true }
+            )
+        } catch {
+            logger.error("Failed to start Bluetooth scan: \(error)")
+            return ServerResponse(
+                message: .with {
+                    $0.success = false
+                    $0.errorMessage = error.localizedDescription
+                }
+            )
+        }
+    }
+
+    func stopBluetoothScan(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StopBluetoothScanRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_StopBluetoothScanResponse> {
+        logger.info("Stopping Bluetooth scan")
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            try await bluetoothManager.stopScan()
+
+            return ServerResponse(
+                message: .with { $0.success = true }
+            )
+        } catch {
+            logger.error("Failed to stop Bluetooth scan: \(error)")
+            return ServerResponse(
+                message: .with {
+                    $0.success = false
+                    $0.errorMessage = error.localizedDescription
+                }
+            )
+        }
+    }
+
+    func connectBluetoothDevice(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothDeviceRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothDeviceResponse>
+    {
+        let address = request.message.address
+        logger.info(
+            "Connecting to Bluetooth device",
+            metadata: [
+                "address": "\(address)",
+                "pair": "\(request.message.pair)",
+                "trust": "\(request.message.trust)",
+            ]
+        )
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            if request.message.pair {
+                try await bluetoothManager.pair(address: address)
+            }
+            if request.message.trust {
+                try await bluetoothManager.trust(address: address)
+            }
+            try await bluetoothManager.connect(address: address)
+
+            logger.info(
+                "Successfully connected to Bluetooth device",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(
+                message: .with { $0.success = true }
+            )
+        } catch {
+            logger.error(
+                "Failed to connect to Bluetooth device: \(error)",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(
+                message: .with {
+                    $0.success = false
+                    $0.errorMessage = error.localizedDescription
+                }
+            )
+        }
+    }
+
+    func disconnectBluetoothDevice(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DisconnectBluetoothDeviceRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothDeviceResponse>
+    {
+        let address = request.message.address
+        logger.info("Disconnecting from Bluetooth device", metadata: ["address": "\(address)"])
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            try await bluetoothManager.disconnect(address: address)
+
+            logger.info(
+                "Successfully disconnected from Bluetooth device",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(
+                message: .with { $0.success = true }
+            )
+        } catch {
+            logger.error(
+                "Failed to disconnect from Bluetooth device: \(error)",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(
+                message: .with {
+                    $0.success = false
+                    $0.errorMessage = error.localizedDescription
+                }
+            )
+        }
+    }
+
+    func forgetBluetoothDevice(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothDeviceRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothDeviceResponse>
+    {
+        let address = request.message.address
+        logger.info("Forgetting Bluetooth device", metadata: ["address": "\(address)"])
+
+        do {
+            let bluetoothManager = BluetoothManager(logger: logger)
+            try await bluetoothManager.forget(address: address)
+
+            logger.info("Successfully forgot Bluetooth device", metadata: ["address": "\(address)"])
+            return ServerResponse(
+                message: .with { $0.success = true }
+            )
+        } catch {
+            logger.error(
+                "Failed to forget Bluetooth device: \(error)",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(
+                message: .with {
+                    $0.success = false
+                    $0.errorMessage = error.localizedDescription
+                }
+            )
+        }
+    }
 }
