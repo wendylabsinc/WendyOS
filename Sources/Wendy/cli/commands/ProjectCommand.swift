@@ -331,13 +331,15 @@ struct AddCommand: ModifyProjectCommand {
         case .peripherals:
             // Mode can be "all" or "default" - "all" enables usbBus
             let usbBus = mode == "all"
-            return .peripherals(PeripheralEntitlements(
-                gpio: true,
-                spi: true,
-                i2c: true,
-                usbSerial: true,
-                usbBus: usbBus
-            ))
+            return .peripherals(
+                PeripheralEntitlements(
+                    gpio: true,
+                    spi: true,
+                    i2c: true,
+                    usbSerial: true,
+                    usbBus: usbBus
+                )
+            )
         }
     }
 }
