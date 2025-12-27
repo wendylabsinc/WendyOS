@@ -57,7 +57,7 @@ jobs:
         include:
           - os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
             container: swift:6.2.3
-          - os: macos-15
+          - os: macos-26
             xcode-select: /Applications/Xcode_26.0.app
 
     runs-on: ${{ matrix.os }}

@@ -110,7 +110,7 @@ jobs:
             swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy
           - artifact-name: wendy-cli-macos-arm64
-            os: macos-15
+            os: macos-26
             xcode-select: /Applications/Xcode_26.0.app
             product: wendy
 
