@@ -55,9 +55,24 @@ extension OCI {
         )
     }
 
+    struct AvailableDevices: Sendable {
+        let devices: [String]
+
+        init(devices: [String]) {
+            self.devices = devices
+        }
+
+        static func detect() throws -> AvailableDevices {
+            let fm = FileManager.default
+            let devContents = try fm.contentsOfDirectory(atPath: "/dev")
+            return AvailableDevices(devices: devContents)
+        }
+    }
+
     mutating func applyEntitlements(
         entitlements: [Entitlement],
-        appName: String
+        appName: String,
+        availableDevices: AvailableDevices
     ) {
         let logger = Logger(label: #file)
         logger.debug(
@@ -251,79 +266,72 @@ extension OCI {
                     self.setDeviceCapabilities(appName: appName)
                 }
             case .video(let video):
-                let fm = FileManager.default
-
                 // Find all video devices in /dev
-                do {
-                    let devContents = try fm.contentsOfDirectory(atPath: "/dev")
-                    let videoDevices = devContents.filter { device in
-                        guard device.hasPrefix("video") else {
-                            return false
-                        }
-
-                        switch video.mode {
-                        case .all:
-                            return true
-                        case .allowlist:
-                            return video.allowlist.contains { allowed in
-                                // Strip `/dev/` prefix for ease of use
-                                return allowed.replacingOccurrences(of: "/dev/", with: "") == device
-                            }
-                        }
-                    }.sorted()
-
-                    for device in videoDevices {
-                        let devicePath = "/dev/\(device)"
-
-                        // Get device info using stat to find major/minor numbers
-                        var statInfo = stat()
-                        guard stat(devicePath, &statInfo) == 0 else { continue }
-
-                        // Extract major/minor numbers from st_rdev
-                        // On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & ~0xff)
-                        let rdev = UInt64(statInfo.st_rdev)
-                        let deviceMajor = Int((rdev >> 8) & 0xfff)
-                        let deviceMinor = Int((rdev & 0xff) | ((rdev >> 12) & ~0xff))
-
-                        self.linux.devices.append(
-                            Device(
-                                path: devicePath,
-                                type: "c",
-                                major: deviceMajor,
-                                minor: deviceMinor,
-                                fileMode: 0o666,
-                                uid: 0,
-                                gid: 0
-                            )
-                        )
-
-                        self.mounts.append(
-                            .init(
-                                destination: devicePath,
-                                type: "bind",
-                                source: devicePath,
-                                options: ["rbind", "nosuid", "noexec"]
-                            )
-                        )
+                let videoDevices = availableDevices.devices.filter { device in
+                    guard device.hasPrefix("video") else {
+                        return false
                     }
 
-                    if !videoDevices.isEmpty {
-                        // Allow all video4linux devices (major 81)
-                        self.linux.resources?.devices?.append(
-                            DeviceAllowance(allow: true, type: "c", major: 81, access: "rw")
-                        )
-
-                        if !didSetDeviceCapabilities {
-                            didSetDeviceCapabilities = true
-                            self.setDeviceCapabilities(appName: appName)
+                    switch video.mode {
+                    case .all:
+                        return true
+                    case .allowlist:
+                        return video.allowlist.contains { allowed in
+                            // Strip `/dev/` prefix for ease of use
+                            return allowed.replacingOccurrences(of: "/dev/", with: "") == device
                         }
-                    } else {
-                        logger.warning(
-                            "Video entitlement requested but no /dev/video* devices found"
-                        )
                     }
-                } catch {
-                    logger.warning("Failed to enumerate /dev for video devices: \(error)")
+                }.sorted()
+
+                for device in videoDevices {
+                    let devicePath = "/dev/\(device)"
+
+                    // Get device info using stat to find major/minor numbers
+                    var statInfo = stat()
+                    guard stat(devicePath, &statInfo) == 0 else { continue }
+
+                    // Extract major/minor numbers from st_rdev
+                    // On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & ~0xff)
+                    let rdev = UInt64(statInfo.st_rdev)
+                    let deviceMajor = Int((rdev >> 8) & 0xfff)
+                    let deviceMinor = Int((rdev & 0xff) | ((rdev >> 12) & ~0xff))
+
+                    self.linux.devices.append(
+                        Device(
+                            path: devicePath,
+                            type: "c",
+                            major: deviceMajor,
+                            minor: deviceMinor,
+                            fileMode: 0o666,
+                            uid: 0,
+                            gid: 0
+                        )
+                    )
+
+                    self.mounts.append(
+                        .init(
+                            destination: devicePath,
+                            type: "bind",
+                            source: devicePath,
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
+                }
+
+                if !videoDevices.isEmpty {
+                    // Allow all video4linux devices (major 81)
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 81, access: "rw")
+                    )
+
+                    if !didSetDeviceCapabilities {
+                        didSetDeviceCapabilities = true
+                        self.setDeviceCapabilities(appName: appName)
+                    }
+                } else {
+                    logger.warning(
+                        "Video entitlement requested but no /dev/video* devices found"
+                    )
                 }
             }
         }
