@@ -22,7 +22,7 @@ struct BluetoothManager: Sendable {
     func listDevices(pairedOnly: Bool) async throws -> [BluetoothDeviceInfo] {
         // First, get the list of device addresses
         let devicesOutput = try await runBluetoothctl(["devices"])
-        let deviceAddresses = parseDeviceAddresses(from: devicesOutput)
+        let deviceAddresses = Self.parseDeviceAddresses(from: devicesOutput)
 
         var devices: [BluetoothDeviceInfo] = []
 
@@ -42,7 +42,7 @@ struct BluetoothManager: Sendable {
     /// Gets detailed information about a specific device
     private func getDeviceInfo(address: String) async throws -> BluetoothDeviceInfo? {
         let infoOutput = try await runBluetoothctl(["info", address])
-        return parseDeviceInfo(from: infoOutput, address: address)
+        return Self.parseDeviceInfo(from: infoOutput, address: address)
     }
 
     /// Starts Bluetooth discovery scan
@@ -194,7 +194,7 @@ struct BluetoothManager: Sendable {
 
     /// Parses device addresses from "bluetoothctl devices" output
     /// Format: "Device XX:XX:XX:XX:XX:XX DeviceName"
-    private func parseDeviceAddresses(from output: String) -> [String] {
+    static func parseDeviceAddresses(from output: String) -> [String] {
         var addresses: [String] = []
         let lines = output.components(separatedBy: .newlines)
 
@@ -212,7 +212,7 @@ struct BluetoothManager: Sendable {
     }
 
     /// Parses device info from "bluetoothctl info <address>" output
-    private func parseDeviceInfo(from output: String, address: String) -> BluetoothDeviceInfo? {
+    static func parseDeviceInfo(from output: String, address: String) -> BluetoothDeviceInfo? {
         var name = "Unknown"
         var rssi: Int?
         var paired = false
