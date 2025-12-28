@@ -47,6 +47,19 @@ service WendyAgentService {
     rpc ForgetBluetoothDevice(ForgetBluetoothDeviceRequest) returns (ForgetBluetoothDeviceResponse);
 }
 
+message ResponseStatus {
+    enum Level {
+        LEVEL_UNSPECIFIED = 0;
+        SUCCESS = 1;
+        INFO = 2;
+        WARNING = 3;
+        ERROR = 4;
+    }
+
+    Level level = 1;
+    string message = 2;
+}
+
 message RunContainerRequest {
     oneof request_type {
         /// The first message in the stream MUST be the header.
@@ -195,6 +208,9 @@ message ConnectToWiFiResponse {
     
     // Optional error message if connection failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for getting WiFi status
@@ -212,6 +228,9 @@ message GetWiFiStatusResponse {
     
     // Optional error message if status check failed
     optional string error_message = 3;
+
+    // Status details for the operation
+    optional ResponseStatus status = 4;
 }
 
 // Request message for disconnecting from WiFi
@@ -226,6 +245,9 @@ message DisconnectWiFiResponse {
     
     // Optional error message if disconnection failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for listing hardware capabilities
@@ -307,6 +329,9 @@ message StartBluetoothScanResponse {
 
     // Optional error message if scan failed to start
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for stopping Bluetooth scan
@@ -321,6 +346,9 @@ message StopBluetoothScanResponse {
 
     // Optional error message if stopping scan failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for connecting to a Bluetooth device
@@ -342,6 +370,9 @@ message ConnectBluetoothDeviceResponse {
 
     // Optional error message if connection failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for disconnecting from a Bluetooth device
@@ -357,6 +388,9 @@ message DisconnectBluetoothDeviceResponse {
 
     // Optional error message if disconnection failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }
 
 // Request message for forgetting a Bluetooth device
@@ -372,4 +406,7 @@ message ForgetBluetoothDeviceResponse {
 
     // Optional error message if removal failed
     optional string error_message = 2;
+
+    // Status details for the operation
+    optional ResponseStatus status = 3;
 }

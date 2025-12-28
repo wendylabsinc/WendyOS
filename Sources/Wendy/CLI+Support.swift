@@ -2,6 +2,7 @@ import Foundation
 import GRPCCore
 import NIOCore
 import Noora
+import WendyAgentGRPC
 
 public func withErrorTracking(
     _ body: @Sendable () async throws -> Void
@@ -21,6 +22,63 @@ public func withErrorTracking(
             )
         )
         throw error
+    }
+}
+
+func responseStatusLevelDescription(
+    _ level: Wendy_Agent_Services_V1_ResponseStatus.Level
+) -> String {
+    switch level {
+    case .success:
+        return "success"
+    case .info:
+        return "info"
+    case .warning:
+        return "warning"
+    case .error:
+        return "error"
+    case .unspecified:
+        return "unspecified"
+    case .UNRECOGNIZED:
+        return "unrecognized"
+    @unknown default:
+        return "unknown"
+    }
+}
+
+func emitResponseStatusIfNeeded(
+    _ status: Wendy_Agent_Services_V1_ResponseStatus?,
+    showSuccess: Bool = false,
+    showError: Bool = false
+) {
+    guard let status else {
+        return
+    }
+
+    let trimmed = status.message.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return
+    }
+
+    switch status.level {
+    case .success:
+        if showSuccess {
+            Noora().success(.alert(.init(stringLiteral: trimmed)))
+        }
+    case .info:
+        Noora().info(.alert(.init(stringLiteral: trimmed)))
+    case .warning:
+        Noora().warning(.alert(.init(stringLiteral: trimmed)))
+    case .error:
+        if showError {
+            Noora().error(.alert(.init(stringLiteral: trimmed)))
+        }
+    case .unspecified:
+        break
+    case .UNRECOGNIZED:
+        break
+    @unknown default:
+        break
     }
 }
 

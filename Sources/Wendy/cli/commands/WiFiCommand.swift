@@ -146,12 +146,17 @@ struct WiFiCommand: AsyncParsableCommand {
                     struct Response: Codable {
                         let success: Bool
                         let errorMessage: String?
+                        let statusLevel: String?
+                        let statusMessage: String?
                     }
 
+                    let status = response.hasStatus ? response.status : nil
                     let responseJSON = try JSONEncoder().encode(
                         Response(
                             success: response.success,
-                            errorMessage: response.hasErrorMessage ? response.errorMessage : nil
+                            errorMessage: response.hasErrorMessage ? response.errorMessage : nil,
+                            statusLevel: status.map { responseStatusLevelDescription($0.level) },
+                            statusMessage: status?.message
                         )
                     )
                     print(String(data: responseJSON, encoding: .utf8)!)
@@ -166,12 +171,22 @@ struct WiFiCommand: AsyncParsableCommand {
                             ssid: ssid,
                             password: password
                         )
+                        if response.success, response.hasStatus {
+                            emitResponseStatusIfNeeded(response.status)
+                        }
                         guard response.success else {
                             struct UnableToConnectToWiFiError: Error {
                                 let errorMessage: String
                             }
 
-                            throw UnableToConnectToWiFiError(errorMessage: response.errorMessage)
+                            let statusMessage = response.hasStatus ? response.status.message : ""
+                            let trimmedStatus = statusMessage.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            )
+                            let errorMessage = response.hasErrorMessage
+                                ? response.errorMessage
+                                : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
+                            throw UnableToConnectToWiFiError(errorMessage: errorMessage)
                         }
                     }
                 }
@@ -218,12 +233,17 @@ struct WiFiCommand: AsyncParsableCommand {
                 let connected: Bool
                 let ssid: String?
                 let errorMessage: String?
+                let statusLevel: String?
+                let statusMessage: String?
             }
 
+            let status = response.hasStatus ? response.status : nil
             let statusInfo = StatusInfo(
                 connected: response.connected,
                 ssid: response.hasSsid ? response.ssid : nil,
-                errorMessage: response.hasErrorMessage ? response.errorMessage : nil
+                errorMessage: response.hasErrorMessage ? response.errorMessage : nil,
+                statusLevel: status.map { responseStatusLevelDescription($0.level) },
+                statusMessage: status?.message
             )
 
             let jsonData = try JSONEncoder().encode(statusInfo)
@@ -243,7 +263,15 @@ struct WiFiCommand: AsyncParsableCommand {
                 print("Status: Disconnected")
             }
 
-            if response.hasErrorMessage {
+            if response.hasStatus {
+                let message = response.status.message.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                if !message.isEmpty {
+                    let level = responseStatusLevelDescription(response.status.level)
+                    print("\(level.capitalized): \(message)")
+                }
+            } else if response.hasErrorMessage {
                 print("Error: \(response.errorMessage)")
             }
         }
@@ -273,10 +301,26 @@ struct WiFiCommand: AsyncParsableCommand {
                 let response = try await agent.disconnectWiFi(request)
 
                 if response.success {
+                    if response.hasStatus {
+                        let message = response.status.message.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+                        if response.status.level == .info, !message.isEmpty {
+                            print(message)
+                            return
+                        }
+                        emitResponseStatusIfNeeded(response.status)
+                    }
                     print("✅ Successfully disconnected from WiFi network")
                 } else {
+                    let statusMessage = response.hasStatus ? response.status.message : ""
+                    let trimmedStatus = statusMessage.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
                     let errorMessage =
-                        response.hasErrorMessage ? response.errorMessage : "Unknown error"
+                        response.hasErrorMessage
+                        ? response.errorMessage
+                        : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                     print("❌ Failed to disconnect: \(errorMessage)")
                 }
             }

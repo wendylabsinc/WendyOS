@@ -159,10 +159,20 @@ struct BluetoothCommand: AsyncParsableCommand {
                         .with { $0.address = targetDevice.address }
                     )
 
+                    if response.hasStatus {
+                        emitResponseStatusIfNeeded(response.status)
+                    }
+
                     if !response.success {
+                        let statusMessage = response.hasStatus ? response.status.message : ""
+                        let trimmedStatus = statusMessage.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
                         throw BluetoothCommandError.disconnectFailed(
                             targetDevice.displayName,
-                            response.hasErrorMessage ? response.errorMessage : "Unknown error"
+                            response.hasErrorMessage
+                                ? response.errorMessage
+                                : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                         )
                     }
                 }
@@ -246,10 +256,20 @@ struct BluetoothCommand: AsyncParsableCommand {
                         .with { $0.address = targetDevice.address }
                     )
 
+                    if response.hasStatus {
+                        emitResponseStatusIfNeeded(response.status)
+                    }
+
                     if !response.success {
+                        let statusMessage = response.hasStatus ? response.status.message : ""
+                        let trimmedStatus = statusMessage.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
                         throw BluetoothCommandError.forgetFailed(
                             targetDevice.displayName,
-                            response.hasErrorMessage ? response.errorMessage : "Unknown error"
+                            response.hasErrorMessage
+                                ? response.errorMessage
+                                : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                         )
                     }
                 }
@@ -332,10 +352,20 @@ struct BluetoothCommand: AsyncParsableCommand {
                         }
                     )
 
+                    if response.hasStatus {
+                        emitResponseStatusIfNeeded(response.status)
+                    }
+
                     if !response.success {
+                        let statusMessage = response.hasStatus ? response.status.message : ""
+                        let trimmedStatus = statusMessage.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
                         throw BluetoothCommandError.connectionFailed(
                             targetDisplayName,
-                            response.hasErrorMessage ? response.errorMessage : "Unknown error"
+                            response.hasErrorMessage
+                                ? response.errorMessage
+                                : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                         )
                     }
                 }
@@ -351,11 +381,16 @@ struct BluetoothCommand: AsyncParsableCommand {
             // Start scanning
             Noora().info("Starting Bluetooth scan...")
             let scanResponse = try await agent.startBluetoothScan(.with { $0.timeoutSeconds = 0 })
+            if scanResponse.hasStatus {
+                emitResponseStatusIfNeeded(scanResponse.status)
+            }
             if !scanResponse.success {
+                let statusMessage = scanResponse.hasStatus ? scanResponse.status.message : ""
+                let trimmedStatus = statusMessage.trimmingCharacters(in: .whitespacesAndNewlines)
                 throw BluetoothCommandError.scanFailed(
                     scanResponse.hasErrorMessage
                         ? scanResponse.errorMessage
-                        : "Unknown error"
+                        : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                 )
             }
 
@@ -367,49 +402,58 @@ struct BluetoothCommand: AsyncParsableCommand {
                 signal(SIGINT, SIG_DFL)
             }
 
-            // Helper to stop scan - must be awaited before returning
-            @Sendable func stopScan() async {
-                _ = try? await agent.stopBluetoothScan(.init())
+            // Helper to stop scan with cancellation-aware fallback
+            @Sendable func stopScanBestEffort() async {
+                if Task.isCancelled {
+                    Task.detached {
+                        _ = try? await agent.stopBluetoothScan(.init())
+                    }
+                    return
+                }
+
+                do {
+                    _ = try await agent.stopBluetoothScan(.init())
+                } catch is CancellationError {
+                    Task.detached {
+                        _ = try? await agent.stopBluetoothScan(.init())
+                    }
+                } catch {
+                    // Best-effort cleanup; ignore stop failures.
+                }
             }
 
             let scanner = DiscoveryScanner(source: agent)
 
-            // Wait for devices to appear (with timeout)
-            var initial: TableData?
-            for attempt in 1...10 {
-                if let data = try await scanner.makeAsyncIterator().next(), !data.rows.isEmpty {
-                    initial = data
-                    break
-                }
-                if attempt < 10 {
-                    Noora().info("Scanning for devices... (\(attempt * 2)s)")
-                }
-            }
-
-            guard let tableData = initial else {
-                // Stop scan before throwing
-                await stopScan()
-                throw BluetoothCommandError.noDevicesFound
-            }
-
-            let index: Int
             do {
-                index = try await Noora().selectableTable(
+                // Wait for devices to appear (with timeout)
+                var initial: TableData?
+                for attempt in 1...10 {
+                    if let data = try await scanner.makeAsyncIterator().next(), !data.rows.isEmpty {
+                        initial = data
+                        break
+                    }
+                    if attempt < 10 {
+                        Noora().info("Scanning for devices... (\(attempt * 2)s)")
+                    }
+                }
+
+                guard let tableData = initial else {
+                    throw BluetoothCommandError.noDevicesFound
+                }
+
+                let index = try await Noora().selectableTable(
                     tableData,
                     updates: scanner,
                     pageSize: pageSize
                 )
+
+                let devices = await scanner.currentDevices
+                await stopScanBestEffort()
+                return devices[index]
             } catch {
-                // Stop scan before rethrowing
-                await stopScan()
+                await stopScanBestEffort()
                 throw error
             }
-
-            // Stop scan before returning
-            await stopScan()
-
-            let devices = await scanner.currentDevices
-            return devices[index]
         }
 
         private func installSigintHandler(

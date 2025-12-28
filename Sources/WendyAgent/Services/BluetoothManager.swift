@@ -1,7 +1,6 @@
 import Foundation
 import Logging
 import Subprocess
-import Synchronization
 
 /// Manages Bluetooth operations using BlueZ (bluetoothctl)
 actor BluetoothManager {
@@ -10,6 +9,10 @@ actor BluetoothManager {
 
     /// Current scan task, if any
     private var scanTask: Task<Void, Never>?
+    /// Current timeout task, if any
+    private var scanTimeoutTask: Task<Void, Never>?
+    /// Monotonic scan generation used to ignore stale timeouts
+    private var scanGeneration: UInt64 = 0
 
     init(logger: Logger) {
         self.logger = logger
@@ -24,6 +27,16 @@ actor BluetoothManager {
         let trusted: Bool
         let deviceType: String
         let icon: String?
+    }
+
+    struct ScanStartResult: Sendable {
+        let restartedExistingScan: Bool
+        let superseded: Bool
+    }
+
+    struct ScanStopResult: Sendable {
+        let hadActiveScan: Bool
+        let superseded: Bool
     }
 
     /// Run loop for managing Bluetooth operations in a structured way.
@@ -69,12 +82,38 @@ actor BluetoothManager {
     }
 
     /// Starts Bluetooth discovery scan
-    func startScan(timeoutSeconds: UInt32) async throws {
+    func startScan(timeoutSeconds: UInt32) async throws -> ScanStartResult {
         // Power on the adapter first
         try await powerOn()
 
-        // Cancel any existing scan before starting a new one
-        scanTask?.cancel()
+        // Invalidate any in-flight timeout and scan tasks
+        scanGeneration &+= 1
+        let scanID = scanGeneration
+        cancelTimeoutTask()
+
+        let hadExistingScan = scanTask != nil
+        let priorScanTask = scanTask
+        scanTask = nil
+        priorScanTask?.cancel()
+        if let priorScanTask {
+            logger.warning("Bluetooth scan already running; restarting scan")
+            await priorScanTask.value
+        }
+
+        // If another start/stop happened while we awaited, skip starting a stale scan
+        guard scanID == scanGeneration else {
+            logger.debug(
+                "Bluetooth scan start superseded by newer request",
+                metadata: [
+                    "scan_id": "\(scanID)",
+                    "current_scan_id": "\(scanGeneration)",
+                ]
+            )
+            return ScanStartResult(
+                restartedExistingScan: hadExistingScan,
+                superseded: true
+            )
+        }
 
         // bluetoothctl scan needs a timeout in non-interactive mode to actually discover devices.
         let effectiveTimeoutSeconds =
@@ -107,10 +146,10 @@ actor BluetoothManager {
 
         // If a timeout is specified, schedule stopping the scan
         if timeoutSeconds > 0 {
-            Task { [logger] in
+            scanTimeoutTask = Task { [logger] in
                 do {
                     try await Task.sleep(for: .seconds(Int(timeoutSeconds)))
-                    try await self.stopScan()
+                    await self.stopScanIfCurrent(scanID: scanID)
                 } catch is CancellationError {
                     // Expected if stopped before timeout
                 } catch {
@@ -120,17 +159,97 @@ actor BluetoothManager {
                     )
                 }
             }
+        } else {
+            scanTimeoutTask = nil
         }
+
+        return ScanStartResult(
+            restartedExistingScan: hadExistingScan,
+            superseded: false
+        )
     }
 
     /// Stops Bluetooth discovery scan
-    func stopScan() async throws {
-        // Cancel the scan task first
-        scanTask?.cancel()
+    func stopScan() async throws -> ScanStopResult {
+        try await stopScan(reason: .external)
+    }
+
+    private enum StopReason {
+        case external
+        case timeout
+    }
+
+    private func stopScan(reason: StopReason) async throws -> ScanStopResult {
+        scanGeneration &+= 1
+        let stopID = scanGeneration
+
+        if reason == .external {
+            cancelTimeoutTask()
+        } else {
+            scanTimeoutTask = nil
+        }
+
+        let hadActiveScan = scanTask != nil
+        let priorScanTask = scanTask
         scanTask = nil
+        priorScanTask?.cancel()
+        if let priorScanTask {
+            await priorScanTask.value
+        }
+
+        // If another scan started while we awaited, do not shut it off
+        guard stopID == scanGeneration else {
+            logger.debug(
+                "Bluetooth scan stop superseded by newer request",
+                metadata: [
+                    "stop_id": "\(stopID)",
+                    "current_scan_id": "\(scanGeneration)",
+                ]
+            )
+            return ScanStopResult(
+                hadActiveScan: hadActiveScan,
+                superseded: true
+            )
+        }
+
+        if !hadActiveScan {
+            logger.debug("Stop scan requested without an active scan")
+        }
 
         // Then tell bluetoothctl to stop scanning
         _ = try await runBluetoothctl(["scan", "off"])
+
+        return ScanStopResult(
+            hadActiveScan: hadActiveScan,
+            superseded: false
+        )
+    }
+
+    private func stopScanIfCurrent(scanID: UInt64) async {
+        guard scanID == scanGeneration else {
+            logger.debug(
+                "Timeout stop ignored due to newer scan",
+                metadata: [
+                    "timeout_scan_id": "\(scanID)",
+                    "current_scan_id": "\(scanGeneration)",
+                ]
+            )
+            return
+        }
+
+        do {
+            _ = try await stopScan(reason: .timeout)
+        } catch {
+            logger.warning(
+                "Failed to stop bluetooth scan after timeout",
+                metadata: ["error": "\(error)"]
+            )
+        }
+    }
+
+    private func cancelTimeoutTask() {
+        scanTimeoutTask?.cancel()
+        scanTimeoutTask = nil
     }
 
     /// Connects to a Bluetooth device by MAC address
