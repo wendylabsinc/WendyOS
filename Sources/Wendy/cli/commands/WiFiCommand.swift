@@ -183,7 +183,8 @@ struct WiFiCommand: AsyncParsableCommand {
                             let trimmedStatus = statusMessage.trimmingCharacters(
                                 in: .whitespacesAndNewlines
                             )
-                            let errorMessage = response.hasErrorMessage
+                            let errorMessage =
+                                response.hasErrorMessage
                                 ? response.errorMessage
                                 : (!trimmedStatus.isEmpty ? trimmedStatus : "Unknown error")
                             throw UnableToConnectToWiFiError(errorMessage: errorMessage)
