@@ -361,13 +361,15 @@ struct BluetoothCommand: AsyncParsableCommand {
 
             let signalSource = installSigintHandler(agent: agent, logger: logger)
 
+            // Use defer only for synchronous cleanup (signal handling)
             defer {
-                // Stop scanning when done
                 signalSource.cancel()
                 signal(SIGINT, SIG_DFL)
-                Task {
-                    _ = try? await agent.stopBluetoothScan(.init())
-                }
+            }
+
+            // Helper to stop scan - must be awaited before returning
+            @Sendable func stopScan() async {
+                _ = try? await agent.stopBluetoothScan(.init())
             }
 
             let scanner = DiscoveryScanner(source: agent)
@@ -385,14 +387,26 @@ struct BluetoothCommand: AsyncParsableCommand {
             }
 
             guard let tableData = initial else {
+                // Stop scan before throwing
+                await stopScan()
                 throw BluetoothCommandError.noDevicesFound
             }
 
-            let index = try await Noora().selectableTable(
-                tableData,
-                updates: scanner,
-                pageSize: pageSize
-            )
+            let index: Int
+            do {
+                index = try await Noora().selectableTable(
+                    tableData,
+                    updates: scanner,
+                    pageSize: pageSize
+                )
+            } catch {
+                // Stop scan before rethrowing
+                await stopScan()
+                throw error
+            }
+
+            // Stop scan before returning
+            await stopScan()
 
             let devices = await scanner.currentDevices
             return devices[index]

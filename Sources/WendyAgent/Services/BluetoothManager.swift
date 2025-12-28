@@ -1,11 +1,19 @@
 import Foundation
 import Logging
 import Subprocess
+import Synchronization
 
 /// Manages Bluetooth operations using BlueZ (bluetoothctl)
-struct BluetoothManager: Sendable {
+actor BluetoothManager {
     let logger: Logger
     private static let defaultScanTimeoutSeconds: UInt32 = 20
+
+    /// Current scan task, if any
+    private var scanTask: Task<Void, Never>?
+
+    init(logger: Logger) {
+        self.logger = logger
+    }
 
     struct BluetoothDeviceInfo: Sendable {
         let name: String
@@ -16,6 +24,21 @@ struct BluetoothManager: Sendable {
         let trusted: Bool
         let deviceType: String
         let icon: String?
+    }
+
+    /// Run loop for managing Bluetooth operations in a structured way.
+    /// Call this from a task group to enable proper lifecycle management.
+    /// The run loop continues until cancelled.
+    func run() async throws {
+        // The run loop keeps the actor alive and allows for structured concurrency.
+        // When cancelled, any active scan task will be cancelled as well.
+        defer {
+            scanTask?.cancel()
+            scanTask = nil
+        }
+
+        // Wait indefinitely until cancelled
+        try await Task.sleep(for: .seconds(Int64.max))
     }
 
     /// Lists Bluetooth devices using bluetoothctl
@@ -50,11 +73,15 @@ struct BluetoothManager: Sendable {
         // Power on the adapter first
         try await powerOn()
 
+        // Cancel any existing scan before starting a new one
+        scanTask?.cancel()
+
         // bluetoothctl scan needs a timeout in non-interactive mode to actually discover devices.
         let effectiveTimeoutSeconds =
             timeoutSeconds == 0 ? Self.defaultScanTimeoutSeconds : timeoutSeconds
 
-        _ = Task.detached { [logger, self] in
+        // Start scan as a child task (structured concurrency)
+        scanTask = Task { [logger] in
             do {
                 let output = try await self.runBluetoothctl([
                     "--timeout", "\(effectiveTimeoutSeconds)",
@@ -67,6 +94,9 @@ struct BluetoothManager: Sendable {
                         metadata: ["output": "\(output)"]
                     )
                 }
+            } catch is CancellationError {
+                // Expected when scan is stopped early
+                logger.debug("Bluetooth scan cancelled")
             } catch {
                 logger.warning(
                     "bluetoothctl scan failed",
@@ -80,7 +110,9 @@ struct BluetoothManager: Sendable {
             Task { [logger] in
                 do {
                     try await Task.sleep(for: .seconds(Int(timeoutSeconds)))
-                    try await stopScan()
+                    try await self.stopScan()
+                } catch is CancellationError {
+                    // Expected if stopped before timeout
                 } catch {
                     logger.warning(
                         "Failed to stop bluetooth scan after timeout",
@@ -93,6 +125,11 @@ struct BluetoothManager: Sendable {
 
     /// Stops Bluetooth discovery scan
     func stopScan() async throws {
+        // Cancel the scan task first
+        scanTask?.cancel()
+        scanTask = nil
+
+        // Then tell bluetoothctl to stop scanning
         _ = try await runBluetoothctl(["scan", "off"])
     }
 
