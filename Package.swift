@@ -28,7 +28,7 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.12.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         .package(
             url: "https://github.com/tuist/Noora.git",

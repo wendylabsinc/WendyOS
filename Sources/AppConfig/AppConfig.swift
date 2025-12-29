@@ -108,7 +108,52 @@ public struct GPUEntitlements: Codable, Sendable, Hashable {
 }
 
 public struct VideoEntitlements: Codable, Sendable, Hashable {
-    public init() {}
+    /// Video entitlement modes for V4L2 device access.
+    public enum VideoMode: String, Codable, Sendable, Hashable, CaseIterable,
+        CustomStringConvertible
+    {
+        /// Bind and allow all detected V4L2 device nodes.
+        case all
+
+        /// Bind and allow only the explicit device list.
+        case allowlist
+
+        public var description: String {
+            switch self {
+            case .all:
+                return "All"
+            case .allowlist:
+                return "Allowlist"
+            }
+        }
+    }
+
+    public var mode: VideoMode
+    public var allowlist: [String]
+
+    /// Defaults to `.all` mode and a single `/dev/video0` whitelist entry.
+    public init(mode: VideoMode = .all, allowlist: [String] = []) {
+        self.mode = mode
+        self.allowlist = allowlist
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case allowlist
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decodeIfPresent(VideoMode.self, forKey: .mode) ?? .all
+        self.allowlist =
+            try container.decodeIfPresent([String].self, forKey: .allowlist) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(allowlist, forKey: .allowlist)
+    }
 }
 
 public struct AudioEntitlements: Codable, Sendable, Hashable {

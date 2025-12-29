@@ -232,11 +232,317 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  package-linux:
+    name: Package Linux (${{ matrix.arch }})
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    needs: [determine-version, build]
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            artifact-suffix: x86_64
+            rpm-arch: x86_64
+          - arch: arm64
+            artifact-suffix: aarch64
+            rpm-arch: aarch64
+    steps:
+      - name: Install FPM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm
+          sudo gem install fpm
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+
+      - name: Download Agent artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+
+      - name: Extract artifacts
+        run: |
+          ls -la
+          tar -xzf wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          tar -xzf wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          ls -la
+
+      - name: Build .deb packages
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Build wendy-cli .deb
+          fpm -s dir -t deb \
+            -n wendy \
+            -v "$VERSION" \
+            --architecture ${{ matrix.arch }} \
+            --description "Wendy CLI - Remote device debugging and deployment" \
+            --url "https://wendy.sh" \
+            --maintainer "Wendy Labs Inc. <support@wendy.sh>" \
+            --license "Proprietary" \
+            --vendor "Wendy Labs Inc." \
+            --category "devel" \
+            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+
+          # Build wendy-agent .deb
+          fpm -s dir -t deb \
+            -n wendy-agent \
+            -v "$VERSION" \
+            --architecture ${{ matrix.arch }} \
+            --description "Wendy Agent - Runs on target devices for remote debugging" \
+            --url "https://wendy.sh" \
+            --maintainer "Wendy Labs Inc. <support@wendy.sh>" \
+            --license "Proprietary" \
+            --vendor "Wendy Labs Inc." \
+            --category "devel" \
+            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+
+          ls -la *.deb
+
+      - name: Build .rpm packages
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          # RPM doesn't allow hyphens in version, replace with underscores
+          RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
+
+          # Build wendy-cli .rpm
+          fpm -s dir -t rpm \
+            -n wendy \
+            -v "$RPM_VERSION" \
+            --architecture ${{ matrix.rpm-arch }} \
+            --description "Wendy CLI - Remote device debugging and deployment" \
+            --url "https://wendy.sh" \
+            --maintainer "Wendy Labs Inc. <support@wendy.sh>" \
+            --license "Proprietary" \
+            --vendor "Wendy Labs Inc." \
+            --category "Development/Tools" \
+            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+
+          # Build wendy-agent .rpm
+          fpm -s dir -t rpm \
+            -n wendy-agent \
+            -v "$RPM_VERSION" \
+            --architecture ${{ matrix.rpm-arch }} \
+            --description "Wendy Agent - Runs on target devices for remote debugging" \
+            --url "https://wendy.sh" \
+            --maintainer "Wendy Labs Inc. <support@wendy.sh>" \
+            --license "Proprietary" \
+            --vendor "Wendy Labs Inc." \
+            --category "Development/Tools" \
+            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+
+          ls -la *.rpm
+
+      - name: Upload .deb packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages-deb-${{ matrix.arch }}
+          path: "*.deb"
+          retention-days: 14
+
+      - name: Upload .rpm packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages-rpm-${{ matrix.arch }}
+          path: "*.rpm"
+          retention-days: 14
+
+  publish-linux-repos:
+    name: Publish Linux Repositories
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    needs: [determine-version, package-linux]
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all .deb packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-packages-deb-*
+          merge-multiple: true
+          path: repo/apt/pool
+
+      - name: Download all .rpm packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-packages-rpm-*
+          merge-multiple: true
+          path: repo/yum/packages
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y createrepo-c dpkg-dev gzip apt-utils
+
+      - name: Create YUM repository
+        run: |
+          cd repo/yum
+
+          # Create repo structure
+          mkdir -p x86_64 aarch64
+
+          # Move packages to arch-specific directories
+          mv packages/*x86_64*.rpm x86_64/ || true
+          mv packages/*aarch64*.rpm aarch64/ || true
+          rmdir packages 2>/dev/null || true
+
+          # Generate repository metadata for each architecture
+          for arch in x86_64 aarch64; do
+            if [ -d "$arch" ] && [ "$(ls -A $arch 2>/dev/null)" ]; then
+              createrepo_c "$arch"
+            fi
+          done
+
+          # Create repo configuration file
+          cat > wendy.repo << 'REPO_EOF'
+          [wendy]
+          name=Wendy CLI Repository
+          baseurl=https://wendylabsinc.github.io/wendy-agent/yum/$basearch
+          enabled=1
+          gpgcheck=0
+          REPO_EOF
+
+          echo "YUM repository created:"
+          find . -type f | head -20
+
+      - name: Create APT repository
+        run: |
+          cd repo/apt
+
+          # Create distribution structure
+          mkdir -p dists/stable/main/binary-amd64
+          mkdir -p dists/stable/main/binary-arm64
+
+          # Move packages to pool
+          cd pool
+          ls -la
+
+          # Generate Packages files
+          cd ..
+
+          # Generate Packages for amd64
+          dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
+          gzip -k dists/stable/main/binary-amd64/Packages
+
+          # Generate Packages for arm64
+          dpkg-scanpackages --arch arm64 pool > dists/stable/main/binary-arm64/Packages
+          gzip -k dists/stable/main/binary-arm64/Packages
+
+          # Create Release file
+          cat > dists/stable/Release << RELEASE_EOF
+          Origin: Wendy Labs Inc.
+          Label: Wendy
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Description: Wendy CLI and Agent packages
+          RELEASE_EOF
+
+          # Create sources.list entry file
+          cat > wendy.list << 'LIST_EOF'
+          deb [trusted=yes] https://wendylabsinc.github.io/wendy-agent/apt stable main
+          LIST_EOF
+
+          echo "APT repository created:"
+          find . -type f | head -20
+
+      - name: Update Arch PKGBUILD checksums
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Calculate checksums from the tarballs in the release
+          X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
+          ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
+
+          # Note: Checksums will be available after release is created
+          # For now, create PKGBUILD with version placeholder updated
+
+          # Update wendy PKGBUILD
+          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy/PKGBUILD
+          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy-agent/PKGBUILD
+
+          # Copy PKGBUILDs to repo directory for publishing
+          mkdir -p repo/arch/wendy repo/arch/wendy-agent
+          cp packaging/arch/wendy/PKGBUILD repo/arch/wendy/
+          cp packaging/arch/wendy-agent/PKGBUILD repo/arch/wendy-agent/
+
+      - name: Create installation scripts
+        run: |
+          # Create YUM install script
+          cat > repo/install-yum.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+          echo "Adding Wendy YUM repository..."
+          sudo curl -fsSL https://wendylabsinc.github.io/wendy-agent/yum/wendy.repo -o /etc/yum.repos.d/wendy.repo
+          echo "Installing wendy..."
+          sudo yum install -y wendy
+          echo "Done! Run 'wendy --help' to get started."
+          SCRIPT_EOF
+          chmod +x repo/install-yum.sh
+
+          # Create APT install script
+          cat > repo/install-apt.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -e
+          echo "Adding Wendy APT repository..."
+          sudo curl -fsSL https://wendylabsinc.github.io/wendy-agent/apt/wendy.list -o /etc/apt/sources.list.d/wendy.list
+          echo "Updating package list..."
+          sudo apt-get update
+          echo "Installing wendy..."
+          sudo apt-get install -y wendy
+          echo "Done! Run 'wendy --help' to get started."
+          SCRIPT_EOF
+          chmod +x repo/install-apt.sh
+
+          # Create Arch install instructions
+          cat > repo/arch/README.md << 'README_EOF'
+          # Wendy for Arch Linux
+
+          ## Installation from AUR (recommended)
+
+          Using yay:
+          ```bash
+          yay -S wendy
+          ```
+
+          Using paru:
+          ```bash
+          paru -S wendy
+          ```
+
+          ## Manual installation
+
+          ```bash
+          git clone https://aur.archlinux.org/wendy.git
+          cd wendy
+          makepkg -si
+          ```
+          README_EOF
+
+      - name: Upload repository artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-repos
+          path: repo/
+          retention-days: 14
+
+      # - name: Deploy to GitHub Pages
+      #   uses: peaceiris/actions-gh-pages@v4
+      #   with:
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     publish_dir: ./repo
+      #     destination_dir: ./
+      #     keep_files: false
+
   release:
     name: Release
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64
-    needs: [determine-version, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [determine-version, build, package-linux]
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -245,10 +551,10 @@ jobs:
       - name: List files
         run: |
           ls -la
-          # Create a newline-delimited list of tar.gz files
+          # Create a newline-delimited list of release files (tar.gz, deb, rpm)
           {
             echo 'FILES<<EOF'
-            find . -name "*.tar.gz" | sort
+            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
       - name: Create Release
@@ -358,3 +664,84 @@ jobs:
           This PR updates the wendy formula to version ${VERSION}.
 
           All platforms use pre-built binaries (signed and notarized for macOS ARM64)."
+
+  publish-aur:
+    name: Publish AUR Packages
+    runs-on: ubuntu-latest
+    needs: [determine-version, release]
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - pkgname: wendy
+            pkgbuild_path: packaging/arch/wendy/PKGBUILD
+            x86_64_artifact: wendy-cli-linux-static-musl-x86_64
+            aarch64_artifact: wendy-cli-linux-static-musl-aarch64
+          - pkgname: wendy-agent
+            pkgbuild_path: packaging/arch/wendy-agent/PKGBUILD
+            x86_64_artifact: wendy-agent-linux-static-musl-x86_64
+            aarch64_artifact: wendy-agent-linux-static-musl-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calculate checksums from release
+        id: checksums
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+
+          # Download and calculate SHA256 for x86_64
+          X86_64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/${{ matrix.x86_64_artifact }}-${VERSION}.tar.gz"
+          echo "Downloading $X86_64_URL"
+          X86_64_SHA=$(curl -fsSL "$X86_64_URL" | sha256sum | awk '{print $1}')
+          echo "x86_64_sha=${X86_64_SHA}" >> $GITHUB_OUTPUT
+
+          # Download and calculate SHA256 for aarch64
+          AARCH64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/${{ matrix.aarch64_artifact }}-${VERSION}.tar.gz"
+          echo "Downloading $AARCH64_URL"
+          AARCH64_SHA=$(curl -fsSL "$AARCH64_URL" | sha256sum | awk '{print $1}')
+          echo "aarch64_sha=${AARCH64_SHA}" >> $GITHUB_OUTPUT
+
+          echo "Checksums:"
+          echo "  x86_64:  ${X86_64_SHA}"
+          echo "  aarch64: ${AARCH64_SHA}"
+
+      - name: Update PKGBUILD
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          PKGBUILD="${{ matrix.pkgbuild_path }}"
+
+          # Update version
+          sed -i "s/^_pkgver=.*/_pkgver=${VERSION}/" "$PKGBUILD"
+
+          # Update checksums
+          sed -i "s/sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.x86_64_sha }}')/" "$PKGBUILD"
+          sed -i "s/sha256sums_aarch64=.*/sha256sums_aarch64=('${{ steps.checksums.outputs.aarch64_sha }}')/" "$PKGBUILD"
+
+          echo "Updated PKGBUILD:"
+          cat "$PKGBUILD"
+
+      - name: Generate .SRCINFO
+        uses: docker://archlinux:latest
+        with:
+          entrypoint: /bin/bash
+          args: |
+            -c "
+            pacman -Sy --noconfirm base-devel shadow
+            cd $(dirname ${{ matrix.pkgbuild_path }})
+            if ! id -u builder >/dev/null 2>&1; then
+              useradd -m builder
+            fi
+            chown -R builder:builder .
+            su builder -s /bin/bash -c 'makepkg --printsrcinfo > .SRCINFO'
+            cat .SRCINFO
+            "
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        with:
+          pkgname: ${{ matrix.pkgname }}
+          pkgbuild: ${{ matrix.pkgbuild_path }}
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ needs.determine-version.outputs.version }}"

@@ -355,7 +355,8 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
             spec.applyEntitlements(
                 entitlements: appConfig.entitlements,
-                appName: request.appName
+                appName: request.appName,
+                availableDevices: try OCI.AvailableDevices.detect()
             )
 
             // Apply CDI for GPU if requested
