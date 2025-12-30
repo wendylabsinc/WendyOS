@@ -50,9 +50,13 @@ service WendyAgentService {
 message ResponseStatus {
     enum Level {
         LEVEL_UNSPECIFIED = 0;
+        // Successful operation without extra details.
         SUCCESS = 1;
+        // Successful operation with informational message.
         INFO = 2;
+        // Successful operation with warning message.
         WARNING = 3;
+        // Failed operation; success should be false.
         ERROR = 4;
     }
 

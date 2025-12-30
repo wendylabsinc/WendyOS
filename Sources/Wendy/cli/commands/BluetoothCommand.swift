@@ -146,6 +146,7 @@ struct BluetoothCommand: AsyncParsableCommand {
                 }
 
                 guard let targetDevice else {
+                    Noora().warning("No Bluetooth device selected.")
                     return
                 }
 
@@ -235,6 +236,7 @@ struct BluetoothCommand: AsyncParsableCommand {
                 }
 
                 guard let targetDevice else {
+                    Noora().warning("No Bluetooth device selected.")
                     return
                 }
 
@@ -404,19 +406,8 @@ struct BluetoothCommand: AsyncParsableCommand {
 
             // Helper to stop scan with cancellation-aware fallback
             @Sendable func stopScanBestEffort() async {
-                if Task.isCancelled {
-                    Task.detached {
-                        _ = try? await agent.stopBluetoothScan(.init())
-                    }
-                    return
-                }
-
                 do {
                     _ = try await agent.stopBluetoothScan(.init())
-                } catch is CancellationError {
-                    Task.detached {
-                        _ = try? await agent.stopBluetoothScan(.init())
-                    }
                 } catch {
                     // Best-effort cleanup; ignore stop failures.
                 }
@@ -466,7 +457,7 @@ struct BluetoothCommand: AsyncParsableCommand {
             signalSource.setEventHandler {
                 logger.info("Received SIGINT, stopping Bluetooth scan")
                 signalSource.cancel()
-                Task.detached {
+                Task {
                     await stopScanAndExit(agent: agent, logger: logger, exitCode: 130)
                 }
             }
@@ -493,7 +484,8 @@ struct BluetoothCommand: AsyncParsableCommand {
                 _ = await group.next()
                 group.cancelAll()
             }
-
+            signal(SIGINT, SIG_DFL)
+            raise(SIGINT)
             systemExit(exitCode)
         }
     }

@@ -155,7 +155,7 @@ struct WiFiCommand: AsyncParsableCommand {
                         Response(
                             success: response.success,
                             errorMessage: response.hasErrorMessage ? response.errorMessage : nil,
-                            statusLevel: status.map { responseStatusLevelDescription($0.level) },
+                            statusLevel: status.map { $0.level.description },
                             statusMessage: status?.message
                         )
                     )
@@ -243,7 +243,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 connected: response.connected,
                 ssid: response.hasSsid ? response.ssid : nil,
                 errorMessage: response.hasErrorMessage ? response.errorMessage : nil,
-                statusLevel: status.map { responseStatusLevelDescription($0.level) },
+                statusLevel: status.map { $0.level.description },
                 statusMessage: status?.message
             )
 
@@ -269,7 +269,7 @@ struct WiFiCommand: AsyncParsableCommand {
                     in: .whitespacesAndNewlines
                 )
                 if !message.isEmpty {
-                    let level = responseStatusLevelDescription(response.status.level)
+                    let level = response.status.level.description
                     print("\(level.capitalized): \(message)")
                 }
             } else if response.hasErrorMessage {

@@ -4,6 +4,27 @@ import NIOCore
 import Noora
 import WendyAgentGRPC
 
+extension Wendy_Agent_Services_V1_ResponseStatus.Level: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .success:
+            return "success"
+        case .info:
+            return "info"
+        case .warning:
+            return "warning"
+        case .error:
+            return "error"
+        case .unspecified:
+            return "unspecified"
+        case .UNRECOGNIZED:
+            return "unrecognized"
+        @unknown default:
+            return "unknown"
+        }
+    }
+}
+
 public func withErrorTracking(
     _ body: @Sendable () async throws -> Void
 ) async throws {
@@ -22,27 +43,6 @@ public func withErrorTracking(
             )
         )
         throw error
-    }
-}
-
-func responseStatusLevelDescription(
-    _ level: Wendy_Agent_Services_V1_ResponseStatus.Level
-) -> String {
-    switch level {
-    case .success:
-        return "success"
-    case .info:
-        return "info"
-    case .warning:
-        return "warning"
-    case .error:
-        return "error"
-    case .unspecified:
-        return "unspecified"
-    case .UNRECOGNIZED:
-        return "unrecognized"
-    @unknown default:
-        return "unknown"
     }
 }
 
