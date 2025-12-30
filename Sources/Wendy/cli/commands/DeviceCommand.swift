@@ -15,14 +15,34 @@ import _NIOFileSystem
 struct DeviceCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "device",
-        abstract: "Manage the Wendy device.",
+        abstract: "Control your Wendy device.",
         subcommands: [
-            SetupCommand.self,
-            AppsCommand.self,
-            HardwareCommand.self,
-            WiFiCommand.self,
-            VersionCommand.self,
-            UpdateCommand.self,
+            SetDefaultCommand.self,
+            UnsetDefaultCommand.self,
+        ],
+        groupedSubcommands: [
+            CommandGroup(
+                name: "Device Management",
+                subcommands: [
+                    SetupCommand.self,
+                    HardwareCommand.self,
+                    WiFiCommand.self,
+                    AppsCommand.self,
+                ]
+            ),
+            CommandGroup(
+                name: "Debugging",
+                subcommands: [
+                    HardwareCommand.self
+                ]
+            ),
+            CommandGroup(
+                name: "Update",
+                subcommands: [
+                    VersionCommand.self,
+                    UpdateCommand.self,
+                ]
+            ),
         ]
     )
 
@@ -82,6 +102,45 @@ struct DeviceCommand: AsyncParsableCommand {
         }
     }
 
+    struct SetDefaultCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "set-default",
+            abstract: "Set the default device."
+        )
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func run() async throws {
+            let endpoint = try await agentConnectionOptions.read(
+                title: "Set default device",
+                readDefault: false
+            )
+
+            var config = getConfig()
+            config.defaultDevice = endpoint.host
+            try config.save()
+
+            Noora().success("Default device set to \(endpoint.host)")
+        }
+    }
+
+    struct UnsetDefaultCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "unset-default",
+            abstract: "Unset the default device."
+        )
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func run() async throws {
+            var config = getConfig()
+            config.defaultDevice = nil
+            try config.save()
+
+            Noora().success("Default device unset")
+        }
+    }
+
     struct UpdateCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "update",
@@ -96,6 +155,9 @@ struct DeviceCommand: AsyncParsableCommand {
                 "Target platform for the agent binary (linux-aarch64 or linux-x86_64). Defaults to linux-aarch64."
         )
         var platform: String?
+
+        @Flag(help: "Download the latest pre-release version instead of stable release")
+        var prerelease: Bool = false
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
@@ -124,7 +186,10 @@ struct DeviceCommand: AsyncParsableCommand {
                     targetPlatform = .linuxAarch64
                 }
 
-                binary = try await downloadLatestRelease(platform: targetPlatform).path
+                binary = try await downloadLatestRelease(
+                    platform: targetPlatform,
+                    includePrerelease: prerelease
+                ).path
             }
 
             let success = try await withAgentGRPCClient(
@@ -269,6 +334,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     return
                 }
 
+                // TODO: Detect platform of remote device
                 // Default to Linux aarch64 for device updates during setup
                 let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
                 let success = try await Noora().progressBarStep(message: "Updating Device") {

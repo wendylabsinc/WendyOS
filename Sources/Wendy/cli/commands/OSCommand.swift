@@ -99,7 +99,7 @@ struct OSCommand: AsyncParsableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "os",
-        abstract: "Setup and manage your WendyOS images.",
+        abstract: "Download and install WendyOS",
         subcommands: [
             OSInstallCommand.self,
             CacheCommand.self,
@@ -166,7 +166,7 @@ struct OSCommand: AsyncParsableCommand {
 
         static let configuration = CommandConfiguration(
             commandName: "supported-devices",
-            abstract: "List supported device images."
+            abstract: "List supported device images"
         )
 
         @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
@@ -192,11 +192,24 @@ struct OSCommand: AsyncParsableCommand {
                     headers: [
                         "Device",
                         "Latest Version",
+                        "Latest Nightly",
+                        "Stability",
                     ],
                     rows: deviceList.map { device in
-                        [
+                        let stabilityIcon: String
+                        switch device.stability {
+                        case .stable:
+                            stabilityIcon = "✓ Stable"
+                        case .experimental:
+                            stabilityIcon = "⚠ Experimental"
+                        case .deprecated:
+                            stabilityIcon = "⚠ Deprecated"
+                        }
+                        return [
                             device.name,
                             device.latestVersion.isEmpty ? "Not Available" : device.latestVersion,
+                            device.latestNightlyVersion ?? "—",
+                            stabilityIcon,
                         ]
                     }
                 )
@@ -273,6 +286,9 @@ struct OSCommand: AsyncParsableCommand {
         @Flag(name: .long, help: "Force redownload and write the image")
         var redownload: Bool = false
 
+        @Flag(name: .long, help: "Install the latest nightly build instead of stable release")
+        var nightly: Bool = false
+
         func run() async throws {
             let logger = Logger(label: "wendy.imager")
             let manifestManager = ManifestManagerFactory.createManifestManager()
@@ -308,7 +324,12 @@ struct OSCommand: AsyncParsableCommand {
                 let devices = familyOptions[familyIndex].1
 
                 let deviceRows = devices.map { device -> [String] in
-                    let version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    let version: String
+                    if nightly {
+                        version = device.latestNightlyVersion ?? "—"
+                    } else {
+                        version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                    }
                     return [
                         device.name,
                         version,
@@ -318,7 +339,7 @@ struct OSCommand: AsyncParsableCommand {
                 let deviceIndex = try await noora.selectableTable(
                     headers: [
                         "Device",
-                        "Latest Version",
+                        nightly ? "Latest Nightly" : "Latest Version",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count
@@ -405,17 +426,17 @@ struct OSCommand: AsyncParsableCommand {
                 }
             }
 
-            noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
+            if nightly {
+                noora.info("🔍 Finding latest nightly image for \(selectedDeviceName)...")
+            } else {
+                noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
+            }
 
             // Get the latest image information for the device
-            let (imageUrl, imageSize) = try await manifestManager.getLatestImageInfo(
-                for: selectedDeviceName
+            let (imageUrl, imageSize, latestVersion) = try await manifestManager.getLatestImageInfo(
+                for: selectedDeviceName,
+                nightly: nightly
             )
-
-            // Also get the latest version string from manifest
-            let devices = try await manifestManager.getAvailableDevices()
-            let latestVersion =
-                devices.first(where: { $0.name == selectedDeviceName })?.latestVersion ?? ""
 
             noora.info(
                 """
@@ -432,11 +453,13 @@ struct OSCommand: AsyncParsableCommand {
 
             // Check if cached image exists and matches the latest version
             let cachedImagePath = try await imageDownloader.cachedImageIfValid(
-                deviceName: selectedDeviceName
+                deviceName: selectedDeviceName,
+                nightly: nightly
             )
             let isCachedLatest = try imageDownloader.isCachedImageLatest(
                 deviceName: selectedDeviceName,
-                latestVersion: latestVersion
+                latestVersion: latestVersion,
+                nightly: nightly
             )
             let shouldUseCache = !redownload && cachedImagePath != nil && isCachedLatest
 
@@ -462,7 +485,8 @@ struct OSCommand: AsyncParsableCommand {
                         deviceName: selectedDeviceName,
                         expectedSize: imageSize,
                         redownload: redownload,
-                        version: latestVersion
+                        version: latestVersion,
+                        nightly: nightly
                     ) { progress in
                         let totalUnits = max(1, progress.totalUnitCount)
                         let fraction = clampProgress(
@@ -488,7 +512,8 @@ struct OSCommand: AsyncParsableCommand {
                     let result = try await imageDownloader.extractArchiveOnly(
                         deviceName: selectedDeviceName,
                         zipPath: zipPath,
-                        version: latestVersion
+                        version: latestVersion,
+                        nightly: nightly
                     ) { p in
                         let total = max(1, p.totalUnitCount)
                         let fraction = clampProgress(Double(p.completedUnitCount) / Double(total))

@@ -637,6 +637,43 @@ public struct Containerd: Sendable {
         return "sha256:\(chainID)"
     }
 
+    public func readImageManifest(
+        image: Containerd_Services_Images_V1_Image
+    ) async throws -> ImageManifest {
+        switch image.target.mediaType {
+        case "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json":
+            return try await self.readJSONContent(
+                digest: image.target.digest,
+                as: ImageManifest.self
+            )
+        case "application/vnd.oci.image.index.v1+json":
+            let index = try await self.readJSONContent(
+                digest: image.target.digest,
+                as: ImageIndex.self
+            )
+            guard
+                let manifestDescriptor = index.manifests.first(where: {
+                    $0.mediaType == "application/vnd.oci.image.manifest.v1+json"
+                })
+            else {
+                throw RPCError(
+                    code: .invalidArgument,
+                    message: "No manifest descriptor found in index"
+                )
+            }
+            return try await self.readJSONContent(
+                digest: manifestDescriptor.digest,
+                as: ImageManifest.self
+            )
+        default:
+            throw RPCError(
+                code: .invalidArgument,
+                message: "Unsupported media type: \(image.target.mediaType)"
+            )
+        }
+    }
+
     /// Unpack an image from the content store into snapshots.
     /// This is required when images are pushed to the registry but not yet unpacked.
     public func unpackImage(
@@ -648,10 +685,7 @@ public struct Containerd: Sendable {
         let image = try await imagesService.get(.with { $0.name = imageName }).image
 
         // Read the manifest
-        let manifest = try await self.readJSONContent(
-            digest: image.target.digest,
-            as: ImageManifest.self
-        )
+        let manifest = try await readImageManifest(image: image)
 
         // Read the image config to get DiffIDs (uncompressed layer hashes)
         let config = try await self.readJSONContent(
@@ -749,6 +783,9 @@ public struct Containerd: Sendable {
                         $0.parent = parent
                     }
                     $0.snapshotter = "overlayfs"
+                    $0.labels = [
+                        "containerd.io/gc.root": Date().rfc3339Formatted()
+                    ]
                 }
             )
 
@@ -775,11 +812,16 @@ public struct Containerd: Sendable {
 
             // Commit snapshot
             do {
-                try await snapshotsService.commit(
+                var labels = [String: String]()
+                if let parent = previousChainID {
+                    labels["containerd.io/gc.ref.snapshot.overlayfs"] = parent
+                }
+                _ = try await snapshots.commit(
                     .with {
                         $0.key = tmpKey
                         $0.name = layerKey
                         $0.snapshotter = "overlayfs"
+                        $0.labels = labels
                     }
                 )
                 logger.debug(
@@ -845,6 +887,9 @@ public struct Containerd: Sendable {
                 $0.key = ephemeralKey
                 $0.parent = previousChainID
                 $0.snapshotter = "overlayfs"
+                $0.labels = [
+                    "containerd.io/gc.root": Date().rfc3339Formatted()
+                ]
             }
         )
 

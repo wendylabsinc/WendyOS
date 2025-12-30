@@ -87,7 +87,11 @@ public struct DevicesCollection: Encodable, Sendable {
         public let interfaces: [InterfaceInfo]
 
         public var description: String {
-            return "\(name) [\(interfaces.map(\.type).joined(separator: ", "))]"
+            let interfaceSummary = interfaces.map(\.type).joined(separator: ", ")
+            if let hostname = interfaces.compactMap(\.lanHostname).first {
+                return "\(name) (\(hostname)) [\(interfaceSummary)]"
+            }
+            return "\(name) [\(interfaceSummary)]"
         }
 
         public init(name: String, interfaces: [InterfaceInfo]) {
@@ -165,6 +169,14 @@ public struct DevicesCollection: Encodable, Sendable {
             }
         }
 
+        public var shortDescription: String {
+            switch self {
+            case .usb(let usb): return usb.usbVersion ?? "USB"
+            case .ethernet: return "Ethernet"
+            case .lan: return "LAN"
+            }
+        }
+
         public var description: String {
             var string = ""
             switch self {
@@ -190,7 +202,11 @@ public struct DevicesCollection: Encodable, Sendable {
                 }
                 return string
             case .lan(let device):
-                string += "LAN: \(device.hostname):\(device.port)"
+                if device.port == 50051 {
+                    string += "LAN: \(device.hostname)"
+                } else {
+                    string += "LAN: \(device.hostname):\(device.port)"
+                }
                 return string
             }
         }
@@ -209,6 +225,11 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet(let device): return device.agentVersion
             case .lan(let device): return device.agentVersion
             }
+        }
+
+        public var lanHostname: String? {
+            guard case .lan(let device) = self else { return nil }
+            return device.hostname
         }
     }
 

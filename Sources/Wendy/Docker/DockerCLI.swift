@@ -16,6 +16,36 @@ public struct DockerCLI: Sendable {
         self.command = command
     }
 
+    public func getServerVersion() async throws -> String {
+        let arguments = ["info", "--format", "{{.ServerVersion}}"]
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .string(limit: 1000, encoding: UTF8.self),
+            error: .discarded
+        )
+
+        guard
+            result.terminationStatus.isSuccess,
+            let output = result.standardOutput
+        else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+            throw SubprocessError.nonZeroExit(
+                command: arguments.description,
+                exitCode: exitCode,
+                terminationReason: result.terminationStatus.description,
+                output: "",
+                error: ""
+            )
+        }
+
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Build a Docker container.
     public func build(
         name: String,
@@ -222,6 +252,7 @@ public struct DockerCLI: Sendable {
             [registry."\(registryHostname):\(registryPort)"]
                 http = true
                 insecure = true
+
             """
 
         let wendyDir = FileManager.default.homeDirectoryForCurrentUser
@@ -234,24 +265,64 @@ public struct DockerCLI: Sendable {
             .appendingPathComponent("buildkit-config.toml")
             .path
 
-        var updatedConfig = false
+        // Update the local config file if this registry isn't configured yet
         if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            if !existingConfig.contains("\(registryHostname):5000") {
+            if !existingConfig.contains("\(registryHostname):\(registryPort)") {
                 existingConfig += "\n\n" + configContent
                 try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
-                updatedConfig = true
             }
         } else {
             try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-            updatedConfig = true
         }
 
+        // Read the desired config from local file
+        let desiredConfig = try String(contentsOfFile: configPath, encoding: .utf8)
+
         if try await hasBuildxBuilder(builderName: defaultBuilderName) {
-            if !updatedConfig {
+            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+
+            // Check if the builder container is actually running
+            let isRunning = await isContainerRunning(containerName: containerName)
+
+            if !isRunning {
+                // If it isn't, start it with bootstrap
+                let bootstrapArguments: Subprocess.Arguments = [
+                    "buildx", "inspect", "--bootstrap", defaultBuilderName,
+                ]
+                let bootstrapResult = try await Subprocess.run(
+                    Subprocess.Executable.name(self.command),
+                    arguments: bootstrapArguments,
+                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+                )
+
+                guard bootstrapResult.terminationStatus.isSuccess else {
+                    let exitCode: Int
+                    switch bootstrapResult.terminationStatus {
+                    case .exited(let code), .unhandledException(let code):
+                        exitCode = Int(code)
+                    }
+                    throw SubprocessError.nonZeroExit(
+                        command: bootstrapArguments.description,
+                        exitCode: exitCode,
+                        terminationReason: bootstrapResult.terminationStatus.description,
+                        output: "",
+                        error: ""
+                    )
+                }
+            }
+
+            // Get the container's current config
+            let containerConfig = await getContainerFileContents(
+                containerName: containerName,
+                filePath: "/etc/buildkit/buildkitd.toml"
+            )
+
+            if containerConfig == desiredConfig {
                 return
             }
 
-            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+            // If there is a change, copy the updated config to the container
             let cpArguments: Subprocess.Arguments = [
                 "cp",
                 configPath,
@@ -279,6 +350,7 @@ public struct DockerCLI: Sendable {
                 )
             }
 
+            // Restart to apply the new config
             let restartArguments: Subprocess.Arguments = [
                 "restart", containerName,
             ]
@@ -336,6 +408,51 @@ public struct DockerCLI: Sendable {
                 output: "",
                 error: ""
             )
+        }
+    }
+
+    /// Checks if a Docker container is currently running
+    private func isContainerRunning(containerName: String) async -> Bool {
+        let arguments = ["inspect", "-f", "{{.State.Running}}", containerName]
+        do {
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100, encoding: UTF8.self),
+                error: .discarded
+            )
+            guard result.terminationStatus.isSuccess,
+                let output = result.standardOutput
+            else {
+                return false
+            }
+            return output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        } catch {
+            return false
+        }
+    }
+
+    /// Gets the contents of a file inside a Docker container using docker exec cat
+    private func getContainerFileContents(
+        containerName: String,
+        filePath: String
+    ) async -> String? {
+        let arguments = ["exec", containerName, "cat", filePath]
+        do {
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100_000, encoding: UTF8.self),
+                error: .discarded
+            )
+            guard result.terminationStatus.isSuccess,
+                let output = result.standardOutput
+            else {
+                return nil
+            }
+            return output
+        } catch {
+            return nil
         }
     }
 

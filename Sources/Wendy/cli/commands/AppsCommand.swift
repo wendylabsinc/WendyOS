@@ -12,8 +12,51 @@ struct AppsCommand: AsyncParsableCommand {
         subcommands: [
             ListCommand.self,
             Stop.self,
+            Remove.self,
         ]
     )
+
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "remove",
+            abstract: "Stop and remove an application from the device"
+        )
+
+        @Argument(help: "Application name used when the app was created")
+        var appName: String
+
+        @Flag(
+            name: .customLong("purge-image"),
+            help: "Also delete the application image to free disk space"
+        )
+        var purgeImage: Bool = false
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func run() async throws {
+            try await withAgentGRPCClient(
+                agentConnectionOptions,
+                title: "Removing application"
+            ) { client in
+                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+                    wrapping: client
+                )
+
+                _ = try await containers.deleteContainer(
+                    .with {
+                        $0.appName = appName
+                        $0.deleteImage = purgeImage
+                    }
+                )
+
+                if purgeImage {
+                    Noora().success("Removed application and its image.")
+                } else {
+                    Noora().success("Removed application.")
+                }
+            }
+        }
+    }
 
     struct Stop: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -55,24 +98,47 @@ struct AppsCommand: AsyncParsableCommand {
                 agentConnectionOptions,
                 title: "Listing applications"
             ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
-                try await agent.listContainers(.init()) { containers in
-                    for try await container in containers.messages {
-                        let status =
-                            switch container.container.runningState {
-                            case .running: "✅"
-                            case .stopped: "🛑"
-                            case .UNRECOGNIZED: "❓"
-                            }
+                let rows: [[String]] =
+                    try await Wendy_Agent_Services_V1_WendyContainerService.Client(
+                        wrapping: client
+                    )
+                    .listContainers(.init()) { containers in
+                        var rows: [[String]] = []
 
-                        let failures =
-                            container.container.failureCount > 0
-                            ? " (failures=\(container.container.failureCount))" : ""
-                        print(
-                            "\(status) \(container.container.appName) @ \(container.container.appVersion)\(failures)"
-                        )
+                        for try await container in containers.messages {
+                            let state =
+                                switch container.container.runningState {
+                                case .running: "Running"
+                                case .stopped: "Stopped"
+                                case .UNRECOGNIZED: "Unknown"
+                                }
+                            let failures = "\(container.container.failureCount)"
+
+                            rows.append([
+                                container.container.appName,
+                                container.container.appVersion,
+                                state,
+                                failures,
+                            ])
+                        }
+
+                        return rows
                     }
+
+                guard !rows.isEmpty else {
+                    Noora().info("No applications found.")
+                    return
                 }
+
+                Noora().table(
+                    headers: [
+                        "App",
+                        "Version",
+                        "State",
+                        "Failures",
+                    ],
+                    rows: rows
+                )
             }
         }
     }

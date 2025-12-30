@@ -1,16 +1,10 @@
-// swift-tools-version: 6.1.2
+// swift-tools-version: 6.2.0
 import PackageDescription
-
-#if compiler(>=6.2.1)
-    let hasSpan = true
-#else
-    let hasSpan = false
-#endif
 
 let package = Package(
     name: "wendy-agent",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v26)
     ],
     products: [
         .executable(name: "wendy-agent", targets: ["wendy-agent"]),
@@ -34,24 +28,19 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.12.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         .package(
             url: "https://github.com/tuist/Noora.git",
-            from: "0.51.0"
+            from: "0.52.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
             exact: "0.2.1",
-            traits: hasSpan ? [.trait(name: "SubprocessSpan")] : []
+            traits: [.trait(name: "SubprocessSpan")]
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.10.3"),
-        .package(
-            url: "https://github.com/swift-server/swift-openapi-async-http-client.git",
-            from: "1.1.0"
-        ),
         .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
@@ -88,7 +77,6 @@ let package = Package(
                 .target(name: "AppConfig"),
                 .target(name: "CliXPCProtocol"),
                 .target(name: "WendySDK"),
-                .target(name: "DockerOpenAPI"),
                 .target(name: "Analytics"),
             ],
             path: "Sources/Wendy",
@@ -103,22 +91,6 @@ let package = Package(
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ]
-        ),
-
-        .target(
-            name: "DockerOpenAPI",
-            dependencies: [
-                .product(
-                    name: "OpenAPIAsyncHTTPClient",
-                    package: "swift-openapi-async-http-client"
-                ),
-                .product(name: "AsyncHTTPClient", package: "async-http-client"),
-                .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "Logging", package: "swift-log"),
-            ],
-            plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
 
         /// The main executable provided by wendy-agent.
@@ -139,7 +111,6 @@ let package = Package(
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
-                .target(name: "DockerOpenAPI"),
                 .target(name: "WendyShared"),
                 .target(name: "AppConfig"),
                 .target(name: "ContainerRegistry"),

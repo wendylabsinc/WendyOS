@@ -10,18 +10,15 @@ struct WendyCLI {
         LoggingSystem.bootstrap { label in
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? .info
+                .flatMap(Logger.Level.init(rawValue:)) ?? .info
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
             return logger
         }
 
-        // Initialize analytics service
-        let analytics = AnalyticsService.shared
-
         // Track command execution with analytics
-        if let analytics = analytics {
+        if let analytics = try? AnalyticsService(config: getConfig().analytics) {
             await analytics.trackCommandExecution {
                 await WendyCommand.main()
             }

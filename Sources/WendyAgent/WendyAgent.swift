@@ -38,7 +38,7 @@ struct WendyAgent: AsyncParsableCommand {
 
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? defaultLogLevel
+                .flatMap(Logger.Level.init(rawValue:)) ?? defaultLogLevel
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
@@ -233,7 +233,11 @@ func cleanupOldBackupFiles(logger: Logger) async {
     // Resolve symlinks to get the actual binary location
     let rawBinaryPath = FilePath(ProcessInfo.processInfo.arguments[0])
     let currentBinaryPath = resolveSymlinks(rawBinaryPath)
-    let backupPath = currentBinaryPath.appending(".backup")
+    let binaryName = currentBinaryPath.lastComponent?.string ?? "wendy-agent"
+    let backupPath =
+        currentBinaryPath
+        .removingLastComponent()
+        .appending(binaryName + ".backup")
 
     // Use try? to handle missing files gracefully instead of throwing
     let currentInfo = try? await filesystem.info(forFileAt: currentBinaryPath)

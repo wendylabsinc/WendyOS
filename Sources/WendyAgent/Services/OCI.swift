@@ -213,7 +213,7 @@ public struct Syscall: Codable {
     }
 }
 
-public struct Device: Codable {
+public struct Device: Codable, Hashable, Sendable {
     let path: String
     let type: String
     let major: Int

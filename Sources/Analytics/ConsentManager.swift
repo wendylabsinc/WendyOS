@@ -54,128 +54,17 @@ public struct ConsentManager: Sendable {
     public static func shouldDisableAnalytics() -> Bool {
         ConsentManager().shouldDisableAnalytics()
     }
+}
 
-    /// Checks if analytics is enabled based on config and environment
-    public func isAnalyticsEnabled() async -> Bool {
-        // Environment variables override config
-        guard !shouldDisableAnalytics() else {
-            return false
-        }
-
-        // Try to get config, but don't fail if it doesn't exist
-        do {
-            let configURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".wendy")
-                .appendingPathComponent("config.json")
-
-            guard FileManager.default.fileExists(atPath: configURL.path) else {
-                // No config yet, default to enabled
-                return true
-            }
-
-            let data = try Data(contentsOf: configURL)
-            let decoder = JSONDecoder()
-            if let config = try? decoder.decode(AnalyticsConfigWrapper.self, from: data) {
-                return config.analytics?.enabled ?? true
-            }
-
-            // Config exists but doesn't have analytics section yet, default to enabled
-            return true
-        } catch {
-            logger.debug("Failed to read config for analytics: \(error)")
-            // On error reading config, default to enabled
-            return true
-        }
+extension WendyAnalyticsConfig {
+    public mutating func disableAnalytics() {
+        self.enabled = false
+        self.optOutDate = Date()
     }
 
-    /// Disables analytics
-    public func disableAnalytics() throws {
-        let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".wendy")
-        let configURL = configDir.appendingPathComponent("config.json")
-
-        // Ensure directory exists
-        try FileManager.default.createDirectory(
-            at: configDir,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-
-        // Read existing config or create new one
-        var configData: [String: Any] = [:]
-        if FileManager.default.fileExists(atPath: configURL.path) {
-            let data = try Data(contentsOf: configURL)
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                configData = json
-            }
-        }
-
-        // Update analytics section
-        var analytics = (configData["analytics"] as? [String: Any]) ?? [:]
-        analytics["enabled"] = false
-        analytics["optOutDate"] = ISO8601DateFormatter().string(from: Date())
-        analytics["anonymousId"] = analytics["anonymousId"] ?? UUID().uuidString
-
-        configData["analytics"] = analytics
-
-        // Write back to file
-        let updatedData = try JSONSerialization.data(
-            withJSONObject: configData,
-            options: [.prettyPrinted, .sortedKeys]
-        )
-        try updatedData.write(to: configURL)
-
-        Noora().success("Analytics disabled")
-    }
-
-    /// Enables analytics
-    public func enableAnalytics() throws {
-        let configDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".wendy")
-        let configURL = configDir.appendingPathComponent("config.json")
-
-        // Ensure directory exists
-        try FileManager.default.createDirectory(
-            at: configDir,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-
-        // Read existing config or create new one
-        var configData: [String: Any] = [:]
-        if FileManager.default.fileExists(atPath: configURL.path) {
-            let data = try Data(contentsOf: configURL)
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                configData = json
-            }
-        }
-
-        // Update analytics section
-        var analytics = (configData["analytics"] as? [String: Any]) ?? [:]
-        analytics["enabled"] = true
-        analytics["optOutDate"] = nil
-        analytics["anonymousId"] = analytics["anonymousId"] ?? UUID().uuidString
-
-        configData["analytics"] = analytics
-
-        // Write back to file
-        let updatedData = try JSONSerialization.data(
-            withJSONObject: configData,
-            options: [.prettyPrinted, .sortedKeys]
-        )
-        try updatedData.write(to: configURL)
-
-        Noora().success("Analytics enabled")
-    }
-
-    /// Gets the current analytics status
-    public func getStatus() async -> String {
-        if shouldDisableAnalytics() {
-            return "Analytics: Disabled (environment variable)"
-        }
-
-        let enabled = await isAnalyticsEnabled()
-        return enabled ? "Analytics: Enabled" : "Analytics: Disabled"
+    public mutating func enableAnalytics() {
+        self.enabled = true
+        self.optOutDate = nil
     }
 }
 

@@ -1,6 +1,7 @@
 #if os(macOS)
     import Foundation
     import Subprocess
+    import NIOFileSystem
 
     /// A disk writer implementation for macOS that uses the `dd` command.
     public class MacOSDiskWriter: DiskWriter {
@@ -100,7 +101,6 @@
                 // Stream the image to dd via stdin. We count bytes written ourselves for progress.
                 // Use a larger block size on the dd side to improve throughput, and avoid conv=sync
                 // which can slow writes and pad short reads when stdin is a pipe.
-                let chunkSize = 4 * 1024 * 1024  // 4 MiB
                 let result = try await Subprocess.run(
                     Subprocess.Executable.name("sudo"),
                     arguments: [
@@ -111,42 +111,32 @@
                     error: .discarded,
                     preferredBufferSize: nil
                 ) { execution, stdinWriter, _ in
-                    // Feed file chunks to dd's stdin and report progress
-                    let fileURL = URL(fileURLWithPath: imagePath)
-                    guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
-                        throw DiskWriterError.imageNotFoundInPath(path: imagePath)
-                    }
-                    defer { try? handle.close() }
+                    try await FileSystem.shared.withFileHandle(forReadingAt: FilePath(imagePath)) {
+                        handle in
+                        var reader = handle.bufferedReader()
+                        var totalWritten: Int64 = 0
+                        let totalBytes = totalBytes  // capture
 
-                    var totalWritten: Int64 = 0
-                    let totalBytes = totalBytes  // capture
+                        while true {
+                            try Task.checkCancellation()
+                            let chunk = try await reader.read(.bytes(4 * 1024 * 1024))  // 4 MiB
+                            if chunk.readableBytes == 0 {
+                                return execution
+                            }
 
-                    while true {
-                        // Read next chunk synchronously
-                        let data = try? handle.read(upToCount: chunkSize)
-                        guard let data, !data.isEmpty else { break }
-
-                        // Write to dd's stdin (async) and propagate any write error
-                        do {
-                            _ = try await stdinWriter.write(Array(data))
-                        } catch {
-                            throw DiskWriterError.writeFailed(
-                                reason: "Failed piping data to dd: \(error.localizedDescription)"
+                            totalWritten += try await Int64(
+                                stdinWriter.write(chunk.readableBytesSpan)
                             )
-                        }
-                        totalWritten += Int64(data.count)
-                        if let totalBytes, totalBytes > 0 {
-                            progressHandler(
-                                DiskWriteProgress(
-                                    bytesWritten: min(totalWritten, totalBytes),
-                                    totalBytes: totalBytes
+                            if let totalBytes, totalBytes > 0 {
+                                progressHandler(
+                                    DiskWriteProgress(
+                                        bytesWritten: min(totalWritten, totalBytes),
+                                        totalBytes: totalBytes
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
-                    // Signal EOF to dd
-                    try? await stdinWriter.finish()
-                    return execution
                 }
 
                 if !result.terminationStatus.isSuccess {

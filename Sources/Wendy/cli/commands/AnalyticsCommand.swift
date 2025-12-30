@@ -47,8 +47,9 @@ extension AnalyticsCommand {
         )
 
         func run() async throws {
-            let consentManager = ConsentManager()
-            try consentManager.enableAnalytics()
+            var config = getConfig()
+            config.analytics.enableAnalytics()
+            try config.save()
 
             // Show what data we collect
             Noora().info(
@@ -79,8 +80,9 @@ extension AnalyticsCommand {
         )
 
         func run() async throws {
-            let consentManager = ConsentManager()
-            try consentManager.disableAnalytics()
+            var config = getConfig()
+            config.analytics.disableAnalytics()
+            try config.save()
 
             Noora().info(
                 """
@@ -107,11 +109,13 @@ extension AnalyticsCommand {
         var verbose = false
 
         func run() async throws {
-            let consentManager = ConsentManager()
-            let status = await consentManager.getStatus()
+            let config = getConfig()
 
             // Display the status
-            print(status)
+            print(config.analytics.enabled ? "✅ Analytics is enabled" : "❌ Analytics is disabled")
+            if let optOutDate = config.analytics.optOutDate {
+                Noora().info("Opt Out Date: \(optOutDate.formatted().underline)")
+            }
 
             if verbose {
                 // Show environment variables that affect analytics
@@ -145,23 +149,13 @@ extension AnalyticsCommand {
                 print("\nConfig file: \(configPath)")
 
                 // Show anonymous ID if analytics is enabled
-                if await consentManager.isAnalyticsEnabled() {
-                    if AnalyticsService.shared != nil {
-                        // Get anonymous ID from config
-                        if let configData = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-                            let json = try? JSONSerialization.jsonObject(with: configData)
-                                as? [String: Any],
-                            let analyticsConfig = json["analytics"] as? [String: Any],
-                            let id = analyticsConfig["anonymousId"] as? String
-                        {
-                            print("Anonymous ID: \(id)")
-                        }
-                    }
+                if config.analytics.enabled {
+                    print("Anonymous ID: \(config.analytics.anonymousId)")
                 }
             }
 
             // Show help for changing settings
-            if await consentManager.isAnalyticsEnabled() {
+            if config.analytics.enabled {
                 print("\nTo disable analytics: wendy analytics disable")
             } else if !ConsentManager.shouldDisableAnalytics() {
                 print("\nTo enable analytics: wendy analytics enable")

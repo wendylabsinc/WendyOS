@@ -14,7 +14,7 @@ import SystemPackage
 struct InitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "init",
-        abstract: "Initialize a new Wendy project in the current directory."
+        abstract: "Create a new Wendy project"
     )
 
     @Option(
@@ -80,6 +80,11 @@ struct InitCommand: AsyncParsableCommand {
     }
 
     private func initializeSwiftProject() async throws {
+        if FileManager.default.fileExists(atPath: "\(projectPath)/Package.swift") {
+            logger.debug("Package.swift already exists, skipping initialization")
+            return
+        }
+
         // Run swift package init in the specified directory using bash -c to cd into the directory first
         let result = try await Subprocess.run(
             .name("swift"),

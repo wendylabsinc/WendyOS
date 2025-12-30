@@ -8,10 +8,12 @@ struct AgentConnectionOptions: ParsableArguments {
     struct Endpoint: ExpressibleByArgument {
         let host: String
         var port: Int
+        var defaultDevice: Bool
 
-        init(host: String, port: Int) {
+        init(host: String, port: Int, defaultDevice: Bool = false) {
             self.host = host
             self.port = port
+            self.defaultDevice = defaultDevice
         }
 
         init?(argument: String) {
@@ -42,6 +44,7 @@ struct AgentConnectionOptions: ParsableArguments {
 
             self.host = cleanHost
             self.port = components.port ?? 50051
+            self.defaultDevice = false
         }
 
         static var defaultValueDescription: String {
@@ -70,7 +73,27 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var agent: Endpoint?
 
-    func read(title: TerminalText?) async throws -> Endpoint {
+    public init() {}
+
+    public init(
+        endpoint: Endpoint?
+    ) {
+        self.agent = nil
+        self.device = endpoint
+    }
+
+    static func defaultDevice() -> Endpoint? {
+        let config = getConfig()
+        if let defaultDevice = config.defaultDevice {
+            return Endpoint(host: defaultDevice, port: 50051, defaultDevice: true)
+        }
+        return nil
+    }
+
+    func read(
+        title: TerminalText?,
+        readDefault: Bool = true
+    ) async throws -> Endpoint {
         if let device {
             return device
         }
@@ -83,6 +106,10 @@ struct AgentConnectionOptions: ParsableArguments {
             let endpoint = Endpoint(argument: endpoint)
         {
             return endpoint
+        }
+
+        if readDefault, let defaultDevice = Self.defaultDevice() {
+            return defaultDevice
         }
 
         let discovery = PlatformDeviceDiscovery(
@@ -114,6 +141,8 @@ struct AgentConnectionOptions: ParsableArguments {
             options: lanDevices
         )
 
+        printDeviceDetails(device)
+
         for interface in device.interfaces {
             if case .lan(let lanDevice) = interface {
                 return Endpoint(
@@ -144,6 +173,41 @@ struct AgentConnectionOptions: ParsableArguments {
 
             return Endpoint(host: "edgeos-device.local", port: 50051)
         }
+    }
+
+    // MARK: - Device presentation helpers
+
+    private func printDeviceDetails(_ device: DevicesCollection.GroupedDevice) {
+        // Show the selected device name and version (if available)
+        if let version = device.interfaces.compactMap(\.agentVersion).first {
+            Noora().info(.alert("\(device.name) (version: \(version))"))
+        } else {
+            Noora().info(.alert("\(device.name)"))
+        }
+
+        let rows = device.interfaces.map { interface -> [String] in
+            let parts = interface.description.split(
+                separator: ":",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+
+            let interfaceLabel =
+                parts.first.map(String.init)?.trimmingCharacters(
+                    in: .whitespaces
+                ) ?? ""
+            let details =
+                parts.count > 1
+                ? parts[1].trimmingCharacters(in: .whitespaces)
+                : ""
+
+            return [interfaceLabel, details]
+        }
+
+        Noora().table(
+            headers: ["Interface", "Details"],
+            rows: rows
+        )
     }
 }
 

@@ -11,6 +11,7 @@ struct AuthCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "auth",
         abstract: "Managed authentication to cloud services",
+        shouldDisplay: false,
         subcommands: [
             LoginCommand.self,
             LogoutCommand.self,
@@ -91,7 +92,7 @@ struct RefreshCertsCommand: AsyncParsableCommand {
                         }
                     )
                 }
-                var config = try getConfig()
+                var config = getConfig()
                 config.addAuth(auth)
                 try config.save()
                 Noora().success("Refreshed certificates")
@@ -117,7 +118,7 @@ struct LogoutCommand: AsyncParsableCommand {
     )
 
     func run() async throws {
-        var config = try getConfig()
+        var config = getConfig()
 
         if config.auth.isEmpty {
             Noora().error("No accounts found")

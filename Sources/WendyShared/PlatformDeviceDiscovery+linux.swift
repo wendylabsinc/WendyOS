@@ -1,11 +1,13 @@
 #if os(Linux)
     import DNSClient
+    import NIOCore
     import Foundation
     import Logging
     import Subprocess
 
     public struct PlatformDeviceDiscovery: DeviceDiscovery {
         private let logger: Logger
+        package var timeout: NIOCore.TimeAmount = .seconds(5)
 
         public init(
             logger: Logger
@@ -175,17 +177,12 @@
             let dns = try await DNSClient.connectMulticast(
                 on: .singletonMultiThreadedEventLoopGroup
             ).get()
-            async let wendyPTR = try? await dns.sendQuery(
-                forHost: "_wendy._udp.local",
+            let wendyPTR = try? await dns.sendQuery(
+                forHost: "_wendyos._udp.local",
                 type: .any,
-                timeout: .seconds(5)
+                timeout: timeout
             ).get()
-            async let edgePTR = try? await dns.sendQuery(
-                forHost: "_edgeos._udp.local",
-                type: .any,
-                timeout: .seconds(5)
-            ).get()
-            let messages = await [wendyPTR, edgePTR]
+            let messages = [wendyPTR]
             logger.debug(
                 "Going to process answers to PTR query",
                 metadata: ["answers": .stringConvertible(messages.count)]

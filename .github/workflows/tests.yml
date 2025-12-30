@@ -11,12 +11,27 @@ concurrency:
 jobs:
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: [self-hosted, Linux, X64]
-    container: swift:6.2.0
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    container: swift:6.2.3
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache generated protos
+        id: cache-protos
+        uses: actions/cache@v5
+        with:
+          path: |
+            Sources/WendyAgentGRPC/Proto/
+            Sources/WendyCloudGRPC/Proto/
+            Sources/ContainerdGRPC/Proto/
+            Sources/ContainerdGRPCTypes/Proto/
+            Sources/OpenTelemetryGRPC/Proto/
+            Sources/OpenTelemetryGRPCTypes/Proto/
+          key: protos-${{ hashFiles('Proto/**/*.proto', 'Scripts/Generate-Proto.sh') }}
+          restore-keys: protos-
+
       - name: Generate protos
+        if: steps.cache-protos.outputs.cache-hit != 'true'
         run: |
           chmod +x ./Scripts/Generate-Proto.sh
           ./Scripts/Generate-Proto.sh
@@ -40,9 +55,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: [self-hosted, Linux, X64]
-            container: swift:6.2.0
-          - os: macos-15
+          - os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            container: swift:6.2.3
+          - os: macos-26
             xcode-select: /Applications/Xcode_26.0.app
 
     runs-on: ${{ matrix.os }}
@@ -59,7 +74,7 @@ jobs:
           # Downloads to current directory, preserving Sources/ structure
 
       - name: Cache SPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .build/repositories
@@ -68,13 +83,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: xcode-select
         if: ${{ matrix.xcode-select != '' }}
         run: |
           sudo xcode-select --switch ${{ matrix.xcode-select }}
 
       - name: Run Tests
-        run: swift test --enable-code-coverage
+        env:
+          CC: "sccache clang"
+          CXX: "sccache clang++"
+        run: |
+          # Use parallel compilation and testing
+          NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+          swift test --enable-code-coverage --parallel --jobs "$NCPU"
 
       # Generate code coverage report for macOS
       - name: Generate Code Coverage Report (macOS)

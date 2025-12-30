@@ -1,3 +1,4 @@
+import Analytics
 import Crypto
 import Foundation
 import Hummingbird
@@ -39,9 +40,13 @@ public struct Config: Sendable, Codable {
     }
 
     public var auth: [Auth]
+    public var analytics: WendyAnalyticsConfig
+    public var defaultDevice: String?
 
     public init() {
         self.auth = []
+        self.defaultDevice = nil
+        self.analytics = WendyAnalyticsConfig()
     }
 
     public mutating func addAuth(_ newAuth: Auth) {
@@ -70,7 +75,7 @@ var configURL: URL {
     }
 }
 
-func getConfig() throws -> Config {
+func getConfig() -> Config {
     do {
         let data = try Data(contentsOf: configURL)
         return try JSONDecoder().decode(Config.self, from: data)
@@ -119,7 +124,7 @@ func withCertificates<R: Sendable>(
     forOrganizationId orgId: Int32,
     perform: @Sendable @escaping (Config.Auth.Certificates) async throws -> R
 ) async throws -> R {
-    let config = try getConfig()
+    let config = getConfig()
 
     for auth in config.auth {
         for certificate in auth.certificates {
@@ -145,7 +150,7 @@ func withAuth<R: Sendable>(
     title: TerminalText,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
-    let config = try getConfig()
+    let config = getConfig()
 
     if config.auth.isEmpty {
         return try await authenticate(title: title, perform: perform)
@@ -205,7 +210,7 @@ func setupConfig(
     cloudDashboard: String,
     cloudGRPC: String
 ) async throws -> Config.Auth {
-    var config = try getConfig()
+    var config = getConfig()
 
     let endpoint = AgentConnectionOptions.Endpoint(
         host: cloudGRPC,
