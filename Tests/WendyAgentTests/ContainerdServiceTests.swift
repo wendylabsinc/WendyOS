@@ -120,9 +120,11 @@ struct UnpackImageTests {
         var snapshots: Set<String> = []
         var preparedCount = 0
         var committedCount = 0
+        var removedCount = 0
         var statCalls: [String] = []
         var prepareCalls: [String] = []
         var commitCalls: [String] = []
+        var removeCalls: [String] = []
 
         func stat(
             _ request: Containerd_Services_Snapshots_V1_StatSnapshotRequest
@@ -167,6 +169,18 @@ struct UnpackImageTests {
             }
             snapshots.insert(request.name)
             committedCount += 1
+        }
+
+        func remove(
+            _ request: Containerd_Services_Snapshots_V1_RemoveSnapshotRequest
+        ) async throws {
+            removeCalls.append(request.key)
+            if snapshots.contains(request.key) {
+                snapshots.remove(request.key)
+                removedCount += 1
+            } else {
+                throw RPCError(code: .notFound, message: "Snapshot not found: \(request.key)")
+            }
         }
 
         func addSnapshot(key: String) {

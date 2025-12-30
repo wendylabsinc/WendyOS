@@ -839,10 +839,7 @@ public struct Containerd: Sendable {
                     ]
                 )
                 do {
-                    let snapshotsClient = Containerd_Services_Snapshots_V1_Snapshots.Client(
-                        wrapping: client
-                    )
-                    _ = try await snapshotsClient.remove(
+                    try await snapshotsService.remove(
                         .with {
                             $0.key = tmpKey
                             $0.snapshotter = "overlayfs"

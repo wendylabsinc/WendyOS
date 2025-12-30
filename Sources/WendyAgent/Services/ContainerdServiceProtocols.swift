@@ -1,6 +1,7 @@
 import ContainerdGRPC
 import Foundation
 import GRPCCore
+import Logging
 
 // MARK: - Containerd Service Protocols
 
@@ -61,6 +62,10 @@ public protocol ContainerdSnapshotsService: Sendable {
     func commit(
         _ request: Containerd_Services_Snapshots_V1_CommitSnapshotRequest
     ) async throws
+
+    func remove(
+        _ request: Containerd_Services_Snapshots_V1_RemoveSnapshotRequest
+    ) async throws
 }
 
 /// Protocol for containerd Diffs service operations
@@ -74,95 +79,116 @@ public protocol ContainerdDiffsService: Sendable {
 
 /// Production implementation wrapping the real gRPC Images client
 public struct GRPCImagesService<Transport: ClientTransport>: ContainerdImagesService {
-    private let client: GRPCClient<Transport>
+    private let imagesClient: Containerd_Services_Images_V1_Images.Client<Transport>
 
     public init(client: GRPCClient<Transport>) {
-        self.client = client
+        self.imagesClient = Containerd_Services_Images_V1_Images.Client(wrapping: client)
     }
 
     public func get(
         _ request: Containerd_Services_Images_V1_GetImageRequest
     ) async throws -> Containerd_Services_Images_V1_GetImageResponse {
-        let images = Containerd_Services_Images_V1_Images.Client(wrapping: client)
-        return try await images.get(request)
+        return try await imagesClient.get(request)
     }
 }
 
 /// Production implementation wrapping the real gRPC Content client
 public struct GRPCContentService<Transport: ClientTransport>: ContainerdContentService {
-    private let client: GRPCClient<Transport>
+    private let contentClient: Containerd_Services_Content_V1_Content.Client<Transport>
+    private let logger = Logger(label: "com.wendylabs.containerd.content")
 
     public init(client: GRPCClient<Transport>) {
-        self.client = client
+        self.contentClient = Containerd_Services_Content_V1_Content.Client(wrapping: client)
     }
 
     public func read<R: Sendable>(
         _ request: Containerd_Services_Content_V1_ReadContentRequest,
         handler: @Sendable @escaping (ContentReadStream) async throws -> R
     ) async throws -> R {
-        let content = Containerd_Services_Content_V1_Content.Client(wrapping: client)
-        return try await content.read(request) { serverResponse in
-            // Convert gRPC ServerResponse stream to our ContentReadStream
-            let stream = AsyncStream<Containerd_Services_Content_V1_ReadContentResponse> {
-                continuation in
-                Task {
-                    do {
-                        for try await message in serverResponse.messages {
-                            continuation.yield(message)
+        return try await contentClient.read(request) { serverResponse in
+            // Convert gRPC ServerResponse stream to our ContentReadStream using structured concurrency
+            return try await withThrowingTaskGroup(of: Void.self) { group in
+                let stream = AsyncStream<Containerd_Services_Content_V1_ReadContentResponse> {
+                    continuation in
+                    group.addTask {
+                        do {
+                            for try await message in serverResponse.messages {
+                                continuation.yield(message)
+                            }
+                            continuation.finish()
+                        } catch {
+                            // Log the error for debugging production issues
+                            self.logger.error(
+                                "Content stream error",
+                                metadata: [
+                                    "digest": .stringConvertible(request.digest),
+                                    "error": .stringConvertible(String(describing: error)),
+                                ]
+                            )
+                            continuation.finish()
+                            throw error
                         }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish()
                     }
                 }
+
+                // Execute handler with the stream
+                let result = try await handler(ContentReadStream(stream))
+
+                // Wait for stream processing to complete
+                try await group.waitForAll()
+
+                return result
             }
-            return try await handler(ContentReadStream(stream))
         }
     }
 }
 
 /// Production implementation wrapping the real gRPC Snapshots client
 public struct GRPCSnapshotsService<Transport: ClientTransport>: ContainerdSnapshotsService {
-    private let client: GRPCClient<Transport>
+    private let snapshotsClient: Containerd_Services_Snapshots_V1_Snapshots.Client<Transport>
 
     public init(client: GRPCClient<Transport>) {
-        self.client = client
+        self.snapshotsClient = Containerd_Services_Snapshots_V1_Snapshots.Client(
+            wrapping: client
+        )
     }
 
     public func stat(
         _ request: Containerd_Services_Snapshots_V1_StatSnapshotRequest
     ) async throws -> Containerd_Services_Snapshots_V1_StatSnapshotResponse {
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        return try await snapshots.stat(request)
+        return try await snapshotsClient.stat(request)
     }
 
     public func prepare(
         _ request: Containerd_Services_Snapshots_V1_PrepareSnapshotRequest
     ) async throws -> Containerd_Services_Snapshots_V1_PrepareSnapshotResponse {
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        return try await snapshots.prepare(request)
+        return try await snapshotsClient.prepare(request)
     }
 
     public func commit(
         _ request: Containerd_Services_Snapshots_V1_CommitSnapshotRequest
     ) async throws {
-        let snapshots = Containerd_Services_Snapshots_V1_Snapshots.Client(wrapping: client)
-        _ = try await snapshots.commit(request)
+        _ = try await snapshotsClient.commit(request)
+    }
+
+    public func remove(
+        _ request: Containerd_Services_Snapshots_V1_RemoveSnapshotRequest
+    ) async throws {
+        _ = try await snapshotsClient.remove(request)
     }
 }
 
 /// Production implementation wrapping the real gRPC Diffs client
 public struct GRPCDiffsService<Transport: ClientTransport>: ContainerdDiffsService {
-    private let client: GRPCClient<Transport>
+    private let diffsClient: Containerd_Services_Diff_V1_Diff.Client<Transport>
 
     public init(client: GRPCClient<Transport>) {
-        self.client = client
+        self.diffsClient = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
     }
 
     public func apply(
         _ request: Containerd_Services_Diff_V1_ApplyRequest
     ) async throws -> Containerd_Services_Diff_V1_ApplyResponse {
-        let diffs = Containerd_Services_Diff_V1_Diff.Client(wrapping: client)
-        return try await diffs.apply(request)
+        return try await diffsClient.apply(request)
     }
 }
