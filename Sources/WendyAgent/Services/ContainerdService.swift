@@ -816,7 +816,7 @@ public struct Containerd: Sendable {
                 if let parent = previousChainID {
                     labels["containerd.io/gc.ref.snapshot.overlayfs"] = parent
                 }
-                _ = try await snapshots.commit(
+                _ = try await snapshotsService.commit(
                     .with {
                         $0.key = tmpKey
                         $0.name = layerKey
