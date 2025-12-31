@@ -1,8 +1,7 @@
 #!/bin/bash
 
 ## There are times that the `./dev-update-agent.sh` doesn't work, so we need to use this script to update the agent manually.
-read -p "Enter hostname [wendyos-humble-pepper.local]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-wendyos-humble-pepper.local}
+HOSTNAME=wendyos-spirited-rose.local
 USER=edge
 PASSWORD=edge
 
