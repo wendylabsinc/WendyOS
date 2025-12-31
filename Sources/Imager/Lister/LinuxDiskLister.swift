@@ -223,13 +223,25 @@ public struct LinuxDiskLister: DiskLister {
         } catch let decodingError as DecodingError {
             switch decodingError {
             case .keyNotFound(let key, let context):
-                logger.error("JSON parsing error - Missing key: \(key.stringValue)", metadata: ["context": "\(context.debugDescription)"])
+                logger.error(
+                    "JSON parsing error - Missing key: \(key.stringValue)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .typeMismatch(let type, let context):
-                logger.error("JSON parsing error - Type mismatch for type: \(type)", metadata: ["context": "\(context.debugDescription)"])
+                logger.error(
+                    "JSON parsing error - Type mismatch for type: \(type)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .valueNotFound(let type, let context):
-                logger.error("JSON parsing error - Value not found for type: \(type)", metadata: ["context": "\(context.debugDescription)"])
+                logger.error(
+                    "JSON parsing error - Value not found for type: \(type)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .dataCorrupted(let context):
-                logger.error("JSON parsing error - Data corrupted", metadata: ["context": "\(context.debugDescription)"])
+                logger.error(
+                    "JSON parsing error - Data corrupted",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             @unknown default:
                 logger.error("JSON parsing error - Unknown decoding error: \(decodingError)")
             }
