@@ -1,9 +1,12 @@
 import Foundation
+import Logging
 import Subprocess
 
 #if os(Linux)
     /// A disk writer implementation for Linux that uses the `dd` command.
     public class LinuxDiskWriter: DiskWriter {
+        private let logger = Logger(label: "wendy.imager.linux-disk-writer")
+
         public init() {}
 
         public func write(
@@ -57,7 +60,7 @@ import Subprocess
                 }
 
                 // On Linux, dd with status=progress automatically outputs progress information
-                print("Writing image: \(imagePath) -> \(drive.id)")
+                logger.info("Writing image: \(imagePath) -> \(drive.id)")
                 let script = """
                     dd if="\(imagePath)" of="\(drive.id)" bs=1M status=progress conv=fsync 2>&1
                     """
