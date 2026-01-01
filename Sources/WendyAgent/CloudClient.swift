@@ -73,7 +73,7 @@ actor CloudClient: Service {
                 }
             ) { response in
                 for try await newState in response.messages {
-                    print(newState)
+                    self.logger.debug("Received new state: \(newState)")
                 }
             }
 

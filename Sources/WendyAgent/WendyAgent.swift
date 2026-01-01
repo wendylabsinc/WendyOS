@@ -135,7 +135,7 @@ struct WendyAgent: AsyncParsableCommand {
         let authenticatedServices: [any GRPCCore.RegistrableRPCService] = [
             WendyContainerService(),
             WendyAgentService(shouldRestart: {
-                print("Shutting down server")
+                logger.info("Shutting down server")
                 continuation.yield()
             }),
             provisioning,
