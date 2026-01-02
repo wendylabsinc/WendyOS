@@ -1,7 +1,9 @@
+import Logging
 import OpenTelemetryGRPC
 
 actor OpenTelemetryProxy: Opentelemetry_Proto_Collector_Logs_V1_LogsService.SimpleServiceProtocol {
     let cloud: CloudClient
+    let logger = Logger(label: "sh.wendy.agent.otel-proxy")
 
     init(cloud: CloudClient) {
         self.cloud = cloud
@@ -17,7 +19,7 @@ actor OpenTelemetryProxy: Opentelemetry_Proto_Collector_Logs_V1_LogsService.Simp
             )
             return try await otel.export(request)
         } catch {
-            print("Error exporting logs: \(error)")
+            logger.error("Error exporting logs: \(error)")
             return Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceResponse()
         }
     }

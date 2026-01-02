@@ -5,9 +5,11 @@
 //  Created by Maximilian Alexander on 7/20/25.
 //
 
+import OSLog
 import SwiftUI
 
 struct DeviceDetailsPage: View {
+    private let logger = Logger(subsystem: "sh.wendy.companion", category: "DeviceDetails")
     let device: Device
     @State private var ssid = ""
     @State private var password = ""
@@ -77,10 +79,10 @@ struct DeviceDetailsPage: View {
 
     private func saveChanges() {
         // TODO: Implement save logic
-        print("Saving Wi-Fi settings for \(device.name)")
-        print("SSID: \(ssid)")
-        print("Security: \(securityType)")
-        print("Hidden: \(isHiddenNetwork)")
+        logger.debug("Saving Wi-Fi settings for \(device.name)")
+        logger.debug("SSID: \(ssid)")
+        logger.debug("Security: \(securityType)")
+        logger.debug("Hidden: \(isHiddenNetwork)")
     }
 }
 
