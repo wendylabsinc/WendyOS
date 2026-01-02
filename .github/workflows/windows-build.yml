@@ -83,7 +83,7 @@ jobs:
 
       # 2. Provision Zlib (Check Vcpkg)
       - name: Install Visual Studio Build Tools (C++ workload)
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
@@ -91,16 +91,37 @@ jobs:
           $installer = "$env:TEMP\vs_BuildTools.exe"
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $installer
       
-          Start-Process -FilePath $installer -ArgumentList @(
+          $installPath = "C:\BuildTools"
+          $logDir = "$env:TEMP\vslogs"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+      
+          $args = @(
             "--quiet", "--wait", "--norestart", "--nocache",
-            "--installPath", "C:\BuildTools",
+            "--installPath", $installPath,
             "--add", "Microsoft.VisualStudio.Workload.VCTools",
             "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
             "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041",
-            "--includeRecommended"
-          ) -NoNewWindow -Wait
+            "--includeRecommended",
+            "--log", "$logDir\vs_install.log"
+          )
       
-          if ($LASTEXITCODE -ne 0) { throw "VS Build Tools installer failed with exit code $LASTEXITCODE" }
+          $p = Start-Process -FilePath $installer -ArgumentList $args -PassThru -Wait
+          "VS installer exit code: $($p.ExitCode)"
+      
+          if ($p.ExitCode -ne 0) {
+            Write-Host "==== VS installer log (tail) ===="
+            if (Test-Path "$logDir\vs_install.log") {
+              Get-Content "$logDir\vs_install.log" -Tail 200
+            } else {
+              Write-Host "No vs_install.log found at $logDir"
+            }
+      
+            Write-Host "==== Visual Studio Setup logs directory listing ===="
+            $vsSetupLogs = "$env:ProgramData\Microsoft\VisualStudio\Packages\_Instances"
+            if (Test-Path $vsSetupLogs) { Get-ChildItem $vsSetupLogs -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50 | Format-Table -AutoSize }
+      
+            throw "VS Build Tools install failed (exit code $($p.ExitCode))"
+          }
       
       - name: Set up MSVC dev environment
         uses: ilammy/msvc-dev-cmd@v1
