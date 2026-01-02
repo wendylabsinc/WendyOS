@@ -73,6 +73,23 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var agent: Endpoint?
 
+    public init() {}
+
+    public init(
+        endpoint: Endpoint?
+    ) {
+        self.agent = nil
+        self.device = endpoint
+    }
+
+    static func defaultDevice() -> Endpoint? {
+        let config = getConfig()
+        if let defaultDevice = config.defaultDevice {
+            return Endpoint(host: defaultDevice, port: 50051, defaultDevice: true)
+        }
+        return nil
+    }
+
     func read(
         title: TerminalText?,
         readDefault: Bool = true
@@ -91,9 +108,8 @@ struct AgentConnectionOptions: ParsableArguments {
             return endpoint
         }
 
-        let config = getConfig()
-        if readDefault, let defaultDevice = config.defaultDevice {
-            return Endpoint(host: defaultDevice, port: 50051, defaultDevice: true)
+        if readDefault, let defaultDevice = Self.defaultDevice() {
+            return defaultDevice
         }
 
         let discovery = PlatformDeviceDiscovery(

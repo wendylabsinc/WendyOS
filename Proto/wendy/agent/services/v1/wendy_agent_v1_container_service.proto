@@ -11,6 +11,7 @@ service WendyContainerService {
     rpc RunContainer(RunContainerLayersRequest) returns (stream RunContainerLayersResponse);
     rpc StartContainer(StartContainerRequest) returns (stream RunContainerLayersResponse);
     rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
+    rpc DeleteContainer(DeleteContainerRequest) returns (DeleteContainerResponse);
     rpc ListContainers(ListContainersRequest) returns (stream ListContainersResponse);
 }
 
@@ -104,3 +105,12 @@ message StopContainerRequest {
 }
 
 message StopContainerResponse {}
+
+message DeleteContainerRequest {
+    string app_name = 1;
+
+    // Optionally delete the container image as well (useful for freeing space)
+    bool delete_image = 2;
+}
+
+message DeleteContainerResponse {}

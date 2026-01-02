@@ -1,16 +1,10 @@
-// swift-tools-version: 6.1.2
+// swift-tools-version: 6.2.0
 import PackageDescription
-
-#if compiler(>=6.2.1)
-    let hasSpan = true
-#else
-    let hasSpan = false
-#endif
 
 let package = Package(
     name: "wendy-agent",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v26)
     ],
     products: [
         .executable(name: "wendy-agent", targets: ["wendy-agent"]),
@@ -38,12 +32,12 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
        .package(
             url: "https://github.com/tuist/Noora.git",
-            from: "0.51.3"
+            from: "0.52.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
             exact: "0.2.1",
-            traits: hasSpan ? [.trait(name: "SubprocessSpan")] : []
+            traits: [.trait(name: "SubprocessSpan")]
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),

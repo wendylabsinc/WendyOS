@@ -55,6 +55,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Deploy mode with automatic restarts (up to 5 retries on failure)")
     var deploy: Bool = false
 
+    @Flag(name: .customShort("y"))
+    var autoAccept: Bool = false
+
     // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
     @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
     var noRestart: Bool = false
@@ -496,9 +499,15 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
 
         if !installedSDKs.contains(swiftSDK) {
-            let installSDK = Noora().yesOrNoChoicePrompt(
-                question: "Do you want to install the WendyOS Swift SDK?"
-            )
+            let installSDK: Bool
+
+            if autoAccept {
+                installSDK = true
+            } else {
+                installSDK = Noora().yesOrNoChoicePrompt(
+                    question: "Do you want to install the WendyOS Swift SDK?"
+                )
+            }
 
             if installSDK {
                 try await Noora().progressStep(
@@ -514,14 +523,20 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         #if !os(Windows)
         if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
-            let installSwift = Noora().yesOrNoChoicePrompt(
-                title: "Swift \(swiftVersion) version is not installed yet",
-                question: "Do you want to install Swift \(swiftVersion)?",
-                description: """
-                    WendyOS development is tied to a specific Swift toolchain.
-                    We update this version from time to time to ensure compatibility with the latest features.
-                    """
-            )
+            let installSwift: Bool
+
+            if autoAccept {
+                installSwift = true
+            } else {
+                installSwift = Noora().yesOrNoChoicePrompt(
+                    title: "Swift \(swiftVersion) version is not installed yet",
+                    question: "Do you want to install Swift \(swiftVersion)?",
+                    description: """
+                        WendyOS development is tied to a specific Swift toolchain.
+                        We update this version from time to time to ensure compatibility with the latest features.
+                        """
+                )
+            }
 
             if installSwift {
                 try await Noora().progressStep(
@@ -548,7 +563,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }) {
             Noora().info("Container plugin is not installed. Do you want to install it?")
 
-            guard Noora().yesOrNoChoicePrompt(question: "Do you want to install it?") else {
+            guard autoAccept || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
+            else {
                 Noora().error(
                     "Container plugin is required to build and run Swift packages. Please install it manually."
                 )

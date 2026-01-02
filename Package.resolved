@@ -1,5 +1,5 @@
 {
-  "originHash" : "e75c25ec2ac66c294e9b2a891e265375ea8cfc40167eaaa673b367e2e086c136",
+  "originHash" : "7f0259bd0668862885be85949530d196469c885622dec0ddda496fcbc077379b",
   "pins" : [
     {
       "identity" : "dbus",
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tuist/Noora.git",
       "state" : {
-        "revision" : "99d3bef655819d530ad467c017ae4ff7db27b0a3",
-        "version" : "0.51.3"
+        "revision" : "d157bf198c57687a4bab7d2a1751a3719c60b817",
+        "version" : "0.52.0"
       }
     },
     {
@@ -62,6 +62,15 @@
       "state" : {
         "revision" : "7c74ac435e03a927c3a73134c48b61e60221abcb",
         "version" : "0.3.8"
+      }
+    },
+    {
+      "identity" : "rainbow",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/onevcat/Rainbow",
+      "state" : {
+        "revision" : "cdf146ae671b2624917648b61c908d1244b98ca1",
+        "version" : "4.2.1"
       }
     },
     {
@@ -78,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser.git",
       "state" : {
-        "revision" : "cdd0ef3755280949551dc26dee5de9ddeda89f54",
-        "version" : "1.6.2"
+        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
+        "version" : "1.7.0"
       }
     },
     {
@@ -188,6 +197,24 @@
       "state" : {
         "revision" : "0743a9364382629da3bf5677b46a2c4b1ce5d2a6",
         "version" : "2.7.1"
+      }
+    },
+    {
+      "identity" : "swift-nio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio.git",
+      "state" : {
+        "revision" : "a1605a3303a28e14d822dec8aaa53da8a9490461",
+        "version" : "2.92.0"
+      }
+    },
+    {
+      "identity" : "swift-nio-extras",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio-extras.git",
+      "state" : {
+        "revision" : "a55c3dd3a81d035af8a20ce5718889c0dcab073d",
+        "version" : "1.29.0"
       }
     },
     {

@@ -11,8 +11,8 @@ concurrency:
 jobs:
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: ubuntu-latest
-    container: swift:6.2.0
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    container: swift:6.2.3
     steps:
       - uses: actions/checkout@v4
 
@@ -55,9 +55,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            container: swift:6.2.0
-          - os: macos-15
+          - os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            container: swift:6.2.3
+          - os: macos-26
             xcode-select: /Applications/Xcode_26.0.app
 
     runs-on: ${{ matrix.os }}

@@ -4,6 +4,7 @@ import Foundation
 import Logging
 import Noora
 import SystemPackage
+import WendyAgentGRPC
 
 struct ProjectCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -142,8 +143,17 @@ struct ListCommand: ModifyProjectCommand {
             print("   Mode: \(networkEntitlement.mode.rawValue)")
         case .bluetooth(let bluetoothEntitlement):
             print("   Mode: \(bluetoothEntitlement.mode.rawValue)")
-        case .video:
-            print("   No additional configuration")
+        case .video(let videoEntitlement):
+            print("   Mode: \(videoEntitlement.mode.rawValue)")
+            switch videoEntitlement.mode {
+            case .all:
+                print("   All detected video devices")
+            case .allowlist:
+                print("   Selected Video Devices:")
+                for allowlist in videoEntitlement.allowlist {
+                    print("      - \(allowlist)")
+                }
+            }
         case .audio:
             print("   No additional configuration")
         case .gpu:
@@ -249,7 +259,43 @@ struct AddCommand: ModifyProjectCommand {
                     )
                 )
             case .video:
-                newEntitlement = .video(VideoEntitlements())
+                let mode = Noora().singleChoicePrompt(
+                    question: "Which devices do you want to allow?",
+                    options: VideoEntitlements.VideoMode.allCases
+                )
+
+                switch mode {
+                case .all:
+                    newEntitlement = .video(VideoEntitlements(mode: .all))
+                case .allowlist:
+                    let devices = try await withAgentGRPCClient(
+                        AgentConnectionOptions(endpoint: nil),
+                        title: TerminalText("Select a WendyOS device to discover video inputs")
+                    ) { client in
+                        let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
+                            wrapping: client
+                        )
+
+                        var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
+                        request.categoryFilter = "camera"
+
+                        return try await agent.listHardwareCapabilities(request).capabilities
+                    }
+
+                    if devices.isEmpty {
+                        Noora().warning("No camera devices found")
+                        return
+                    } else {
+                        let allowlist = Noora().multipleChoicePrompt(
+                            question: "Which device(s) do you want to allow?",
+                            options: devices.map { $0.devicePath }
+                        )
+
+                        newEntitlement = .video(
+                            VideoEntitlements(mode: .allowlist, allowlist: allowlist)
+                        )
+                    }
+                }
             case .audio:
                 newEntitlement = .audio
             case .gpu:

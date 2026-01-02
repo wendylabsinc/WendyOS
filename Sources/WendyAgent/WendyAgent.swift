@@ -38,7 +38,7 @@ struct WendyAgent: AsyncParsableCommand {
 
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? defaultLogLevel
+                .flatMap(Logger.Level.init(rawValue:)) ?? defaultLogLevel
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
@@ -135,7 +135,7 @@ struct WendyAgent: AsyncParsableCommand {
         let authenticatedServices: [any GRPCCore.RegistrableRPCService] = [
             WendyContainerService(),
             WendyAgentService(shouldRestart: {
-                print("Shutting down server")
+                logger.info("Shutting down server")
                 continuation.yield()
             }),
             provisioning,

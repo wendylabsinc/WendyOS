@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.10.0"),
         .package(url: "https://github.com/tayloraswift/swift-jpeg.git", from: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-container-plugin", from: "1.0.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
