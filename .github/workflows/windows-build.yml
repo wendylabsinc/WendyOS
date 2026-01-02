@@ -45,6 +45,13 @@ jobs:
           repository: hummingbird-project/hummingbird
           ref: jo/windows-support
           path: hummingbird
+        
+      - name: Checkout Custom Rainbow
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/Rainbow
+          ref: jo/windows
+          path: Rainbow
 
       - name: Checkout Custom SwiftNIO
         uses: actions/checkout@v4
