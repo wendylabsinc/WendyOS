@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-windows:
     name: Build & Bundle (Windows)
-    runs-on: runs-on=${{ github.run_id }}/image=windows25-base-x64/family=m7i
+    runs-on: runs-on=${{ github.run_id }}/image=windows22-base-x64/family=m7i
     
     steps:
       # 1. Setup Swift
