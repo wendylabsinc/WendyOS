@@ -160,7 +160,10 @@ jobs:
       - name: Create Distribution Bundle
         shell: pwsh
         run: |
-          $BuildDir = ".build\x86_64-unknown-windows-msvc\${{ env.BUILD_CONFIG }}"
+          # Compute build dir using `swift` CLI for maximum correctness
+          cd ${{ github.workspace }}/wendy-agent
+          $BuildDir = swift build --show-bin-path -c ${{ env.BUILD_CONFIG }} --arch x86_64
+          cd ${{ github.workspace }}
           $StagingDir = "staging"
           $ZlibSource = "C:\vcpkg\installed\x64-windows\bin\zlib1.dll"
           
