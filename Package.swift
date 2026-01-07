@@ -13,21 +13,33 @@ let package = Package(
         .executable(name: "wendy-network-daemon", targets: ["wendy-network-daemon"]),
     ],
     dependencies: [
+        #if os(Windows)
         .package(path: "../async-http-client"),
         .package(path: "../hummingbird"),
+        .package(path: "../DNSClient"),
+        .package(path: "../grpc-swift-nio-transport"),
+        .package(path: "../swift-nio"),
+        .package(path: "../swift-nio-ssl"),
+        .package(path: "../swift-nio-extras"),
+        .package(path: "../Rainbow"),
+        #else
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
+        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.5.0"),
+        .package(
+            url: "https://github.com/grpc/grpc-swift-nio-transport.git",
+            from: "2.3.0"
+        ),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
+        #endif
         .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3"),
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.2.1"),
         .package(url: "https://github.com/grpc/grpc-swift-extras.git", from: "2.1.1"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
-        .package(path: "../DNSClient"),
-        .package(path: "../grpc-swift-nio-transport"),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.12.0"),
-        .package(path: "../swift-nio"),
-        .package(path: "../swift-nio-ssl"),
-        .package(path: "../swift-nio-extras"),
-        .package(path: "../Rainbow"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         .package(
