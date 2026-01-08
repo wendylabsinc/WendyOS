@@ -154,7 +154,7 @@ jobs:
         run: |
           cd ${{ github.workspace }}/wendy-agent
           # We pass the include and library paths from vcpkg explicitly
-          swift build -c ${{ env.BUILD_CONFIG }} --arch x86_64 --product wendy -Xcc -I"C:\vcpkg\installed\x64-windows\include" -Xlinker -L"C:\vcpkg\installed\x64-windows\lib"
+          swift build -v -c ${{ env.BUILD_CONFIG }} --arch x86_64 --product wendy -Xcc -I"C:\vcpkg\installed\x64-windows\include" -Xlinker -L"C:\vcpkg\installed\x64-windows\lib"
 
       # 5. Bundle (The "Alongside" Requirement)
       - name: Create Distribution Bundle

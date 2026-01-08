@@ -1,6 +1,15 @@
 {
-  "originHash" : "7f0259bd0668862885be85949530d196469c885622dec0ddda496fcbc077379b",
+  "originHash" : "9ebf4440a7c5120caf584aaa911cf288d39f787ea003e118034940c0c7f84127",
   "pins" : [
+    {
+      "identity" : "async-http-client",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swift-server/async-http-client.git",
+      "state" : {
+        "revision" : "5dd84c7bb48b348751d7bbe7ba94a17bafdcef37",
+        "version" : "1.30.2"
+      }
+    },
     {
       "identity" : "dbus",
       "kind" : "remoteSourceControl",
@@ -8,6 +17,15 @@
       "state" : {
         "revision" : "2c71124a7baf3fff6346d7ebce6b90c336f0d285",
         "version" : "0.2.4"
+      }
+    },
+    {
+      "identity" : "dnsclient",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/orlandos-nl/DNSClient.git",
+      "state" : {
+        "revision" : "2d4174e4fbe75cc2f31d2fa2d384f486e5fe63b5",
+        "version" : "2.5.0"
       }
     },
     {
@@ -29,12 +47,30 @@
       }
     },
     {
+      "identity" : "grpc-swift-nio-transport",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
+      "state" : {
+        "revision" : "dcfa8dc858bba5ded7a3760cede8c5fc03558a42",
+        "version" : "2.4.0"
+      }
+    },
+    {
       "identity" : "grpc-swift-protobuf",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/grpc/grpc-swift-protobuf.git",
       "state" : {
         "revision" : "a1aa982cb2a276c72b478433eb75a4ec6508a277",
         "version" : "2.1.2"
+      }
+    },
+    {
+      "identity" : "hummingbird",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/hummingbird.git",
+      "state" : {
+        "revision" : "daf66bfd4b46c1f3f080a1f3438d8fbecee7ace5",
+        "version" : "2.19.0"
       }
     },
     {
@@ -224,6 +260,15 @@
       "state" : {
         "revision" : "c2ba4cfbb83f307c66f5a6df6bb43e3c88dfbf80",
         "version" : "1.39.0"
+      }
+    },
+    {
+      "identity" : "swift-nio-ssl",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio-ssl.git",
+      "state" : {
+        "revision" : "173cc69a058623525a58ae6710e2f5727c663793",
+        "version" : "2.36.0"
       }
     },
     {
