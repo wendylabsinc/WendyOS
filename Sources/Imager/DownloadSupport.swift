@@ -443,12 +443,12 @@ public final class ImageDownloader: ImageDownloading {
         if redownload || isValidCache {
             return (try await redownloadImage(), cached: false)
         } else {
-            print("Using cached image for \(deviceName)")
+            logger.info("Using cached image for \(deviceName)")
 
             do {
                 return (try await validateImage(at: extractionDirectoryURL.path), cached: true)
             } catch {
-                print("Invalid image found in cache, redownloading...")
+                logger.warning("Invalid image found in cache, redownloading...")
 
                 return (try await redownloadImage(), cached: false)
             }

@@ -192,7 +192,7 @@ public struct LinuxDiskLister: DiskLister {
 
         // Try to parse the JSON output from lsblk -J
         guard let jsonData = output.data(using: .utf8) else {
-            print("Error: Could not convert lsblk output to data")
+            logger.error("Could not convert lsblk output to data")
             return []
         }
 
@@ -223,23 +223,31 @@ public struct LinuxDiskLister: DiskLister {
         } catch let decodingError as DecodingError {
             switch decodingError {
             case .keyNotFound(let key, let context):
-                print("JSON parsing error - Missing key: \(key.stringValue)")
-                print("Context: \(context.debugDescription)")
+                logger.error(
+                    "JSON parsing error - Missing key: \(key.stringValue)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .typeMismatch(let type, let context):
-                print("JSON parsing error - Type mismatch for type: \(type)")
-                print("Context: \(context.debugDescription)")
+                logger.error(
+                    "JSON parsing error - Type mismatch for type: \(type)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .valueNotFound(let type, let context):
-                print("JSON parsing error - Value not found for type: \(type)")
-                print("Context: \(context.debugDescription)")
+                logger.error(
+                    "JSON parsing error - Value not found for type: \(type)",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             case .dataCorrupted(let context):
-                print("JSON parsing error - Data corrupted")
-                print("Context: \(context.debugDescription)")
+                logger.error(
+                    "JSON parsing error - Data corrupted",
+                    metadata: ["context": "\(context.debugDescription)"]
+                )
             @unknown default:
-                print("JSON parsing error - Unknown decoding error: \(decodingError)")
+                logger.error("JSON parsing error - Unknown decoding error: \(decodingError)")
             }
             return []
         } catch {
-            print("lsblk JSON parsing failed with error: \(error)")
+            logger.error("lsblk JSON parsing failed with error: \(error)")
             return []
         }
 

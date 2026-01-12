@@ -351,192 +351,58 @@ jobs:
           retention-days: 14
 
   publish-linux-repos:
-    name: Publish Linux Repositories
+    name: Publish to GCP Artifact Registry
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     needs: [determine-version, package-linux]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download all .deb packages
         uses: actions/download-artifact@v4
         with:
           pattern: linux-packages-deb-*
           merge-multiple: true
-          path: repo/apt/pool
+          path: packages/deb
 
       - name: Download all .rpm packages
         uses: actions/download-artifact@v4
         with:
           pattern: linux-packages-rpm-*
           merge-multiple: true
-          path: repo/yum/packages
+          path: packages/rpm
 
-      - name: Install repository tools
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload APT packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y createrepo-c dpkg-dev gzip apt-utils
-
-      - name: Create YUM repository
-        run: |
-          cd repo/yum
-
-          # Create repo structure
-          mkdir -p x86_64 aarch64
-
-          # Move packages to arch-specific directories
-          mv packages/*x86_64*.rpm x86_64/ || true
-          mv packages/*aarch64*.rpm aarch64/ || true
-          rmdir packages 2>/dev/null || true
-
-          # Generate repository metadata for each architecture
-          for arch in x86_64 aarch64; do
-            if [ -d "$arch" ] && [ "$(ls -A $arch 2>/dev/null)" ]; then
-              createrepo_c "$arch"
-            fi
+          echo "Uploading .deb packages to Artifact Registry..."
+          for deb in packages/deb/*.deb; do
+            echo "Uploading $deb"
+            gcloud artifacts apt upload wendy-apt \
+              --location=us-central1 \
+              --project=${{ vars.GCP_PROJECT_ID }} \
+              --source="$deb"
           done
 
-          # Create repo configuration file
-          cat > wendy.repo << 'REPO_EOF'
-          [wendy]
-          name=Wendy CLI Repository
-          baseurl=https://wendylabsinc.github.io/wendy-agent/yum/$basearch
-          enabled=1
-          gpgcheck=0
-          REPO_EOF
-
-          echo "YUM repository created:"
-          find . -type f | head -20
-
-      - name: Create APT repository
+      - name: Upload YUM packages
         run: |
-          cd repo/apt
-
-          # Create distribution structure
-          mkdir -p dists/stable/main/binary-amd64
-          mkdir -p dists/stable/main/binary-arm64
-
-          # Move packages to pool
-          cd pool
-          ls -la
-
-          # Generate Packages files
-          cd ..
-
-          # Generate Packages for amd64
-          dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
-          gzip -k dists/stable/main/binary-amd64/Packages
-
-          # Generate Packages for arm64
-          dpkg-scanpackages --arch arm64 pool > dists/stable/main/binary-arm64/Packages
-          gzip -k dists/stable/main/binary-arm64/Packages
-
-          # Create Release file
-          cat > dists/stable/Release << RELEASE_EOF
-          Origin: Wendy Labs Inc.
-          Label: Wendy
-          Suite: stable
-          Codename: stable
-          Architectures: amd64 arm64
-          Components: main
-          Description: Wendy CLI and Agent packages
-          RELEASE_EOF
-
-          # Create sources.list entry file
-          cat > wendy.list << 'LIST_EOF'
-          deb [trusted=yes] https://wendylabsinc.github.io/wendy-agent/apt stable main
-          LIST_EOF
-
-          echo "APT repository created:"
-          find . -type f | head -20
-
-      - name: Update Arch PKGBUILD checksums
-        run: |
-          VERSION="${{ needs.determine-version.outputs.version }}"
-
-          # Calculate checksums from the tarballs in the release
-          X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
-          ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
-
-          # Note: Checksums will be available after release is created
-          # For now, create PKGBUILD with version placeholder updated
-
-          # Update wendy PKGBUILD
-          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy/PKGBUILD
-          sed -i "s/_pkgver=VERSION_PLACEHOLDER/_pkgver=${VERSION}/" packaging/arch/wendy-agent/PKGBUILD
-
-          # Copy PKGBUILDs to repo directory for publishing
-          mkdir -p repo/arch/wendy repo/arch/wendy-agent
-          cp packaging/arch/wendy/PKGBUILD repo/arch/wendy/
-          cp packaging/arch/wendy-agent/PKGBUILD repo/arch/wendy-agent/
-
-      - name: Create installation scripts
-        run: |
-          # Create YUM install script
-          cat > repo/install-yum.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -e
-          echo "Adding Wendy YUM repository..."
-          sudo curl -fsSL https://wendylabsinc.github.io/wendy-agent/yum/wendy.repo -o /etc/yum.repos.d/wendy.repo
-          echo "Installing wendy..."
-          sudo yum install -y wendy
-          echo "Done! Run 'wendy --help' to get started."
-          SCRIPT_EOF
-          chmod +x repo/install-yum.sh
-
-          # Create APT install script
-          cat > repo/install-apt.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -e
-          echo "Adding Wendy APT repository..."
-          sudo curl -fsSL https://wendylabsinc.github.io/wendy-agent/apt/wendy.list -o /etc/apt/sources.list.d/wendy.list
-          echo "Updating package list..."
-          sudo apt-get update
-          echo "Installing wendy..."
-          sudo apt-get install -y wendy
-          echo "Done! Run 'wendy --help' to get started."
-          SCRIPT_EOF
-          chmod +x repo/install-apt.sh
-
-          # Create Arch install instructions
-          cat > repo/arch/README.md << 'README_EOF'
-          # Wendy for Arch Linux
-
-          ## Installation from AUR (recommended)
-
-          Using yay:
-          ```bash
-          yay -S wendy
-          ```
-
-          Using paru:
-          ```bash
-          paru -S wendy
-          ```
-
-          ## Manual installation
-
-          ```bash
-          git clone https://aur.archlinux.org/wendy.git
-          cd wendy
-          makepkg -si
-          ```
-          README_EOF
-
-      - name: Upload repository artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-repos
-          path: repo/
-          retention-days: 14
-
-      # - name: Deploy to GitHub Pages
-      #   uses: peaceiris/actions-gh-pages@v4
-      #   with:
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
-      #     publish_dir: ./repo
-      #     destination_dir: ./
-      #     keep_files: false
+          echo "Uploading .rpm packages to Artifact Registry..."
+          for rpm in packages/rpm/*.rpm; do
+            echo "Uploading $rpm"
+            gcloud artifacts yum upload wendy-yum \
+              --location=us-central1 \
+              --project=${{ vars.GCP_PROJECT_ID }} \
+              --source="$rpm"
+          done
 
   release:
     name: Release
