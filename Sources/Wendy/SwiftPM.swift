@@ -260,9 +260,12 @@ public struct SwiftPM: Sendable {
     public func buildAndPushContainer(
         swiftSDK: String,
         product: Executable,
-        device: String
+        device: String,
+        entrypoint: String?,
+        arguments entrypointArguments: [String],
+        resources: [(source: String, destination: String)]
     ) async throws {
-        let args = arguments([
+        var flags = [
             "package",
             "--swift-sdk=\(swiftSDK)",
             "--allow-network-connections=all",
@@ -271,20 +274,31 @@ public struct SwiftPM: Sendable {
             "--allow-insecure-http=destination",
             "--product=\(product.name)",
             "--repository=\(device):5000/\(product.name.lowercased())",
-            // TODO: Resources like DS2
             // TODO: Select target architecture based on target device advertisement?
             "--architecture=arm64",
-        ])
+        ]
+
+        flags += resources.map { "--resources=\($0.source):\($0.destination)" }
+
+        if let entrypoint {
+            flags.append("--entrypoint=\(entrypoint)")
+        }
+
+        if !entrypointArguments.isEmpty {
+            flags.append("--cmd")
+            flags.append(contentsOf: entrypointArguments)
+        }
+
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
-            arguments: args,
+            arguments: arguments(flags),
             output: .standardOutput,
             error: .standardError
         )
 
         guard result.terminationStatus.isSuccess else {
             throw SubprocessError.nonZeroExit(
-                command: args.description,
+                command: executableName + " " + flags.joined(separator: " "),
                 exitCode: Int(result.terminationStatus.description) ?? -1,
                 output: "",
                 error: ""
