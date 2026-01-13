@@ -555,7 +555,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let package = try await swiftPM.showDependencies()
 
         if !package.dependencies.contains(where: {
-            $0.url == "https://github.com/apple/swift-container-plugin"
+            $0.url.hasSuffix("swift-container-plugin")
+                || $0.url.hasSuffix("swift-container-plugin.git")
         }) {
             Noora().info("Container plugin is not installed. Do you want to install it?")
 
@@ -604,10 +605,53 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         ) { client, endpoint in
             Noora().info("Building Swift app")
             try await executePhase(phase: "build_swift_app", runtime: "swift") {
+                var resources: [(source: String, destination: String)] = []
+                var entrypoint: String?
+                let debugArguments = [
+                    "gdbserver",
+                    "0.0.0.0:4242",
+                    "/\(url.lastPathComponent)",
+                ]
+                var arguments: [String] = []
+
+                if debug {
+                    let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
+                    // Include the ds2 executable in the container image.
+                    if let url = Bundle.module.url(
+                        forResource: ds2BinaryName,
+                        withExtension: nil
+                    ) {
+                        resources.append((source: url.path(), destination: "/bin/ds2"))
+                        entrypoint = "/bin/ds2"
+                        arguments = debugArguments
+                    } else {
+                        let url = URL(fileURLWithPath: CommandLine.arguments[0])
+                            .deletingLastPathComponent()
+                            .appending(path: "wendy-agent_wendy.bundle")
+                            .appending(path: "Contents")
+                            .appending(path: "Resources")
+                            .appending(path: "Resources")
+                            .appending(component: ds2BinaryName)
+
+                        if FileManager.default.fileExists(atPath: url.path()) {
+                            resources.append((source: url.path(), destination: "/bin/ds2"))
+                            entrypoint = "/bin/ds2"
+                            arguments = debugArguments
+                        } else {
+                            Noora().warning(
+                                "ds2 binary not found. Debugging will not be available."
+                            )
+                        }
+                    }
+                }
+
                 try await swiftPM.buildAndPushContainer(
                     swiftSDK: swiftSDK,
                     product: executableTarget,
-                    device: endpoint.host
+                    device: endpoint.host,
+                    entrypoint: entrypoint,
+                    arguments: arguments,
+                    resources: resources
                 )
             }
 
