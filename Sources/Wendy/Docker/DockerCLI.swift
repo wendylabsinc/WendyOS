@@ -62,10 +62,10 @@ public final class BuildLock: Sendable {
         self.lockPath = wendyDir.appendingPathComponent("build.lock").path
     }
 
-    /// Attempts to acquire an exclusive lock for building
+    /// Acquires a shared lock for building
+    /// Multiple builds can hold shared locks simultaneously, allowing parallel builds
     /// Returns a file descriptor that must be passed to `release()` when done
-    /// Throws `BuildLockError.buildInProgress` if another build is in progress
-    public func acquire() throws -> Int32 {
+    public func acquireForBuild() throws -> Int32 {
         // Ensure directory exists
         let wendyDir = (lockPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(
@@ -80,25 +80,18 @@ public final class BuildLock: Sendable {
         }
 
         #if os(macOS) || canImport(Glibc) || canImport(Musl)
-            // Try to acquire an exclusive lock (non-blocking)
-            let result = flock(fd, LOCK_EX | LOCK_NB)
+            // Acquire a shared lock, multiple builds can hold this simultaneously
+            let result = flock(fd, LOCK_SH)
             if result != 0 {
                 close(fd)
-                throw BuildLockError.buildInProgress
+                throw BuildLockError.unableToCreateLock
             }
         #endif
-
-        // Write our PID to the lock file for debugging purposes
-        let pid = String(getpid())
-        _ = ftruncate(fd, 0)
-        _ = pid.withCString { ptr in
-            write(fd, ptr, strlen(ptr))
-        }
 
         return fd
     }
 
-    /// Releases the build lock
+    /// Releases the build lock.
     public func release(fd: Int32) {
         #if os(macOS) || canImport(Glibc) || canImport(Musl)
             flock(fd, LOCK_UN)
@@ -106,9 +99,9 @@ public final class BuildLock: Sendable {
         close(fd)
     }
 
-    /// Checks if a build is currently in progress
+    /// Checks if any builds are currently in progress
     public func isBuildInProgress() -> Bool {
-        let fd = open(lockPath, O_RDONLY)
+        let fd = open(lockPath, O_RDWR)
         guard fd >= 0 else {
             // Lock file doesn't exist, no build in progress
             return false
@@ -116,14 +109,16 @@ public final class BuildLock: Sendable {
         defer { close(fd) }
 
         #if os(macOS) || canImport(Glibc) || canImport(Musl)
-            // Try to acquire a shared lock (non-blocking)
-            // If we can't get even a shared lock, an exclusive lock is held
-            let result = flock(fd, LOCK_SH | LOCK_NB)
+            // Try to acquire an exclusive lock (non-blocking)
+            // If we can't get it, shared locks are held by running builds
+            let result = flock(fd, LOCK_EX | LOCK_NB)
             if result != 0 {
+                // Failed to get exclusive lock - builds are in progress
                 return true
             }
 
-            // We got the shared lock, release it and return false
+            // We got the exclusive lock, meaning no builds are running
+            // Release it and return false
             flock(fd, LOCK_UN)
         #endif
 
@@ -286,8 +281,8 @@ public struct DockerCLI: Sendable {
         registryHostname: String = "host.docker.internal",
         registryPort: Int = 5000
     ) async throws {
-        // Acquire build lock to prevent builder restarts during build
-        let lockFd = try BuildLock.shared.acquire()
+        // Acquire shared build lock, allows parallel builds but prevents builder restarts
+        let lockFd = try BuildLock.shared.acquireForBuild()
         defer { BuildLock.shared.release(fd: lockFd) }
 
         let arguments = [
@@ -478,7 +473,12 @@ public struct DockerCLI: Sendable {
                 return
             }
 
-            // If there is a change, copy the updated config to the container
+            // Config needs updating, check if any builds are in progress before modifying
+            if BuildLock.shared.isBuildInProgress() {
+                throw BuildLockError.buildInProgress
+            }
+
+            // Copy the updated config to the container
             let cpArguments: Subprocess.Arguments = [
                 "cp",
                 configPath,
@@ -504,11 +504,6 @@ public struct DockerCLI: Sendable {
                     output: "",
                     error: ""
                 )
-            }
-
-            // Check if a build is in progress before restarting
-            if BuildLock.shared.isBuildInProgress() {
-                throw BuildLockError.buildInProgress
             }
 
             // Restart to apply the new config
