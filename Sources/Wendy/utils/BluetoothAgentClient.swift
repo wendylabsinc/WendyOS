@@ -300,12 +300,11 @@ actor BluetoothAgentClient {
         }
 
         // Send with length prefix (4-byte big-endian)
-        var lengthPrefix = Data(count: 4)
-        let length = UInt32(commandData.count)
-        lengthPrefix[0] = UInt8((length >> 24) & 0xFF)
-        lengthPrefix[1] = UInt8((length >> 16) & 0xFF)
-        lengthPrefix[2] = UInt8((length >> 8) & 0xFF)
-        lengthPrefix[3] = UInt8(length & 0xFF)
+        var sendBuffer = ByteBuffer()
+        sendBuffer.writeLengthPrefixed(as: UInt32.self, endianness: .big) { buffer in
+            buffer.writeData(commandData)
+            return buffer.writerIndex
+        }
 
         logger.debug(
             "Sending command",
@@ -316,12 +315,12 @@ actor BluetoothAgentClient {
             ]
         )
 
-        try await channel.send(lengthPrefix + commandData)
+        try await channel.send(Data(buffer: sendBuffer))
 
         // Read response with length prefix and timeout
-        let responseData: Data
+        var responseBuffer: ByteBuffer
         do {
-            responseData = try await withThrowingTimeout(of: timeout) {
+            responseBuffer = try await withThrowingTimeout(of: timeout) {
                 try await self.readLengthPrefixedMessage()
             }
         } catch is TimeoutError {
@@ -335,7 +334,9 @@ actor BluetoothAgentClient {
         // Parse response
         let response: Wendy_Agent_Services_V1_BluetoothResponse
         do {
-            response = try Wendy_Agent_Services_V1_BluetoothResponse(serializedBytes: responseData)
+            response = try Wendy_Agent_Services_V1_BluetoothResponse(
+                serializedBytes: responseBuffer.readableBytesView
+            )
         } catch {
             throw BluetoothAgentError.deserializationFailed(
                 peripheralId: peripheralId,
@@ -364,27 +365,15 @@ actor BluetoothAgentClient {
         return response
     }
 
-    private func readLengthPrefixedMessage() async throws -> Data {
-        var buffer = Data()
-        var messageLength: UInt32?
+    private func readLengthPrefixedMessage() async throws -> ByteBuffer {
+        var buffer = ByteBuffer()
 
         for try await data in channel.incoming() {
-            buffer.append(data)
+            buffer.writeData(data)
 
-            // Read length prefix if we haven't yet
-            if messageLength == nil && buffer.count >= 4 {
-                let length =
-                    UInt32(buffer[0]) << 24
-                    | UInt32(buffer[1]) << 16
-                    | UInt32(buffer[2]) << 8
-                    | UInt32(buffer[3])
-                messageLength = length
-                buffer = Data(buffer.dropFirst(4))
-            }
-
-            // Check if we have the complete message
-            if let length = messageLength, buffer.count >= length {
-                return Data(buffer.prefix(Int(length)))
+            // Try to read a length-prefixed message
+            if let message = buffer.readLengthPrefixed(as: UInt32.self, endianness: .big) {
+                return message
             }
         }
 
