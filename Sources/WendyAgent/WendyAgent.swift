@@ -66,11 +66,12 @@ struct WendyAgent: AsyncParsableCommand {
 
         var backgroundServices: [any ServiceLifecycle.Service] = [
             ContainerMonitor.shared,  // Add container monitor as a background service
-            BluetoothService(),  // Bluetooth service for CLI communication
         ]
         var servers = [GRPCServer<HTTP2ServerTransport.Posix>]()
 
         if let enrolled = await config.enrolled {
+            // Device is provisioned for cloud - Bluetooth service is disabled for security
+            logger.info("Device is provisioned, Bluetooth service disabled")
             provisioning = await WendyProvisioningService(
                 privateKey: config.privateKey,
                 enrolled: enrolled
@@ -135,6 +136,11 @@ struct WendyAgent: AsyncParsableCommand {
                 logger.notice("Provisioning complete. Restarting server")
                 continuation.yield()
             }
+
+            // Enable Bluetooth service only for unprovisioned devices
+            // This allows initial setup via Bluetooth before cloud provisioning
+            backgroundServices.append(BluetoothService())
+            logger.info("Bluetooth service enabled for device setup")
         }
 
         let authenticatedServices: [any GRPCCore.RegistrableRPCService] = [
