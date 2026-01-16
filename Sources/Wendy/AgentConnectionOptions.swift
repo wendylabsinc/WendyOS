@@ -342,7 +342,7 @@ struct AgentConnectionOptions: ParsableArguments {
 
                         let device = BluetoothDevice(
                             id: result.peripheral.id.rawValue,
-                            displayName: result.advertisementData.localName ?? "WendyOS Device",
+                            displayName: result.advertisementData.localName ?? result.peripheral.name ?? "WendyOS Device",
                             address: result.peripheral.id.rawValue,
                             rssi: result.rssi,
                             l2capPSM: nil
