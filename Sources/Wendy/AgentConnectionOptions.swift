@@ -4,6 +4,12 @@ import Logging
 import Noora
 import WendyShared
 
+/// The type of connection to use for agent communication
+enum AgentConnectionType: Sendable {
+    case grpc(AgentConnectionOptions.Endpoint)
+    case bluetooth(deviceIdentifier: String)
+}
+
 struct AgentConnectionOptions: ParsableArguments {
     struct Endpoint: ExpressibleByArgument {
         let host: String
@@ -73,6 +79,12 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var agent: Endpoint?
 
+    @Option(
+        name: .shortAndLong,
+        help: "Connect to a device over Bluetooth by name or address. Use 'wendy discover --type bluetooth' to find devices."
+    )
+    var bluetooth: String?
+
     public init() {}
 
     public init(
@@ -80,6 +92,27 @@ struct AgentConnectionOptions: ParsableArguments {
     ) {
         self.agent = nil
         self.device = endpoint
+        self.bluetooth = nil
+    }
+
+    public init(bluetoothDevice: String) {
+        self.agent = nil
+        self.device = nil
+        self.bluetooth = bluetoothDevice
+    }
+
+    /// Returns the connection type based on provided options
+    var connectionType: AgentConnectionType? {
+        if let bluetooth {
+            return .bluetooth(deviceIdentifier: bluetooth)
+        }
+        if let device {
+            return .grpc(device)
+        }
+        if let agent {
+            return .grpc(agent)
+        }
+        return nil
     }
 
     static func defaultDevice() -> Endpoint? {
@@ -90,7 +123,30 @@ struct AgentConnectionOptions: ParsableArguments {
         return nil
     }
 
+    /// Reads the connection type from options, environment, or interactive prompt
+    func readConnectionType(
+        title: TerminalText?,
+        readDefault: Bool = true
+    ) async throws -> AgentConnectionType {
+        // Check for Bluetooth first
+        if let bluetooth {
+            return .bluetooth(deviceIdentifier: bluetooth)
+        }
+
+        // Fall back to gRPC endpoint
+        let endpoint = try await readGRPCEndpoint(title: title, readDefault: readDefault)
+        return .grpc(endpoint)
+    }
+
     func read(
+        title: TerminalText?,
+        readDefault: Bool = true
+    ) async throws -> Endpoint {
+        // For backwards compatibility, return endpoint (ignores bluetooth option)
+        return try await readGRPCEndpoint(title: title, readDefault: readDefault)
+    }
+
+    private func readGRPCEndpoint(
         title: TerminalText?,
         readDefault: Bool = true
     ) async throws -> Endpoint {
@@ -116,7 +172,7 @@ struct AgentConnectionOptions: ParsableArguments {
         if JSONMode.isEnabled {
             jsonModeRequiresArgument(
                 argument: "device",
-                description: "Provide --device <hostname:port> or set WENDY_AGENT environment variable"
+                description: "Provide --device <hostname:port>, --bluetooth <device>, or set WENDY_AGENT environment variable"
             )
         }
 
@@ -133,7 +189,17 @@ struct AgentConnectionOptions: ParsableArguments {
                 try Task.checkCancellation()
                 let devices = try await discovery.findAllDevices()
                     .groupedDevices()
-                    .filter { $0.interfaces.contains(where: { $0.type == "LAN" }) }
+                    .filter { device in
+                        device.interfaces.contains(where: { interface in
+                            switch interface {
+                            case .lan:
+                                return true
+                            default:
+                                // This function is for gRPC endpoints only, so we only look for LAN devices
+                                return false
+                            }
+                        })
+                    }
 
                 if !devices.isEmpty {
                     return devices
@@ -143,7 +209,7 @@ struct AgentConnectionOptions: ParsableArguments {
             }
         }
 
-        let device = Noora().singleChoicePrompt(
+        let device: DevicesCollection.GroupedDevice = Noora().singleChoicePrompt(
             title: title,
             question: "Select a device",
             options: lanDevices

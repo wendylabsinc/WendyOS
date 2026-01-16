@@ -1,5 +1,6 @@
 import ArgumentParser
 import AsyncHTTPClient
+import Bluetooth
 import Crypto
 import Foundation
 import GRPCCore
@@ -64,7 +65,8 @@ struct WendyAgent: AsyncParsableCommand {
         }()
 
         var backgroundServices: [any ServiceLifecycle.Service] = [
-            ContainerMonitor.shared  // Add container monitor as a background service
+            ContainerMonitor.shared,  // Add container monitor as a background service
+            BluetoothService(),  // Bluetooth service for CLI communication
         ]
         var servers = [GRPCServer<HTTP2ServerTransport.Posix>]()
 

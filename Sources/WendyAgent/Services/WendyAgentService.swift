@@ -338,7 +338,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListWiFiNetworksRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListWiFiNetworksResponse> {
-        logger.info("Listing available WiFi networks")
+        logger.debug("Listing available WiFi networks")
 
         do {
             let networkManager = try await networkManagerFactory.createNetworkManager(
@@ -346,7 +346,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
             let wifiNetworks = try await networkManager.listWiFiNetworks()
 
-            logger.info("Found \(wifiNetworks.count) WiFi networks")
+            logger.debug("Found \(wifiNetworks.count) WiFi networks")
 
             return ServerResponse(
                 message: .with { response in
@@ -377,7 +377,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         let ssid = request.message.ssid
         let password = request.message.password
 
-        logger.info("Connecting to WiFi network", metadata: ["ssid": "\(ssid)"])
+        logger.debug("Connecting to WiFi network", metadata: ["ssid": "\(ssid)"])
 
         do {
             let networkManager = try await networkManagerFactory.createNetworkManager(
@@ -386,7 +386,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             try await networkManager.setupWiFi(ssid: ssid, password: password)
 
             if let connection = try await networkManager.getCurrentConnection() {
-                logger.info(
+                logger.debug(
                     "Successfully connected to WiFi network",
                     metadata: ["ssid": "\(connection.ssid)"]
                 )
@@ -424,7 +424,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetWiFiStatusRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetWiFiStatusResponse> {
-        logger.info("Getting WiFi connection status")
+        logger.debug("Getting WiFi connection status")
 
         do {
             let networkManager = try await networkManagerFactory.createNetworkManager(
@@ -444,7 +444,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     }
                 )
             } else {
-                logger.info("Not connected to any WiFi network")
+                logger.debug("Not connected to any WiFi network")
                 return ServerResponse(
                     message: .with { response in
                         response.connected = false
@@ -467,7 +467,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse> {
-        logger.info("Disconnecting from WiFi network")
+        logger.debug("Disconnecting from WiFi network")
 
         do {
             let networkManager = try await networkManagerFactory.createNetworkManager(
@@ -476,7 +476,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
 
             // Check current connection first
             if let connectionInfo = try await networkManager.getCurrentConnection() {
-                logger.info(
+                logger.debug(
                     "Disconnecting from WiFi network",
                     metadata: ["ssid": "\(connectionInfo.ssid)"]
                 )
@@ -484,7 +484,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 let success = try await networkManager.disconnectFromNetwork()
 
                 if success {
-                    logger.info(
+                    logger.debug(
                         "Successfully disconnected from WiFi network",
                         metadata: ["ssid": "\(connectionInfo.ssid)"]
                     )
@@ -504,7 +504,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     )
                 }
             } else {
-                logger.info("Not connected to any WiFi network")
+                logger.debug("Not connected to any WiFi network")
                 return ServerResponse(
                     message: .with {
                         $0.success = true
@@ -513,7 +513,7 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             }
         } catch NetworkConnectionError.noActiveConnection {
             // Not being connected is not an error for disconnection
-            logger.info("Not connected to any WiFi network")
+            logger.debug("Not connected to any WiFi network")
             return ServerResponse(
                 message: .with {
                     $0.success = true

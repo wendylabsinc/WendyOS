@@ -536,7 +536,7 @@ public actor NetworkManager: NetworkConnectionManager {
                     }
                 }
 
-                self.logger.info("Successfully connected to WiFi network: \(ssid)")
+                self.logger.debug("Successfully connected to WiFi network: \(ssid)")
 
             } catch let error as NetworkConnectionError {
                 // Just re-throw NetworkConnectionErrors

@@ -22,7 +22,7 @@ struct HardwareCommandTests {
             let command =
                 try HardwareCommand.parseAsRoot(["--category", "gpu", "--json"]) as! HardwareCommand
             #expect(command.category == "gpu")
-            #expect(command.json == true)
+            #expect(JSONMode.isEnabled == true)
         } catch {
             #expect(Bool(false), "Failed to parse valid arguments: \(error)")
         }
@@ -33,7 +33,7 @@ struct HardwareCommandTests {
         // Test default values
         let command = try HardwareCommand.parseAsRoot([]) as! HardwareCommand
         #expect(command.category == nil)
-        #expect(command.json == false)
+        #expect(JSONMode.isEnabled == false)
     }
 
     @Test("HardwareCommand invalid category handling")

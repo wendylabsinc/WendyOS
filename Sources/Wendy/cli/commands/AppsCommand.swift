@@ -16,6 +16,17 @@ struct AppsCommand: AsyncParsableCommand {
         ]
     )
 
+    enum AppsCommandError: Error, LocalizedError {
+        case operationFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .operationFailed(let message):
+                return message
+            }
+        }
+    }
+
     struct Remove: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "remove",
@@ -34,27 +45,52 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentConnection(
                 agentConnectionOptions,
-                title: "Removing application"
-            ) { client in
-                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
-                    wrapping: client
-                )
+                title: "Removing application",
+                grpcOperation: { client in
+                    let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+                        wrapping: client
+                    )
 
-                _ = try await containers.deleteContainer(
-                    .with {
-                        $0.appName = appName
-                        $0.deleteImage = purgeImage
+                    _ = try await containers.deleteContainer(
+                        .with {
+                            $0.appName = appName
+                            $0.deleteImage = purgeImage
+                        }
+                    )
+
+                    if purgeImage {
+                        Noora().success("Removed application and its image.")
+                    } else {
+                        Noora().success("Removed application.")
                     }
-                )
-
-                if purgeImage {
-                    Noora().success("Removed application and its image.")
-                } else {
-                    Noora().success("Removed application.")
+                },
+                bluetoothOperation: { deviceIdentifier in
+                    #if canImport(Bluetooth)
+                    let response = try await executeBluetoothCommand(
+                        .appsRemove(appName: appName, purgeImage: purgeImage),
+                        deviceIdentifier: deviceIdentifier
+                    )
+                    if case .appsRemove(let success, let errorMessage) = response {
+                        if success {
+                            if purgeImage {
+                                Noora().success("Removed application and its image.")
+                            } else {
+                                Noora().success("Removed application.")
+                            }
+                        } else {
+                            let message = errorMessage ?? "Unknown error"
+                            Noora().error("Failed to remove application: \(message)")
+                        }
+                    } else if case .error(let message) = response {
+                        Noora().error("Error: \(message)")
+                    }
+                    #else
+                    throw BluetoothNotAvailableError()
+                    #endif
                 }
-            }
+            )
         }
     }
 
@@ -70,18 +106,39 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentConnection(
                 agentConnectionOptions,
-                title: "Stopping application"
-            ) { client in
-                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
-                    wrapping: client
-                )
-                _ = try await containers.stopContainer(
-                    .with { $0.appName = appName }
-                )
-                Noora().info("Stop request sent")
-            }
+                title: "Stopping application",
+                grpcOperation: { client in
+                    let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+                        wrapping: client
+                    )
+                    _ = try await containers.stopContainer(
+                        .with { $0.appName = appName }
+                    )
+                    Noora().info("Stop request sent")
+                },
+                bluetoothOperation: { deviceIdentifier in
+                    #if canImport(Bluetooth)
+                    let response = try await executeBluetoothCommand(
+                        .appsStop(appName: appName),
+                        deviceIdentifier: deviceIdentifier
+                    )
+                    if case .appsStop(let success, let errorMessage) = response {
+                        if success {
+                            Noora().success("Application stopped")
+                        } else {
+                            let message = errorMessage ?? "Unknown error"
+                            Noora().error("Failed to stop application: \(message)")
+                        }
+                    } else if case .error(let message) = response {
+                        Noora().error("Error: \(message)")
+                    }
+                    #else
+                    throw BluetoothNotAvailableError()
+                    #endif
+                }
+            )
         }
     }
 
@@ -94,16 +151,15 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            let apps: [AppInfo] = try await withAgentConnection(
                 agentConnectionOptions,
-                title: "Listing applications"
-            ) { client in
-                let rows: [[String]] =
+                title: "Listing applications",
+                grpcOperation: { client in
                     try await Wendy_Agent_Services_V1_WendyContainerService.Client(
                         wrapping: client
                     )
                     .listContainers(.init()) { containers in
-                        var rows: [[String]] = []
+                        var apps: [AppInfo] = []
 
                         for try await container in containers.messages {
                             let state =
@@ -112,34 +168,49 @@ struct AppsCommand: AsyncParsableCommand {
                                 case .stopped: "Stopped"
                                 case .UNRECOGNIZED: "Unknown"
                                 }
-                            let failures = "\(container.container.failureCount)"
 
-                            rows.append([
-                                container.container.appName,
-                                container.container.appVersion,
-                                state,
-                                failures,
-                            ])
+                            apps.append(AppInfo(
+                                appName: container.container.appName,
+                                appVersion: container.container.appVersion,
+                                state: state,
+                                failureCount: Int(container.container.failureCount)
+                            ))
                         }
 
-                        return rows
+                        return apps
                     }
-
-                guard !rows.isEmpty else {
-                    Noora().info("No applications found.")
-                    return
+                },
+                bluetoothOperation: { deviceIdentifier in
+                    #if canImport(Bluetooth)
+                    let response = try await executeBluetoothCommand(.appsList, deviceIdentifier: deviceIdentifier)
+                    if case .appsList(let apps) = response {
+                        return apps
+                    } else if case .error(let message) = response {
+                        throw AppsCommandError.operationFailed(message)
+                    }
+                    return []
+                    #else
+                    throw BluetoothNotAvailableError()
+                    #endif
                 }
+            )
 
-                Noora().table(
-                    headers: [
-                        "App",
-                        "Version",
-                        "State",
-                        "Failures",
-                    ],
-                    rows: rows
-                )
+            guard !apps.isEmpty else {
+                Noora().info("No applications found.")
+                return
             }
+
+            Noora().table(
+                headers: [
+                    "App",
+                    "Version",
+                    "State",
+                    "Failures",
+                ],
+                rows: apps.map { app in
+                    [app.appName, app.appVersion, app.state, "\(app.failureCount)"]
+                }
+            )
         }
     }
 

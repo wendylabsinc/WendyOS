@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "wendy-agent",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v26)
     ],
     products: [
         .executable(name: "wendy-agent", targets: ["wendy-agent"]),
@@ -21,7 +21,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.1.0"),
         .package(url: "https://github.com/grpc/grpc-swift-extras.git", from: "2.1.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
-        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.0"),
+        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
         .package(
             url: "https://github.com/grpc/grpc-swift-nio-transport.git",
             from: "2.3.0"
@@ -41,9 +41,10 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
-        .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
+        .package(url: "https://github.com/wendylabsinc/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
+        .package(url: "https://github.com/wendylabsinc/bluetooth.git", from: "0.0.2"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
@@ -78,6 +79,7 @@ let package = Package(
                 .target(name: "CliXPCProtocol"),
                 .target(name: "WendySDK"),
                 .target(name: "Analytics"),
+                .product(name: "Bluetooth", package: "bluetooth"),
             ],
             path: "Sources/Wendy",
             resources: [
@@ -116,6 +118,7 @@ let package = Package(
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
+                .product(name: "Bluetooth", package: "bluetooth"),
             ],
             path: "Sources/WendyAgent"
         ),

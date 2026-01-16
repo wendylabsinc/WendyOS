@@ -100,7 +100,7 @@ public actor NetworkConnectionManagerFactory {
             return cached
         }
 
-        logger.info("Detecting available network manager")
+        logger.debug("Detecting available network manager")
 
         let connManAvailable = await isServiceAvailable("net.connman")
         let networkManagerAvailable = await isServiceAvailable("org.freedesktop.NetworkManager")
@@ -108,10 +108,10 @@ public actor NetworkConnectionManagerFactory {
         let detected: NetworkManagerType
         if connManAvailable {
             detected = .connMan
-            logger.info("ConnMan detected and will be used")
+            logger.debug("ConnMan detected and will be used")
         } else if networkManagerAvailable {
             detected = .networkManager
-            logger.info("NetworkManager detected and will be used")
+            logger.debug("NetworkManager detected and will be used")
         } else {
             detected = .none
             logger.warning("No network manager detected")
@@ -130,7 +130,7 @@ public actor NetworkConnectionManagerFactory {
         case .forceConnMan:
             // Check if ConnMan is available first
             if await isServiceAvailable("net.connman") {
-                logger.info("Creating ConnMan instance (forced)")
+                logger.debug("Creating ConnMan instance (forced)")
                 return ConnMan(uid: uid, socketPath: socketPath)
             }
             logger.error("ConnMan is not available, cannot use forced setting")
@@ -139,37 +139,37 @@ public actor NetworkConnectionManagerFactory {
         case .forceNetworkManager:
             // Check if NetworkManager is available first
             if await isServiceAvailable("org.freedesktop.NetworkManager") {
-                logger.info("Creating NetworkManager instance (forced)")
+                logger.debug("Creating NetworkManager instance (forced)")
                 return NetworkManager(uid: uid, socketPath: socketPath)
             }
             logger.error("NetworkManager is not available, cannot use forced setting")
             throw NetworkConnectionError.managerNotAvailable
 
         case .preferConnMan:
-            logger.info("ConnMan preferred by configuration")
+            logger.debug("ConnMan preferred by configuration")
             // Check if ConnMan is available first
             if await isServiceAvailable("net.connman") {
-                logger.info("Creating ConnMan instance (preferred and available)")
+                logger.debug("Creating ConnMan instance (preferred and available)")
                 return ConnMan(uid: uid, socketPath: socketPath)
             }
             // Fall back to NetworkManager if available
             if await isServiceAvailable("org.freedesktop.NetworkManager") {
-                logger.info("ConnMan not available, falling back to NetworkManager")
+                logger.debug("ConnMan not available, falling back to NetworkManager")
                 return NetworkManager(uid: uid, socketPath: socketPath)
             }
             logger.error("No network manager available")
             throw NetworkConnectionError.managerNotAvailable
 
         case .preferNetworkManager:
-            logger.info("NetworkManager preferred by configuration")
+            logger.debug("NetworkManager preferred by configuration")
             // Check if NetworkManager is available first
             if await isServiceAvailable("org.freedesktop.NetworkManager") {
-                logger.info("Creating NetworkManager instance (preferred and available)")
+                logger.debug("Creating NetworkManager instance (preferred and available)")
                 return NetworkManager(uid: uid, socketPath: socketPath)
             }
             // Fall back to ConnMan if available
             if await isServiceAvailable("net.connman") {
-                logger.info("NetworkManager not available, falling back to ConnMan")
+                logger.debug("NetworkManager not available, falling back to ConnMan")
                 return ConnMan(uid: uid, socketPath: socketPath)
             }
             logger.error("No network manager available")
@@ -181,11 +181,11 @@ public actor NetworkConnectionManagerFactory {
 
             switch detected {
             case .connMan:
-                logger.info("Creating ConnMan instance (auto-detected)")
+                logger.debug("Creating ConnMan instance (auto-detected)")
                 return ConnMan(uid: uid, socketPath: socketPath)
 
             case .networkManager:
-                logger.info("Creating NetworkManager instance (auto-detected)")
+                logger.debug("Creating NetworkManager instance (auto-detected)")
                 return NetworkManager(uid: uid, socketPath: socketPath)
 
             case .none:

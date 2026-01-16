@@ -66,13 +66,28 @@ struct DeviceCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let version = try await withAgentGRPCClient(
+            let version: String = try await withAgentConnection(
                 agentConnectionOptions,
-                title: "For which device do you want to get the agent version?"
-            ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-                return try await agent.getAgentVersion(request: .init(message: .init()))
-            }
+                title: "For which device do you want to get the agent version?",
+                grpcOperation: { client in
+                    let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+                    let response = try await agent.getAgentVersion(request: .init(message: .init()))
+                    return response.version
+                },
+                bluetoothOperation: { deviceIdentifier in
+                    #if canImport(Bluetooth)
+                    let response = try await executeBluetoothCommand(.agentVersion, deviceIdentifier: deviceIdentifier)
+                    if case .agentVersion(let version) = response {
+                        return version
+                    } else if case .error(let message) = response {
+                        throw VersionCommandError.operationFailed(message)
+                    }
+                    throw VersionCommandError.operationFailed("Unexpected response")
+                    #else
+                    throw BluetoothNotAvailableError()
+                    #endif
+                }
+            )
 
             var latestVersion: String? = nil
 
@@ -85,16 +100,27 @@ struct DeviceCommand: AsyncParsableCommand {
             }
 
             if JSONMode.isEnabled {
-                let output = JSONOutput(currentVersion: version.version, latestVersion: latestVersion)
+                let output = JSONOutput(currentVersion: version, latestVersion: latestVersion)
                 let data = try JSONEncoder().encode(output)
                 print(String(data: data, encoding: .utf8)!)
             } else {
-                print("Current version: \(version.version)")
-                if let latestVersion, version.version != latestVersion {
-                    print("Update available: \(latestVersion)")
+                Noora().info("Current version: \(version)")
+                if let latestVersion, version != latestVersion {
+                    Noora().warning("Update available: \(latestVersion)")
                 } else if checkUpdates {
-                    print("No update available")
+                    Noora().success("No update available")
                 }
+            }
+        }
+    }
+
+    enum VersionCommandError: Error, LocalizedError {
+        case operationFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .operationFailed(let message):
+                return message
             }
         }
     }
