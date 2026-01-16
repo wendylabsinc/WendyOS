@@ -13,52 +13,113 @@ actor BluetoothAgentClient {
     private let connection: PeripheralConnection
     private let channel: any L2CAPChannel
     private let logger: Logger
+    private let peripheralId: String
 
-    private init(connection: PeripheralConnection, channel: any L2CAPChannel, logger: Logger) {
+    /// Default timeout for connection establishment
+    static let defaultConnectionTimeout: Duration = .seconds(30)
+
+    /// Default timeout for command responses
+    static let defaultResponseTimeout: Duration = .seconds(60)
+
+    private init(
+        connection: PeripheralConnection,
+        channel: any L2CAPChannel,
+        logger: Logger,
+        peripheralId: String
+    ) {
         self.connection = connection
         self.channel = channel
         self.logger = logger
+        self.peripheralId = peripheralId
     }
 
     /// Execute a block with a connected Bluetooth agent client.
     /// Connection and cleanup are handled automatically through structured concurrency.
+    ///
+    /// - Parameters:
+    ///   - peripheral: The Bluetooth peripheral to connect to
+    ///   - connectionTimeout: Maximum time to wait for connection (default: 30 seconds)
+    ///   - logger: Logger for debug output
+    ///   - body: The closure to execute with the connected client
     static func withConnection<R: Sendable>(
         to peripheral: Peripheral,
+        connectionTimeout: Duration = defaultConnectionTimeout,
         logger: Logger = Logger(label: "sh.wendy.bluetooth-client"),
         _ body: @escaping @Sendable (BluetoothAgentClient) async throws -> R
     ) async throws -> R {
         let centralManager = CentralManager()
+        let peripheralId = peripheral.id.description
 
-        logger.debug("Connecting to peripheral", metadata: ["id": "\(peripheral.id)"])
+        logger.debug("Connecting to peripheral", metadata: ["id": "\(peripheralId)"])
 
-        // Connect to the peripheral
-        let connection = try await centralManager.connect(to: peripheral)
+        // Connect to the peripheral with timeout
+        let connection: PeripheralConnection
+        do {
+            connection = try await withThrowingTimeout(of: connectionTimeout) {
+                try await centralManager.connect(to: peripheral)
+            }
+        } catch is TimeoutError {
+            throw BluetoothAgentError.connectionTimeout(
+                peripheralId: peripheralId,
+                timeout: connectionTimeout
+            )
+        }
 
-        // Wait for connection to be ready
+        // Wait for connection to be ready with timeout
         let state = await connection.state()
         if state != .connected {
-            for await newState in await connection.stateUpdates() {
-                if newState == .connected {
-                    break
+            do {
+                try await withThrowingTimeout(of: connectionTimeout) {
+                    for await newState in await connection.stateUpdates() {
+                        if newState == .connected {
+                            return
+                        }
+                        if case .disconnected = newState {
+                            throw BluetoothAgentError.connectionFailed(
+                                peripheralId: peripheralId,
+                                reason: "Peripheral disconnected during connection"
+                            )
+                        }
+                    }
                 }
-                if case .disconnected = newState {
-                    throw BluetoothAgentError.connectionFailed("Peripheral disconnected")
-                }
+            } catch is TimeoutError {
+                await connection.disconnect()
+                throw BluetoothAgentError.connectionTimeout(
+                    peripheralId: peripheralId,
+                    timeout: connectionTimeout
+                )
             }
         }
 
-        logger.debug("Connected, opening L2CAP channel")
+        logger.debug("Connected, opening L2CAP channel", metadata: ["id": "\(peripheralId)"])
 
         // Open L2CAP channel on the Wendy PSM
         let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
-        let channel = try await connection.openL2CAPChannel(psm: psm)
+        let channel: any L2CAPChannel
+        do {
+            channel = try await withThrowingTimeout(of: connectionTimeout) {
+                try await connection.openL2CAPChannel(psm: psm)
+            }
+        } catch is TimeoutError {
+            await connection.disconnect()
+            throw BluetoothAgentError.channelTimeout(peripheralId: peripheralId, psm: psm.rawValue)
+        }
 
         logger.debug(
             "L2CAP channel opened",
-            metadata: ["psm": "\(psm.rawValue)", "mtu": "\(channel.mtu)"]
+            metadata: [
+                "id": "\(peripheralId)",
+                "psm": "\(psm.rawValue)",
+                "mtu": "\(channel.mtu)",
+            ]
         )
 
-        let client = BluetoothAgentClient(connection: connection, channel: channel, logger: logger)
+        let client = BluetoothAgentClient(
+            connection: connection,
+            channel: channel,
+            logger: logger,
+            peripheralId: peripheralId
+        )
 
         do {
             let result = try await body(client)
@@ -80,7 +141,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .wifiList(let wifiList) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return wifiList.networks
     }
@@ -97,7 +161,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .wifiConnect(let wifiConnect) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return wifiConnect
     }
@@ -108,7 +175,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .wifiStatus(let wifiStatus) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return wifiStatus
     }
@@ -119,7 +189,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .wifiDisconnect(let wifiDisconnect) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return wifiDisconnect
     }
@@ -132,7 +205,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .appsList(let appsList) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return appsList.apps
     }
@@ -145,7 +221,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .appsStop(let appsStop) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return appsStop
     }
@@ -162,7 +241,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .appsRemove(let appsRemove) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return appsRemove
     }
@@ -175,7 +257,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .agentVersion(let agentVersion) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return agentVersion.version
     }
@@ -186,7 +271,10 @@ actor BluetoothAgentClient {
 
         let response = try await sendCommand(command)
         guard case .hardwareList(let hardwareList) = response.response else {
-            throw BluetoothAgentError.unexpectedResponse
+            throw BluetoothAgentError.unexpectedResponse(
+                peripheralId: peripheralId,
+                command: command.commandName
+            )
         }
         return hardwareList.capabilities
     }
@@ -194,10 +282,22 @@ actor BluetoothAgentClient {
     // MARK: - Private Methods
 
     private func sendCommand(
-        _ command: Wendy_Agent_Services_V1_BluetoothCommand
+        _ command: Wendy_Agent_Services_V1_BluetoothCommand,
+        timeout: Duration = defaultResponseTimeout
     ) async throws -> Wendy_Agent_Services_V1_BluetoothResponse {
+        let commandName = command.commandName
+
         // Serialize the command
-        let commandData = try command.serializedData()
+        let commandData: Data
+        do {
+            commandData = try command.serializedData()
+        } catch {
+            throw BluetoothAgentError.serializationFailed(
+                peripheralId: peripheralId,
+                command: commandName,
+                underlying: error
+            )
+        }
 
         // Send with length prefix (4-byte big-endian)
         var lengthPrefix = Data(count: 4)
@@ -207,20 +307,59 @@ actor BluetoothAgentClient {
         lengthPrefix[2] = UInt8((length >> 8) & 0xFF)
         lengthPrefix[3] = UInt8(length & 0xFF)
 
-        logger.debug("Sending command", metadata: ["length": "\(commandData.count)"])
+        logger.debug(
+            "Sending command",
+            metadata: [
+                "command": "\(commandName)",
+                "length": "\(commandData.count)",
+                "peripheralId": "\(peripheralId)",
+            ]
+        )
 
         try await channel.send(lengthPrefix + commandData)
 
-        // Read response with length prefix
-        let responseData = try await readLengthPrefixedMessage()
+        // Read response with length prefix and timeout
+        let responseData: Data
+        do {
+            responseData = try await withThrowingTimeout(of: timeout) {
+                try await self.readLengthPrefixedMessage()
+            }
+        } catch is TimeoutError {
+            throw BluetoothAgentError.responseTimeout(
+                peripheralId: peripheralId,
+                command: commandName,
+                timeout: timeout
+            )
+        }
 
         // Parse response
-        let response = try Wendy_Agent_Services_V1_BluetoothResponse(serializedBytes: responseData)
+        let response: Wendy_Agent_Services_V1_BluetoothResponse
+        do {
+            response = try Wendy_Agent_Services_V1_BluetoothResponse(serializedBytes: responseData)
+        } catch {
+            throw BluetoothAgentError.deserializationFailed(
+                peripheralId: peripheralId,
+                command: commandName,
+                underlying: error
+            )
+        }
 
         // Check for error response
         if case .error(let error) = response.response {
-            throw BluetoothAgentError.agentError(error.message)
+            throw BluetoothAgentError.agentError(
+                peripheralId: peripheralId,
+                command: commandName,
+                message: error.message
+            )
         }
+
+        logger.debug(
+            "Received response",
+            metadata: [
+                "command": "\(commandName)",
+                "peripheralId": "\(peripheralId)",
+            ]
+        )
 
         return response
     }
@@ -249,26 +388,84 @@ actor BluetoothAgentClient {
             }
         }
 
-        throw BluetoothAgentError.connectionClosed
+        throw BluetoothAgentError.connectionClosed(peripheralId: peripheralId)
     }
 }
 
 enum BluetoothAgentError: Error, CustomStringConvertible {
-    case connectionFailed(String)
-    case connectionClosed
-    case unexpectedResponse
-    case agentError(String)
+    case connectionTimeout(peripheralId: String, timeout: Duration)
+    case connectionFailed(peripheralId: String, reason: String)
+    case channelTimeout(peripheralId: String, psm: UInt16)
+    case connectionClosed(peripheralId: String)
+    case responseTimeout(peripheralId: String, command: String, timeout: Duration)
+    case unexpectedResponse(peripheralId: String, command: String)
+    case serializationFailed(peripheralId: String, command: String, underlying: Error)
+    case deserializationFailed(peripheralId: String, command: String, underlying: Error)
+    case agentError(peripheralId: String, command: String, message: String)
 
     var description: String {
         switch self {
-        case .connectionFailed(let message):
-            return "Connection failed: \(message)"
-        case .connectionClosed:
-            return "Connection closed unexpectedly"
-        case .unexpectedResponse:
-            return "Received unexpected response from agent"
-        case .agentError(let message):
-            return "Agent error: \(message)"
+        case .connectionTimeout(let peripheralId, let timeout):
+            return "Connection to \(peripheralId) timed out after \(timeout)"
+        case .connectionFailed(let peripheralId, let reason):
+            return "Connection to \(peripheralId) failed: \(reason)"
+        case .channelTimeout(let peripheralId, let psm):
+            return "L2CAP channel (PSM \(psm)) to \(peripheralId) timed out"
+        case .connectionClosed(let peripheralId):
+            return "Connection to \(peripheralId) closed unexpectedly"
+        case .responseTimeout(let peripheralId, let command, let timeout):
+            return "Response for '\(command)' from \(peripheralId) timed out after \(timeout)"
+        case .unexpectedResponse(let peripheralId, let command):
+            return "Unexpected response for '\(command)' from \(peripheralId)"
+        case .serializationFailed(let peripheralId, let command, let underlying):
+            return "Failed to serialize '\(command)' for \(peripheralId): \(underlying)"
+        case .deserializationFailed(let peripheralId, let command, let underlying):
+            return
+                "Failed to deserialize response for '\(command)' from \(peripheralId): \(underlying)"
+        case .agentError(let peripheralId, let command, let message):
+            return "Agent \(peripheralId) returned error for '\(command)': \(message)"
+        }
+    }
+}
+
+// MARK: - Timeout Helper
+
+private struct TimeoutError: Error {}
+
+private func withThrowingTimeout<T: Sendable>(
+    of duration: Duration,
+    _ operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(for: duration)
+            throw TimeoutError()
+        }
+
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
+    }
+}
+
+// MARK: - Command Name Helper
+
+extension Wendy_Agent_Services_V1_BluetoothCommand {
+    var commandName: String {
+        switch self.command {
+        case .wifiList: return "wifiList"
+        case .wifiConnect: return "wifiConnect"
+        case .wifiStatus: return "wifiStatus"
+        case .wifiDisconnect: return "wifiDisconnect"
+        case .appsList: return "appsList"
+        case .appsStop: return "appsStop"
+        case .appsRemove: return "appsRemove"
+        case .agentVersion: return "agentVersion"
+        case .hardwareList: return "hardwareList"
+        case .none: return "unknown"
         }
     }
 }
