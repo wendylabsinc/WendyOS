@@ -12,6 +12,15 @@ import Noora
     import WinSDK
 #endif
 
+/// Flush stdout - wrapped to handle Swift 6 strict concurrency
+@inline(__always)
+private func flushStdout() {
+    // stdout is a global mutable variable, but fflush is thread-safe
+    // and we're doing synchronous terminal I/O
+    nonisolated(unsafe) let out = stdout
+    fflush(out)
+}
+
 /// Prompt for password input with Noora-style rendering and masked characters
 /// - Parameters:
 ///   - title: The title displayed above the prompt (e.g., "Enter WiFi password")
@@ -28,7 +37,7 @@ func secureTextPrompt(title: String, prompt: String) -> String {
 func securePasswordPrompt(_ prompt: String) -> String {
     // Print prompt without newline
     print(prompt, terminator: "")
-    fflush(stdout)
+    flushStdout()
 
     #if os(Windows)
         // Windows implementation using Console API
@@ -68,12 +77,12 @@ func securePasswordPrompt(_ prompt: String) -> String {
                 if !password.isEmpty {
                     password.removeLast()
                     print("\u{8} \u{8}", terminator: "")
-                    fflush(stdout)
+                    flushStdout()
                 }
             } else if let scalar = UnicodeScalar(UInt16(char)) {
                 password.append(Character(scalar))
                 print("*", terminator: "")
-                fflush(stdout)
+                flushStdout()
             }
         }
 
@@ -104,13 +113,13 @@ func securePasswordPrompt(_ prompt: String) -> String {
                     password.removeLast()
                     // Move cursor back, print space, move back again
                     print("\u{8} \u{8}", terminator: "")
-                    fflush(stdout)
+                    flushStdout()
                 }
             } else if char >= 0 && char <= 127 {
                 // Valid ASCII character
                 password.append(Character(UnicodeScalar(UInt8(char))))
                 print("*", terminator: "")
-                fflush(stdout)
+                flushStdout()
             }
             // Ignore non-ASCII bytes (could be part of UTF-8 sequence)
         }
