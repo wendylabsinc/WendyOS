@@ -1,5 +1,5 @@
 {
-  "originHash" : "7f0259bd0668862885be85949530d196469c885622dec0ddda496fcbc077379b",
+  "originHash" : "e792f5c55fc7dd3ea23b428ec9b8f356d617af4195b47e5694ef0163996bb404",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -11,12 +11,21 @@
       }
     },
     {
+      "identity" : "bluetooth",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/wendylabsinc/bluetooth.git",
+      "state" : {
+        "revision" : "570956c252d32c00e45d02e04b09560ab1ea5a15",
+        "version" : "0.1.0"
+      }
+    },
+    {
       "identity" : "dbus",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/edgeengineer/dbus.git",
+      "location" : "https://github.com/wendylabsinc/dbus.git",
       "state" : {
-        "revision" : "b166ef42d254a6191127a1c97b68b342bd6b2dc9",
-        "version" : "0.2.3"
+        "revision" : "4d88300754c806827d919c5274cbfc18baebe9ab",
+        "version" : "0.3.0"
       }
     },
     {
