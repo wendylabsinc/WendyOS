@@ -80,7 +80,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @OptionGroup
     var agentConnectionOptions: AgentConnectionOptions
 
-    var swiftVersion: String { "6.2.1" }
+    var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {
         "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/6.2.1-RELEASE_wendyos_aarch64.artifactbundle.zip"
