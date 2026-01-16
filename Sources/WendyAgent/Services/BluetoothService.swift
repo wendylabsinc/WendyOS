@@ -18,10 +18,16 @@ import WendyShared
 /// Service that exposes the WendyOS agent over Bluetooth Low Energy
 /// This allows CLI clients to discover and communicate with devices without network connectivity
 actor BluetoothService: Service {
+    // BLE advertising packet size constraints
+    private static let legacyAdvertisingMaxBytes = 31
+    private static let flagsFieldBytes = 3
+    private static let localNameHeaderBytes = 2
+    
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
     private var peripheralManager: PeripheralManager?
+    private let hardwareDiscoverer = SystemHardwareDiscoverer()
 
     init() {
         let uid = String(getuid())
@@ -208,19 +214,16 @@ actor BluetoothService: Service {
             throw BluetoothServiceError.invalidConfiguration
         }
 
-        // deviceName was already extracted above for logging
-        let shortName = deviceName
-
         // Calculate approximate advertising data size:
-        // - Flags: 3 bytes
-        // - Complete Local Name: 2 + name.utf8.count bytes
-        // Total must be <= 31 bytes for legacy advertising
+        // - Flags: flagsFieldBytes
+        // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
+        // Total must be <= legacyAdvertisingMaxBytes for legacy advertising
         // If name is too long, truncate it
-        let maxNameLength = 31 - 3 - 2  // 26 bytes for name
+        let maxNameLength = Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
         let advertisingName: String
-        if shortName.utf8.count > maxNameLength {
+        if deviceName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
-            var truncated = shortName
+            var truncated = deviceName
             while truncated.utf8.count > maxNameLength && !truncated.isEmpty {
                 truncated.removeLast()
             }
@@ -228,14 +231,14 @@ actor BluetoothService: Service {
             logger.debug(
                 "Truncated advertising name to fit legacy limit",
                 metadata: [
-                    "original": "\(shortName)",
+                    "original": "\(deviceName)",
                     "truncated": "\(advertisingName)",
-                    "originalBytes": "\(shortName.utf8.count)",
+                    "originalBytes": "\(deviceName.utf8.count)",
                     "truncatedBytes": "\(advertisingName.utf8.count)",
                 ]
             )
         } else {
-            advertisingName = shortName
+            advertisingName = deviceName
         }
 
         let advertisementData = AdvertisementData(
@@ -383,18 +386,28 @@ actor BluetoothService: Service {
                     // If we don't know the expected length yet, try to read it
                     if expectedLength == nil {
                         guard buffer.readableBytes >= 4 else { break }
-                        expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
-                        logger.debug(
-                            "Read message length",
-                            metadata: ["expectedLength": "\(expectedLength!)"]
-                        )
+                        if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self) {
+                            expectedLength = Int(lengthPrefix)
+                            logger.debug(
+                                "Read message length",
+                                metadata: ["expectedLength": "\(lengthPrefix)"]
+                            )
+                        } else {
+                            logger.error("Failed to read message length from Bluetooth buffer")
+                            expectedLength = nil
+                            break
+                        }
                     }
 
                     // Check if we have the complete message
                     guard let length = expectedLength, buffer.readableBytes >= length else { break }
 
                     // Extract the complete message
-                    let messageData = buffer.readData(length: length)!
+                    guard let messageData = buffer.readData(length: length) else {
+                        logger.error("Failed to read Bluetooth message data from buffer")
+                        expectedLength = nil
+                        break
+                    }
                     expectedLength = nil
 
                     messagesReceived += 1
@@ -598,7 +611,7 @@ actor BluetoothService: Service {
                 preference: configuration.networkManagerPreference
             )
 
-            if (try await networkManager.getCurrentConnection()) != nil {
+            if try await networkManager.getCurrentConnection() != nil {
                 let success = try await networkManager.disconnectFromNetwork()
                 response.success = success
             } else {
@@ -717,8 +730,7 @@ actor BluetoothService: Service {
     {
         logger.debug("Bluetooth: Listing hardware capabilities")
 
-        let discoverer = SystemHardwareDiscoverer()
-        let capabilities = try await discoverer.discoverCapabilities(categoryFilter: nil)
+        let capabilities = try await hardwareDiscoverer.discoverCapabilities(categoryFilter: nil)
 
         var response = Wendy_Agent_Services_V1_HardwareListResponse()
         response.capabilities = capabilities.map { cap in
