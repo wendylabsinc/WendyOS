@@ -23,5 +23,10 @@
             logger.warning("LAN device listing is not supported on this platform")
             return []
         }
+
+        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+            logger.warning("Bluetooth device listing is not supported on this platform")
+            return []
+        }
     }
 #endif

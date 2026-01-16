@@ -22,16 +22,24 @@ public struct DevicesCollection: Encodable, Sendable {
     public var usbDevices: [USBDevice]
     public var ethernetDevices: [EthernetInterface]
     public var lanDevices: [LANDevice]
+    public var bluetoothDevices: [BluetoothDevice]
 
-    public init(usb: [USBDevice] = [], ethernet: [EthernetInterface] = [], lan: [LANDevice] = []) {
+    public init(
+        usb: [USBDevice] = [],
+        ethernet: [EthernetInterface] = [],
+        lan: [LANDevice] = [],
+        bluetooth: [BluetoothDevice] = []
+    ) {
         self.usbDevices = usb
         self.ethernetDevices = ethernet
         self.lanDevices = lan
+        self.bluetoothDevices = bluetooth
     }
 
     /// Whether the collection contains no devices
     public var isEmpty: Bool {
         return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
+            && bluetoothDevices.isEmpty
     }
 
     /// The number of unique devices (counting each unique device name once)
@@ -77,6 +85,9 @@ public struct DevicesCollection: Encodable, Sendable {
             names.insert(normalizeDeviceName(device.displayName))
         }
         for device in lanDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
+        for device in bluetoothDevices {
             names.insert(normalizeDeviceName(device.displayName))
         }
         return names
@@ -150,6 +161,16 @@ public struct DevicesCollection: Encodable, Sendable {
             deviceGroups[normalizedName] = group
         }
 
+        // Group Bluetooth devices
+        for device in bluetoothDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+            var group =
+                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            group.displayName = betterDisplayName(group.displayName, device.displayName)
+            group.interfaces.append(.bluetooth(device))
+            deviceGroups[normalizedName] = group
+        }
+
         // Sort by display name for consistent output
         return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }
             .sorted { $0.name < $1.name }
@@ -160,12 +181,14 @@ public struct DevicesCollection: Encodable, Sendable {
         case usb(USBDevice)
         case ethernet(EthernetInterface)
         case lan(LANDevice)
+        case bluetooth(BluetoothDevice)
 
         public var type: String {
             switch self {
             case .usb: return "USB"
             case .ethernet: return "Ethernet"
             case .lan: return "LAN"
+            case .bluetooth: return "Bluetooth"
             }
         }
 
@@ -174,6 +197,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let usb): return usb.usbVersion ?? "USB"
             case .ethernet: return "Ethernet"
             case .lan: return "LAN"
+            case .bluetooth: return "BLE"
             }
         }
 
@@ -208,6 +232,12 @@ public struct DevicesCollection: Encodable, Sendable {
                     string += "LAN: \(device.hostname):\(device.port)"
                 }
                 return string
+            case .bluetooth(let device):
+                string += "Bluetooth: \(device.address)"
+                if device.rssi != 0 {
+                    string += " (RSSI: \(device.rssi))"
+                }
+                return string
             }
         }
 
@@ -216,6 +246,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let device): return device.displayName
             case .ethernet(let device): return device.displayName
             case .lan(let device): return device.displayName
+            case .bluetooth(let device): return device.displayName
             }
         }
 
@@ -224,7 +255,13 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let device): return device.agentVersion
             case .ethernet(let device): return device.agentVersion
             case .lan(let device): return device.agentVersion
+            case .bluetooth(let device): return device.agentVersion
             }
+        }
+
+        public var bluetoothAddress: String? {
+            guard case .bluetooth(let device) = self else { return nil }
+            return device.address
         }
 
         public var lanHostname: String? {

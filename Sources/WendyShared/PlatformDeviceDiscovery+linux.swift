@@ -233,5 +233,9 @@
 
             return interfaces
         }
+
+        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+            return []
+        }
     }
 #endif

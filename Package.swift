@@ -138,6 +138,7 @@ let package = Package(
                 .product(name: "AsyncDNSResolver", package: "swift-async-dns-resolver"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "DNSClient", package: "DNSClient"),
+                .product(name: "Bluetooth", package: "bluetooth"),
             ]
         ),
         .target(

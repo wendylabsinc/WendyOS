@@ -4,6 +4,7 @@ public protocol DeviceDiscovery: Sendable {
     func findUSBDevices() async -> [USBDevice]
     func findEthernetInterfaces() async -> [EthernetInterface]
     func findLANDevices() async throws -> [LANDevice]
+    func findBluetoothDevices() async throws -> [BluetoothDevice]
 }
 
 extension DeviceDiscovery {
@@ -11,11 +12,13 @@ extension DeviceDiscovery {
         async let usbDevices = findUSBDevices()
         async let ethernetDevices = findEthernetInterfaces()
         async let lanDevices = findLANDevices()
+        async let bluetoothDevices = findBluetoothDevices()
 
         return try await DevicesCollection(
             usb: usbDevices,
             ethernet: ethernetDevices,
-            lan: lanDevices
+            lan: lanDevices,
+            bluetooth: bluetoothDevices
         )
     }
 }

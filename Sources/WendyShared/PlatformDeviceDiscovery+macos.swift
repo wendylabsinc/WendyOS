@@ -1,5 +1,6 @@
 #if os(macOS)
     import AsyncDNSResolver
+    import Bluetooth
     import Foundation
     import Logging
     import IOKit
@@ -173,6 +174,127 @@
             }
 
             return interfaces
+        }
+
+        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+            logger.debug("Starting Bluetooth device discovery...")
+
+            let centralManager = CentralManager()
+
+            // Wait for Bluetooth to be ready
+            let startTime = ContinuousClock.now
+            let timeout: Duration = .seconds(5)
+
+            var state = await centralManager.state()
+            while state != .poweredOn {
+                if ContinuousClock.now - startTime > timeout {
+                    logger.warning(
+                        "Timeout waiting for Bluetooth to be ready",
+                        metadata: ["lastState": "\(state)"]
+                    )
+                    return []
+                }
+
+                if state == .poweredOff || state == .unauthorized || state == .unsupported {
+                    logger.warning(
+                        "Bluetooth not available",
+                        metadata: ["state": "\(state)"]
+                    )
+                    return []
+                }
+
+                // Wait for state updates
+                for await newState in await centralManager.stateUpdates() {
+                    state = newState
+                    if state == .poweredOn {
+                        break
+                    }
+                    if state == .poweredOff || state == .unauthorized || state == .unsupported {
+                        logger.warning(
+                            "Bluetooth not available",
+                            metadata: ["state": "\(state)"]
+                        )
+                        return []
+                    }
+                    if ContinuousClock.now - startTime > timeout {
+                        break
+                    }
+                }
+            }
+
+            logger.debug("Bluetooth is ready, starting scan...")
+
+            var discoveredDevices: [String: BluetoothDevice] = [:]
+            let scanDuration: Duration = .seconds(5)
+            let scanStartTime = ContinuousClock.now
+
+            do {
+                // Start scanning for devices - no filter to discover all WendyOS devices
+                // The service UUID may not be in advertising data due to 31-byte limit
+                let discoveries = try await centralManager.scan()
+
+                for try await discovery in discoveries {
+                    let elapsed = ContinuousClock.now - scanStartTime
+                    if elapsed > scanDuration {
+                        break
+                    }
+
+                    // Check if this is a Wendy device by looking at the local name
+                    let localName =
+                        discovery.advertisementData.localName ?? discovery.peripheral.name ?? ""
+                    let isWendyDevice = localName.lowercased().contains("wendy")
+
+                    if isWendyDevice {
+                        let deviceId = discovery.peripheral.id.rawValue
+                        let displayName =
+                            localName.isEmpty ? "WendyOS Device" : localName
+
+                        let rssi = discovery.rssi
+
+                        // Get the Bluetooth address (on macOS, we use the peripheral identifier)
+                        let address = deviceId
+
+                        let device = BluetoothDevice(
+                            id: deviceId,
+                            displayName: displayName,
+                            address: address,
+                            rssi: rssi,
+                            isWendyDevice: true,
+                            agentVersion: nil,  // Will be resolved separately
+                            l2capPSM: WendyBluetoothUUIDs.l2capPSM
+                        )
+
+                        // Only add if not already discovered (keep the one with better RSSI)
+                        if let existing = discoveredDevices[deviceId] {
+                            if rssi > existing.rssi {
+                                discoveredDevices[deviceId] = device
+                            }
+                        } else {
+                            discoveredDevices[deviceId] = device
+                            logger.debug(
+                                "Discovered Wendy Bluetooth device",
+                                metadata: [
+                                    "name": "\(displayName)",
+                                    "rssi": "\(rssi)",
+                                ]
+                            )
+                        }
+                    }
+                }
+
+                try await centralManager.stopScan()
+            } catch {
+                logger.warning(
+                    "Bluetooth scan failed",
+                    metadata: ["error": "\(error)"]
+                )
+                return []
+            }
+
+            let devices = Array(discoveredDevices.values).sorted { $0.rssi > $1.rssi }
+            logger.debug("Bluetooth scan complete", metadata: ["deviceCount": "\(devices.count)"])
+
+            return devices
         }
     }
 #endif
