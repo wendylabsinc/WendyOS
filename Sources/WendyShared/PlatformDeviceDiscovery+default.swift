@@ -24,7 +24,9 @@
             return []
         }
 
-        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+        public func findBluetoothDevices(
+            resolveAgentVersion: Bool = false
+        ) async throws -> [BluetoothDevice] {
             logger.warning("Bluetooth device listing is not supported on this platform")
             return []
         }

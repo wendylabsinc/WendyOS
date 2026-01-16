@@ -247,7 +247,12 @@
             return interfaces
         }
 
-        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+        public func findBluetoothDevices(
+            resolveAgentVersion: Bool = false
+        ) async throws -> [BluetoothDevice] {
+            // Bluetooth discovery on Linux requires BlueZ/DBus integration
+            // which is not yet implemented. Return empty array for now.
+            logger.debug("Bluetooth discovery not yet implemented on Linux")
             return []
         }
     }
