@@ -18,6 +18,11 @@ import WendyShared
 /// Service that exposes the WendyOS agent over Bluetooth Low Energy
 /// This allows CLI clients to discover and communicate with devices without network connectivity
 actor BluetoothService: Service {
+    // BLE advertising packet size constraints
+    private static let legacyAdvertisingMaxBytes = 31
+    private static let flagsFieldBytes = 3
+    private static let localNameHeaderBytes = 2
+
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
@@ -658,7 +663,9 @@ actor BluetoothService: Service {
         return response
     }
 
-    private func handleAppsStop(appName: String) async throws
+    private func handleAppsStop(
+        appName: String
+    ) async throws
         -> Wendy_Agent_Services_V1_AppsStopResponse
     {
         logger.debug("Bluetooth: Stopping app", metadata: ["app": "\(appName)"])
