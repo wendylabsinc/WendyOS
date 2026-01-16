@@ -20,6 +20,14 @@ func securePasswordPrompt(_ prompt: String) -> String {
     #if os(Windows)
         // Windows implementation using Console API
         let handle = GetStdHandle(STD_INPUT_HANDLE)
+
+        // Check for invalid handle
+        guard handle != INVALID_HANDLE_VALUE else {
+            // Fall back to unmasked input
+            print()
+            return readLine() ?? ""
+        }
+
         var oldMode: DWORD = 0
         GetConsoleMode(handle, &oldMode)
         // Disable echo and line input
@@ -34,7 +42,12 @@ func securePasswordPrompt(_ prompt: String) -> String {
         while true {
             var char: WCHAR = 0
             var charsRead: DWORD = 0
-            ReadConsoleW(handle, &char, 1, &charsRead, nil)
+            let readResult = ReadConsoleW(handle, &char, 1, &charsRead, nil)
+
+            // Check for read failure or EOF
+            if readResult == 0 || charsRead == 0 {
+                break
+            }
 
             if char == 13 || char == 10 {  // Enter
                 break
@@ -44,8 +57,8 @@ func securePasswordPrompt(_ prompt: String) -> String {
                     print("\u{8} \u{8}", terminator: "")
                     fflush(stdout)
                 }
-            } else {
-                password.append(Character(UnicodeScalar(UInt16(char))!))
+            } else if let scalar = UnicodeScalar(UInt16(char)) {
+                password.append(Character(scalar))
                 print("*", terminator: "")
                 fflush(stdout)
             }
@@ -80,11 +93,13 @@ func securePasswordPrompt(_ prompt: String) -> String {
                     print("\u{8} \u{8}", terminator: "")
                     fflush(stdout)
                 }
-            } else {
+            } else if char >= 0 && char <= 127 {
+                // Valid ASCII character
                 password.append(Character(UnicodeScalar(UInt8(char))))
                 print("*", terminator: "")
                 fflush(stdout)
             }
+            // Ignore non-ASCII bytes (could be part of UTF-8 sequence)
         }
 
         return password
