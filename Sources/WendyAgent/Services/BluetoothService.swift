@@ -18,17 +18,10 @@ import WendyShared
 /// Service that exposes the WendyOS agent over Bluetooth Low Energy
 /// This allows CLI clients to discover and communicate with devices without network connectivity
 actor BluetoothService: Service {
-    // BLE advertising packet size constraints
-    private static let legacyAdvertisingMaxBytes = 31
-    private static let flagsFieldBytes = 3
-    private static let localNameHeaderBytes = 2
-    private static let serviceUUID128FieldBytes = 18  // 2 bytes header + 16 bytes UUID
-
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
     private var peripheralManager: PeripheralManager?
-    private let hardwareDiscoverer = SystemHardwareDiscoverer()
 
     init() {
         let uid = String(getuid())
@@ -204,8 +197,8 @@ actor BluetoothService: Service {
             ]
         )
 
-        // Convert string UUID to BluetoothUUID for advertising
-        guard let foundationUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
+        // Convert string UUID to Foundation UUID
+        guard let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
             logger.error(
                 "Invalid service UUID configuration",
                 metadata: [
@@ -214,21 +207,20 @@ actor BluetoothService: Service {
             )
             throw BluetoothServiceError.invalidConfiguration
         }
-        let serviceUUID = BluetoothUUID.bit128(foundationUUID)
+
+        // deviceName was already extracted above for logging
+        let shortName = deviceName
 
         // Calculate approximate advertising data size:
-        // - Flags: flagsFieldBytes (3 bytes)
-        // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
-        // - 128-bit Service UUID: serviceUUID128FieldBytes (18 bytes)
-        // Total must be <= legacyAdvertisingMaxBytes (31 bytes) for legacy advertising
+        // - Flags: 3 bytes
+        // - Complete Local Name: 2 + name.utf8.count bytes
+        // Total must be <= 31 bytes for legacy advertising
         // If name is too long, truncate it
-        let maxNameLength =
-            Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
-            - Self.serviceUUID128FieldBytes
+        let maxNameLength = 31 - 3 - 2  // 26 bytes for name
         let advertisingName: String
-        if deviceName.utf8.count > maxNameLength {
+        if shortName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
-            var truncated = deviceName
+            var truncated = shortName
             while truncated.utf8.count > maxNameLength && !truncated.isEmpty {
                 truncated.removeLast()
             }
@@ -236,40 +228,36 @@ actor BluetoothService: Service {
             logger.debug(
                 "Truncated advertising name to fit legacy limit",
                 metadata: [
-                    "original": "\(deviceName)",
+                    "original": "\(shortName)",
                     "truncated": "\(advertisingName)",
-                    "originalBytes": "\(deviceName.utf8.count)",
+                    "originalBytes": "\(shortName.utf8.count)",
                     "truncatedBytes": "\(advertisingName.utf8.count)",
                 ]
             )
         } else {
-            advertisingName = deviceName
+            advertisingName = shortName
         }
 
         let advertisementData = AdvertisementData(
             localName: advertisingName,
-            serviceUUIDs: [serviceUUID]  // Include service UUID for discovery filtering
-        )
-
-        // Include full name in scan response data for devices that request it
-        let scanResponseData = AdvertisementData(
-            localName: deviceName
+            serviceUUIDs: []  // Omit UUID to stay under legacy 31-byte limit
         )
 
         logger.debug(
             "Starting Bluetooth advertising",
             metadata: [
                 "advertisingName": "\(advertisingName)",
-                "fullName": "\(deviceName)",
                 "nameBytes": "\(advertisingName.utf8.count)",
-                "serviceUUID": "\(serviceUUID)",
+                "serviceUUID": "\(serviceUUID) (not included in advertising)",
             ]
         )
 
         do {
+            // Pass nil for scanResponseData - BlueZ doesn't properly support it
+            // and will merge it into advertising data, pushing us over 31 bytes
             try await manager.startAdvertising(
                 advertisingData: advertisementData,
-                scanResponseData: scanResponseData,
+                scanResponseData: nil,
                 parameters: AdvertisingParameters()
             )
             logger.debug("Bluetooth advertising started successfully")
@@ -395,37 +383,18 @@ actor BluetoothService: Service {
                     // If we don't know the expected length yet, try to read it
                     if expectedLength == nil {
                         guard buffer.readableBytes >= 4 else { break }
-                        if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self)
-                        {
-                            // Validate message size (cap to UInt16.max for BLE)
-                            if lengthPrefix > UInt32(UInt16.max) {
-                                logger.error(
-                                    "Message size exceeds maximum allowed for BLE",
-                                    metadata: ["length": "\(lengthPrefix)"]
-                                )
-                                return
-                            }
-                            expectedLength = Int(lengthPrefix)
-                            logger.debug(
-                                "Read message length",
-                                metadata: ["expectedLength": "\(lengthPrefix)"]
-                            )
-                        } else {
-                            logger.error("Failed to read message length from Bluetooth buffer")
-                            expectedLength = nil
-                            break
-                        }
+                        expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
+                        logger.debug(
+                            "Read message length",
+                            metadata: ["expectedLength": "\(expectedLength!)"]
+                        )
                     }
 
                     // Check if we have the complete message
                     guard let length = expectedLength, buffer.readableBytes >= length else { break }
 
                     // Extract the complete message
-                    guard let messageData = buffer.readData(length: length) else {
-                        logger.error("Failed to read Bluetooth message data from buffer")
-                        expectedLength = nil
-                        break
-                    }
+                    let messageData = buffer.readData(length: length)!
                     expectedLength = nil
 
                     messagesReceived += 1
@@ -629,7 +598,7 @@ actor BluetoothService: Service {
                 preference: configuration.networkManagerPreference
             )
 
-            if try await networkManager.getCurrentConnection() != nil {
+            if (try await networkManager.getCurrentConnection()) != nil {
                 let success = try await networkManager.disconnectFromNetwork()
                 response.success = success
             } else {
@@ -689,9 +658,7 @@ actor BluetoothService: Service {
         return response
     }
 
-    private func handleAppsStop(
-        appName: String
-    ) async throws
+    private func handleAppsStop(appName: String) async throws
         -> Wendy_Agent_Services_V1_AppsStopResponse
     {
         logger.debug("Bluetooth: Stopping app", metadata: ["app": "\(appName)"])
@@ -750,7 +717,8 @@ actor BluetoothService: Service {
     {
         logger.debug("Bluetooth: Listing hardware capabilities")
 
-        let capabilities = try await hardwareDiscoverer.discoverCapabilities(categoryFilter: nil)
+        let discoverer = SystemHardwareDiscoverer()
+        let capabilities = try await discoverer.discoverCapabilities(categoryFilter: nil)
 
         var response = Wendy_Agent_Services_V1_HardwareListResponse()
         response.capabilities = capabilities.map { cap in
@@ -792,7 +760,7 @@ actor BluetoothService: Service {
     private func extractDeviceName(from hostname: String) -> String {
         var name = hostname
 
-        // Remove common prefixes to maximize usable name length in BLE advertising
+        // Remove common prefixes
         let prefixes = ["wendyos-", "wendy-"]
         for prefix in prefixes {
             if name.lowercased().hasPrefix(prefix) {
@@ -817,7 +785,7 @@ actor BluetoothService: Service {
 
         // If name is empty after processing, use a fallback
         if name.isEmpty {
-            return "WendyOS"
+            return "WendyOS Device"
         }
 
         return name
