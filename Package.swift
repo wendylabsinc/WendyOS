@@ -141,6 +141,9 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "DNSClient", package: "DNSClient"),
                 .product(name: "Bluetooth", package: "bluetooth"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOFoundationCompat", package: "swift-nio"),
+                .target(name: "WendyAgentGRPC"),
             ]
         ),
         .target(

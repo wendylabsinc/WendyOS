@@ -6,7 +6,10 @@
     import IOKit
     import IOKit.usb
     import Network
+    import NIOCore
+    import NIOFoundationCompat
     import SystemConfiguration
+    import WendyAgentGRPC
 
     public struct PlatformDeviceDiscovery: DeviceDiscovery {
         private let ioServiceProvider: IOServiceProvider
@@ -176,7 +179,7 @@
             return interfaces
         }
 
-        public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+        public func findBluetoothDevices(resolveAgentVersion: Bool = false) async throws -> [BluetoothDevice] {
             logger.debug("Starting Bluetooth device discovery...")
 
             let centralManager = CentralManager()
@@ -224,7 +227,7 @@
 
             logger.debug("Bluetooth is ready, starting scan...")
 
-            var discoveredDevices: [String: BluetoothDevice] = [:]
+            var discoveredDevices: [String: (BluetoothDevice, Peripheral)] = [:]
             let scanDuration: Duration = .seconds(5)
             let scanStartTime = ContinuousClock.now
 
@@ -260,17 +263,20 @@
                             address: address,
                             rssi: rssi,
                             isWendyDevice: true,
-                            agentVersion: nil,  // Will be resolved separately
+                            agentVersion: nil,
                             l2capPSM: WendyBluetoothUUIDs.l2capPSM
                         )
 
+                        // Store peripheral for version resolution
+                        let peripheral = discovery.peripheral
+
                         // Only add if not already discovered (keep the one with better RSSI)
                         if let existing = discoveredDevices[deviceId] {
-                            if rssi > existing.rssi {
-                                discoveredDevices[deviceId] = device
+                            if rssi > existing.0.rssi {
+                                discoveredDevices[deviceId] = (device, peripheral)
                             }
                         } else {
-                            discoveredDevices[deviceId] = device
+                            discoveredDevices[deviceId] = (device, peripheral)
                             logger.debug(
                                 "Discovered Wendy Bluetooth device",
                                 metadata: [
@@ -283,6 +289,32 @@
                 }
 
                 try await centralManager.stopScan()
+
+                // Resolve agent versions if requested
+                if resolveAgentVersion {
+                    await withTaskGroup(of: (String, String?).self) { group in
+                        for (deviceId, (_, peripheral)) in discoveredDevices {
+                            group.addTask {
+                                do {
+                                    let version = try await self.resolveBluetoothAgentVersion(
+                                        peripheral: peripheral,
+                                        centralManager: centralManager
+                                    )
+                                    return (deviceId, version)
+                                } catch {
+                                    return (deviceId, nil)
+                                }
+                            }
+                        }
+
+                        for await (deviceId, version) in group {
+                            if let version, var entry = discoveredDevices[deviceId] {
+                                entry.0.agentVersion = version
+                                discoveredDevices[deviceId] = entry
+                            }
+                        }
+                    }
+                }
             } catch {
                 logger.warning(
                     "Bluetooth scan failed",
@@ -291,10 +323,99 @@
                 return []
             }
 
-            let devices = Array(discoveredDevices.values).sorted { $0.rssi > $1.rssi }
+            let devices = discoveredDevices.values.map(\.0).sorted { $0.rssi > $1.rssi }
             logger.debug("Bluetooth scan complete", metadata: ["deviceCount": "\(devices.count)"])
 
             return devices
         }
+
+        /// Resolve agent version for a Bluetooth device via L2CAP connection
+        private func resolveBluetoothAgentVersion(
+            peripheral: Peripheral,
+            centralManager: CentralManager
+        ) async throws -> String {
+            logger.debug("Resolving agent version for \(peripheral.name ?? "unknown")")
+
+            // Connect to the peripheral
+            let connection = try await centralManager.connect(to: peripheral)
+
+            // Wait for connection to be ready
+            let state = await connection.state()
+            if state != .connected {
+                for await newState in await connection.stateUpdates() {
+                    if newState == .connected {
+                        break
+                    }
+                    if case .disconnected = newState {
+                        throw BluetoothVersionResolutionError.connectionFailed
+                    }
+                }
+            }
+
+            defer {
+                Task {
+                    await connection.disconnect()
+                }
+            }
+
+            // Open L2CAP channel
+            let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
+            let channel = try await connection.openL2CAPChannel(psm: psm)
+
+            defer {
+                Task {
+                    await channel.close()
+                }
+            }
+
+            // Send version request
+            var command = Wendy_Agent_Services_V1_BluetoothCommand()
+            command.agentVersion = Wendy_Agent_Services_V1_AgentVersionCommand()
+            let commandBytes: [UInt8] = try command.serializedBytes()
+
+            // Send with length prefix using ByteBuffer
+            var sendBuffer = ByteBuffer()
+            sendBuffer.writeInteger(UInt32(commandBytes.count), endianness: .big)
+            sendBuffer.writeBytes(commandBytes)
+            try await channel.send(Data(buffer: sendBuffer))
+
+            // Read response using ByteBuffer
+            var receiveBuffer = ByteBuffer()
+
+            for try await data in channel.incoming() {
+                receiveBuffer.writeData(data)
+
+                // Try to read length prefix if we have enough bytes
+                if receiveBuffer.readableBytes >= 4 {
+                    let readerIndex = receiveBuffer.readerIndex
+                    guard let messageLength = receiveBuffer.readInteger(endianness: .big, as: UInt32.self) else {
+                        continue
+                    }
+
+                    if receiveBuffer.readableBytes >= messageLength {
+                        guard let responseBytes = receiveBuffer.readBytes(length: Int(messageLength)) else {
+                            throw BluetoothVersionResolutionError.unexpectedResponse
+                        }
+                        let response = try Wendy_Agent_Services_V1_BluetoothResponse(serializedBytes: responseBytes)
+
+                        if case .agentVersion(let versionResponse) = response.response {
+                            return versionResponse.version
+                        }
+                        throw BluetoothVersionResolutionError.unexpectedResponse
+                    } else {
+                        // Not enough data yet, reset reader index and wait for more
+                        receiveBuffer.moveReaderIndex(to: readerIndex)
+                    }
+                }
+            }
+
+            throw BluetoothVersionResolutionError.connectionClosed
+        }
+    }
+
+    private enum BluetoothVersionResolutionError: Error {
+        case connectionFailed
+        case unexpectedResponse
+        case connectionClosed
     }
 #endif

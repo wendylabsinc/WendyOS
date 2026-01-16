@@ -2,6 +2,7 @@ import Bluetooth
 import Foundation
 import Logging
 import NIOCore
+import NIOFoundationCompat
 import WendyAgentGRPC
 import WendyShared
 
@@ -288,9 +289,9 @@ actor BluetoothAgentClient {
         let commandName = command.commandName
 
         // Serialize the command
-        let commandData: Data
+        let commandBytes: [UInt8]
         do {
-            commandData = try command.serializedData()
+            commandBytes = try command.serializedBytes()
         } catch {
             throw BluetoothAgentError.serializationFailed(
                 peripheralId: peripheralId,
@@ -310,7 +311,7 @@ actor BluetoothAgentClient {
             "Sending command",
             metadata: [
                 "command": "\(commandName)",
-                "length": "\(commandData.count)",
+                "length": "\(commandBytes.count)",
                 "peripheralId": "\(peripheralId)",
             ]
         )

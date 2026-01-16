@@ -4,7 +4,14 @@ public protocol DeviceDiscovery: Sendable {
     func findUSBDevices() async -> [USBDevice]
     func findEthernetInterfaces() async -> [EthernetInterface]
     func findLANDevices() async throws -> [LANDevice]
-    func findBluetoothDevices() async throws -> [BluetoothDevice]
+    func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice]
+}
+
+extension DeviceDiscovery {
+    /// Convenience method that calls findBluetoothDevices with resolveAgentVersion: false
+    public func findBluetoothDevices() async throws -> [BluetoothDevice] {
+        try await findBluetoothDevices(resolveAgentVersion: false)
+    }
 }
 
 extension DeviceDiscovery {

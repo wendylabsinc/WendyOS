@@ -32,6 +32,9 @@ struct DiscoverCommand: AsyncParsableCommand {
         var lanDevices: [LANDevice] = []
         var bluetoothDevices: [BluetoothDevice] = []
 
+        // Bluetooth devices need inline version resolution since we can't reliably reconnect
+        let resolveBluetoothVersionInline = !skipResolveAgentVersion
+
         switch type {
         case .usb:
             usbDevices = await discovery.findUSBDevices()
@@ -40,13 +43,17 @@ struct DiscoverCommand: AsyncParsableCommand {
         case .lan:
             lanDevices = try await discovery.findLANDevices()
         case .bluetooth:
-            bluetoothDevices = try await discovery.findBluetoothDevices()
+            bluetoothDevices = try await discovery.findBluetoothDevices(
+                resolveAgentVersion: resolveBluetoothVersionInline
+            )
         case .all:
             // Fetch all types of devices
             async let _usbDevices = await discovery.findUSBDevices()
             async let _ethernetDevices = await discovery.findEthernetInterfaces()
             async let _lanDevices = try await discovery.findLANDevices()
-            async let _bluetoothDevices = try await discovery.findBluetoothDevices()
+            async let _bluetoothDevices = try await discovery.findBluetoothDevices(
+                resolveAgentVersion: resolveBluetoothVersionInline
+            )
 
             usbDevices = await _usbDevices
             ethernetDevices = await _ethernetDevices
@@ -262,9 +269,36 @@ extension DevicesCollection {
     }
 
     private func resolveBluetoothDeviceAgentVersions() async -> [BluetoothDevice] {
-        // Bluetooth agent version resolution is done via BLE L2CAP connection
-        // This will be implemented in a subsequent PR
-        return bluetoothDevices
+        await withTaskGroup(of: BluetoothDevice?.self) { group in
+            for device in bluetoothDevices {
+                group.addTask {
+                    do {
+                        let peripheral = Peripheral(
+                            id: BluetoothDeviceID(device.id),
+                            name: device.displayName
+                        )
+                        return try await BluetoothAgentClient.withConnection(
+                            to: peripheral,
+                            connectionTimeout: .seconds(10)
+                        ) { client in
+                            let version = try await client.getAgentVersion()
+                            var updatedDevice = device
+                            updatedDevice.agentVersion = version
+                            return updatedDevice
+                        }
+                    } catch {
+                        // Failed to resolve version, return device as-is
+                        return device
+                    }
+                }
+            }
+
+            return await group.reduce(into: [BluetoothDevice]()) { devices, device in
+                if let device {
+                    devices.append(device)
+                }
+            }
+        }
     }
 
     func resolveAgentVersions() async throws -> DevicesCollection {
