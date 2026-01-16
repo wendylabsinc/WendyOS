@@ -57,7 +57,7 @@ func securePasswordPrompt(_ prompt: String) -> String {
         var oldTermios = termios()
         tcgetattr(STDIN_FILENO, &oldTermios)
         var newTermios = oldTermios
-        newTermios.c_lflag &= ~UInt(ECHO | ICANON)
+        newTermios.c_lflag &= ~tcflag_t(ECHO | ICANON)
         tcsetattr(STDIN_FILENO, TCSANOW, &newTermios)
 
         defer {
