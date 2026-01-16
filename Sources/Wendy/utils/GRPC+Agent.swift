@@ -386,58 +386,77 @@ func _withAgentGRPCClient<R: Sendable>(
     }
 
     /// Execute a Bluetooth command and return the response
+    /// - Parameters:
+    ///   - command: The command to execute
+    ///   - deviceIdentifier: The Bluetooth device identifier
+    ///   - timeout: Timeout per attempt in seconds (default 10)
+    ///   - maxRetries: Maximum number of retry attempts (default 3)
     func executeBluetoothCommand(
         _ command: BluetoothAgentCommand,
         deviceIdentifier: String,
-        timeout: Int = 30
+        timeout: Int = 10,
+        maxRetries: Int = 3
     ) async throws -> BluetoothResponse {
         let logger = Logger(label: "sh.wendy.cli.bluetooth")
-        return try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
-            // Send length-prefixed command
-            let commandData = try command.toData()
-            var buffer = ByteBuffer()
-            buffer.writeInteger(UInt32(commandData.count), endianness: .big)
-            buffer.writeData(commandData)
+        var lastError: Error = BluetoothConnectionError.noResponse
 
-            logger.debug("Sending command", metadata: ["size": "\(commandData.count)"])
-            try await channel.send(Data(buffer.readableBytesView))
-            logger.debug("Command sent, waiting for response...")
-
-            // Wait for length-prefixed response with timeout
-            return try await withThrowingTaskGroup(of: BluetoothResponse.self) { group in
-                group.addTask {
+        for attempt in 1...maxRetries {
+            do {
+                return try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
+                    // Send length-prefixed command
+                    let commandData = try command.toData()
                     var buffer = ByteBuffer()
-                    var expectedLength: Int?
+                    buffer.writeInteger(UInt32(commandData.count), endianness: .big)
+                    buffer.writeData(commandData)
 
-                    for try await data in channel.incoming() {
-                        buffer.writeData(data)
+                    logger.debug("Sending command", metadata: ["size": "\(commandData.count)", "attempt": "\(attempt)"])
+                    try await channel.send(Data(buffer.readableBytesView))
+                    logger.debug("Command sent, waiting for response...")
 
-                        // Read length prefix if we don't have it yet
-                        if expectedLength == nil && buffer.readableBytes >= 4 {
-                            expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
-                            logger.debug("Response length", metadata: ["expected": "\(expectedLength!)"])
+                    // Wait for length-prefixed response with timeout
+                    return try await withThrowingTaskGroup(of: BluetoothResponse.self) { group in
+                        group.addTask {
+                            var buffer = ByteBuffer()
+                            var expectedLength: Int?
+
+                            for try await data in channel.incoming() {
+                                buffer.writeData(data)
+
+                                // Read length prefix if we don't have it yet
+                                if expectedLength == nil && buffer.readableBytes >= 4 {
+                                    expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
+                                    logger.debug("Response length", metadata: ["expected": "\(expectedLength!)"])
+                                }
+
+                                // Check if we have complete response
+                                if let length = expectedLength, buffer.readableBytes >= length {
+                                    let responseData = buffer.readData(length: length)!
+                                    logger.debug("Received complete response", metadata: ["size": "\(responseData.count)"])
+                                    return try BluetoothResponse.from(data: responseData)
+                                }
+                            }
+                            throw BluetoothConnectionError.noResponse
                         }
 
-                        // Check if we have complete response
-                        if let length = expectedLength, buffer.readableBytes >= length {
-                            let responseData = buffer.readData(length: length)!
-                            logger.debug("Received complete response", metadata: ["size": "\(responseData.count)"])
-                            return try BluetoothResponse.from(data: responseData)
+                        group.addTask {
+                            try await Task.sleep(for: .seconds(timeout))
+                            throw BluetoothConnectionError.noResponse
                         }
+
+                        let result = try await group.next()!
+                        group.cancelAll()
+                        return result
                     }
-                    throw BluetoothConnectionError.noResponse
                 }
-
-                group.addTask {
-                    try await Task.sleep(for: .seconds(timeout))
-                    throw BluetoothConnectionError.noResponse
+            } catch {
+                lastError = error
+                if attempt < maxRetries {
+                    logger.debug("Command failed, retrying...", metadata: ["attempt": "\(attempt)", "error": "\(error)"])
                 }
-
-                let result = try await group.next()!
-                group.cancelAll()
-                return result
             }
         }
+
+        throw lastError
     }
 
 #endif
