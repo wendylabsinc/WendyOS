@@ -117,6 +117,7 @@ let package = Package(
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
+                .product(name: "Bluetooth", package: "bluetooth"),
             ],
             path: "Sources/WendyAgent"
         ),
