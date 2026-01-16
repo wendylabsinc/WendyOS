@@ -3,6 +3,7 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIOCore
+import NIOFoundationCompat
 import NIOSSL
 import Noora
 import WendyAgentGRPC
@@ -387,16 +388,55 @@ func _withAgentGRPCClient<R: Sendable>(
     /// Execute a Bluetooth command and return the response
     func executeBluetoothCommand(
         _ command: BluetoothAgentCommand,
-        deviceIdentifier: String
+        deviceIdentifier: String,
+        timeout: Int = 30
     ) async throws -> BluetoothResponse {
-        try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
-            try await channel.send(command.toData())
+        let logger = Logger(label: "sh.wendy.cli.bluetooth")
+        return try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
+            // Send length-prefixed command
+            let commandData = try command.toData()
+            var buffer = ByteBuffer()
+            buffer.writeInteger(UInt32(commandData.count), endianness: .big)
+            buffer.writeData(commandData)
 
-            for try await data in channel.incoming() {
-                return try BluetoothResponse.from(data: data)
+            logger.debug("Sending command", metadata: ["size": "\(commandData.count)"])
+            try await channel.send(Data(buffer.readableBytesView))
+            logger.debug("Command sent, waiting for response...")
+
+            // Wait for length-prefixed response with timeout
+            return try await withThrowingTaskGroup(of: BluetoothResponse.self) { group in
+                group.addTask {
+                    var buffer = ByteBuffer()
+                    var expectedLength: Int?
+
+                    for try await data in channel.incoming() {
+                        buffer.writeData(data)
+
+                        // Read length prefix if we don't have it yet
+                        if expectedLength == nil && buffer.readableBytes >= 4 {
+                            expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
+                            logger.debug("Response length", metadata: ["expected": "\(expectedLength!)"])
+                        }
+
+                        // Check if we have complete response
+                        if let length = expectedLength, buffer.readableBytes >= length {
+                            let responseData = buffer.readData(length: length)!
+                            logger.debug("Received complete response", metadata: ["size": "\(responseData.count)"])
+                            return try BluetoothResponse.from(data: responseData)
+                        }
+                    }
+                    throw BluetoothConnectionError.noResponse
+                }
+
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw BluetoothConnectionError.noResponse
+                }
+
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
             }
-
-            throw BluetoothConnectionError.noResponse
         }
     }
 

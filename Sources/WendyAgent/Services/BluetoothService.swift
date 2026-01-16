@@ -2,6 +2,8 @@ import Bluetooth
 import ContainerdGRPC
 import Foundation
 import Logging
+import NIOCore
+import NIOFoundationCompat
 import ServiceLifecycle
 import WendyShared
 
@@ -382,30 +384,68 @@ actor BluetoothService: Service {
     private func handleChannel(_ channel: any L2CAPChannel) async {
         logger.debug("Starting to handle Bluetooth channel...")
         var messagesReceived = 0
+        var buffer = ByteBuffer()
+        var expectedLength: Int?
 
         do {
             for try await data in channel.incoming() {
-                messagesReceived += 1
                 logger.debug(
-                    "Received Bluetooth message",
+                    "Received Bluetooth data chunk",
                     metadata: [
-                        "messageNumber": "\(messagesReceived)",
-                        "dataSize": "\(data.count)",
+                        "chunkSize": "\(data.count)",
+                        "bufferSize": "\(buffer.readableBytes)",
                     ]
                 )
-                let response = await processCommand(data)
-                logger.debug("Sending response", metadata: ["responseSize": "\(response.count)"])
-                try await channel.send(response)
+
+                buffer.writeData(data)
+
+                // Process complete messages from buffer
+                while true {
+                    // If we don't know the expected length yet, try to read it
+                    if expectedLength == nil {
+                        guard buffer.readableBytes >= 4 else { break }
+                        expectedLength = Int(buffer.readInteger(endianness: .big, as: UInt32.self)!)
+                        logger.debug(
+                            "Read message length",
+                            metadata: ["expectedLength": "\(expectedLength!)"]
+                        )
+                    }
+
+                    // Check if we have the complete message
+                    guard let length = expectedLength, buffer.readableBytes >= length else { break }
+
+                    // Extract the complete message
+                    let messageData = buffer.readData(length: length)!
+                    expectedLength = nil
+
+                    messagesReceived += 1
+                    logger.debug(
+                        "Received complete Bluetooth message",
+                        metadata: [
+                            "messageNumber": "\(messagesReceived)",
+                            "messageSize": "\(messageData.count)",
+                        ]
+                    )
+
+                    // Parse and process command
+                    guard let command = try? BluetoothAgentCommand.from(data: messageData) else {
+                        logger.error("Failed to parse Bluetooth command")
+                        let errorResponse = BluetoothResponse.error(message: "Invalid command format")
+                        try await sendLengthPrefixed(errorResponse.toData(), on: channel)
+                        continue
+                    }
+
+                    let response = await processCommand(command)
+                    logger.debug("Sending response", metadata: ["responseSize": "\(response.count)"])
+                    try await sendLengthPrefixed(response, on: channel)
+                }
             }
         } catch {
-            // Socket closed after processing messages is expected (client disconnected)
             let errorString = String(describing: error)
             if messagesReceived > 0 && errorString.contains("socket closed") {
                 logger.debug(
                     "Client disconnected after request/response",
-                    metadata: [
-                        "messagesProcessed": "\(messagesReceived)"
-                    ]
+                    metadata: ["messagesProcessed": "\(messagesReceived)"]
                 )
             } else {
                 logger.error(
@@ -421,15 +461,19 @@ actor BluetoothService: Service {
 
         logger.debug(
             "Bluetooth connection closed",
-            metadata: [
-                "totalMessagesProcessed": "\(messagesReceived)"
-            ]
+            metadata: ["totalMessagesProcessed": "\(messagesReceived)"]
         )
     }
 
-    private func processCommand(_ data: Data) async -> Data {
+    private func sendLengthPrefixed(_ data: Data, on channel: any L2CAPChannel) async throws {
+        var buffer = ByteBuffer()
+        buffer.writeInteger(UInt32(data.count), endianness: .big)
+        buffer.writeData(data)
+        try await channel.send(Data(buffer.readableBytesView))
+    }
+
+    private func processCommand(_ command: BluetoothAgentCommand) async -> Data {
         do {
-            let command = try BluetoothAgentCommand.from(data: data)
             let response = try await executeCommand(command)
             return try response.toData()
         } catch {
@@ -662,7 +706,9 @@ actor BluetoothService: Service {
         #if os(Linux)
             var buffer = [CChar](repeating: 0, count: 256)
             if gethostname(&buffer, buffer.count) == 0 {
-                return String(cString: buffer)
+                // Find null terminator and decode as UTF-8
+                let length = buffer.firstIndex(of: 0) ?? buffer.count
+                return String(decoding: buffer.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
             }
         #endif
         // Fallback to ProcessInfo
