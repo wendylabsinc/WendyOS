@@ -1,5 +1,6 @@
 import ArgumentParser
 import AsyncAlgorithms
+import Bluetooth
 import Foundation
 import Logging
 import Noora
@@ -180,19 +181,34 @@ extension [DevicesCollection.GroupedDevice] {
         return TableData(
             columns: [
                 TableColumn(title: "Name"),
-                TableColumn(title: "Hostname"),
+                TableColumn(title: "Connection"),
                 TableColumn(title: "Interfaces"),
                 TableColumn(title: "Version"),
             ],
             rows: self.map { device in
-                var hostname = ""
-                for case .lan(let lanDevice) in device.interfaces {
-                    hostname = lanDevice.hostname
+                // Build connection info showing LAN hostname and/or BLE RSSI
+                var connectionParts: [String] = []
+
+                for interface in device.interfaces {
+                    switch interface {
+                    case .lan(let lanDevice):
+                        connectionParts.append("\(lanDevice.hostname) (LAN)")
+                    case .bluetooth(let btDevice):
+                        if btDevice.rssi != 0 {
+                            connectionParts.append("RSSI: \(btDevice.rssi) dBm (BLE)")
+                        } else {
+                            connectionParts.append("(BLE)")
+                        }
+                    case .usb, .ethernet:
+                        break
+                    }
                 }
+
+                let connection = connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
 
                 return [
                     "\(device.name)",
-                    "\(hostname)",
+                    "\(connection)",
                     "\(device.interfaces.map { $0.shortDescription }.joined(separator: ", "))",
                     "\(device.interfaces.compactMap(\.agentVersion).first ?? "Unknown")",
                 ]
