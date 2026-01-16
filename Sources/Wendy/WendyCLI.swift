@@ -18,7 +18,8 @@ struct WendyCLI {
         }
 
         // Check for global --json flag in arguments
-        let jsonMode = ProcessInfo.processInfo.arguments.contains("--json")
+        let jsonMode =
+            ProcessInfo.processInfo.arguments.contains("--json")
             || ProcessInfo.processInfo.arguments.contains("-j")
 
         // Track command execution with analytics
@@ -75,6 +76,9 @@ struct WendyCommand: AsyncParsableCommand {
         ]
     )
 
-    @Flag(name: [.customShort("j"), .long], help: "Output in JSON format. Disables interactive prompts.")
+    @Flag(
+        name: [.customShort("j"), .long],
+        help: "Output in JSON format. Disables interactive prompts."
+    )
     var json: Bool = false
 }

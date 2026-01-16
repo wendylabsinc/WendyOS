@@ -68,26 +68,26 @@ struct AppsCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(
-                        .appsRemove(appName: appName, purgeImage: purgeImage),
-                        deviceIdentifier: deviceIdentifier
-                    )
-                    if case .appsRemove(let success, let errorMessage) = response {
-                        if success {
-                            if purgeImage {
-                                Noora().success("Removed application and its image.")
+                        let response = try await executeBluetoothCommand(
+                            .appsRemove(appName: appName, purgeImage: purgeImage),
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .appsRemove(let success, let errorMessage) = response {
+                            if success {
+                                if purgeImage {
+                                    Noora().success("Removed application and its image.")
+                                } else {
+                                    Noora().success("Removed application.")
+                                }
                             } else {
-                                Noora().success("Removed application.")
+                                let message = errorMessage ?? "Unknown error"
+                                Noora().error("Failed to remove application: \(message)")
                             }
-                        } else {
-                            let message = errorMessage ?? "Unknown error"
-                            Noora().error("Failed to remove application: \(message)")
+                        } else if case .error(let message) = response {
+                            Noora().error("Error: \(message)")
                         }
-                    } else if case .error(let message) = response {
-                        Noora().error("Error: \(message)")
-                    }
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
@@ -120,22 +120,22 @@ struct AppsCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(
-                        .appsStop(appName: appName),
-                        deviceIdentifier: deviceIdentifier
-                    )
-                    if case .appsStop(let success, let errorMessage) = response {
-                        if success {
-                            Noora().success("Application stopped")
-                        } else {
-                            let message = errorMessage ?? "Unknown error"
-                            Noora().error("Failed to stop application: \(message)")
+                        let response = try await executeBluetoothCommand(
+                            .appsStop(appName: appName),
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .appsStop(let success, let errorMessage) = response {
+                            if success {
+                                Noora().success("Application stopped")
+                            } else {
+                                let message = errorMessage ?? "Unknown error"
+                                Noora().error("Failed to stop application: \(message)")
+                            }
+                        } else if case .error(let message) = response {
+                            Noora().error("Error: \(message)")
                         }
-                    } else if case .error(let message) = response {
-                        Noora().error("Error: \(message)")
-                    }
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
@@ -169,12 +169,14 @@ struct AppsCommand: AsyncParsableCommand {
                                 case .UNRECOGNIZED: "Unknown"
                                 }
 
-                            apps.append(AppInfo(
-                                appName: container.container.appName,
-                                appVersion: container.container.appVersion,
-                                state: state,
-                                failureCount: Int(container.container.failureCount)
-                            ))
+                            apps.append(
+                                AppInfo(
+                                    appName: container.container.appName,
+                                    appVersion: container.container.appVersion,
+                                    state: state,
+                                    failureCount: Int(container.container.failureCount)
+                                )
+                            )
                         }
 
                         return apps
@@ -182,15 +184,18 @@ struct AppsCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(.appsList, deviceIdentifier: deviceIdentifier)
-                    if case .appsList(let apps) = response {
-                        return apps
-                    } else if case .error(let message) = response {
-                        throw AppsCommandError.operationFailed(message)
-                    }
-                    return []
+                        let response = try await executeBluetoothCommand(
+                            .appsList,
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .appsList(let apps) = response {
+                            return apps
+                        } else if case .error(let message) = response {
+                            throw AppsCommandError.operationFailed(message)
+                        }
+                        return []
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )

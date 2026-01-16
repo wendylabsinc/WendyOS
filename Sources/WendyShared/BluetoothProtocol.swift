@@ -195,7 +195,10 @@ public enum BluetoothResponse: Codable, Sendable {
             let version = try container.decode(String.self, forKey: .version)
             self = .agentVersion(version: version)
         case .hardwareList:
-            let capabilities = try container.decode([BluetoothHardwareInfo].self, forKey: .capabilities)
+            let capabilities = try container.decode(
+                [BluetoothHardwareInfo].self,
+                forKey: .capabilities
+            )
             self = .hardwareList(capabilities: capabilities)
         case .error:
             let message = try container.decode(String.self, forKey: .message)

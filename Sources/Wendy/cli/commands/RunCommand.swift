@@ -409,7 +409,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     JSONErrorResponse(
                         error: "docker_not_running",
                         reason: "Docker is not running",
-                        suggestion: "Please start Docker Desktop or OrbStack before running this command"
+                        suggestion:
+                            "Please start Docker Desktop or OrbStack before running this command"
                     ).print()
                     _Exit(1)
                 }
@@ -573,7 +574,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }) {
             Noora().info("Container plugin is not installed. Do you want to install it?")
 
-            guard shouldAutoAccept || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
+            guard
+                shouldAutoAccept
+                    || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
             else {
                 Noora().error(
                     "Container plugin is required to build and run Swift packages. Please install it manually."
@@ -615,7 +618,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             // Multiple executable targets and no --executable specified
             jsonModeRequiresArgument(
                 argument: "executable",
-                description: "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
+                description:
+                    "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
             )
         } else {
             executableTarget = Noora().singleChoicePrompt(

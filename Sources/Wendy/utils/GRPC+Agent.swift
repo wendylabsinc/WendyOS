@@ -1,6 +1,3 @@
-#if canImport(Bluetooth)
-import Bluetooth
-#endif
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
@@ -11,6 +8,10 @@ import Noora
 import WendyAgentGRPC
 import WendyCloudGRPC
 import WendyShared
+
+#if canImport(Bluetooth)
+    import Bluetooth
+#endif
 
 typealias GRPCTransport = HTTP2ClientTransport.Posix
 
@@ -238,144 +239,166 @@ func _withAgentGRPCClient<R: Sendable>(
 
 #if canImport(Bluetooth)
 
-enum BluetoothConnectionError: Error, LocalizedError {
-    case deviceNotFound
-    case connectionFailed
-    case noResponse
-    case bluetoothUnavailable
+    enum BluetoothConnectionError: Error, LocalizedError {
+        case deviceNotFound
+        case connectionFailed
+        case connectionTimeout
+        case noResponse
+        case bluetoothUnavailable
 
-    var errorDescription: String? {
-        switch self {
-        case .deviceNotFound:
-            return "Device not found"
-        case .connectionFailed:
-            return "Failed to establish Bluetooth connection"
-        case .noResponse:
-            return "No response received from device"
-        case .bluetoothUnavailable:
-            return "Bluetooth is not available"
-        }
-    }
-}
-
-/// Connect to a WendyOS device over Bluetooth using a peripheral and execute a command
-/// - Parameters:
-///   - central: The CentralManager that discovered the peripheral (required on CoreBluetooth)
-///   - peripheral: The peripheral to connect to
-///   - l2capPSM: Optional L2CAP PSM to use (defaults to WendyBluetoothUUIDs.l2capPSM)
-///   - operation: The operation to perform on the L2CAP channel
-func withBluetoothConnection<T>(
-    central: CentralManager,
-    peripheral: Peripheral,
-    l2capPSM: UInt16? = nil,
-    operation: (L2CAPChannel) async throws -> T
-) async throws -> T {
-    let logger = Logger(label: "sh.wendy.cli.bluetooth")
-
-    logger.debug("Connecting to device", metadata: ["peripheral": "\(peripheral.id.rawValue)"])
-
-    // Connect to the device using the same CentralManager that discovered it
-    let connection = try await central.connect(to: peripheral)
-
-    // Use provided PSM or fall back to default
-    let psm = L2CAPPSM(rawValue: l2capPSM ?? WendyBluetoothUUIDs.l2capPSM)
-
-    // Open L2CAP channel
-    let channel = try await connection.openL2CAPChannel(psm: psm)
-
-    logger.debug("L2CAP channel opened")
-
-    defer {
-        Task {
-            await channel.close()
-            await connection.disconnect()
-        }
-    }
-
-    return try await operation(channel)
-}
-
-/// Result of establishing a Bluetooth connection
-private struct BluetoothConnectionResult: Sendable {
-    let connection: PeripheralConnection
-    let channel: L2CAPChannel
-}
-
-/// Connect to a WendyOS device directly by identifier and execute a command
-func withBluetoothConnection<T: Sendable>(
-    deviceIdentifier: String,
-    timeout: Int = 30,
-    operation: @Sendable (L2CAPChannel) async throws -> T
-) async throws -> T {
-    let logger = Logger(label: "sh.wendy.cli.bluetooth")
-    let central = CentralManager()
-
-    // Wait for Bluetooth to be ready
-    let currentState = await central.state()
-    switch currentState {
-    case .poweredOn:
-        break
-    case .poweredOff, .unauthorized, .unsupported:
-        throw BluetoothConnectionError.bluetoothUnavailable
-    default:
-        var ready = false
-        for await state in await central.stateUpdates() {
-            switch state {
-            case .poweredOn:
-                ready = true
-            case .poweredOff, .unauthorized, .unsupported:
-                throw BluetoothConnectionError.bluetoothUnavailable
-            default:
-                continue
+        var errorDescription: String? {
+            switch self {
+            case .deviceNotFound:
+                return "Device not found"
+            case .connectionFailed:
+                return "Failed to establish Bluetooth connection"
+            case .connectionTimeout:
+                return "Bluetooth connection timed out"
+            case .noResponse:
+                return "No response received from device"
+            case .bluetoothUnavailable:
+                return "Bluetooth is not available"
             }
-            break
-        }
-        guard ready else {
-            throw BluetoothConnectionError.bluetoothUnavailable
         }
     }
 
-    logger.debug("Connecting directly to device", metadata: ["identifier": "\(deviceIdentifier)"])
+    /// Connect to a WendyOS device over Bluetooth using a peripheral and execute a command
+    /// - Parameters:
+    ///   - central: The CentralManager that discovered the peripheral (required on CoreBluetooth)
+    ///   - peripheral: The peripheral to connect to
+    ///   - l2capPSM: Optional L2CAP PSM to use (defaults to WendyBluetoothUUIDs.l2capPSM)
+    ///   - operation: The operation to perform on the L2CAP channel
+    func withBluetoothConnection<T>(
+        central: CentralManager,
+        peripheral: Peripheral,
+        l2capPSM: UInt16? = nil,
+        operation: (L2CAPChannel) async throws -> T
+    ) async throws -> T {
+        let logger = Logger(label: "sh.wendy.cli.bluetooth")
 
-    // Create a Peripheral from the identifier
-    // Note: The identifier should include the uuid: or addr: prefix as expected by the backend
-    let peripheral = Peripheral(id: BluetoothDeviceID(deviceIdentifier))
+        logger.debug("Connecting to device", metadata: ["peripheral": "\(peripheral.id.rawValue)"])
 
-    // Connect to the device with a progress spinner
-    let result: BluetoothConnectionResult = try await Noora().progressStep(
-        message: "Connecting to Bluetooth device",
-        successMessage: "Connected to Bluetooth device",
-        errorMessage: "Failed to connect to Bluetooth device",
-        showSpinner: true
-    ) { _ in
+        // Connect to the device using the same CentralManager that discovered it
         let connection = try await central.connect(to: peripheral)
-        let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
+
+        // Use provided PSM or fall back to default
+        let psm = L2CAPPSM(rawValue: l2capPSM ?? WendyBluetoothUUIDs.l2capPSM)
+
+        // Open L2CAP channel
         let channel = try await connection.openL2CAPChannel(psm: psm)
-        return BluetoothConnectionResult(connection: connection, channel: channel)
-    }
 
-    defer {
-        Task {
-            await result.channel.close()
-            await result.connection.disconnect()
-        }
-    }
+        logger.debug("L2CAP channel opened")
 
-    return try await operation(result.channel)
-}
-
-/// Execute a Bluetooth command and return the response
-func executeBluetoothCommand(_ command: BluetoothAgentCommand, deviceIdentifier: String) async throws -> BluetoothResponse {
-    try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
-        try await channel.send(command.toData())
-
-        for try await data in channel.incoming() {
-            return try BluetoothResponse.from(data: data)
+        defer {
+            Task {
+                await channel.close()
+                await connection.disconnect()
+            }
         }
 
-        throw BluetoothConnectionError.noResponse
+        return try await operation(channel)
     }
-}
+
+    /// Result of establishing a Bluetooth connection
+    private struct BluetoothConnectionResult: Sendable {
+        let connection: PeripheralConnection
+        let channel: L2CAPChannel
+    }
+
+    /// Connect to a WendyOS device directly by identifier and execute a command
+    func withBluetoothConnection<T: Sendable>(
+        deviceIdentifier: String,
+        timeout: Int = 30,
+        operation: @Sendable (L2CAPChannel) async throws -> T
+    ) async throws -> T {
+        let logger = Logger(label: "sh.wendy.cli.bluetooth")
+        let central = CentralManager()
+
+        // Wait for Bluetooth to be ready
+        let currentState = await central.state()
+        switch currentState {
+        case .poweredOn:
+            break
+        case .poweredOff, .unauthorized, .unsupported:
+            throw BluetoothConnectionError.bluetoothUnavailable
+        default:
+            var ready = false
+            for await state in await central.stateUpdates() {
+                switch state {
+                case .poweredOn:
+                    ready = true
+                case .poweredOff, .unauthorized, .unsupported:
+                    throw BluetoothConnectionError.bluetoothUnavailable
+                default:
+                    continue
+                }
+                break
+            }
+            guard ready else {
+                throw BluetoothConnectionError.bluetoothUnavailable
+            }
+        }
+
+        logger.debug(
+            "Connecting directly to device",
+            metadata: ["identifier": "\(deviceIdentifier)"]
+        )
+
+        // Create a Peripheral from the identifier
+        // Note: The identifier should include the uuid: or addr: prefix as expected by the backend
+        let peripheral = Peripheral(id: BluetoothDeviceID(deviceIdentifier))
+
+        // Connect to the device with a progress spinner and timeout
+        let result: BluetoothConnectionResult = try await Noora().progressStep(
+            message: "Connecting to Bluetooth device",
+            successMessage: "Connected to Bluetooth device",
+            errorMessage: "Failed to connect to Bluetooth device",
+            showSpinner: true
+        ) { _ in
+            try await withThrowingTaskGroup(of: BluetoothConnectionResult.self) { group in
+                group.addTask {
+                    let connection = try await central.connect(to: peripheral)
+                    let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
+                    let channel = try await connection.openL2CAPChannel(psm: psm)
+                    return BluetoothConnectionResult(connection: connection, channel: channel)
+                }
+
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw BluetoothConnectionError.connectionTimeout
+                }
+
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+        }
+
+        defer {
+            Task {
+                await result.channel.close()
+                await result.connection.disconnect()
+            }
+        }
+
+        return try await operation(result.channel)
+    }
+
+    /// Execute a Bluetooth command and return the response
+    func executeBluetoothCommand(
+        _ command: BluetoothAgentCommand,
+        deviceIdentifier: String
+    ) async throws -> BluetoothResponse {
+        try await withBluetoothConnection(deviceIdentifier: deviceIdentifier) { channel in
+            try await channel.send(command.toData())
+
+            for try await data in channel.incoming() {
+                return try BluetoothResponse.from(data: data)
+            }
+
+            throw BluetoothConnectionError.noResponse
+        }
+    }
 
 #endif
 
@@ -397,11 +420,14 @@ func withAgentConnection<R: Sendable>(
         }
     case .bluetooth(let deviceIdentifier):
         #if canImport(Bluetooth)
-        let logger = Logger(label: "sh.wendy.cli.bluetooth")
-        logger.debug("Using Bluetooth connection", metadata: ["identifier": "\(deviceIdentifier)"])
-        return try await bluetoothOperation(deviceIdentifier)
+            let logger = Logger(label: "sh.wendy.cli.bluetooth")
+            logger.debug(
+                "Using Bluetooth connection",
+                metadata: ["identifier": "\(deviceIdentifier)"]
+            )
+            return try await bluetoothOperation(deviceIdentifier)
         #else
-        throw BluetoothNotAvailableError()
+            throw BluetoothNotAvailableError()
         #endif
     }
 }

@@ -5,7 +5,7 @@ import Noora
 import WendyShared
 
 #if canImport(Bluetooth)
-import Bluetooth
+    import Bluetooth
 #endif
 
 /// The type of connection to use for agent communication
@@ -85,7 +85,8 @@ struct AgentConnectionOptions: ParsableArguments {
 
     @Option(
         name: .shortAndLong,
-        help: "Connect to a device over Bluetooth by name or address. Use 'wendy discover --type bluetooth' to find devices."
+        help:
+            "Connect to a device over Bluetooth by name or address. Use 'wendy discover --type bluetooth' to find devices."
     )
     var bluetooth: String?
 
@@ -161,7 +162,8 @@ struct AgentConnectionOptions: ParsableArguments {
         if JSONMode.isEnabled {
             jsonModeRequiresArgument(
                 argument: "device",
-                description: "Provide --device <hostname:port>, --bluetooth <device>, or set WENDY_AGENT environment variable"
+                description:
+                    "Provide --device <hostname:port>, --bluetooth <device>, or set WENDY_AGENT environment variable"
             )
         }
 
@@ -190,10 +192,10 @@ struct AgentConnectionOptions: ParsableArguments {
                 async let lanDevicesTask = discovery.findAllDevices()
 
                 #if canImport(Bluetooth)
-                async let bluetoothDevicesTask = Self.discoverBluetoothDevices(scanDuration: 5)
-                let bluetoothDevices = try await bluetoothDevicesTask
+                    async let bluetoothDevicesTask = Self.discoverBluetoothDevices(scanDuration: 5)
+                    let bluetoothDevices = try await bluetoothDevicesTask
                 #else
-                let bluetoothDevices: [BluetoothDevice] = []
+                    let bluetoothDevices: [BluetoothDevice] = []
                 #endif
 
                 let lanCollection = try await lanDevicesTask
@@ -247,10 +249,12 @@ struct AgentConnectionOptions: ParsableArguments {
         // Prefer LAN if available, otherwise use Bluetooth
         for interface in device.interfaces {
             if case .lan(let lanDevice) = interface {
-                return .grpc(Endpoint(
-                    host: lanDevice.hostname,
-                    port: lanDevice.port
-                ))
+                return .grpc(
+                    Endpoint(
+                        host: lanDevice.hostname,
+                        port: lanDevice.port
+                    )
+                )
             }
         }
 
@@ -265,91 +269,100 @@ struct AgentConnectionOptions: ParsableArguments {
     }
 
     #if canImport(Bluetooth)
-    /// Actor for safely collecting discovered Bluetooth devices
-    private actor BluetoothDeviceCollector {
-        private var devices: [BluetoothDevice] = []
+        /// Actor for safely collecting discovered Bluetooth devices
+        private actor BluetoothDeviceCollector {
+            private var devices: [BluetoothDevice] = []
 
-        func add(_ device: BluetoothDevice) {
-            if !devices.contains(where: { $0.id == device.id }) {
-                devices.append(device)
-            }
-        }
-
-        func getDevices() -> [BluetoothDevice] {
-            return devices
-        }
-    }
-
-    /// Discovers Bluetooth devices (simplified version for device selection)
-    private static func discoverBluetoothDevices(scanDuration: Int = 5) async throws -> [BluetoothDevice] {
-        let logger = Logger(label: "sh.wendy.cli.bluetooth.discover")
-        let central = CentralManager()
-
-        // Check current Bluetooth state
-        let currentState = await central.state()
-        switch currentState {
-        case .poweredOn:
-            break
-        case .poweredOff, .unauthorized, .unsupported:
-            logger.debug("Bluetooth not available: \(currentState)")
-            return []
-        default:
-            // Wait for state to stabilize
-            for await state in await central.stateUpdates() {
-                switch state {
-                case .poweredOn:
-                    break
-                case .poweredOff, .unauthorized, .unsupported:
-                    return []
-                default:
-                    continue
+            func add(_ device: BluetoothDevice) {
+                if !devices.contains(where: { $0.id == device.id }) {
+                    devices.append(device)
                 }
-                break
+            }
+
+            func getDevices() -> [BluetoothDevice] {
+                return devices
             }
         }
 
-        try await Task.sleep(for: .milliseconds(100))
+        /// Discovers Bluetooth devices (simplified version for device selection)
+        private static func discoverBluetoothDevices(
+            scanDuration: Int = 5
+        ) async throws -> [BluetoothDevice] {
+            let logger = Logger(label: "sh.wendy.cli.bluetooth.discover")
+            let central = CentralManager()
 
-        let collector = BluetoothDeviceCollector()
-        let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID)!
-        let targetServiceUUID = BluetoothUUID(serviceUUID)
-
-        // Scan for 2 seconds
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                let scanParameters = ScanParameters(allowDuplicates: true)
-                for try await result in try await central.scan(filter: nil, parameters: scanParameters) {
-                    let name = result.advertisementData.localName ?? result.peripheral.name ?? "Unknown"
-
-                    // Only process devices with Wendy service UUID or name
-                    guard result.advertisementData.serviceUUIDs.contains(targetServiceUUID) ||
-                          name.lowercased().contains("wendy") else {
+            // Check current Bluetooth state
+            let currentState = await central.state()
+            switch currentState {
+            case .poweredOn:
+                break
+            case .poweredOff, .unauthorized, .unsupported:
+                logger.debug("Bluetooth not available: \(currentState)")
+                return []
+            default:
+                // Wait for state to stabilize
+                for await state in await central.stateUpdates() {
+                    switch state {
+                    case .poweredOn:
+                        break
+                    case .poweredOff, .unauthorized, .unsupported:
+                        return []
+                    default:
                         continue
                     }
-
-                    let device = BluetoothDevice(
-                        id: result.peripheral.id.rawValue,
-                        displayName: result.advertisementData.localName ?? "WendyOS Device",
-                        address: result.peripheral.id.rawValue,
-                        rssi: result.rssi,
-                        l2capPSM: nil
-                    )
-
-                    await collector.add(device)
+                    break
                 }
             }
 
-            group.addTask {
-                try await Task.sleep(for: .seconds(scanDuration))
+            try await Task.sleep(for: .milliseconds(100))
+
+            let collector = BluetoothDeviceCollector()
+            let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID)!
+            let targetServiceUUID = BluetoothUUID(serviceUUID)
+
+            // Scan for 2 seconds
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    let scanParameters = ScanParameters(allowDuplicates: true)
+                    for try await result in try await central.scan(
+                        filter: nil,
+                        parameters: scanParameters
+                    ) {
+                        let name =
+                            result.advertisementData.localName ?? result.peripheral.name
+                            ?? "Unknown"
+
+                        // Only process devices with Wendy service UUID or name
+                        guard
+                            result.advertisementData.serviceUUIDs.contains(targetServiceUUID)
+                                || name.lowercased().contains("wendy")
+                        else {
+                            continue
+                        }
+
+                        let device = BluetoothDevice(
+                            id: result.peripheral.id.rawValue,
+                            displayName: result.advertisementData.localName ?? "WendyOS Device",
+                            address: result.peripheral.id.rawValue,
+                            rssi: result.rssi,
+                            l2capPSM: nil
+                        )
+
+                        await collector.add(device)
+                    }
+                }
+
+                group.addTask {
+                    try await Task.sleep(for: .seconds(scanDuration))
+                }
+
+                _ = try await group.next()
+                group.cancelAll()
             }
 
-            _ = try await group.next()
-            group.cancelAll()
+            try await central.stopScan()
+            return await collector.getDevices()
         }
-
-        try await central.stopScan()
-        return await collector.getDevices()
-    }
     #endif
 
     func read(
@@ -386,7 +399,8 @@ struct AgentConnectionOptions: ParsableArguments {
         if JSONMode.isEnabled {
             jsonModeRequiresArgument(
                 argument: "device",
-                description: "Provide --device <hostname:port>, --bluetooth <device>, or set WENDY_AGENT environment variable"
+                description:
+                    "Provide --device <hostname:port>, --bluetooth <device>, or set WENDY_AGENT environment variable"
             )
         }
 

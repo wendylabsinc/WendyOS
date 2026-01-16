@@ -7,7 +7,7 @@ import WendyAgentGRPC
 import WendyShared
 
 #if canImport(Bluetooth)
-import Bluetooth
+    import Bluetooth
 #endif
 
 struct HardwareCommand: AsyncParsableCommand {
@@ -60,21 +60,26 @@ struct HardwareCommand: AsyncParsableCommand {
             },
             bluetoothOperation: { deviceIdentifier in
                 #if canImport(Bluetooth)
-                let response = try await executeBluetoothCommand(.hardwareList, deviceIdentifier: deviceIdentifier)
-                if case .hardwareList(let capabilities) = response {
-                    // Convert BluetoothHardwareInfo to gRPC HardwareCapability
-                    return capabilities.map { info in
-                        var capability = Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse.HardwareCapability()
-                        capability.category = info.type
-                        capability.description_p = info.name
-                        return capability
+                    let response = try await executeBluetoothCommand(
+                        .hardwareList,
+                        deviceIdentifier: deviceIdentifier
+                    )
+                    if case .hardwareList(let capabilities) = response {
+                        // Convert BluetoothHardwareInfo to gRPC HardwareCapability
+                        return capabilities.map { info in
+                            var capability =
+                                Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse
+                                .HardwareCapability()
+                            capability.category = info.type
+                            capability.description_p = info.name
+                            return capability
+                        }
+                    } else if case .error(let message) = response {
+                        throw HardwareCommandError.operationFailed(message)
                     }
-                } else if case .error(let message) = response {
-                    throw HardwareCommandError.operationFailed(message)
-                }
-                return []
+                    return []
                 #else
-                throw BluetoothNotAvailableError()
+                    throw BluetoothNotAvailableError()
                 #endif
             }
         )

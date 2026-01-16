@@ -137,7 +137,8 @@ struct LogoutCommand: AsyncParsableCommand {
 
         let logout: Config.Auth
         if let cloudDashboard {
-            guard let auth = config.auth.first(where: { $0.cloudDashboard == cloudDashboard }) else {
+            guard let auth = config.auth.first(where: { $0.cloudDashboard == cloudDashboard })
+            else {
                 if JSONMode.isEnabled {
                     JSONErrorResponse(
                         error: "account_not_found",

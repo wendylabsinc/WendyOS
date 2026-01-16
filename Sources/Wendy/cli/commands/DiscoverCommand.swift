@@ -1,13 +1,14 @@
 import ArgumentParser
 import AsyncAlgorithms
-#if canImport(Bluetooth)
-import Bluetooth
-#endif
 import Foundation
 import Logging
 import Noora
 import WendyAgentGRPC
 import WendyShared
+
+#if canImport(Bluetooth)
+    import Bluetooth
+#endif
 
 /// Cache for BLE devices to keep them visible even when they stop advertising
 /// BLE advertisements are less reliable than LAN mDNS, so we keep devices visible longer
@@ -135,225 +136,251 @@ struct DiscoverCommand: AsyncParsableCommand {
     }
 
     #if canImport(Bluetooth)
-    /// Intermediate structure to hold discovered device info before version resolution
-    private struct DiscoveredBluetoothDevice {
-        let peripheral: Peripheral
-        var device: BluetoothDevice
-        let l2capPSM: UInt16?
-    }
+        /// Intermediate structure to hold discovered device info before version resolution
+        private struct DiscoveredBluetoothDevice {
+            let peripheral: Peripheral
+            var device: BluetoothDevice
+            let l2capPSM: UInt16?
+        }
 
-    private func discoverBluetoothDevices() async throws -> [BluetoothDevice] {
-        let logger = Logger(label: "sh.wendy.cli.bluetooth.discover")
-        let central = CentralManager()
+        private func discoverBluetoothDevices() async throws -> [BluetoothDevice] {
+            let logger = Logger(label: "sh.wendy.cli.bluetooth.discover")
+            let central = CentralManager()
 
-        // Check current Bluetooth state first (don't wait for updates if already ready)
-        let currentState = await central.state()
-        logger.debug("Bluetooth state: \(currentState)")
-        switch currentState {
-        case .poweredOn:
-            // Already ready, proceed
-            break
-        case .poweredOff, .unauthorized, .unsupported:
-            logger.debug("Bluetooth not available: \(currentState)")
-            return []
-        default:
-            // State is unknown or resetting, wait for it to stabilize
-            logger.debug("Waiting for Bluetooth to become ready...")
-            for await state in await central.stateUpdates() {
-                logger.debug("Bluetooth state update: \(state)")
-                switch state {
-                case .poweredOn:
-                    break
-                case .poweredOff, .unauthorized, .unsupported:
-                    logger.debug("Bluetooth not available: \(state)")
-                    return []
-                default:
-                    continue
-                }
+            // Check current Bluetooth state first (don't wait for updates if already ready)
+            let currentState = await central.state()
+            logger.debug("Bluetooth state: \(currentState)")
+            switch currentState {
+            case .poweredOn:
+                // Already ready, proceed
                 break
-            }
-        }
-
-        // Small delay to let CoreBluetooth fully initialize
-        try await Task.sleep(for: .milliseconds(100))
-        logger.debug("Starting Bluetooth scan...")
-
-        let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID)!
-        // Don't use CoreBluetooth's native service filter - it has issues with case sensitivity
-        // for custom 128-bit UUIDs. We filter manually below instead.
-        let filter: ScanFilter? = nil
-        let targetServiceUUID = BluetoothUUID(serviceUUID)
-
-        // Use an actor to safely collect discovered devices
-        actor DeviceCollector {
-            var devices: [DiscoveredBluetoothDevice] = []
-            var totalSeen: Int = 0
-
-            func sawDevice() {
-                totalSeen += 1
-            }
-
-            func add(_ device: DiscoveredBluetoothDevice) -> Bool {
-                if devices.contains(where: { $0.device.id == device.device.id }) {
-                    return false
-                }
-                devices.append(device)
-                return true
-            }
-
-            func getDevices() -> [DiscoveredBluetoothDevice] {
-                return devices
-            }
-
-            func getTotalSeen() -> Int {
-                return totalSeen
-            }
-        }
-
-        let collector = DeviceCollector()
-
-        let bluetoothServiceUUID = BluetoothUUID(serviceUUID)
-
-        // Phase 1: Scan for devices (don't connect during scan - it causes flakiness)
-        // Use allowDuplicates to catch devices that advertise intermittently
-        let scanParameters = ScanParameters(allowDuplicates: true)
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                for try await result in try await central.scan(filter: filter, parameters: scanParameters) {
-                    await collector.sawDevice()
-                    let name = result.advertisementData.localName ?? result.peripheral.name ?? "Unknown"
-                    let serviceUUIDs = result.advertisementData.serviceUUIDs.map { $0.description }
-
-                    // Log all devices for debugging
-                    logger.debug("Saw device", metadata: [
-                        "name": "\(name)",
-                        "id": "\(result.peripheral.id.rawValue)",
-                        "serviceUUIDs": "\(serviceUUIDs)"
-                    ])
-
-                    // Only process devices with Wendy service UUID or name
-                    guard result.advertisementData.serviceUUIDs.contains(targetServiceUUID) ||
-                          name.lowercased().contains("wendy") else {
+            case .poweredOff, .unauthorized, .unsupported:
+                logger.debug("Bluetooth not available: \(currentState)")
+                return []
+            default:
+                // State is unknown or resetting, wait for it to stabilize
+                logger.debug("Waiting for Bluetooth to become ready...")
+                for await state in await central.stateUpdates() {
+                    logger.debug("Bluetooth state update: \(state)")
+                    switch state {
+                    case .poweredOn:
+                        break
+                    case .poweredOff, .unauthorized, .unsupported:
+                        logger.debug("Bluetooth not available: \(state)")
+                        return []
+                    default:
                         continue
                     }
-
-                    // Extract PSM from service data if available
-                    var l2capPSM: UInt16? = nil
-                    if let psmData = result.advertisementData.serviceData[bluetoothServiceUUID],
-                       psmData.count >= 2 {
-                        l2capPSM = psmData.withUnsafeBytes { $0.load(as: UInt16.self) }
-                    }
-
-                    let device = BluetoothDevice(
-                        id: result.peripheral.id.rawValue,
-                        displayName: result.advertisementData.localName ?? "WendyOS Device",
-                        address: result.peripheral.id.rawValue,
-                        rssi: result.rssi,
-                        l2capPSM: l2capPSM
-                    )
-
-                    let discovered = DiscoveredBluetoothDevice(
-                        peripheral: result.peripheral,
-                        device: device,
-                        l2capPSM: l2capPSM
-                    )
-
-                    if await collector.add(discovered) {
-                        logger.debug("Found Bluetooth device", metadata: [
-                            "name": "\(device.displayName)",
-                            "id": "\(device.id)"
-                        ])
-                    }
+                    break
                 }
             }
 
-            group.addTask {
-                try await Task.sleep(for: .seconds(self.timeout))
+            // Small delay to let CoreBluetooth fully initialize
+            try await Task.sleep(for: .milliseconds(100))
+            logger.debug("Starting Bluetooth scan...")
+
+            let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID)!
+            // Don't use CoreBluetooth's native service filter - it has issues with case sensitivity
+            // for custom 128-bit UUIDs. We filter manually below instead.
+            let filter: ScanFilter? = nil
+            let targetServiceUUID = BluetoothUUID(serviceUUID)
+
+            // Use an actor to safely collect discovered devices
+            actor DeviceCollector {
+                var devices: [DiscoveredBluetoothDevice] = []
+                var totalSeen: Int = 0
+
+                func sawDevice() {
+                    totalSeen += 1
+                }
+
+                func add(_ device: DiscoveredBluetoothDevice) -> Bool {
+                    if devices.contains(where: { $0.device.id == device.device.id }) {
+                        return false
+                    }
+                    devices.append(device)
+                    return true
+                }
+
+                func getDevices() -> [DiscoveredBluetoothDevice] {
+                    return devices
+                }
+
+                func getTotalSeen() -> Int {
+                    return totalSeen
+                }
             }
 
-            // Wait for timeout
-            _ = try await group.next()
-            group.cancelAll()
-        }
+            let collector = DeviceCollector()
 
-        try await central.stopScan()
-        let totalSeen = await collector.getTotalSeen()
-        logger.debug("Scan complete. Total devices seen: \(totalSeen)")
+            let bluetoothServiceUUID = BluetoothUUID(serviceUUID)
 
-        // Phase 2: Resolve versions for discovered devices (after scan completes)
-        // Do this in parallel with a timeout per device
-        let discoveredDevices = await collector.getDevices()
-        logger.debug("Wendy devices found: \(discoveredDevices.count)")
-
-        guard !skipResolveAgentVersion && !discoveredDevices.isEmpty else {
-            return discoveredDevices.map(\.device)
-        }
-
-        logger.debug("Resolving versions for \(discoveredDevices.count) device(s) in parallel")
-
-        let resolvedDevices = await withTaskGroup(of: BluetoothDevice.self) { group in
-            for discovered in discoveredDevices {
+            // Phase 1: Scan for devices (don't connect during scan - it causes flakiness)
+            // Use allowDuplicates to catch devices that advertise intermittently
+            let scanParameters = ScanParameters(allowDuplicates: true)
+            try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
-                    var device = discovered.device
+                    for try await result in try await central.scan(
+                        filter: filter,
+                        parameters: scanParameters
+                    ) {
+                        await collector.sawDevice()
+                        let name =
+                            result.advertisementData.localName ?? result.peripheral.name
+                            ?? "Unknown"
+                        let serviceUUIDs = result.advertisementData.serviceUUIDs.map {
+                            $0.description
+                        }
 
-                    do {
-                        // 5 second timeout per device
-                        let response = try await withThrowingTaskGroup(of: BluetoothResponse.self) { timeoutGroup in
-                            timeoutGroup.addTask {
-                                try await withBluetoothConnection(
-                                    central: central,
-                                    peripheral: discovered.peripheral,
-                                    l2capPSM: discovered.l2capPSM
-                                ) { channel in
-                                    try await channel.send(BluetoothAgentCommand.agentVersion.toData())
-                                    for try await data in channel.incoming() {
-                                        return try BluetoothResponse.from(data: data)
+                        // Log all devices for debugging
+                        logger.debug(
+                            "Saw device",
+                            metadata: [
+                                "name": "\(name)",
+                                "id": "\(result.peripheral.id.rawValue)",
+                                "serviceUUIDs": "\(serviceUUIDs)",
+                            ]
+                        )
+
+                        // Only process devices with Wendy service UUID or name
+                        guard
+                            result.advertisementData.serviceUUIDs.contains(targetServiceUUID)
+                                || name.lowercased().contains("wendy")
+                        else {
+                            continue
+                        }
+
+                        // Extract PSM from service data if available
+                        var l2capPSM: UInt16? = nil
+                        if let psmData = result.advertisementData.serviceData[bluetoothServiceUUID],
+                            psmData.count >= 2
+                        {
+                            l2capPSM = psmData.withUnsafeBytes { $0.load(as: UInt16.self) }
+                        }
+
+                        let device = BluetoothDevice(
+                            id: result.peripheral.id.rawValue,
+                            displayName: result.advertisementData.localName ?? "WendyOS Device",
+                            address: result.peripheral.id.rawValue,
+                            rssi: result.rssi,
+                            l2capPSM: l2capPSM
+                        )
+
+                        let discovered = DiscoveredBluetoothDevice(
+                            peripheral: result.peripheral,
+                            device: device,
+                            l2capPSM: l2capPSM
+                        )
+
+                        if await collector.add(discovered) {
+                            logger.debug(
+                                "Found Bluetooth device",
+                                metadata: [
+                                    "name": "\(device.displayName)",
+                                    "id": "\(device.id)",
+                                ]
+                            )
+                        }
+                    }
+                }
+
+                group.addTask {
+                    try await Task.sleep(for: .seconds(self.timeout))
+                }
+
+                // Wait for timeout
+                _ = try await group.next()
+                group.cancelAll()
+            }
+
+            try await central.stopScan()
+            let totalSeen = await collector.getTotalSeen()
+            logger.debug("Scan complete. Total devices seen: \(totalSeen)")
+
+            // Phase 2: Resolve versions for discovered devices (after scan completes)
+            // Do this in parallel with a timeout per device
+            let discoveredDevices = await collector.getDevices()
+            logger.debug("Wendy devices found: \(discoveredDevices.count)")
+
+            guard !skipResolveAgentVersion && !discoveredDevices.isEmpty else {
+                return discoveredDevices.map(\.device)
+            }
+
+            logger.debug("Resolving versions for \(discoveredDevices.count) device(s) in parallel")
+
+            let resolvedDevices = await withTaskGroup(of: BluetoothDevice.self) { group in
+                for discovered in discoveredDevices {
+                    group.addTask {
+                        var device = discovered.device
+
+                        do {
+                            // 5 second timeout per device
+                            let response = try await withThrowingTaskGroup(
+                                of: BluetoothResponse.self
+                            ) { timeoutGroup in
+                                timeoutGroup.addTask {
+                                    try await withBluetoothConnection(
+                                        central: central,
+                                        peripheral: discovered.peripheral,
+                                        l2capPSM: discovered.l2capPSM
+                                    ) { channel in
+                                        try await channel.send(
+                                            BluetoothAgentCommand.agentVersion.toData()
+                                        )
+                                        for try await data in channel.incoming() {
+                                            return try BluetoothResponse.from(data: data)
+                                        }
+                                        throw BluetoothConnectionError.noResponse
                                     }
+                                }
+
+                                timeoutGroup.addTask {
+                                    try await Task.sleep(for: .seconds(5))
                                     throw BluetoothConnectionError.noResponse
                                 }
+
+                                let result = try await timeoutGroup.next()!
+                                timeoutGroup.cancelAll()
+                                return result
                             }
 
-                            timeoutGroup.addTask {
-                                try await Task.sleep(for: .seconds(5))
-                                throw BluetoothConnectionError.noResponse
+                            if case .agentVersion(let version) = response {
+                                device.agentVersion = version
+                                logger.debug(
+                                    "Resolved version",
+                                    metadata: [
+                                        "device": "\(device.displayName)",
+                                        "version": "\(version)",
+                                    ]
+                                )
                             }
-
-                            let result = try await timeoutGroup.next()!
-                            timeoutGroup.cancelAll()
-                            return result
+                        } catch {
+                            logger.debug(
+                                "Failed to resolve Bluetooth version",
+                                metadata: [
+                                    "device": "\(device.displayName)",
+                                    "error": "\(error)",
+                                ]
+                            )
                         }
 
-                        if case .agentVersion(let version) = response {
-                            device.agentVersion = version
-                            logger.debug("Resolved version", metadata: [
-                                "device": "\(device.displayName)",
-                                "version": "\(version)"
-                            ])
-                        }
-                    } catch {
-                        logger.debug("Failed to resolve Bluetooth version", metadata: [
-                            "device": "\(device.displayName)",
-                            "error": "\(error)"
-                        ])
+                        return device
                     }
-
-                    return device
                 }
+
+                var results: [BluetoothDevice] = []
+                for await device in group {
+                    results.append(device)
+                }
+                return results
             }
 
-            var results: [BluetoothDevice] = []
-            for await device in group {
-                results.append(device)
-            }
-            return results
+            return resolvedDevices
         }
-
-        return resolvedDevices
-    }
     #else
-    private func discoverBluetoothDevices() async throws -> [BluetoothDevice] {
-        return []
-    }
+        private func discoverBluetoothDevices() async throws -> [BluetoothDevice] {
+            return []
+        }
     #endif
 
     func run() async throws {
@@ -429,7 +456,6 @@ extension DevicesCollection {
         // TODO: Agent version resolution unsupported
         return ethernetDevices
     }
-
 
     private func resolveLANDeviceAgentVersions() async -> [LANDevice] {
         await withTaskGroup(of: LANDevice?.self) { group in

@@ -38,7 +38,8 @@ public struct DevicesCollection: Encodable, Sendable {
 
     /// Whether the collection contains no devices
     public var isEmpty: Bool {
-        return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty && bluetoothDevices.isEmpty
+        return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
+            && bluetoothDevices.isEmpty
     }
 
     /// The number of unique devices (counting each unique device name once)

@@ -13,9 +13,9 @@ import X509
 import _NIOFileSystem
 
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-import Darwin
+    import Darwin
 #elseif os(Linux)
-import Glibc
+    import Glibc
 #endif
 
 /// Prompt for password input without echoing to terminal
@@ -90,15 +90,18 @@ struct DeviceCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(.agentVersion, deviceIdentifier: deviceIdentifier)
-                    if case .agentVersion(let version) = response {
-                        return version
-                    } else if case .error(let message) = response {
-                        throw VersionCommandError.operationFailed(message)
-                    }
-                    throw VersionCommandError.operationFailed("Unexpected response")
+                        let response = try await executeBluetoothCommand(
+                            .agentVersion,
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .agentVersion(let version) = response {
+                            return version
+                        } else if case .error(let message) = response {
+                            throw VersionCommandError.operationFailed(message)
+                        }
+                        throw VersionCommandError.operationFailed("Unexpected response")
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )

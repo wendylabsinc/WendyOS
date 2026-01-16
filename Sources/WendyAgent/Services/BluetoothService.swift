@@ -6,9 +6,9 @@ import ServiceLifecycle
 import WendyShared
 
 #if canImport(Glibc)
-import Glibc
+    import Glibc
 #elseif canImport(Musl)
-import Musl
+    import Musl
 #endif
 
 /// Service that exposes the WendyOS agent over Bluetooth Low Energy
@@ -54,10 +54,14 @@ actor BluetoothService: Service {
             do {
                 try await startAdvertising(manager)
             } catch {
-                logger.warning("Advertising failed, but continuing with L2CAP listener", metadata: [
-                    "error": "\(error)",
-                    "hint": "Device may not be discoverable, but direct connections may still work"
-                ])
+                logger.warning(
+                    "Advertising failed, but continuing with L2CAP listener",
+                    metadata: [
+                        "error": "\(error)",
+                        "hint":
+                            "Device may not be discoverable, but direct connections may still work",
+                    ]
+                )
             }
 
             // Handle incoming L2CAP connections
@@ -65,16 +69,22 @@ actor BluetoothService: Service {
             logger.debug("Phase: handling incoming L2CAP connections")
             try await handleConnections(manager)
         } catch is CancellationError {
-            logger.debug("Bluetooth service cancelled", metadata: ["phase": "\(currentPhase.rawValue)"])
+            logger.debug(
+                "Bluetooth service cancelled",
+                metadata: ["phase": "\(currentPhase.rawValue)"]
+            )
         } catch {
             // Log the error but don't crash the entire agent
             // Bluetooth is optional functionality
-            logger.warning("Bluetooth service failed (agent continues without Bluetooth)", metadata: [
-                "error": "\(error)",
-                "errorType": "\(type(of: error))",
-                "errorDescription": "\((error as? LocalizedError)?.errorDescription ?? "N/A")",
-                "phase": "\(currentPhase.rawValue)"
-            ])
+            logger.warning(
+                "Bluetooth service failed (agent continues without Bluetooth)",
+                metadata: [
+                    "error": "\(error)",
+                    "errorType": "\(type(of: error))",
+                    "errorDescription": "\((error as? LocalizedError)?.errorDescription ?? "N/A")",
+                    "phase": "\(currentPhase.rawValue)",
+                ]
+            )
 
             // Wait for graceful shutdown instead of throwing
             // This prevents the error from bringing down the entire service group
@@ -113,7 +123,9 @@ actor BluetoothService: Service {
             // On Linux/BlueZ, the state might be reported as unknown even when the adapter is powered on.
             // The BlueZ library may not correctly read the Powered property.
             // We'll proceed optimistically and let actual Bluetooth operations fail if there's a real issue.
-            logger.warning("Bluetooth state is unknown - proceeding optimistically (BlueZ may not report state correctly)")
+            logger.warning(
+                "Bluetooth state is unknown - proceeding optimistically (BlueZ may not report state correctly)"
+            )
             return
         case .resetting:
             // State is resetting, wait for it to stabilize
@@ -132,27 +144,36 @@ actor BluetoothService: Service {
             lastState = "\(state)"
             let elapsed = ContinuousClock.now - startTime
 
-            logger.debug("Received Bluetooth state update", metadata: [
-                "state": "\(state)",
-                "updateNumber": "\(stateUpdateCount)",
-                "elapsedSeconds": "\(elapsed.components.seconds)"
-            ])
+            logger.debug(
+                "Received Bluetooth state update",
+                metadata: [
+                    "state": "\(state)",
+                    "updateNumber": "\(stateUpdateCount)",
+                    "elapsedSeconds": "\(elapsed.components.seconds)",
+                ]
+            )
 
             // Check for timeout
             if elapsed > timeoutDuration {
-                logger.error("Timeout waiting for Bluetooth to be ready", metadata: [
-                    "lastState": "\(lastState)",
-                    "totalUpdates": "\(stateUpdateCount)",
-                    "timeoutSeconds": "\(timeoutDuration.components.seconds)"
-                ])
+                logger.error(
+                    "Timeout waiting for Bluetooth to be ready",
+                    metadata: [
+                        "lastState": "\(lastState)",
+                        "totalUpdates": "\(stateUpdateCount)",
+                        "timeoutSeconds": "\(timeoutDuration.components.seconds)",
+                    ]
+                )
                 throw BluetoothServiceError.timeout(waitingFor: "poweredOn", lastState: lastState)
             }
 
             switch state {
             case .poweredOn:
-                logger.debug("Bluetooth is powered on and ready", metadata: [
-                    "elapsedSeconds": "\(elapsed.components.seconds)"
-                ])
+                logger.debug(
+                    "Bluetooth is powered on and ready",
+                    metadata: [
+                        "elapsedSeconds": "\(elapsed.components.seconds)"
+                    ]
+                )
                 return
             case .poweredOff:
                 logger.error("Bluetooth is powered off")
@@ -174,26 +195,35 @@ actor BluetoothService: Service {
 
         // If we get here, the stream ended without reaching poweredOn
         // On Linux/BlueZ this might happen, proceed optimistically
-        logger.warning("Bluetooth state stream ended without definitive state - proceeding optimistically", metadata: [
-            "totalUpdates": "\(stateUpdateCount)",
-            "lastState": "\(lastState)"
-        ])
+        logger.warning(
+            "Bluetooth state stream ended without definitive state - proceeding optimistically",
+            metadata: [
+                "totalUpdates": "\(stateUpdateCount)",
+                "lastState": "\(lastState)",
+            ]
+        )
     }
 
     private func startAdvertising(_ manager: PeripheralManager) async throws {
         // Get hostname for device name - use gethostname() on Linux for reliability
         let hostname = getSystemHostname()
         let deviceName = extractDeviceName(from: hostname)
-        logger.info("Preparing advertisement", metadata: [
-            "hostname": "\(hostname)",
-            "advertisingName": "\(deviceName)"
-        ])
+        logger.info(
+            "Preparing advertisement",
+            metadata: [
+                "hostname": "\(hostname)",
+                "advertisingName": "\(deviceName)",
+            ]
+        )
 
         // Convert string UUID to Foundation UUID
         guard let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
-            logger.error("Invalid service UUID configuration", metadata: [
-                "serviceUUID": "\(WendyBluetoothUUIDs.serviceUUID)"
-            ])
+            logger.error(
+                "Invalid service UUID configuration",
+                metadata: [
+                    "serviceUUID": "\(WendyBluetoothUUIDs.serviceUUID)"
+                ]
+            )
             throw BluetoothServiceError.invalidConfiguration
         }
 
@@ -214,12 +244,15 @@ actor BluetoothService: Service {
                 truncated.removeLast()
             }
             advertisingName = truncated
-            logger.debug("Truncated advertising name to fit legacy limit", metadata: [
-                "original": "\(shortName)",
-                "truncated": "\(advertisingName)",
-                "originalBytes": "\(shortName.utf8.count)",
-                "truncatedBytes": "\(advertisingName.utf8.count)"
-            ])
+            logger.debug(
+                "Truncated advertising name to fit legacy limit",
+                metadata: [
+                    "original": "\(shortName)",
+                    "truncated": "\(advertisingName)",
+                    "originalBytes": "\(shortName.utf8.count)",
+                    "truncatedBytes": "\(advertisingName.utf8.count)",
+                ]
+            )
         } else {
             advertisingName = shortName
         }
@@ -229,11 +262,14 @@ actor BluetoothService: Service {
             serviceUUIDs: []  // Omit UUID to stay under legacy 31-byte limit
         )
 
-        logger.debug("Starting Bluetooth advertising", metadata: [
-            "advertisingName": "\(advertisingName)",
-            "nameBytes": "\(advertisingName.utf8.count)",
-            "serviceUUID": "\(serviceUUID) (not included in advertising)"
-        ])
+        logger.debug(
+            "Starting Bluetooth advertising",
+            metadata: [
+                "advertisingName": "\(advertisingName)",
+                "nameBytes": "\(advertisingName.utf8.count)",
+                "serviceUUID": "\(serviceUUID) (not included in advertising)",
+            ]
+        )
 
         do {
             // Pass nil for scanResponseData - BlueZ doesn't properly support it
@@ -245,10 +281,13 @@ actor BluetoothService: Service {
             )
             logger.debug("Bluetooth advertising started successfully")
         } catch {
-            logger.error("Failed to start advertising", metadata: [
-                "error": "\(error)",
-                "errorType": "\(type(of: error))"
-            ])
+            logger.error(
+                "Failed to start advertising",
+                metadata: [
+                    "error": "\(error)",
+                    "errorType": "\(type(of: error))",
+                ]
+            )
             throw BluetoothServiceError.advertisingFailed(underlying: error)
         }
     }
@@ -263,30 +302,45 @@ actor BluetoothService: Service {
             psm = try await manager.publishL2CAPChannel(
                 parameters: L2CAPChannelParameters(requiresEncryption: false)
             )
-            logger.debug("L2CAP channel published successfully", metadata: ["psm": "\(psm.rawValue)"])
+            logger.debug(
+                "L2CAP channel published successfully",
+                metadata: ["psm": "\(psm.rawValue)"]
+            )
         } catch {
-            logger.error("Failed to publish L2CAP channel", metadata: [
-                "error": "\(error)",
-                "errorType": "\(type(of: error))"
-            ])
+            logger.error(
+                "Failed to publish L2CAP channel",
+                metadata: [
+                    "error": "\(error)",
+                    "errorType": "\(type(of: error))",
+                ]
+            )
             throw BluetoothServiceError.l2capPublishFailed(underlying: error)
         }
 
         // Skip PSM update for now - BlueZ has issues with stop/restart advertising
         // The CLI will use the default PSM (128)
-        logger.debug("Skipping PSM service data update (BlueZ compatibility)", metadata: ["psm": "\(psm.rawValue)"])
+        logger.debug(
+            "Skipping PSM service data update (BlueZ compatibility)",
+            metadata: ["psm": "\(psm.rawValue)"]
+        )
 
         // Get the incoming channel stream
         logger.debug("Creating incoming L2CAP channel stream...")
         let incomingChannels: AsyncThrowingStream<any L2CAPChannel, Error>
         do {
             incomingChannels = try await manager.incomingL2CAPChannels(psm: psm)
-            logger.debug("Incoming L2CAP channel stream created, waiting for connections...", metadata: ["psm": "\(psm.rawValue)"])
+            logger.debug(
+                "Incoming L2CAP channel stream created, waiting for connections...",
+                metadata: ["psm": "\(psm.rawValue)"]
+            )
         } catch {
-            logger.error("Failed to get incoming L2CAP channels", metadata: [
-                "error": "\(error)",
-                "errorType": "\(type(of: error))"
-            ])
+            logger.error(
+                "Failed to get incoming L2CAP channels",
+                metadata: [
+                    "error": "\(error)",
+                    "errorType": "\(type(of: error))",
+                ]
+            )
             throw error
         }
 
@@ -297,9 +351,12 @@ actor BluetoothService: Service {
             try await withThrowingDiscardingTaskGroup { group in
                 for try await channel in incomingChannels {
                     connectionCount += 1
-                    self.logger.debug("New Bluetooth connection established", metadata: [
-                        "connectionNumber": "\(connectionCount)"
-                    ])
+                    self.logger.debug(
+                        "New Bluetooth connection established",
+                        metadata: [
+                            "connectionNumber": "\(connectionCount)"
+                        ]
+                    )
 
                     // Handle each connection in a child task
                     group.addTask {
@@ -308,9 +365,12 @@ actor BluetoothService: Service {
                 }
             }
 
-            self.logger.debug("L2CAP channel stream ended", metadata: [
-                "totalConnections": "\(connectionCount)"
-            ])
+            self.logger.debug(
+                "L2CAP channel stream ended",
+                metadata: [
+                    "totalConnections": "\(connectionCount)"
+                ]
+            )
         } onGracefulShutdown: {
             self.logger.debug("Bluetooth service shutting down")
             Task {
@@ -326,10 +386,13 @@ actor BluetoothService: Service {
         do {
             for try await data in channel.incoming() {
                 messagesReceived += 1
-                logger.debug("Received Bluetooth message", metadata: [
-                    "messageNumber": "\(messagesReceived)",
-                    "dataSize": "\(data.count)"
-                ])
+                logger.debug(
+                    "Received Bluetooth message",
+                    metadata: [
+                        "messageNumber": "\(messagesReceived)",
+                        "dataSize": "\(data.count)",
+                    ]
+                )
                 let response = await processCommand(data)
                 logger.debug("Sending response", metadata: ["responseSize": "\(response.count)"])
                 try await channel.send(response)
@@ -338,21 +401,30 @@ actor BluetoothService: Service {
             // Socket closed after processing messages is expected (client disconnected)
             let errorString = String(describing: error)
             if messagesReceived > 0 && errorString.contains("socket closed") {
-                logger.debug("Client disconnected after request/response", metadata: [
-                    "messagesProcessed": "\(messagesReceived)"
-                ])
+                logger.debug(
+                    "Client disconnected after request/response",
+                    metadata: [
+                        "messagesProcessed": "\(messagesReceived)"
+                    ]
+                )
             } else {
-                logger.error("Error handling Bluetooth channel", metadata: [
-                    "error": "\(error)",
-                    "errorType": "\(type(of: error))",
-                    "messagesProcessed": "\(messagesReceived)"
-                ])
+                logger.error(
+                    "Error handling Bluetooth channel",
+                    metadata: [
+                        "error": "\(error)",
+                        "errorType": "\(type(of: error))",
+                        "messagesProcessed": "\(messagesReceived)",
+                    ]
+                )
             }
         }
 
-        logger.debug("Bluetooth connection closed", metadata: [
-            "totalMessagesProcessed": "\(messagesReceived)"
-        ])
+        logger.debug(
+            "Bluetooth connection closed",
+            metadata: [
+                "totalMessagesProcessed": "\(messagesReceived)"
+            ]
+        )
     }
 
     private func processCommand(_ data: Data) async -> Data {
@@ -588,10 +660,10 @@ actor BluetoothService: Service {
     /// Gets the system hostname, using gethostname() on Linux for reliability
     private func getSystemHostname() -> String {
         #if os(Linux)
-        var buffer = [CChar](repeating: 0, count: 256)
-        if gethostname(&buffer, buffer.count) == 0 {
-            return String(cString: buffer)
-        }
+            var buffer = [CChar](repeating: 0, count: 256)
+            if gethostname(&buffer, buffer.count) == 0 {
+                return String(cString: buffer)
+            }
         #endif
         // Fallback to ProcessInfo
         let hostname = ProcessInfo.processInfo.hostName
@@ -621,7 +693,8 @@ actor BluetoothService: Service {
         }
 
         // Replace hyphens/underscores with spaces and capitalize words
-        name = name
+        name =
+            name
             .replacingOccurrences(of: "-", with: " ")
             .replacingOccurrences(of: "_", with: " ")
             .split(separator: " ")

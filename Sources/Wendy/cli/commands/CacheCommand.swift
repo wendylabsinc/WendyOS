@@ -116,7 +116,10 @@ struct CacheCommand: AsyncParsableCommand {
                         let success: Bool
                         let message: String
                     }
-                    let result = ClearResult(success: true, message: "No cached WendyOS images to clear.")
+                    let result = ClearResult(
+                        success: true,
+                        message: "No cached WendyOS images to clear."
+                    )
                     let data = try JSONEncoder().encode(result)
                     print(String(data: data, encoding: .utf8)!)
                 } else {
@@ -222,9 +225,12 @@ struct CacheCommand: AsyncParsableCommand {
 
                 let result = ClearResult(
                     success: failures.isEmpty,
-                    cleared: targets.filter { t in !failures.contains { $0.0 == t.device } }.map(\.device),
+                    cleared: targets.filter { t in !failures.contains { $0.0 == t.device } }.map(
+                        \.device
+                    ),
                     freedBytes: totalBytes,
-                    failures: failures.isEmpty ? nil : failures.map { ClearResult.FailureInfo(device: $0.0, error: $0.1) }
+                    failures: failures.isEmpty
+                        ? nil : failures.map { ClearResult.FailureInfo(device: $0.0, error: $0.1) }
                 )
                 let data = try JSONEncoder().encode(result)
                 print(String(data: data, encoding: .utf8)!)

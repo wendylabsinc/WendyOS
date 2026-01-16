@@ -8,9 +8,9 @@ import WendyAgentGRPC
 import WendyShared
 
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-import Darwin
+    import Darwin
 #elseif os(Linux)
-import Glibc
+    import Glibc
 #endif
 
 /// Prompt for password input without echoing to terminal
@@ -63,27 +63,32 @@ struct WiFiCommand: AsyncParsableCommand {
                         }.networks
                     }
 
-                    return grpcNetworks
+                    return
+                        grpcNetworks
                         .filter { !$0.ssid.isEmpty }  // Filter out networks without visible SSID
                         .map { network in
                             WiFiNetworkInfo(
                                 ssid: network.ssid,
-                                signalStrength: network.hasSignalStrength ? Int(network.signalStrength) : nil
+                                signalStrength: network.hasSignalStrength
+                                    ? Int(network.signalStrength) : nil
                             )
                         }
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(.wifiList, deviceIdentifier: deviceIdentifier)
-                    if case .wifiList(let networks) = response {
-                        // Filter out networks without visible SSID
-                        return networks.filter { !$0.ssid.isEmpty }
-                    } else if case .error(let message) = response {
-                        throw WiFiCommandError.operationFailed(message)
-                    }
-                    return []
+                        let response = try await executeBluetoothCommand(
+                            .wifiList,
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .wifiList(let networks) = response {
+                            // Filter out networks without visible SSID
+                            return networks.filter { !$0.ssid.isEmpty }
+                        } else if case .error(let message) = response {
+                            throw WiFiCommandError.operationFailed(message)
+                        }
+                        return []
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
@@ -215,84 +220,90 @@ struct WiFiCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    // For Bluetooth, determine SSID first
-                    let finalSsid: String
-                    if let providedSsid = self.ssid {
-                        finalSsid = providedSsid
-                    } else {
-                        // Scan for available WiFi networks
-                        let networks: [WiFiNetworkInfo] = try await Noora().progressStep(
-                            message: "Scanning for WiFi networks",
-                            successMessage: nil,
-                            errorMessage: "Failed to scan for WiFi networks",
+                        // For Bluetooth, determine SSID first
+                        let finalSsid: String
+                        if let providedSsid = self.ssid {
+                            finalSsid = providedSsid
+                        } else {
+                            // Scan for available WiFi networks
+                            let networks: [WiFiNetworkInfo] = try await Noora().progressStep(
+                                message: "Scanning for WiFi networks",
+                                successMessage: nil,
+                                errorMessage: "Failed to scan for WiFi networks",
+                                showSpinner: true
+                            ) { _ in
+                                let response = try await executeBluetoothCommand(
+                                    .wifiList,
+                                    deviceIdentifier: deviceIdentifier
+                                )
+                                if case .wifiList(let networks) = response {
+                                    return networks.filter { !$0.ssid.isEmpty }
+                                } else if case .error(let message) = response {
+                                    throw WiFiCommandError.operationFailed(message)
+                                }
+                                return []
+                            }
+
+                            if networks.isEmpty {
+                                Noora().warning("No WiFi networks found")
+                                return
+                            }
+
+                            // Let user pick from the list
+                            let selected: WiFiNetworkInfo = Noora().singleChoicePrompt(
+                                title: "Select WiFi network",
+                                question: "Which network do you want to connect to?",
+                                options: networks
+                            )
+                            finalSsid = selected.ssid
+                        }
+
+                        // Now prompt for password
+                        let password: String
+                        if let providedPassword = self.password {
+                            password = providedPassword
+                        } else if JSONMode.isEnabled {
+                            password = ""
+                        } else {
+                            password = securePasswordPrompt("Password for '\(finalSsid)': ")
+                        }
+
+                        logger.debug(
+                            "Connecting to WiFi network via Bluetooth",
+                            metadata: ["ssid": "\(finalSsid)"]
+                        )
+
+                        let response = try await Noora().progressStep(
+                            message: "Connecting to WiFi network: \(finalSsid)...",
+                            successMessage: "Connected to \(finalSsid)",
+                            errorMessage: "Failed to connect to \(finalSsid)",
                             showSpinner: true
                         ) { _ in
-                            let response = try await executeBluetoothCommand(.wifiList, deviceIdentifier: deviceIdentifier)
-                            if case .wifiList(let networks) = response {
-                                return networks.filter { !$0.ssid.isEmpty }
-                            } else if case .error(let message) = response {
-                                throw WiFiCommandError.operationFailed(message)
-                            }
-                            return []
-                        }
-
-                        if networks.isEmpty {
-                            Noora().warning("No WiFi networks found")
-                            return
-                        }
-
-                        // Let user pick from the list
-                        let selected: WiFiNetworkInfo = Noora().singleChoicePrompt(
-                            title: "Select WiFi network",
-                            question: "Which network do you want to connect to?",
-                            options: networks
-                        )
-                        finalSsid = selected.ssid
-                    }
-
-                    // Now prompt for password
-                    let password: String
-                    if let providedPassword = self.password {
-                        password = providedPassword
-                    } else if JSONMode.isEnabled {
-                        password = ""
-                    } else {
-                        password = securePasswordPrompt("Password for '\(finalSsid)': ")
-                    }
-
-                    logger.debug("Connecting to WiFi network via Bluetooth", metadata: ["ssid": "\(finalSsid)"])
-
-                    let response = try await Noora().progressStep(
-                        message: "Connecting to WiFi network: \(finalSsid)...",
-                        successMessage: "Connected to \(finalSsid)",
-                        errorMessage: "Failed to connect to \(finalSsid)",
-                        showSpinner: true
-                    ) { _ in
-                        try await executeBluetoothCommand(
-                            .wifiConnect(ssid: finalSsid, password: password),
-                            deviceIdentifier: deviceIdentifier
-                        )
-                    }
-
-                    if case .wifiConnect(let success, let errorMessage) = response {
-                        if JSONMode.isEnabled {
-                            struct Response: Codable {
-                                let success: Bool
-                                let errorMessage: String?
-                            }
-                            let responseJSON = try JSONEncoder().encode(
-                                Response(success: success, errorMessage: errorMessage)
+                            try await executeBluetoothCommand(
+                                .wifiConnect(ssid: finalSsid, password: password),
+                                deviceIdentifier: deviceIdentifier
                             )
-                            print(String(data: responseJSON, encoding: .utf8)!)
-                        } else if !success {
-                            let message = errorMessage ?? "Unknown error"
-                            Noora().error("Failed to connect: \(message)")
                         }
-                    } else if case .error(let message) = response {
-                        Noora().error("Error: \(message)")
-                    }
+
+                        if case .wifiConnect(let success, let errorMessage) = response {
+                            if JSONMode.isEnabled {
+                                struct Response: Codable {
+                                    let success: Bool
+                                    let errorMessage: String?
+                                }
+                                let responseJSON = try JSONEncoder().encode(
+                                    Response(success: success, errorMessage: errorMessage)
+                                )
+                                print(String(data: responseJSON, encoding: .utf8)!)
+                            } else if !success {
+                                let message = errorMessage ?? "Unknown error"
+                                Noora().error("Failed to connect: \(message)")
+                            }
+                        } else if case .error(let message) = response {
+                            Noora().error("Error: \(message)")
+                        }
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
@@ -333,15 +344,26 @@ struct WiFiCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(.wifiStatus, deviceIdentifier: deviceIdentifier)
-                    if case .wifiStatus(let connected, let ssid, let errorMessage) = response {
-                        return WiFiStatus(connected: connected, ssid: ssid, errorMessage: errorMessage)
-                    } else if case .error(let message) = response {
-                        throw WiFiCommandError.operationFailed(message)
-                    }
-                    return WiFiStatus(connected: false, ssid: nil, errorMessage: "Unknown response")
+                        let response = try await executeBluetoothCommand(
+                            .wifiStatus,
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .wifiStatus(let connected, let ssid, let errorMessage) = response {
+                            return WiFiStatus(
+                                connected: connected,
+                                ssid: ssid,
+                                errorMessage: errorMessage
+                            )
+                        } else if case .error(let message) = response {
+                            throw WiFiCommandError.operationFailed(message)
+                        }
+                        return WiFiStatus(
+                            connected: false,
+                            ssid: nil,
+                            errorMessage: "Unknown response"
+                        )
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
@@ -414,25 +436,29 @@ struct WiFiCommand: AsyncParsableCommand {
                     if response.success {
                         Noora().success("Successfully disconnected from WiFi network")
                     } else {
-                        let errorMessage = response.hasErrorMessage ? response.errorMessage : "Unknown error"
+                        let errorMessage =
+                            response.hasErrorMessage ? response.errorMessage : "Unknown error"
                         Noora().error("Failed to disconnect: \(errorMessage)")
                     }
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    let response = try await executeBluetoothCommand(.wifiDisconnect, deviceIdentifier: deviceIdentifier)
-                    if case .wifiDisconnect(let success, let errorMessage) = response {
-                        if success {
-                            Noora().success("Successfully disconnected from WiFi network")
-                        } else {
-                            let message = errorMessage ?? "Unknown error"
-                            Noora().error("Failed to disconnect: \(message)")
+                        let response = try await executeBluetoothCommand(
+                            .wifiDisconnect,
+                            deviceIdentifier: deviceIdentifier
+                        )
+                        if case .wifiDisconnect(let success, let errorMessage) = response {
+                            if success {
+                                Noora().success("Successfully disconnected from WiFi network")
+                            } else {
+                                let message = errorMessage ?? "Unknown error"
+                                Noora().error("Failed to disconnect: \(message)")
+                            }
+                        } else if case .error(let message) = response {
+                            Noora().error("Error: \(message)")
                         }
-                    } else if case .error(let message) = response {
-                        Noora().error("Error: \(message)")
-                    }
                     #else
-                    throw BluetoothNotAvailableError()
+                        throw BluetoothNotAvailableError()
                     #endif
                 }
             )
