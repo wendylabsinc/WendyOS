@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # This script generates the WendyAgentGRPC Swift code using Swift Package Manager plugins.
 # It should be run from the root of the project.
