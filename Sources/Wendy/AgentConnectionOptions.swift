@@ -106,16 +106,16 @@ struct AgentConnectionOptions: ParsableArguments {
         self.bluetooth = bluetoothDevice
     }
 
-    /// Returns the connection type based on provided options
+    /// Returns the connection type based on provided options (LAN takes priority over Bluetooth)
     var connectionType: AgentConnectionType? {
-        if let bluetooth {
-            return .bluetooth(deviceIdentifier: bluetooth)
-        }
         if let device {
             return .grpc(device)
         }
         if let agent {
             return .grpc(agent)
+        }
+        if let bluetooth {
+            return .bluetooth(deviceIdentifier: bluetooth)
         }
         return nil
     }
@@ -133,17 +133,17 @@ struct AgentConnectionOptions: ParsableArguments {
         title: TerminalText?,
         readDefault: Bool = true
     ) async throws -> AgentConnectionType {
-        // Check for explicit Bluetooth option first
-        if let bluetooth {
-            return .bluetooth(deviceIdentifier: bluetooth)
-        }
-
-        // Check for explicit device/agent option
+        // Check for explicit device/agent option first (LAN takes priority over Bluetooth)
         if let device {
             return .grpc(device)
         }
         if let agent {
             return .grpc(agent)
+        }
+
+        // Check for explicit Bluetooth option
+        if let bluetooth {
+            return .bluetooth(deviceIdentifier: bluetooth)
         }
 
         // Check environment variable
