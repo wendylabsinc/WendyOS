@@ -12,13 +12,20 @@ import Noora
     import WinSDK
 #endif
 
+/// Global reference to stdout - marked nonisolated(unsafe) to handle Swift 6 strict concurrency.
+/// fflush is thread-safe and we're doing synchronous terminal I/O.
+#if !os(Windows)
+    nonisolated(unsafe) private let unsafeStdout = stdout
+#endif
+
 /// Flush stdout - wrapped to handle Swift 6 strict concurrency
 @inline(__always)
 private func flushStdout() {
-    // stdout is a global mutable variable, but fflush is thread-safe
-    // and we're doing synchronous terminal I/O
-    nonisolated(unsafe) let out = stdout
-    fflush(out)
+    #if os(Windows)
+        fflush(stdout)
+    #else
+        fflush(unsafeStdout)
+    #endif
 }
 
 /// Prompt for password input with Noora-style rendering and masked characters
