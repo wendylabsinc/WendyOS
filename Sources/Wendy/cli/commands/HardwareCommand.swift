@@ -4,6 +4,11 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import WendyAgentGRPC
+import WendyShared
+
+#if canImport(Bluetooth)
+import Bluetooth
+#endif
 
 struct HardwareCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -39,19 +44,50 @@ struct HardwareCommand: AsyncParsableCommand {
     private func discoverHardware() async throws
         -> [Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse.HardwareCapability]
     {
-        return try await withAgentGRPCClient(
+        return try await withAgentConnection(
             agentConnectionOptions,
-            title: "For which device do you want to discover hardware?"
-        ) { client in
-            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            title: "For which device do you want to discover hardware?",
+            grpcOperation: { client in
+                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
 
-            var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
-            if let categoryFilter = category {
-                request.categoryFilter = categoryFilter
+                var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
+                if let categoryFilter = self.category {
+                    request.categoryFilter = categoryFilter
+                }
+
+                let response = try await agent.listHardwareCapabilities(request)
+                return response.capabilities
+            },
+            bluetoothOperation: { deviceIdentifier in
+                #if canImport(Bluetooth)
+                let response = try await executeBluetoothCommand(.hardwareList, deviceIdentifier: deviceIdentifier)
+                if case .hardwareList(let capabilities) = response {
+                    // Convert BluetoothHardwareInfo to gRPC HardwareCapability
+                    return capabilities.map { info in
+                        var capability = Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse.HardwareCapability()
+                        capability.category = info.type
+                        capability.description_p = info.name
+                        return capability
+                    }
+                } else if case .error(let message) = response {
+                    throw HardwareCommandError.operationFailed(message)
+                }
+                return []
+                #else
+                throw BluetoothNotAvailableError()
+                #endif
             }
+        )
+    }
 
-            let response = try await agent.listHardwareCapabilities(request)
-            return response.capabilities
+    enum HardwareCommandError: Error, LocalizedError {
+        case operationFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .operationFailed(let message):
+                return message
+            }
         }
     }
 

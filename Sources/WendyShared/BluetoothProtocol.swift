@@ -258,13 +258,20 @@ public enum BluetoothResponse: Codable, Sendable {
 }
 
 /// WiFi network information for Bluetooth responses
-public struct WiFiNetworkInfo: Codable, Sendable {
+public struct WiFiNetworkInfo: Codable, Sendable, Equatable, CustomStringConvertible {
     public let ssid: String
     public let signalStrength: Int?
 
     public init(ssid: String, signalStrength: Int?) {
         self.ssid = ssid
         self.signalStrength = signalStrength
+    }
+
+    public var description: String {
+        if let signal = signalStrength {
+            return "\(ssid) (Signal: \(signal))"
+        }
+        return ssid
     }
 }
 

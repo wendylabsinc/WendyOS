@@ -258,12 +258,6 @@ enum BluetoothConnectionError: Error, LocalizedError {
     }
 }
 
-/// Result of scanning for a Bluetooth device
-private struct ScanDiscoveryResult {
-    let peripheral: Peripheral
-    let l2capPSM: UInt16?
-}
-
 /// Connect to a WendyOS device over Bluetooth using a peripheral and execute a command
 /// - Parameters:
 ///   - central: The CentralManager that discovered the peripheral (required on CoreBluetooth)
@@ -301,11 +295,17 @@ func withBluetoothConnection<T>(
     return try await operation(channel)
 }
 
-/// Connect to a WendyOS device by scanning and execute a command
-func withBluetoothConnection<T>(
+/// Result of establishing a Bluetooth connection
+private struct BluetoothConnectionResult: Sendable {
+    let connection: PeripheralConnection
+    let channel: L2CAPChannel
+}
+
+/// Connect to a WendyOS device directly by identifier and execute a command
+func withBluetoothConnection<T: Sendable>(
     deviceIdentifier: String,
     timeout: Int = 30,
-    operation: (L2CAPChannel) async throws -> T
+    operation: @Sendable (L2CAPChannel) async throws -> T
 ) async throws -> T {
     let logger = Logger(label: "sh.wendy.cli.bluetooth")
     let central = CentralManager()
@@ -335,69 +335,33 @@ func withBluetoothConnection<T>(
         }
     }
 
-    logger.debug("Scanning for device", metadata: ["identifier": "\(deviceIdentifier)"])
+    logger.debug("Connecting directly to device", metadata: ["identifier": "\(deviceIdentifier)"])
 
-    let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID)!
-    let bluetoothServiceUUID = BluetoothUUID(serviceUUID)
-    let filter: ScanFilter? = nil
-    let scanParameters = ScanParameters(allowDuplicates: true)
+    // Create a Peripheral from the identifier
+    // Note: The identifier should include the uuid: or addr: prefix as expected by the backend
+    let peripheral = Peripheral(id: BluetoothDeviceID(deviceIdentifier))
 
-    let discoveryResult: ScanDiscoveryResult? = try await withThrowingTaskGroup(of: ScanDiscoveryResult?.self) { group in
-        group.addTask {
-            for try await result in try await central.scan(filter: filter, parameters: scanParameters) {
-                let localName = result.advertisementData.localName ?? ""
-
-                // Check if this is a WendyOS device by service UUID or name
-                let hasWendyServiceUUID = result.advertisementData.serviceUUIDs.contains(bluetoothServiceUUID)
-                let hasWendyName = localName.lowercased().contains("wendy")
-
-                guard hasWendyServiceUUID || hasWendyName else {
-                    continue
-                }
-
-                // Check if device identifier matches the name or address
-                let matchesName = localName.localizedCaseInsensitiveContains(deviceIdentifier)
-                let matchesAddress = result.peripheral.id.rawValue.localizedCaseInsensitiveContains(deviceIdentifier)
-
-                if matchesName || matchesAddress {
-                    var l2capPSM: UInt16? = nil
-                    if let psmData = result.advertisementData.serviceData[bluetoothServiceUUID],
-                       psmData.count >= 2 {
-                        l2capPSM = psmData.withUnsafeBytes { $0.load(as: UInt16.self) }
-                    }
-                    return ScanDiscoveryResult(peripheral: result.peripheral, l2capPSM: l2capPSM)
-                }
-            }
-            return nil
-        }
-
-        group.addTask {
-            try await Task.sleep(for: .seconds(timeout))
-            return nil
-        }
-
-        let result = try await group.next() ?? nil
-        group.cancelAll()
-        try await central.stopScan()
-        return result
+    // Connect to the device with a progress spinner
+    let result: BluetoothConnectionResult = try await Noora().progressStep(
+        message: "Connecting to Bluetooth device",
+        successMessage: "Connected to Bluetooth device",
+        errorMessage: "Failed to connect to Bluetooth device",
+        showSpinner: true
+    ) { _ in
+        let connection = try await central.connect(to: peripheral)
+        let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
+        let channel = try await connection.openL2CAPChannel(psm: psm)
+        return BluetoothConnectionResult(connection: connection, channel: channel)
     }
-
-    guard let discovery = discoveryResult else {
-        throw BluetoothConnectionError.deviceNotFound
-    }
-
-    let connection = try await central.connect(to: discovery.peripheral)
-    let psm = L2CAPPSM(rawValue: discovery.l2capPSM ?? WendyBluetoothUUIDs.l2capPSM)
-    let channel = try await connection.openL2CAPChannel(psm: psm)
 
     defer {
         Task {
-            await channel.close()
-            await connection.disconnect()
+            await result.channel.close()
+            await result.connection.disconnect()
         }
     }
 
-    return try await operation(channel)
+    return try await operation(result.channel)
 }
 
 /// Execute a Bluetooth command and return the response
@@ -433,6 +397,8 @@ func withAgentConnection<R: Sendable>(
         }
     case .bluetooth(let deviceIdentifier):
         #if canImport(Bluetooth)
+        let logger = Logger(label: "sh.wendy.cli.bluetooth")
+        logger.debug("Using Bluetooth connection", metadata: ["identifier": "\(deviceIdentifier)"])
         return try await bluetoothOperation(deviceIdentifier)
         #else
         throw BluetoothNotAvailableError()

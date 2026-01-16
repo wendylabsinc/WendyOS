@@ -7,6 +7,20 @@ import Noora
 import WendyAgentGRPC
 import WendyShared
 
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+import Darwin
+#elseif os(Linux)
+import Glibc
+#endif
+
+/// Prompt for password input without echoing to terminal
+private func securePasswordPrompt(_ prompt: String) -> String {
+    guard let password = getpass(prompt) else {
+        return ""
+    }
+    return String(cString: password)
+}
+
 struct WiFiCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wifi",
@@ -49,18 +63,21 @@ struct WiFiCommand: AsyncParsableCommand {
                         }.networks
                     }
 
-                    return grpcNetworks.map { network in
-                        WiFiNetworkInfo(
-                            ssid: network.ssid,
-                            signalStrength: network.hasSignalStrength ? Int(network.signalStrength) : nil
-                        )
-                    }
+                    return grpcNetworks
+                        .filter { !$0.ssid.isEmpty }  // Filter out networks without visible SSID
+                        .map { network in
+                            WiFiNetworkInfo(
+                                ssid: network.ssid,
+                                signalStrength: network.hasSignalStrength ? Int(network.signalStrength) : nil
+                            )
+                        }
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
                     let response = try await executeBluetoothCommand(.wifiList, deviceIdentifier: deviceIdentifier)
                     if case .wifiList(let networks) = response {
-                        return networks
+                        // Filter out networks without visible SSID
+                        return networks.filter { !$0.ssid.isEmpty }
                     } else if case .error(let message) = response {
                         throw WiFiCommandError.operationFailed(message)
                     }
@@ -125,39 +142,15 @@ struct WiFiCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            // Determine SSID - need to handle differently for Bluetooth vs gRPC
-            let ssid: String
-            if let providedSsid = self.ssid {
-                ssid = providedSsid
-            } else if JSONMode.isEnabled {
+            let logger = Logger(label: "sh.wendy.cli.wifi.connect")
+
+            // Check JSON mode requirements upfront
+            if JSONMode.isEnabled && self.ssid == nil {
                 jsonModeRequiresArgument(
                     argument: "ssid",
                     description: "Provide --ssid <network_name> to specify the WiFi network"
                 )
-            } else if agentConnectionOptions.bluetooth != nil {
-                // For Bluetooth, we need to prompt for SSID since we can't use the Agent helper
-                ssid = Noora().textPrompt(
-                    title: "Enter the WiFi network name",
-                    prompt: "SSID"
-                )
-            } else {
-                // For gRPC, we'll discover the SSID inside the connection
-                ssid = ""
             }
-
-            let password: String
-            if let providedPassword = self.password {
-                password = providedPassword
-            } else if JSONMode.isEnabled {
-                password = ""
-            } else {
-                password = Noora().textPrompt(
-                    title: "Enter the password for the WiFi network",
-                    prompt: "Password"
-                )
-            }
-
-            let logger = Logger(label: "sh.wendy.cli.wifi.connect")
 
             try await withAgentConnection(
                 agentConnectionOptions,
@@ -166,10 +159,22 @@ struct WiFiCommand: AsyncParsableCommand {
                     let agent = Agent(client: client)
                     let finalSsid: String
 
-                    if ssid.isEmpty {
-                        finalSsid = try await agent.discoverSSID()
+                    // Determine SSID
+                    if let providedSsid = self.ssid {
+                        finalSsid = providedSsid
                     } else {
-                        finalSsid = ssid
+                        // Discover and select SSID interactively
+                        finalSsid = try await agent.discoverSSID()
+                    }
+
+                    // Now prompt for password (after SSID is known)
+                    let password: String
+                    if let providedPassword = self.password {
+                        password = providedPassword
+                    } else if JSONMode.isEnabled {
+                        password = ""
+                    } else {
+                        password = securePasswordPrompt("Password for '\(finalSsid)': ")
                     }
 
                     logger.debug("Connecting to WiFi network", metadata: ["ssid": "\(finalSsid)"])
@@ -210,16 +215,61 @@ struct WiFiCommand: AsyncParsableCommand {
                 },
                 bluetoothOperation: { deviceIdentifier in
                     #if canImport(Bluetooth)
-                    logger.debug("Connecting to WiFi network via Bluetooth", metadata: ["ssid": "\(ssid)"])
+                    // For Bluetooth, determine SSID first
+                    let finalSsid: String
+                    if let providedSsid = self.ssid {
+                        finalSsid = providedSsid
+                    } else {
+                        // Scan for available WiFi networks
+                        let networks: [WiFiNetworkInfo] = try await Noora().progressStep(
+                            message: "Scanning for WiFi networks",
+                            successMessage: nil,
+                            errorMessage: "Failed to scan for WiFi networks",
+                            showSpinner: true
+                        ) { _ in
+                            let response = try await executeBluetoothCommand(.wifiList, deviceIdentifier: deviceIdentifier)
+                            if case .wifiList(let networks) = response {
+                                return networks.filter { !$0.ssid.isEmpty }
+                            } else if case .error(let message) = response {
+                                throw WiFiCommandError.operationFailed(message)
+                            }
+                            return []
+                        }
+
+                        if networks.isEmpty {
+                            Noora().warning("No WiFi networks found")
+                            return
+                        }
+
+                        // Let user pick from the list
+                        let selected: WiFiNetworkInfo = Noora().singleChoicePrompt(
+                            title: "Select WiFi network",
+                            question: "Which network do you want to connect to?",
+                            options: networks
+                        )
+                        finalSsid = selected.ssid
+                    }
+
+                    // Now prompt for password
+                    let password: String
+                    if let providedPassword = self.password {
+                        password = providedPassword
+                    } else if JSONMode.isEnabled {
+                        password = ""
+                    } else {
+                        password = securePasswordPrompt("Password for '\(finalSsid)': ")
+                    }
+
+                    logger.debug("Connecting to WiFi network via Bluetooth", metadata: ["ssid": "\(finalSsid)"])
 
                     let response = try await Noora().progressStep(
-                        message: "Connecting to WiFi network: \(ssid)...",
-                        successMessage: "Connected to \(ssid)",
-                        errorMessage: "Failed to connect to \(ssid)",
+                        message: "Connecting to WiFi network: \(finalSsid)...",
+                        successMessage: "Connected to \(finalSsid)",
+                        errorMessage: "Failed to connect to \(finalSsid)",
                         showSpinner: true
                     ) { _ in
                         try await executeBluetoothCommand(
-                            .wifiConnect(ssid: ssid, password: password),
+                            .wifiConnect(ssid: finalSsid, password: password),
                             deviceIdentifier: deviceIdentifier
                         )
                     }

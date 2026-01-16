@@ -335,11 +335,19 @@ actor BluetoothService: Service {
                 try await channel.send(response)
             }
         } catch {
-            logger.error("Error handling Bluetooth channel", metadata: [
-                "error": "\(error)",
-                "errorType": "\(type(of: error))",
-                "messagesProcessed": "\(messagesReceived)"
-            ])
+            // Socket closed after processing messages is expected (client disconnected)
+            let errorString = String(describing: error)
+            if messagesReceived > 0 && errorString.contains("socket closed") {
+                logger.debug("Client disconnected after request/response", metadata: [
+                    "messagesProcessed": "\(messagesReceived)"
+                ])
+            } else {
+                logger.error("Error handling Bluetooth channel", metadata: [
+                    "error": "\(error)",
+                    "errorType": "\(type(of: error))",
+                    "messagesProcessed": "\(messagesReceived)"
+                ])
+            }
         }
 
         logger.debug("Bluetooth connection closed", metadata: [

@@ -12,6 +12,20 @@ import WendySDK
 import X509
 import _NIOFileSystem
 
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+import Darwin
+#elseif os(Linux)
+import Glibc
+#endif
+
+/// Prompt for password input without echoing to terminal
+private func securePasswordPrompt(_ prompt: String) -> String {
+    guard let password = getpass(prompt) else {
+        return ""
+    }
+    return String(cString: password)
+}
+
 struct DeviceCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "device",
@@ -326,10 +340,7 @@ struct DeviceCommand: AsyncParsableCommand {
                         while !Task.isCancelled {
                             let ssid = try await agent.discoverSSID()
 
-                            let password = Noora().textPrompt(
-                                title: "Enter the password for the WiFi network",
-                                prompt: "Password"
-                            )
+                            let password = securePasswordPrompt("Password for '\(ssid)': ")
 
                             let result = try await agent.connectToWiFi(
                                 ssid: ssid,
