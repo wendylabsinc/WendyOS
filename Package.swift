@@ -68,6 +68,7 @@ let package = Package(
                 ),
                 .product(name: "Noora", package: "Noora"),
                 .product(name: "DNSClient", package: "DNSClient"),
+                .product(name: "Bluetooth", package: "bluetooth"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyShared"),
