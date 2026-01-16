@@ -179,7 +179,9 @@
             return interfaces
         }
 
-        public func findBluetoothDevices(resolveAgentVersion: Bool = false) async throws -> [BluetoothDevice] {
+        public func findBluetoothDevices(
+            resolveAgentVersion: Bool = false
+        ) async throws -> [BluetoothDevice] {
             logger.debug("Starting Bluetooth device discovery...")
 
             let centralManager = CentralManager()
@@ -388,15 +390,24 @@
                 // Try to read length prefix if we have enough bytes
                 if receiveBuffer.readableBytes >= 4 {
                     let readerIndex = receiveBuffer.readerIndex
-                    guard let messageLength = receiveBuffer.readInteger(endianness: .big, as: UInt32.self) else {
+                    guard
+                        let messageLength = receiveBuffer.readInteger(
+                            endianness: .big,
+                            as: UInt32.self
+                        )
+                    else {
                         continue
                     }
 
                     if receiveBuffer.readableBytes >= messageLength {
-                        guard let responseBytes = receiveBuffer.readBytes(length: Int(messageLength)) else {
+                        guard
+                            let responseBytes = receiveBuffer.readBytes(length: Int(messageLength))
+                        else {
                             throw BluetoothVersionResolutionError.unexpectedResponse
                         }
-                        let response = try Wendy_Agent_Services_V1_BluetoothResponse(serializedBytes: responseBytes)
+                        let response = try Wendy_Agent_Services_V1_BluetoothResponse(
+                            serializedBytes: responseBytes
+                        )
 
                         if case .agentVersion(let versionResponse) = response.response {
                             return versionResponse.version

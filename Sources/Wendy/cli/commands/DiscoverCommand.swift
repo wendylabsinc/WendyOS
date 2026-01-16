@@ -113,9 +113,11 @@ struct DiscoverCommand: AsyncParsableCommand {
 /// visible for a period after they were last seen
 private actor DeviceCache {
     private var usbDevices: [String: (device: USBDevice, lastSeen: ContinuousClock.Instant)] = [:]
-    private var ethernetDevices: [String: (device: EthernetInterface, lastSeen: ContinuousClock.Instant)] = [:]
+    private var ethernetDevices:
+        [String: (device: EthernetInterface, lastSeen: ContinuousClock.Instant)] = [:]
     private var lanDevices: [String: (device: LANDevice, lastSeen: ContinuousClock.Instant)] = [:]
-    private var bluetoothDevices: [String: (device: BluetoothDevice, lastSeen: ContinuousClock.Instant)] = [:]
+    private var bluetoothDevices:
+        [String: (device: BluetoothDevice, lastSeen: ContinuousClock.Instant)] = [:]
     private let staleTimeout: Duration
 
     init(staleTimeout: Duration) {
@@ -211,7 +213,8 @@ extension [DevicesCollection.GroupedDevice] {
                     }
                 }
 
-                let connection = connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
+                let connection =
+                    connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
 
                 return [
                     "\(device.name)",

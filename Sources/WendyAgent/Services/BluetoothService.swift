@@ -22,7 +22,7 @@ actor BluetoothService: Service {
     private static let legacyAdvertisingMaxBytes = 31
     private static let flagsFieldBytes = 3
     private static let localNameHeaderBytes = 2
-    
+
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
@@ -219,7 +219,8 @@ actor BluetoothService: Service {
         // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
         // Total must be <= legacyAdvertisingMaxBytes for legacy advertising
         // If name is too long, truncate it
-        let maxNameLength = Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
+        let maxNameLength =
+            Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
         let advertisingName: String
         if deviceName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
@@ -386,7 +387,8 @@ actor BluetoothService: Service {
                     // If we don't know the expected length yet, try to read it
                     if expectedLength == nil {
                         guard buffer.readableBytes >= 4 else { break }
-                        if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self) {
+                        if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self)
+                        {
                             expectedLength = Int(lengthPrefix)
                             logger.debug(
                                 "Read message length",
@@ -671,7 +673,9 @@ actor BluetoothService: Service {
         return response
     }
 
-    private func handleAppsStop(appName: String) async throws
+    private func handleAppsStop(
+        appName: String
+    ) async throws
         -> Wendy_Agent_Services_V1_AppsStopResponse
     {
         logger.debug("Bluetooth: Stopping app", metadata: ["app": "\(appName)"])

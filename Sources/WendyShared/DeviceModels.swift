@@ -53,7 +53,9 @@ public struct DevicesCollection: Encodable, Sendable {
         var normalized = name.lowercased()
 
         // Remove common prefixes (with space or hyphen separator)
-        let prefixes = ["wendyos device", "wendyos-", "wendyos ", "wendy device", "wendy-", "wendy ", "device"]
+        let prefixes = [
+            "wendyos device", "wendyos-", "wendyos ", "wendy device", "wendy-", "wendy ", "device",
+        ]
         for prefix in prefixes {
             if normalized.hasPrefix(prefix) {
                 normalized = String(normalized.dropFirst(prefix.count))
