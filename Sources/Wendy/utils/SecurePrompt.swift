@@ -4,27 +4,24 @@ import Noora
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
     import Darwin
 #elseif canImport(Glibc)
-    import Glibc
+    @preconcurrency import Glibc
 #elseif canImport(Musl)
-    import Musl
+    @preconcurrency import Musl
 #elseif os(Windows)
     import ucrt
     import WinSDK
 #endif
 
-/// Global reference to stdout - marked nonisolated(unsafe) to handle Swift 6 strict concurrency.
-/// fflush is thread-safe and we're doing synchronous terminal I/O.
-#if !os(Windows)
-    nonisolated(unsafe) private let unsafeStdout = stdout
-#endif
-
-/// Flush stdout - wrapped to handle Swift 6 strict concurrency
+/// Flush stdout - fflush is thread-safe and we're doing synchronous terminal I/O.
+/// On Linux, we use fflush(nil) to avoid Swift 6 concurrency warnings about the
+/// stdout global variable. This flushes all output streams, which is safe but
+/// slightly less efficient. On other platforms we can use stdout directly.
 @inline(__always)
 private func flushStdout() {
-    #if os(Windows)
-        fflush(stdout)
+    #if os(Linux)
+        fflush(nil)
     #else
-        fflush(unsafeStdout)
+        fflush(stdout)
     #endif
 }
 
