@@ -84,13 +84,94 @@ struct DiscoverCommand: AsyncParsableCommand {
                 progress in
                 try await discoverDevices()
             }
+
+            // Track devices with last-seen timestamps to avoid flickering
+            let deviceCache = DeviceCache(staleTimeout: .seconds(30))
+            await deviceCache.update(with: collection)
+
             let updates = AsyncTimerSequence(interval: .seconds(2), clock: .continuous)
                 .map { _ in
-                    try await discoverDevices().groupedDevices().tableData
+                    let newDevices = try await discoverDevices()
+                    await deviceCache.update(with: newDevices)
+                    return await deviceCache.groupedDevices().tableData
                 }
 
             await Noora().table(collection.groupedDevices().tableData, updates: updates)
         }
+    }
+}
+
+/// Cache for discovered devices that prevents flickering by keeping devices
+/// visible for a period after they were last seen
+private actor DeviceCache {
+    private var usbDevices: [String: (device: USBDevice, lastSeen: ContinuousClock.Instant)] = [:]
+    private var ethernetDevices: [String: (device: EthernetInterface, lastSeen: ContinuousClock.Instant)] = [:]
+    private var lanDevices: [String: (device: LANDevice, lastSeen: ContinuousClock.Instant)] = [:]
+    private var bluetoothDevices: [String: (device: BluetoothDevice, lastSeen: ContinuousClock.Instant)] = [:]
+    private let staleTimeout: Duration
+
+    init(staleTimeout: Duration) {
+        self.staleTimeout = staleTimeout
+    }
+
+    func update(with collection: DevicesCollection) {
+        let now = ContinuousClock.now
+
+        // Update USB devices
+        for device in collection.usbDevices {
+            let key = "\(device.vendorId)-\(device.productId)-\(device.serialNumber ?? "")"
+            usbDevices[key] = (device, now)
+        }
+
+        // Update Ethernet devices
+        for device in collection.ethernetDevices {
+            let key = device.name
+            ethernetDevices[key] = (device, now)
+        }
+
+        // Update LAN devices
+        for device in collection.lanDevices {
+            let key = device.hostname
+            // Preserve agent version if we already have it
+            var updatedDevice = device
+            if let existing = lanDevices[key], updatedDevice.agentVersion == nil {
+                updatedDevice.agentVersion = existing.device.agentVersion
+            }
+            lanDevices[key] = (updatedDevice, now)
+        }
+
+        // Update Bluetooth devices
+        for device in collection.bluetoothDevices {
+            let key = device.id
+            // Preserve agent version if we already have it
+            var updatedDevice = device
+            if let existing = bluetoothDevices[key], updatedDevice.agentVersion == nil {
+                updatedDevice.agentVersion = existing.device.agentVersion
+            }
+            bluetoothDevices[key] = (updatedDevice, now)
+        }
+
+        // Remove stale devices
+        removeStaleDevices(olderThan: now)
+    }
+
+    private func removeStaleDevices(olderThan now: ContinuousClock.Instant) {
+        let cutoff = now - staleTimeout
+
+        usbDevices = usbDevices.filter { $0.value.lastSeen > cutoff }
+        ethernetDevices = ethernetDevices.filter { $0.value.lastSeen > cutoff }
+        lanDevices = lanDevices.filter { $0.value.lastSeen > cutoff }
+        bluetoothDevices = bluetoothDevices.filter { $0.value.lastSeen > cutoff }
+    }
+
+    func groupedDevices() -> [DevicesCollection.GroupedDevice] {
+        let collection = DevicesCollection(
+            usb: usbDevices.values.map(\.device),
+            ethernet: ethernetDevices.values.map(\.device),
+            lan: lanDevices.values.map(\.device),
+            bluetooth: bluetoothDevices.values.map(\.device)
+        )
+        return collection.groupedDevices()
     }
 }
 
