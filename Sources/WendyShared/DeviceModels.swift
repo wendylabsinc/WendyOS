@@ -52,11 +52,19 @@ public struct DevicesCollection: Encodable, Sendable {
         // Convert to lowercase, remove common prefixes, and normalize separators
         var normalized = name.lowercased()
 
-        // Remove common prefixes
-        let prefixes = ["wendyos device", "wendy device", "device"]
-        for prefix in prefixes {
+        // Remove common prefixes (with space separator)
+        let spacePrefixes = ["wendyos device", "wendy device", "device"]
+        for prefix in spacePrefixes {
             if normalized.hasPrefix(prefix + " ") {
                 normalized = String(normalized.dropFirst(prefix.count + 1))
+            }
+        }
+
+        // Remove common prefixes (with hyphen separator, e.g., "wendyos-diligent-vessel")
+        let hyphenPrefixes = ["wendyos-", "wendy-"]
+        for prefix in hyphenPrefixes {
+            if normalized.hasPrefix(prefix) {
+                normalized = String(normalized.dropFirst(prefix.count))
             }
         }
 
