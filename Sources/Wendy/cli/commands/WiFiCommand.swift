@@ -13,12 +13,45 @@ import WendyShared
     import Glibc
 #endif
 
-/// Prompt for password input without echoing to terminal
+/// Prompt for password input with masked characters (shows * for each character)
 private func securePasswordPrompt(_ prompt: String) -> String {
-    guard let password = getpass(prompt) else {
-        return ""
+    // Print prompt without newline
+    print(prompt, terminator: "")
+    fflush(stdout)
+
+    // Save terminal settings and disable echo
+    var oldTermios = termios()
+    tcgetattr(STDIN_FILENO, &oldTermios)
+    var newTermios = oldTermios
+    newTermios.c_lflag &= ~UInt(ECHO | ICANON)
+    tcsetattr(STDIN_FILENO, TCSANOW, &newTermios)
+
+    defer {
+        // Restore terminal settings
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldTermios)
+        print()  // Print newline after input
     }
-    return String(cString: password)
+
+    var password = ""
+    while true {
+        let char = getchar()
+        if char == EOF || char == Int32(Character("\n").asciiValue!) || char == Int32(Character("\r").asciiValue!) {
+            break
+        } else if char == 127 || char == 8 {  // Backspace or Delete
+            if !password.isEmpty {
+                password.removeLast()
+                // Move cursor back, print space, move back again
+                print("\u{8} \u{8}", terminator: "")
+                fflush(stdout)
+            }
+        } else {
+            password.append(Character(UnicodeScalar(UInt8(char))))
+            print("*", terminator: "")
+            fflush(stdout)
+        }
+    }
+
+    return password
 }
 
 struct WiFiCommand: AsyncParsableCommand {
