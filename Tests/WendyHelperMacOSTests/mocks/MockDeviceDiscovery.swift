@@ -10,15 +10,18 @@
         var mockUSBDevices: [USBDevice] = []
         var mockEthernetInterfaces: [EthernetInterface] = []
         var mockLANDevices: [LANDevice] = []
+        var mockBluetoothDevices: [BluetoothDevice] = []
 
         var shouldFailUSBDiscovery = false
         var shouldFailEthernetDiscovery = false
         var shouldFailLANDiscovery = false
+        var shouldFailBluetoothDiscovery = false
 
         // Call tracking
         var findUSBDevicesCallCount = 0
         var findEthernetInterfacesCallCount = 0
         var findLANDevicesCallCount = 0
+        var findBluetoothDevicesCallCount = 0
 
         private let logger: Logger
 
@@ -76,6 +79,16 @@
             return mockLANDevices
         }
 
+        func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice] {
+            findBluetoothDevicesCallCount += 1
+
+            if shouldFailBluetoothDiscovery {
+                throw MockDeviceDiscoveryError.bluetoothDiscoveryFailed
+            }
+
+            return mockBluetoothDevices
+        }
+
         // Test helper methods
         func addMockUSBDevice(_ device: USBDevice) async {
             mockUSBDevices.append(device)
@@ -89,10 +102,15 @@
             mockLANDevices.append(device)
         }
 
+        func addMockBluetoothDevice(_ device: BluetoothDevice) async {
+            mockBluetoothDevices.append(device)
+        }
+
         func clearMockDevices() async {
             mockUSBDevices.removeAll()
             mockEthernetInterfaces.removeAll()
             mockLANDevices.removeAll()
+            mockBluetoothDevices.removeAll()
         }
 
         func setShouldFailUSBDiscovery(_ value: Bool) async {
@@ -107,10 +125,15 @@
             shouldFailLANDiscovery = value
         }
 
+        func setShouldFailBluetoothDiscovery(_ value: Bool) async {
+            shouldFailBluetoothDiscovery = value
+        }
+
         func resetCounts() async {
             findUSBDevicesCallCount = 0
             findEthernetInterfacesCallCount = 0
             findLANDevicesCallCount = 0
+            findBluetoothDevicesCallCount = 0
         }
 
         func reset() async {
@@ -119,6 +142,7 @@
             shouldFailUSBDiscovery = false
             shouldFailEthernetDiscovery = false
             shouldFailLANDiscovery = false
+            shouldFailBluetoothDiscovery = false
         }
     }
 
@@ -161,6 +185,7 @@
         case usbDiscoveryFailed
         case ethernetDiscoveryFailed
         case lanDiscoveryFailed
+        case bluetoothDiscoveryFailed
 
         var errorDescription: String? {
             switch self {
@@ -170,6 +195,8 @@
                 return "Mock ethernet interface discovery failed"
             case .lanDiscoveryFailed:
                 return "Mock LAN device discovery failed"
+            case .bluetoothDiscoveryFailed:
+                return "Mock Bluetooth device discovery failed"
             }
         }
     }

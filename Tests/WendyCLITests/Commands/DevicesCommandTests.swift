@@ -207,15 +207,18 @@ struct MockDeviceDiscovery: DeviceDiscovery {
     let usbDevices: [USBDevice]
     let ethernetInterfaces: [EthernetInterface]
     let lanDevices: [LANDevice]
+    let bluetoothDevices: [BluetoothDevice]
 
     init(
         usbDevices: [USBDevice] = [],
         ethernetInterfaces: [EthernetInterface] = [],
-        lanDevices: [LANDevice] = []
+        lanDevices: [LANDevice] = [],
+        bluetoothDevices: [BluetoothDevice] = []
     ) {
         self.usbDevices = usbDevices
         self.ethernetInterfaces = ethernetInterfaces
         self.lanDevices = lanDevices
+        self.bluetoothDevices = bluetoothDevices
     }
 
     func findUSBDevices() async -> [USBDevice] {
@@ -228,6 +231,10 @@ struct MockDeviceDiscovery: DeviceDiscovery {
 
     func findLANDevices() async throws -> [LANDevice] {
         return lanDevices
+    }
+
+    func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice] {
+        return bluetoothDevices
     }
 }
 
