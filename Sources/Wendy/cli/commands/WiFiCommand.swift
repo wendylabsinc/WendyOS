@@ -129,7 +129,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 } else if json {
                     password = ""
                 } else {
-                    password = secureTextPrompt(
+                    password = try secureTextPrompt(
                         title: "Enter the password for '\(ssid)'",
                         prompt: "Password"
                     )

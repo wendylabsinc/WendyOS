@@ -303,7 +303,7 @@ struct DeviceCommand: AsyncParsableCommand {
                         while !Task.isCancelled {
                             let ssid = try await agent.discoverSSID()
 
-                            let password = secureTextPrompt(
+                            let password = try secureTextPrompt(
                                 title: "Enter the password for '\(ssid)'",
                                 prompt: "Password"
                             )

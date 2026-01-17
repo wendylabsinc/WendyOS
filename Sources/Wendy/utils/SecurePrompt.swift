@@ -30,15 +30,17 @@ private func flushStdout() {
 ///   - title: The title displayed above the prompt (e.g., "Enter WiFi password")
 ///   - prompt: The prompt label (e.g., "Password")
 /// - Returns: The password entered by the user
-func secureTextPrompt(title: String, prompt: String) -> String {
+/// - Throws: `CancellationError` if the user presses Ctrl+C
+func secureTextPrompt(title: String, prompt: String) throws -> String {
     // Print styled title
     print(title.bold)
     // Use the simple prompt with masking
-    return securePasswordPrompt("  \(prompt): ")
+    return try securePasswordPrompt("  \(prompt): ")
 }
 
 /// Prompt for password input with masked characters (shows * for each character)
-func securePasswordPrompt(_ prompt: String) -> String {
+/// - Throws: `CancellationError` if the user presses Ctrl+C
+func securePasswordPrompt(_ prompt: String) throws -> String {
     // Print prompt without newline
     print(prompt, terminator: "")
     flushStdout()
@@ -77,6 +79,8 @@ func securePasswordPrompt(_ prompt: String) -> String {
 
             if char == 13 || char == 10 {  // Enter
                 break
+            } else if char == 3 {  // Ctrl+C
+                throw CancellationError()
             } else if char == 8 {  // Backspace
                 if !password.isEmpty {
                     password.removeLast()
@@ -95,8 +99,11 @@ func securePasswordPrompt(_ prompt: String) -> String {
         // Unix implementation using termios
         var oldTermios = termios()
         tcgetattr(STDIN_FILENO, &oldTermios)
+
         var newTermios = oldTermios
-        newTermios.c_lflag &= ~tcflag_t(ECHO | ICANON)
+        // Disable echo, canonical mode, and signal generation
+        // ISIG disabled so Ctrl+C comes through as character (ASCII 3) instead of SIGINT
+        newTermios.c_lflag &= ~tcflag_t(ECHO | ICANON | ISIG)
         tcsetattr(STDIN_FILENO, TCSANOW, &newTermios)
 
         defer {
@@ -108,10 +115,11 @@ func securePasswordPrompt(_ prompt: String) -> String {
         var password = ""
         while true {
             let char = getchar()
-            if char == EOF || char == Int32(Character("\n").asciiValue!)
-                || char == Int32(Character("\r").asciiValue!)
-            {
+            // 10 = newline (\n), 13 = carriage return (\r)
+            if char == EOF || char == 10 || char == 13 || char == 4 {  // EOF, Enter, or Ctrl+D
                 break
+            } else if char == 3 {  // Ctrl+C (ETX)
+                throw CancellationError()
             } else if char == 127 || char == 8 {  // Backspace or Delete
                 if !password.isEmpty {
                     password.removeLast()
@@ -119,13 +127,13 @@ func securePasswordPrompt(_ prompt: String) -> String {
                     print("\u{8} \u{8}", terminator: "")
                     flushStdout()
                 }
-            } else if char >= 0 && char <= 127 {
-                // Valid ASCII character
+            } else if char >= 32 && char <= 126 {
+                // Valid printable ASCII character
                 password.append(Character(UnicodeScalar(UInt8(char))))
                 print("*", terminator: "")
                 flushStdout()
             }
-            // Ignore non-ASCII bytes (could be part of UTF-8 sequence)
+            // Ignore other control characters and non-ASCII bytes
         }
 
         return password
