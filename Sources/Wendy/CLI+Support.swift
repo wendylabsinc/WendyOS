@@ -9,17 +9,32 @@ public func withErrorTracking(
     do {
         return try await body()
     } catch let error as RPCError where error.code == .unavailable {
+        if JSONMode.isEnabled {
+            JSONErrorResponse(
+                error: "device_unavailable",
+                reason: "Device is unreachable",
+                suggestion: "Check the device is powered on and connected to the network"
+            ).print()
+            throw error
+        }
         try await deviceUnreachable()
         return
     } catch {
-        Noora().error(
-            .alert(
-                "An unexpected error occurred: \(error.localizedDescription)",
-                takeaways: [
-                    "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
-                ]
+        if JSONMode.isEnabled {
+            JSONErrorResponse(
+                error: "unexpected_error",
+                reason: error.localizedDescription
+            ).print()
+        } else {
+            Noora().error(
+                .alert(
+                    "An unexpected error occurred: \(error.localizedDescription)",
+                    takeaways: [
+                        "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
+                    ]
+                )
             )
-        )
+        }
         throw error
     }
 }

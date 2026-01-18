@@ -16,7 +16,7 @@ let packageDependencies: [Package.Dependency] = [
 let packageDependencies: [Package.Dependency] = [
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
-        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.5.0"),
+        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
         .package(
             url: "https://github.com/grpc/grpc-swift-nio-transport.git",
             from: "2.3.0"

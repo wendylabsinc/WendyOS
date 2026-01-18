@@ -51,9 +51,6 @@ struct DeviceCommand: AsyncParsableCommand {
             abstract: "Get the version of the Wendy agent."
         )
 
-        @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-        var json: Bool = false
-
         @Flag(help: "Check for updates")
         var checkUpdates: Bool = false
 
@@ -86,9 +83,12 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
             }
 
-            if json {
-                let json = JSONOutput(currentVersion: version.version, latestVersion: latestVersion)
-                let data = try JSONEncoder().encode(json)
+            if JSONMode.isEnabled {
+                let output = JSONOutput(
+                    currentVersion: version.version,
+                    latestVersion: latestVersion
+                )
+                let data = try JSONEncoder().encode(output)
                 print(String(data: data, encoding: .utf8)!)
             } else {
                 print("Current version: \(version.version)")
@@ -306,8 +306,8 @@ struct DeviceCommand: AsyncParsableCommand {
                         while !Task.isCancelled {
                             let ssid = try await agent.discoverSSID()
 
-                            let password = Noora().textPrompt(
-                                title: "Enter the password for the WiFi network",
+                            let password = try secureTextPrompt(
+                                title: "Enter the password for '\(ssid)'",
                                 prompt: "Password"
                             )
 

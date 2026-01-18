@@ -8,7 +8,7 @@ public struct SwiftPM: Sendable {
     public let path: String
 
     /// Default Swift version to use for building packages
-    public static let defaultSwiftVersion = "6.2.1"
+    public static let defaultSwiftVersion = "6.2.3"
 
     /// Custom Swift version, defaults to defaultSwiftVersion if nil
     public let swiftVersion: String?
@@ -312,7 +312,7 @@ public struct SwiftPM: Sendable {
 
         guard result.terminationStatus.isSuccess else {
             throw SubprocessError.nonZeroExit(
-                command: executableName + " " + flags.joined(separator: " "),
+                command: executableName + " " + arguments(flags).description,
                 exitCode: Int(result.terminationStatus.description) ?? -1,
                 output: "",
                 error: ""
