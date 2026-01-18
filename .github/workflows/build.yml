@@ -177,6 +177,7 @@ jobs:
 
           # Add optimization flags for wendy-agent builds
           if [ "${{ matrix.product }}" == "wendy-agent" ]; then
+            args+=(-Xswiftc -Osize)
             args+=(-Xswiftc -whole-module-optimization)
             args+=(-Xlinker --gc-sections)
             args+=(-Xlinker --strip-all)
@@ -198,6 +199,13 @@ jobs:
           if [ -d "$BIN_PATH/wendy-agent_${{ matrix.product }}.bundle" ]; then
             cp -r $BIN_PATH/wendy-agent_${{ matrix.product }}.bundle $OUTPUT_DIR/
           fi
+      - name: Compress with UPX
+        if: matrix.product == 'wendy-agent'
+        run: |
+          apt-get update && apt-get install -y upx-ucl
+          echo "Before UPX: $(du -h ${{ matrix.artifact-name }}/${{ matrix.product }})"
+          upx --best --lzma ${{ matrix.artifact-name }}/${{ matrix.product }}
+          echo "After UPX: $(du -h ${{ matrix.artifact-name }}/${{ matrix.product }})"
       - name: Import P12 Certificate
         if: ${{ matrix.artifact-name == 'wendy-cli-macos-arm64' }}
         uses: apple-actions/import-codesign-certs@v3
