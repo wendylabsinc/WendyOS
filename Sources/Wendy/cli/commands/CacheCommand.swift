@@ -24,13 +24,10 @@ struct CacheCommand: AsyncParsableCommand {
             let images: [CachedImageEntry]
         }
 
-        @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-        var json: Bool = false
-
         func run() async throws {
             let cachedImages = try listCachedImages()
 
-            if json {
+            if JSONMode.isEnabled {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted]
                 encoder.dateEncodingStrategy = .iso8601
@@ -97,8 +94,16 @@ struct CacheCommand: AsyncParsableCommand {
         var force: Bool = false
 
         func run() async throws {
+            // In JSON mode, require either --all or a device argument
+            if JSONMode.isEnabled && !all && device == nil {
+                jsonModeRequiresArgument(
+                    argument: "device",
+                    description: "Provide a device name or use --all to clear all cached images"
+                )
+            }
+
             guard all || device != nil else {
-                throw ValidationError("Specify a device name or --all, not both.")
+                throw ValidationError("Specify a device name or --all.")
             }
 
             let noora = Noora()
@@ -106,7 +111,20 @@ struct CacheCommand: AsyncParsableCommand {
             let cachedImages = try listCachedImages(fileManager: fileManager)
 
             guard !cachedImages.isEmpty else {
-                noora.info("No cached WendyOS images to clear.")
+                if JSONMode.isEnabled {
+                    struct ClearResult: Codable {
+                        let success: Bool
+                        let message: String
+                    }
+                    let result = ClearResult(
+                        success: true,
+                        message: "No cached WendyOS images to clear."
+                    )
+                    let data = try JSONEncoder().encode(result)
+                    print(String(data: data, encoding: .utf8)!)
+                } else {
+                    noora.info("No cached WendyOS images to clear.")
+                }
                 return
             }
 
@@ -115,10 +133,18 @@ struct CacheCommand: AsyncParsableCommand {
                 targets = cachedImages
             } else if let device {
                 guard let entry = cachedImages.first(where: { $0.device == device }) else {
+                    if JSONMode.isEnabled {
+                        JSONErrorResponse(
+                            error: "device_not_found",
+                            reason: "No cached image found for device '\(device)'"
+                        ).print()
+                        return
+                    }
                     throw ValidationError("No cached image found for device '\(device)'.")
                 }
                 targets = [entry]
             } else {
+                // This branch is only reachable in non-JSON mode
                 let rows = cachedImages.map { entry in
                     [
                         entry.device,
@@ -146,7 +172,8 @@ struct CacheCommand: AsyncParsableCommand {
             }
 
             let totalBytes = targets.reduce(0) { $0 + $1.sizeBytes }
-            if !force {
+            // Skip confirmation in JSON mode (use --force for non-interactive)
+            if !force && !JSONMode.isEnabled {
                 let description: String
                 if all {
                     description = "all cached images"
@@ -183,7 +210,31 @@ struct CacheCommand: AsyncParsableCommand {
                 }
             }
 
-            if failures.isEmpty {
+            if JSONMode.isEnabled {
+                struct ClearResult: Codable {
+                    let success: Bool
+                    let cleared: [String]
+                    let freedBytes: Int64
+                    let failures: [FailureInfo]?
+
+                    struct FailureInfo: Codable {
+                        let device: String
+                        let error: String
+                    }
+                }
+
+                let result = ClearResult(
+                    success: failures.isEmpty,
+                    cleared: targets.filter { t in !failures.contains { $0.0 == t.device } }.map(
+                        \.device
+                    ),
+                    freedBytes: totalBytes,
+                    failures: failures.isEmpty
+                        ? nil : failures.map { ClearResult.FailureInfo(device: $0.0, error: $0.1) }
+                )
+                let data = try JSONEncoder().encode(result)
+                print(String(data: data, encoding: .utf8)!)
+            } else if failures.isEmpty {
                 let sizeText = ByteCountFormatter.string(
                     fromByteCount: totalBytes,
                     countStyle: .file

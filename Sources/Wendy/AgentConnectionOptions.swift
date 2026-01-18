@@ -112,6 +112,15 @@ struct AgentConnectionOptions: ParsableArguments {
             return defaultDevice
         }
 
+        // In JSON mode, we cannot prompt for device selection
+        if JSONMode.isEnabled {
+            jsonModeRequiresArgument(
+                argument: "device",
+                description:
+                    "Provide --device <hostname:port> or set WENDY_AGENT environment variable"
+            )
+        }
+
         let discovery = PlatformDeviceDiscovery(
             logger: Logger(label: "sh.wendy.cli.find-agent")
         )

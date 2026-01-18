@@ -1,5 +1,5 @@
 {
-  "originHash" : "69422cb4b579a15efd6a7e299ad6dde8922e6a5bbcec29d9aeb204f71b4637a8",
+  "originHash" : "f09c6b4c00fe58f00dc99095cb07944f4b77aa79e1814f247a15eee5f9158369",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/edgeengineer/dbus.git",
       "state" : {
-        "revision" : "4d88300754c806827d919c5274cbfc18baebe9ab",
-        "version" : "0.3.0"
+        "revision" : "b166ef42d254a6191127a1c97b68b342bd6b2dc9",
+        "version" : "0.2.3"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/orlandos-nl/DNSClient.git",
       "state" : {
-        "revision" : "2d4174e4fbe75cc2f31d2fa2d384f486e5fe63b5",
-        "version" : "2.5.0"
+        "revision" : "ae146fd47b64df4222fdb455d520763be9b98b58",
+        "version" : "2.6.1"
       }
     },
     {

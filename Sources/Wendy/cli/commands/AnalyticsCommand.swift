@@ -51,21 +51,33 @@ extension AnalyticsCommand {
             config.analytics.enableAnalytics()
             try config.save()
 
-            // Show what data we collect
-            Noora().info(
-                """
-                Analytics has been enabled.
+            if JSONMode.isEnabled {
+                struct Response: Codable {
+                    let success: Bool
+                    let enabled: Bool
+                }
+                let response = Response(success: true, enabled: true)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .prettyPrinted
+                let data = try encoder.encode(response)
+                print(String(data: data, encoding: .utf8)!)
+            } else {
+                // Show what data we collect
+                Noora().info(
+                    """
+                    Analytics has been enabled.
 
-                We collect:
-                • Command names and success/failure
-                • Error types (no sensitive data)
-                • CLI version and OS
-                • Anonymous ID (no personal information)
+                    We collect:
+                    • Command names and success/failure
+                    • Error types (no sensitive data)
+                    • CLI version and OS
+                    • Anonymous ID (no personal information)
 
-                You can disable at anytime with: wendy analytics disable
-                Or set environment variable: WENDY_ANALYTICS=false
-                """
-            )
+                    You can disable at anytime with: wendy analytics disable
+                    Or set environment variable: WENDY_ANALYTICS=false
+                    """
+                )
+            }
         }
     }
 }
@@ -84,14 +96,26 @@ extension AnalyticsCommand {
             config.analytics.disableAnalytics()
             try config.save()
 
-            Noora().info(
-                """
-                Analytics has been disabled.
+            if JSONMode.isEnabled {
+                struct Response: Codable {
+                    let success: Bool
+                    let enabled: Bool
+                }
+                let response = Response(success: true, enabled: false)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .prettyPrinted
+                let data = try encoder.encode(response)
+                print(String(data: data, encoding: .utf8)!)
+            } else {
+                Noora().info(
+                    """
+                    Analytics has been disabled.
 
-                You can re-enable anytime with: wendy analytics enable
-                Or set environment variable: WENDY_ANALYTICS=true
-                """
-            )
+                    You can re-enable anytime with: wendy analytics enable
+                    Or set environment variable: WENDY_ANALYTICS=true
+                    """
+                )
+            }
         }
     }
 }
@@ -110,6 +134,27 @@ extension AnalyticsCommand {
 
         func run() async throws {
             let config = getConfig()
+
+            if JSONMode.isEnabled {
+                struct StatusResponse: Codable {
+                    let enabled: Bool
+                    let optOutDate: String?
+                    let anonymousId: String?
+                    let configPath: String
+                }
+                let response = StatusResponse(
+                    enabled: config.analytics.enabled,
+                    optOutDate: config.analytics.optOutDate?.formatted(),
+                    anonymousId: config.analytics.enabled ? config.analytics.anonymousId : nil,
+                    configPath: FileManager.default.homeDirectoryForCurrentUser
+                        .appendingPathComponent(".wendy/config.json").path
+                )
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .prettyPrinted
+                let data = try encoder.encode(response)
+                print(String(data: data, encoding: .utf8)!)
+                return
+            }
 
             // Display the status
             print(config.analytics.enabled ? "✅ Analytics is enabled" : "❌ Analytics is disabled")

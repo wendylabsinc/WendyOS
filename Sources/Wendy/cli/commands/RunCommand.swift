@@ -56,8 +56,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Deploy mode with automatic restarts (up to 5 retries on failure)")
     var deploy: Bool = false
 
-    @Flag(name: .customShort("y"))
+    @Flag(name: .customShort("y"), help: "Auto-accept prompts (required for --json mode)")
     var autoAccept: Bool = false
+
+    /// Whether prompts should be auto-accepted (either explicit -y or JSON mode)
+    var shouldAutoAccept: Bool { autoAccept || JSONMode.isEnabled }
 
     // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
     @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
@@ -83,7 +86,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {
-        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/6.2.1-RELEASE_wendyos_aarch64.artifactbundle.zip"
+        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/\(swiftVersion)-RELEASE_wendyos_aarch64.artifactbundle.zip"
     }
     var sdkChecksum: String {
         "d1f198fe5ce827e4f7f0d812a4c180c0b09831affafe520a254d4f0ce0c53ae9"
@@ -401,6 +404,17 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 _ = try await docker.getServerVersion()
                 return
             } catch {
+                // In JSON mode, just fail with an error - cannot prompt to start Docker
+                if JSONMode.isEnabled {
+                    JSONErrorResponse(
+                        error: "docker_not_running",
+                        reason: "Docker is not running",
+                        suggestion:
+                            "Please start Docker Desktop or OrbStack before running this command"
+                    ).print()
+                    throw ExitCode.failure
+                }
+
                 Noora().warning("Docker is not running")
 
                 #if os(macOS)
@@ -499,7 +513,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         if !installedSDKs.contains(swiftSDK) {
             let installSDK: Bool
 
-            if autoAccept {
+            if shouldAutoAccept {
                 installSDK = true
             } else {
                 installSDK = Noora().yesOrNoChoicePrompt(
@@ -522,7 +536,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
             let installSwift: Bool
 
-            if autoAccept {
+            if shouldAutoAccept {
                 installSwift = true
             } else {
                 installSwift = Noora().yesOrNoChoicePrompt(
@@ -560,7 +574,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }) {
             Noora().info("Container plugin is not installed. Do you want to install it?")
 
-            guard autoAccept || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
+            guard
+                shouldAutoAccept
+                    || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
             else {
                 Noora().error(
                     "Container plugin is required to build and run Swift packages. Please install it manually."
@@ -587,8 +603,24 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
             executableTarget = target
         } else if executableTargets.isEmpty {
+            if JSONMode.isEnabled {
+                JSONErrorResponse(
+                    error: "no_executable_targets",
+                    reason: "No executable targets found in package"
+                ).print()
+                return
+            }
             Noora().error("No executable targets found in package")
             return
+        } else if executableTargets.count == 1 {
+            executableTarget = executableTargets[0]
+        } else if JSONMode.isEnabled {
+            // Multiple executable targets and no --executable specified
+            jsonModeRequiresArgument(
+                argument: "executable",
+                description:
+                    "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
+            )
         } else {
             executableTarget = Noora().singleChoicePrompt(
                 title: "Select executable target to run",

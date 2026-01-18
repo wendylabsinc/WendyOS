@@ -19,9 +19,6 @@ struct DiscoverCommand: AsyncParsableCommand {
     @Option(help: "Device types to list (usb, ethernet, lan, or all)")
     var type: DeviceType = .all
 
-    @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-    var json: Bool = false
-
     @Flag(help: "Skip resolving the agent's version")
     var skipResolveAgentVersion: Bool = false
 
@@ -67,9 +64,8 @@ struct DiscoverCommand: AsyncParsableCommand {
 
     func run() async throws {
         let logger = Logger(label: "sh.wendy.cli.devices")
-        let format = json ? OutputFormat.json : OutputFormat.text
 
-        if format == .json {
+        if JSONMode.isEnabled {
             let collection = try await discoverDevices()
             do {
                 let jsonOutput = try collection.toJSON()

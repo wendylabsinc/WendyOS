@@ -17,9 +17,6 @@ struct HardwareCommand: AsyncParsableCommand {
     )
     var category: String?
 
-    @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-    var json: Bool = false
-
     @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
     func run() async throws {
@@ -28,7 +25,7 @@ struct HardwareCommand: AsyncParsableCommand {
         do {
             let capabilities = try await discoverHardware()
 
-            if json {
+            if JSONMode.isEnabled {
                 try outputJSON(capabilities)
             } else {
                 outputText(capabilities, logger: logger)

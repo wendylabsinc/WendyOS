@@ -117,23 +117,65 @@ struct LogoutCommand: AsyncParsableCommand {
         abstract: "Log out of cloud services"
     )
 
+    @Option(help: "Cloud dashboard URL to log out from")
+    var cloudDashboard: String?
+
     func run() async throws {
         var config = getConfig()
 
         if config.auth.isEmpty {
-            Noora().error("No accounts found")
+            if JSONMode.isEnabled {
+                JSONErrorResponse(
+                    error: "no_accounts",
+                    reason: "No accounts found to log out from"
+                ).print()
+            } else {
+                Noora().error("No accounts found")
+            }
             return
         }
 
-        let logout = Noora().singleChoicePrompt(
-            title: "Logout",
-            question: "Which account do you want to log out of?",
-            options: config.auth
-        )
+        let logout: Config.Auth
+        if let cloudDashboard {
+            guard let auth = config.auth.first(where: { $0.cloudDashboard == cloudDashboard })
+            else {
+                if JSONMode.isEnabled {
+                    JSONErrorResponse(
+                        error: "account_not_found",
+                        reason: "No account found for cloud dashboard: \(cloudDashboard)"
+                    ).print()
+                } else {
+                    Noora().error("No account found for cloud dashboard: \(cloudDashboard)")
+                }
+                return
+            }
+            logout = auth
+        } else if JSONMode.isEnabled {
+            jsonModeRequiresArgument(
+                argument: "cloud-dashboard",
+                description: "Provide --cloud-dashboard <url> to specify which account to log out"
+            )
+        } else {
+            logout = Noora().singleChoicePrompt(
+                title: "Logout",
+                question: "Which account do you want to log out of?",
+                options: config.auth
+            )
+        }
 
         config.auth.removeAll { $0 == logout }
 
         let data = try JSONEncoder().encode(config)
         try data.write(to: configURL)
+
+        if JSONMode.isEnabled {
+            struct SuccessResponse: Codable {
+                let success: Bool
+                let message: String
+            }
+            let response = SuccessResponse(success: true, message: "Logged out successfully")
+            let responseData = try JSONEncoder().encode(response)
+            print(String(data: responseData, encoding: .utf8)!)
+        }
     }
 }
