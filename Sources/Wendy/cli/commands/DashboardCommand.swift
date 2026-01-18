@@ -8,10 +8,23 @@ import WendyAgentGRPC
 #if canImport(Darwin)
     import Darwin
 #elseif canImport(Glibc)
-    import Glibc
+    @preconcurrency import Glibc
 #elseif canImport(Musl)
-    import Musl
+    @preconcurrency import Musl
 #endif
+
+/// Flush stdout - fflush is thread-safe and we're doing synchronous terminal I/O.
+/// On Linux, we use fflush(nil) to avoid Swift 6 concurrency warnings about the
+/// stdout global variable. This flushes all output streams, which is safe but
+/// slightly less efficient. On other platforms we can use stdout directly.
+@inline(__always)
+private func flushStdout() {
+    #if os(Linux)
+        fflush(nil)
+    #else
+        fflush(stdout)
+    #endif
+}
 
 struct DashboardCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -40,13 +53,13 @@ struct DashboardCommand: AsyncParsableCommand {
         // Enter alternate screen buffer and hide cursor
         print("\u{001B}[?1049h", terminator: "")  // Enter alternate screen
         print("\u{001B}[?25l", terminator: "")  // Hide cursor
-        fflush(stdout)
+        flushStdout()
 
         // Ensure we restore terminal state on exit
         defer {
             print("\u{001B}[?25h", terminator: "")  // Show cursor
             print("\u{001B}[?1049l", terminator: "")  // Exit alternate screen
-            fflush(stdout)
+            flushStdout()
         }
 
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -357,7 +370,7 @@ actor Dashboard {
         print("\u{001B}[J", terminator: "")
 
         // Flush output to ensure immediate display
-        fflush(stdout)
+        flushStdout()
     }
 
     private func formatValue(_ metric: Opentelemetry_Proto_Metrics_V1_Metric) -> String {
