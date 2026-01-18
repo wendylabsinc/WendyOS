@@ -11,6 +11,9 @@ let package = Package(
         .executable(name: "wendy", targets: ["wendy"]),
         .executable(name: "wendy-helper", targets: ["wendy-helper"]),
         .executable(name: "wendy-network-daemon", targets: ["wendy-network-daemon"]),
+        // Libraries for E2E tests and external consumers
+        .library(name: "WendyAgentGRPC", targets: ["WendyAgentGRPC"]),
+        .library(name: "WendyShared", targets: ["WendyShared"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
@@ -44,6 +47,7 @@ let package = Package(
         .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
+        .package(url: "https://github.com/apple/swift-container-plugin", from: "1.0.0"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
