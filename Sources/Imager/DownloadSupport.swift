@@ -285,7 +285,7 @@ public final class ImageDownloader: ImageDownloading {
             defer { try? destHandle.close() }
 
             while true {
-                let data = outPipe.fileHandleForReading.readData(ofLength: 1 << 16)  // 64 KiB
+                let data = outPipe.fileHandleForReading.readData(ofLength: 1 << 18)  // 256 KiB
                 if data.isEmpty {
                     break
                 }
