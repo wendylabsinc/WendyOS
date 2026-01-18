@@ -21,7 +21,6 @@ let packageDependencies: [Package.Dependency] = [
             url: "https://github.com/grpc/grpc-swift-nio-transport.git",
             from: "2.3.0"
         ),
-        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.7.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
 ]
 #endif
