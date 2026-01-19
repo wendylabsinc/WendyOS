@@ -772,11 +772,12 @@ actor BluetoothService: Service {
     }
 
     /// Extracts a human-readable device name from a hostname
-    /// For example: "wendyos-diligent-vessel" -> "Diligent Vessel"
+    /// For example: "wendyos-diligent-vessel" -> "Wendy Diligent Vessel"
+    /// The "Wendy" prefix is required for CLI discovery (scans for "wendy" in name)
     private func extractDeviceName(from hostname: String) -> String {
         var name = hostname
 
-        // Remove common prefixes
+        // Remove common prefixes (we'll add "Wendy" back later for discoverability)
         let prefixes = ["wendyos-", "wendy-"]
         for prefix in prefixes {
             if name.lowercased().hasPrefix(prefix) {
@@ -804,7 +805,9 @@ actor BluetoothService: Service {
             return "WendyOS Device"
         }
 
-        return name
+        // Prepend "Wendy" so CLI can discover this device
+        // (CLI scans for devices with "wendy" in the local name)
+        return "Wendy " + name
     }
 }
 
