@@ -5,12 +5,23 @@ public protocol DeviceDiscovery: Sendable {
     func findEthernetInterfaces() async -> [EthernetInterface]
     func findLANDevices() async throws -> [LANDevice]
     func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice]
+
+    /// Discover LAN devices and call the handler for each one as it's found
+    func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws
 }
 
 extension DeviceDiscovery {
     /// Convenience method that calls findBluetoothDevices with resolveAgentVersion: false
     public func findBluetoothDevices() async throws -> [BluetoothDevice] {
         try await findBluetoothDevices(resolveAgentVersion: false)
+    }
+
+    /// Default implementation that wraps findLANDevices
+    public func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws {
+        let devices = try await findLANDevices()
+        for device in devices {
+            try await handler(device)
+        }
     }
 }
 

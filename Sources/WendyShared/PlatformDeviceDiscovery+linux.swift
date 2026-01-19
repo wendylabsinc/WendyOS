@@ -9,7 +9,7 @@
 
     public struct PlatformDeviceDiscovery: DeviceDiscovery {
         private let logger: Logger
-        package var timeout: NIOCore.TimeAmount = .seconds(5)
+        package var timeout: NIOCore.TimeAmount = .seconds(10)
 
         public init(
             logger: Logger

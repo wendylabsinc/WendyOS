@@ -148,18 +148,51 @@
         }
 
         public func findLANDevices() async throws -> [LANDevice] {
-            var interfaces: [LANDevice] = []
+            var devices: [LANDevice] = []
+            try await withLANDeviceDiscovery { device in
+                devices.append(device)
+            }
+            return devices
+        }
+
+        public func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws {
+            var seenDevices: Set<String> = []
+
+            // Run PTR query with 3-second timeout
+            let allNames: [String]
+            do {
+                allNames = try await withThrowingTaskGroup(of: [String].self) { group in
+                    group.addTask {
+                        let resolver = try AsyncDNSResolver()
+                        return try await resolver.queryPTR(name: "_wendyos._udp.local").names
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(3))
+                        throw CancellationError()
+                    }
+                    let result = try await group.next() ?? []
+                    group.cancelAll()
+                    return result
+                }
+            } catch is CancellationError {
+                return
+            }
 
             let resolver = try AsyncDNSResolver()
-            let ptrWendy = try await resolver.queryPTR(name: "_wendyos._udp.local")
-            let ptrEdge = try await resolver.queryPTR(name: "_edgeos._udp.local")
-            for name in (ptrWendy.names + ptrEdge.names) {
-                guard let srv = try await resolver.querySRV(name: name).first else {
+
+            for name in allNames {
+                try Task.checkCancellation()
+
+                guard let srv = try? await resolver.querySRV(name: name).first else {
                     continue
                 }
 
                 let txt = try? await resolver.queryTXT(name: name).first
                 let id = txt?.txt.split(separator: "=").last.map(String.init) ?? ""
+
+                let key = "\(id)-\(srv.host)"
+                guard !seenDevices.contains(key) else { continue }
+                seenDevices.insert(key)
 
                 let lanDevice = LANDevice(
                     id: id,
@@ -170,13 +203,8 @@
                     isWendyDevice: true
                 )
 
-                // Prevent duplicates
-                if !interfaces.contains(where: { $0.id == id || $0.hostname == srv.host }) {
-                    interfaces.append(lanDevice)
-                }
+                try await handler(lanDevice)
             }
-
-            return interfaces
         }
 
         public func findBluetoothDevices(
