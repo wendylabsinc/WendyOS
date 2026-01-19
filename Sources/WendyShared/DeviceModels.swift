@@ -154,14 +154,36 @@ public struct DevicesCollection: Encodable, Sendable {
             deviceGroups[normalizedName] = group
         }
 
-        // Group LAN devices
+        // Group LAN devices - match by display name but don't merge different hostnames
         for device in lanDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group =
-                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
-            group.displayName = betterDisplayName(group.displayName, device.displayName)
-            group.interfaces.append(.lan(device))
-            deviceGroups[normalizedName] = group
+
+            // Check if there's an existing group AND if it already has a LAN device with different hostname
+            if let existingGroup = deviceGroups[normalizedName] {
+                let hasConflictingLAN = existingGroup.interfaces.contains { iface in
+                    if case .lan(let existing) = iface {
+                        return existing.hostname != device.hostname
+                    }
+                    return false
+                }
+
+                if hasConflictingLAN {
+                    // Different LAN device with same display name - create separate group using hostname
+                    let uniqueKey = "lan:\(device.hostname)"
+                    var group = deviceGroups[uniqueKey] ?? (displayName: device.displayName, interfaces: [])
+                    group.interfaces.append(.lan(device))
+                    deviceGroups[uniqueKey] = group
+                } else {
+                    // Same device or no LAN conflict - add to existing group
+                    var group = existingGroup
+                    group.displayName = betterDisplayName(group.displayName, device.displayName)
+                    group.interfaces.append(.lan(device))
+                    deviceGroups[normalizedName] = group
+                }
+            } else {
+                // No existing group - create new one
+                deviceGroups[normalizedName] = (displayName: device.displayName, interfaces: [.lan(device)])
+            }
         }
 
         // Group Bluetooth devices - with prefix matching for truncated BLE names
@@ -199,9 +221,17 @@ public struct DevicesCollection: Encodable, Sendable {
             }
         }
 
-        // Sort by display name for consistent output
+        // Sort by display name, then by first interface identifier for stability
         return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }
-            .sorted { $0.name < $1.name }
+            .sorted { lhs, rhs in
+                if lhs.name != rhs.name {
+                    return lhs.name < rhs.name
+                }
+                // Secondary sort by first interface's identifier for stable ordering
+                let lhsKey = lhs.interfaces.first?.sortKey ?? ""
+                let rhsKey = rhs.interfaces.first?.sortKey ?? ""
+                return lhsKey < rhsKey
+            }
     }
 
     /// Information about a specific interface for a device
@@ -226,6 +256,16 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet: return "Ethernet"
             case .lan: return "LAN"
             case .bluetooth: return "BLE"
+            }
+        }
+
+        /// Stable sort key for consistent ordering of devices with same name
+        var sortKey: String {
+            switch self {
+            case .usb(let device): return device.serialNumber ?? "\(device.vendorId)-\(device.productId)"
+            case .ethernet(let device): return device.name
+            case .lan(let device): return device.hostname
+            case .bluetooth(let device): return device.id
             }
         }
 
