@@ -164,14 +164,39 @@ public struct DevicesCollection: Encodable, Sendable {
             deviceGroups[normalizedName] = group
         }
 
-        // Group Bluetooth devices
+        // Group Bluetooth devices - with prefix matching for truncated BLE names
         for device in bluetoothDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group =
-                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
-            group.displayName = betterDisplayName(group.displayName, device.displayName)
-            group.interfaces.append(.bluetooth(device))
-            deviceGroups[normalizedName] = group
+
+            // First, try exact match
+            if var group = deviceGroups[normalizedName] {
+                group.displayName = betterDisplayName(group.displayName, device.displayName)
+                group.interfaces.append(.bluetooth(device))
+                deviceGroups[normalizedName] = group
+            } else {
+                // Try prefix matching - BLE names may be truncated due to advertising size limits
+                // Find a group whose normalized name starts with the BLE device's normalized name
+                var matchedKey: String?
+                for (key, _) in deviceGroups {
+                    if key.hasPrefix(normalizedName) && !normalizedName.isEmpty {
+                        matchedKey = key
+                        break
+                    }
+                }
+
+                if let key = matchedKey, var group = deviceGroups[key] {
+                    // Found a match - add BLE to existing group, keep the longer display name
+                    group.interfaces.append(.bluetooth(device))
+                    deviceGroups[key] = group
+                } else {
+                    // No match found - create new group
+                    let group = (
+                        displayName: device.displayName,
+                        interfaces: [InterfaceInfo.bluetooth(device)]
+                    )
+                    deviceGroups[normalizedName] = group
+                }
+            }
         }
 
         // Sort by display name for consistent output

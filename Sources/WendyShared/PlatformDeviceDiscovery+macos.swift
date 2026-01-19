@@ -233,10 +233,17 @@
             let scanDuration: Duration = .seconds(5)
             let scanStartTime = ContinuousClock.now
 
+            // Create BluetoothUUID for filtering
+            guard let foundationUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
+                logger.warning("Invalid Wendy service UUID configuration")
+                return []
+            }
+            let wendyServiceUUID = BluetoothUUID.bit128(foundationUUID)
+
             do {
-                // Start scanning for devices - no filter to discover all WendyOS devices
-                // The service UUID may not be in advertising data due to 31-byte limit
-                let discoveries = try await centralManager.scan()
+                // Start scanning for devices advertising the Wendy service UUID
+                let scanFilter = ScanFilter(serviceUUIDs: [wendyServiceUUID])
+                let discoveries = try await centralManager.scan(filter: scanFilter)
 
                 for try await discovery in discoveries {
                     let elapsed = ContinuousClock.now - scanStartTime
@@ -244,12 +251,13 @@
                         break
                     }
 
-                    // Check if this is a Wendy device by looking at the local name
-                    let localName =
-                        discovery.advertisementData.localName ?? discovery.peripheral.name ?? ""
-                    let isWendyDevice = localName.lowercased().contains("wendy")
+                    // Check if this is a Wendy device by checking for our service UUID
+                    let advertisedServiceUUIDs = discovery.advertisementData.serviceUUIDs
+                    let isWendyDevice = advertisedServiceUUIDs.contains(wendyServiceUUID)
 
                     if isWendyDevice {
+                        let localName =
+                            discovery.advertisementData.localName ?? discovery.peripheral.name ?? ""
                         let deviceId = discovery.peripheral.id.rawValue
                         let displayName =
                             localName.isEmpty ? "WendyOS Device" : localName

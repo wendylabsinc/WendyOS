@@ -22,6 +22,7 @@ actor BluetoothService: Service {
     private static let legacyAdvertisingMaxBytes = 31
     private static let flagsFieldBytes = 3
     private static let localNameHeaderBytes = 2
+    private static let serviceUUID128FieldBytes = 18  // 2 bytes header + 16 bytes UUID
 
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
@@ -203,8 +204,8 @@ actor BluetoothService: Service {
             ]
         )
 
-        // Convert string UUID to Foundation UUID
-        guard let serviceUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
+        // Convert string UUID to BluetoothUUID for advertising
+        guard let foundationUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
             logger.error(
                 "Invalid service UUID configuration",
                 metadata: [
@@ -213,14 +214,17 @@ actor BluetoothService: Service {
             )
             throw BluetoothServiceError.invalidConfiguration
         }
+        let serviceUUID = BluetoothUUID.bit128(foundationUUID)
 
         // Calculate approximate advertising data size:
-        // - Flags: flagsFieldBytes
+        // - Flags: flagsFieldBytes (3 bytes)
         // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
-        // Total must be <= legacyAdvertisingMaxBytes for legacy advertising
+        // - 128-bit Service UUID: serviceUUID128FieldBytes (18 bytes)
+        // Total must be <= legacyAdvertisingMaxBytes (31 bytes) for legacy advertising
         // If name is too long, truncate it
         let maxNameLength =
             Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
+            - Self.serviceUUID128FieldBytes
         let advertisingName: String
         if deviceName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
@@ -244,24 +248,28 @@ actor BluetoothService: Service {
 
         let advertisementData = AdvertisementData(
             localName: advertisingName,
-            serviceUUIDs: []  // Omit UUID to stay under legacy 31-byte limit
+            serviceUUIDs: [serviceUUID]  // Include service UUID for discovery filtering
+        )
+
+        // Include full name in scan response data for devices that request it
+        let scanResponseData = AdvertisementData(
+            localName: deviceName
         )
 
         logger.debug(
             "Starting Bluetooth advertising",
             metadata: [
                 "advertisingName": "\(advertisingName)",
+                "fullName": "\(deviceName)",
                 "nameBytes": "\(advertisingName.utf8.count)",
-                "serviceUUID": "\(serviceUUID) (not included in advertising)",
+                "serviceUUID": "\(serviceUUID)",
             ]
         )
 
         do {
-            // Pass nil for scanResponseData - BlueZ doesn't properly support it
-            // and will merge it into advertising data, pushing us over 31 bytes
             try await manager.startAdvertising(
                 advertisingData: advertisementData,
-                scanResponseData: nil,
+                scanResponseData: scanResponseData,
                 parameters: AdvertisingParameters()
             )
             logger.debug("Bluetooth advertising started successfully")
@@ -772,12 +780,11 @@ actor BluetoothService: Service {
     }
 
     /// Extracts a human-readable device name from a hostname
-    /// For example: "wendyos-diligent-vessel" -> "Wendy Diligent Vessel"
-    /// The "Wendy" prefix is required for CLI discovery (scans for "wendy" in name)
+    /// For example: "wendyos-diligent-vessel" -> "Diligent Vessel"
     private func extractDeviceName(from hostname: String) -> String {
         var name = hostname
 
-        // Remove common prefixes (we'll add "Wendy" back later for discoverability)
+        // Remove common prefixes to maximize usable name length in BLE advertising
         let prefixes = ["wendyos-", "wendy-"]
         for prefix in prefixes {
             if name.lowercased().hasPrefix(prefix) {
@@ -802,12 +809,10 @@ actor BluetoothService: Service {
 
         // If name is empty after processing, use a fallback
         if name.isEmpty {
-            return "WendyOS Device"
+            return "WendyOS"
         }
 
-        // Prepend "Wendy" so CLI can discover this device
-        // (CLI scans for devices with "wendy" in the local name)
-        return "Wendy " + name
+        return name
     }
 }
 
