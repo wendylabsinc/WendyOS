@@ -53,7 +53,10 @@ actor BluetoothAgentClient {
         let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
         let channel = try await connection.openL2CAPChannel(psm: psm)
 
-        logger.debug("L2CAP channel opened", metadata: ["psm": "\(psm.rawValue)", "mtu": "\(channel.mtu)"])
+        logger.debug(
+            "L2CAP channel opened",
+            metadata: ["psm": "\(psm.rawValue)", "mtu": "\(channel.mtu)"]
+        )
 
         let client = BluetoothAgentClient(connection: connection, channel: channel, logger: logger)
 
@@ -82,7 +85,10 @@ actor BluetoothAgentClient {
         return wifiList.networks
     }
 
-    func connectToWiFi(ssid: String, password: String) async throws -> Wendy_Agent_Services_V1_WifiConnectResponse {
+    func connectToWiFi(
+        ssid: String,
+        password: String
+    ) async throws -> Wendy_Agent_Services_V1_WifiConnectResponse {
         var command = Wendy_Agent_Services_V1_BluetoothCommand()
         var wifiConnect = Wendy_Agent_Services_V1_WifiConnectCommand()
         wifiConnect.ssid = ssid
@@ -144,7 +150,10 @@ actor BluetoothAgentClient {
         return appsStop
     }
 
-    func removeApp(name: String, purgeImage: Bool) async throws -> Wendy_Agent_Services_V1_AppsRemoveResponse {
+    func removeApp(
+        name: String,
+        purgeImage: Bool
+    ) async throws -> Wendy_Agent_Services_V1_AppsRemoveResponse {
         var command = Wendy_Agent_Services_V1_BluetoothCommand()
         var appsRemove = Wendy_Agent_Services_V1_AppsRemoveCommand()
         appsRemove.appName = name
@@ -184,7 +193,9 @@ actor BluetoothAgentClient {
 
     // MARK: - Private Methods
 
-    private func sendCommand(_ command: Wendy_Agent_Services_V1_BluetoothCommand) async throws -> Wendy_Agent_Services_V1_BluetoothResponse {
+    private func sendCommand(
+        _ command: Wendy_Agent_Services_V1_BluetoothCommand
+    ) async throws -> Wendy_Agent_Services_V1_BluetoothResponse {
         // Serialize the command
         let commandData = try command.serializedData()
 
@@ -223,7 +234,8 @@ actor BluetoothAgentClient {
 
             // Read length prefix if we haven't yet
             if messageLength == nil && buffer.count >= 4 {
-                let length = UInt32(buffer[0]) << 24
+                let length =
+                    UInt32(buffer[0]) << 24
                     | UInt32(buffer[1]) << 16
                     | UInt32(buffer[2]) << 8
                     | UInt32(buffer[3])

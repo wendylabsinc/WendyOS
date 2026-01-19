@@ -37,7 +37,7 @@ func withAgentClient<R: Sendable>(
             return try await withAgentGRPCClient(endpoint, title: title) { client in
                 try await body(.grpc(client))
             }
-        } catch where defaultDevice {
+        } catch  where defaultDevice {
             // If default device failed, try again without default
             let newDevice = try await connectionOptions.readWithBluetooth(
                 title: title,
