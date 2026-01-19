@@ -20,6 +20,12 @@ struct DiscoverCommand: AsyncParsableCommand {
     @Option(help: "Device types to list (usb, ethernet, lan, bluetooth, or all)")
     var type: DeviceType = .all
 
+    @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
+    var json: Bool = false
+
+    @Flag(name: [.customShort("s"), .long], help: "Stream continuous discovery updates (use with --json for JSON stream)")
+    var stream: Bool = false
+
     @Flag(help: "Skip resolving the agent's version")
     var skipResolveAgentVersion: Bool = false
 
@@ -79,7 +85,9 @@ struct DiscoverCommand: AsyncParsableCommand {
     func run() async throws {
         let logger = Logger(label: "sh.wendy.cli.devices")
 
-        if JSONMode.isEnabled {
+        switch (json, stream) {
+        case (true, false):
+            // Single JSON output
             let collection = try await discoverDevices()
             do {
                 let jsonOutput = try collection.toJSON()
@@ -87,143 +95,168 @@ struct DiscoverCommand: AsyncParsableCommand {
             } catch {
                 logger.error("Error serializing to JSON: \(error)")
             }
-        } else {
-            let collection = try await Noora().progressStep(message: "Discovering Wendy devices") {
-                progress in
-                try await discoverDevices()
-            }
+        case (true, true):
+            // Streaming JSONL output (one compact JSON object per line)
+            let deviceCache = DeviceCache()
 
-            // Track devices with last-seen timestamps to avoid flickering
-            let deviceCache = DeviceCache(staleTimeout: .seconds(30))
-            await deviceCache.update(with: collection)
+            // Initial discovery
+            let initialCollection = try await discoverDevices()
+            await deviceCache.update(with: initialCollection)
+            printJSON(await deviceCache.currentCollection(), compact: true)
 
-            let updates = AsyncTimerSequence(interval: .seconds(2), clock: .continuous)
-                .map { _ in
-                    let newDevices = try await discoverDevices()
-                    await deviceCache.update(with: newDevices)
-                    return await deviceCache.groupedDevices().tableData
-                }
+            // Continuous updates
+            while !Task.isCancelled {
+                try await Task.sleep(for: .seconds(2))
 
-            await Noora().table(collection.groupedDevices().tableData, updates: updates)
-        }
-    }
-}
-
-/// Cache for discovered devices that prevents flickering by keeping devices
-/// visible for a period after they were last seen
-private actor DeviceCache {
-    private var usbDevices: [String: (device: USBDevice, lastSeen: ContinuousClock.Instant)] = [:]
-    private var ethernetDevices:
-        [String: (device: EthernetInterface, lastSeen: ContinuousClock.Instant)] = [:]
-    private var lanDevices: [String: (device: LANDevice, lastSeen: ContinuousClock.Instant)] = [:]
-    private var bluetoothDevices:
-        [String: (device: BluetoothDevice, lastSeen: ContinuousClock.Instant)] = [:]
-    private let staleTimeout: Duration
-
-    init(staleTimeout: Duration) {
-        self.staleTimeout = staleTimeout
-    }
-
-    func update(with collection: DevicesCollection) {
-        let now = ContinuousClock.now
-
-        // Update USB devices
-        for device in collection.usbDevices {
-            let key = "\(device.vendorId)-\(device.productId)-\(device.serialNumber ?? "")"
-            usbDevices[key] = (device, now)
-        }
-
-        // Update Ethernet devices
-        for device in collection.ethernetDevices {
-            let key = device.name
-            ethernetDevices[key] = (device, now)
-        }
-
-        // Update LAN devices
-        for device in collection.lanDevices {
-            let key = device.hostname
-            // Preserve agent version if we already have it
-            var updatedDevice = device
-            if let existing = lanDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
-            }
-            lanDevices[key] = (updatedDevice, now)
-        }
-
-        // Update Bluetooth devices
-        for device in collection.bluetoothDevices {
-            let key = device.id
-            // Preserve agent version if we already have it
-            var updatedDevice = device
-            if let existing = bluetoothDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
-            }
-            bluetoothDevices[key] = (updatedDevice, now)
-        }
-
-        // Remove stale devices
-        removeStaleDevices(olderThan: now)
-    }
-
-    private func removeStaleDevices(olderThan now: ContinuousClock.Instant) {
-        let cutoff = now - staleTimeout
-
-        usbDevices = usbDevices.filter { $0.value.lastSeen > cutoff }
-        ethernetDevices = ethernetDevices.filter { $0.value.lastSeen > cutoff }
-        lanDevices = lanDevices.filter { $0.value.lastSeen > cutoff }
-        bluetoothDevices = bluetoothDevices.filter { $0.value.lastSeen > cutoff }
-    }
-
-    func groupedDevices() -> [DevicesCollection.GroupedDevice] {
-        let collection = DevicesCollection(
-            usb: usbDevices.values.map(\.device),
-            ethernet: ethernetDevices.values.map(\.device),
-            lan: lanDevices.values.map(\.device),
-            bluetooth: bluetoothDevices.values.map(\.device)
-        )
-        return collection.groupedDevices()
-    }
-}
-
-extension [DevicesCollection.GroupedDevice] {
-    fileprivate var tableData: TableData {
-        return TableData(
-            columns: [
-                TableColumn(title: "Name"),
-                TableColumn(title: "Connection"),
-                TableColumn(title: "Interfaces"),
-                TableColumn(title: "Version"),
-            ],
-            rows: self.map { device in
-                // Build connection info showing LAN hostname and/or BLE RSSI
-                var connectionParts: [String] = []
-
-                for interface in device.interfaces {
-                    switch interface {
-                    case .lan(let lanDevice):
-                        connectionParts.append("\(lanDevice.hostname) (LAN)")
-                    case .bluetooth(let btDevice):
-                        if btDevice.rssi != 0 {
-                            connectionParts.append("RSSI: \(btDevice.rssi) dBm (BLE)")
-                        } else {
-                            connectionParts.append("(BLE)")
+                do {
+                    let newDevices = try await withThrowingTaskGroup(
+                        of: DevicesCollection.self
+                    ) { group in
+                        group.addTask {
+                            try await discoverDevices()
                         }
-                    case .usb, .ethernet:
-                        break
+                        group.addTask {
+                            try await Task.sleep(for: .seconds(30))
+                            throw CancellationError()
+                        }
+                        guard let result = try await group.next() else {
+                            return DevicesCollection()
+                        }
+                        group.cancelAll()
+                        return result
                     }
+                    await deviceCache.update(with: newDevices)
+                } catch {
+                    await deviceCache.update(with: DevicesCollection())
                 }
 
-                let connection =
-                    connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
-
-                return [
-                    "\(device.name)",
-                    "\(connection)",
-                    "\(device.interfaces.map { $0.shortDescription }.joined(separator: ", "))",
-                    "\(device.interfaces.compactMap(\.agentVersion).first ?? "Unknown")",
-                ]
+                printJSON(await deviceCache.currentCollection(), compact: true)
             }
-        )
+        case (false, _):
+            // Interactive table output (with or without --stream flag)
+            let deviceCache = DeviceCache()
+            let (updates, continuation) = AsyncStream<TableData>.makeStream()
+
+            // Run discovery and table display concurrently using structured concurrency
+            async let discoveryTask: Void = runTableDiscovery(
+                deviceCache: deviceCache,
+                resolveBluetoothVersionInline: !skipResolveAgentVersion,
+                skipVersionResolution: skipResolveAgentVersion,
+                continuation: continuation
+            )
+
+            // Display table (consumes stream until finished)
+            let emptyResult = await deviceCache.groupedDevices()
+            await Noora().table(emptyResult.tableData(), updates: updates)
+
+            await discoveryTask
+        }
+    }
+
+    private func runTableDiscovery(
+        deviceCache: DeviceCache,
+        resolveBluetoothVersionInline: Bool,
+        skipVersionResolution: Bool,
+        continuation: sending AsyncStream<TableData>.Continuation
+    ) async {
+        let logger = Logger(label: "sh.wendy.cli.devices")
+        let discovery = PlatformDeviceDiscovery(logger: logger)
+
+        // Transfer ownership of continuation for safe sharing across task group children
+        // AsyncStream.Continuation is thread-safe but Swift's region isolation
+        // doesn't know this, so we use nonisolated(unsafe) to opt out of checking
+        nonisolated(unsafe) let sharedContinuation = consume continuation
+
+        try? await withThrowingDiscardingTaskGroup { group in
+            // Refresh task: update table every second so "Last Seen" counter ticks
+            group.addTask {
+                while !Task.isCancelled {
+                    try await Task.sleep(for: .seconds(1))
+                    let result = await deviceCache.groupedDevices()
+                    sharedContinuation.yield(result.tableData())
+                }
+            }
+
+            // BLE discovery task
+            group.addTask {
+                while !Task.isCancelled {
+                    do {
+                        let devices = try await discovery.findBluetoothDevices(
+                            resolveAgentVersion: resolveBluetoothVersionInline
+                        )
+                        logger.debug("BLE discovery done: \(devices.count)")
+                        await deviceCache.updateBLEDevices(with: devices)
+                    } catch {
+                        logger.debug("BLE discovery failed: \(error)")
+                    }
+                    try await Task.sleep(for: .seconds(2))
+                }
+            }
+
+            // LAN discovery task - calls handler for each device as found
+            group.addTask {
+                while !Task.isCancelled {
+                    do {
+                        try await discovery.withLANDeviceDiscovery { device in
+                            var resolvedDevice = device
+                            if !skipVersionResolution {
+                                let collection = DevicesCollection(lan: [device])
+                                if let resolved = await collection.resolveLANDeviceAgentVersions().first {
+                                    resolvedDevice = resolved
+                                }
+                            }
+                            await deviceCache.updateFastDevices(with: DevicesCollection(lan: [resolvedDevice]))
+                            logger.debug("LAN device found: \(resolvedDevice.hostname)")
+                        }
+                    } catch is CancellationError {
+                        break
+                    } catch {
+                        logger.debug("LAN discovery failed: \(error)")
+                    }
+                    // Mark LAN cycle complete for stale tracking
+                    await deviceCache.updateFastDevices(with: DevicesCollection())
+                    // Short delay before next LAN discovery cycle
+                    try await Task.sleep(for: .seconds(2))
+                }
+            }
+
+            // USB/Ethernet discovery task (fast, run every 2 seconds)
+            group.addTask {
+                while !Task.isCancelled {
+                    async let usbDevices = discovery.findUSBDevices()
+                    async let ethernetDevices = discovery.findEthernetInterfaces()
+
+                    let usb = await usbDevices
+                    let ethernet = await ethernetDevices
+
+                    if !usb.isEmpty {
+                        await deviceCache.updateFastDevices(with: DevicesCollection(usb: usb))
+                    }
+                    if !ethernet.isEmpty {
+                        await deviceCache.updateFastDevices(with: DevicesCollection(ethernet: ethernet))
+                    }
+
+                    try await Task.sleep(for: .seconds(2))
+                }
+            }
+        }
+
+        sharedContinuation.finish()
+    }
+
+    private func printJSON(_ collection: DevicesCollection, compact: Bool = false) {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = compact ? [.sortedKeys] : [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(collection)
+            if let jsonOutput = String(data: data, encoding: .utf8) {
+                print(jsonOutput)
+                // Flush stdout to ensure immediate output for piping
+                fflush(stdout)
+            }
+        } catch {
+            FileHandle.standardError.write(Data("Error serializing to JSON: \(error)\n".utf8))
+        }
     }
 }
 
@@ -238,7 +271,7 @@ extension DevicesCollection {
         return ethernetDevices
     }
 
-    private func resolveLANDeviceAgentVersions() async -> [LANDevice] {
+    func resolveLANDeviceAgentVersions() async -> [LANDevice] {
         await withTaskGroup(of: LANDevice?.self) { group in
             for device in lanDevices {
                 group.addTask {
