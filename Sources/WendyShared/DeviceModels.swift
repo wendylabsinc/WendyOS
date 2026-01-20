@@ -5,6 +5,14 @@ public enum OutputFormat {
     case json
 }
 
+/// Types of device interfaces
+public enum InterfaceType: String, Sendable, Hashable {
+    case usb = "USB"
+    case ethernet = "Ethernet"
+    case lan = "LAN"
+    case bluetooth = "Bluetooth"
+}
+
 // Add to DeviceModels.swift or create a separate file like Device.swift in the domain folder
 public protocol Device: Codable, Hashable {
     var isWendyDevice: Bool { get }
@@ -101,7 +109,7 @@ public struct DevicesCollection: Encodable, Sendable {
         public let interfaces: [InterfaceInfo]
 
         public var description: String {
-            let interfaceSummary = interfaces.map(\.type).joined(separator: ", ")
+            let interfaceSummary = interfaces.map(\.type.rawValue).joined(separator: ", ")
             if let hostname = interfaces.compactMap(\.lanHostname).first {
                 return "\(name) (\(hostname)) [\(interfaceSummary)]"
             }
@@ -241,12 +249,12 @@ public struct DevicesCollection: Encodable, Sendable {
         case lan(LANDevice)
         case bluetooth(BluetoothDevice)
 
-        public var type: String {
+        public var type: InterfaceType {
             switch self {
-            case .usb: return "USB"
-            case .ethernet: return "Ethernet"
-            case .lan: return "LAN"
-            case .bluetooth: return "Bluetooth"
+            case .usb: return .usb
+            case .ethernet: return .ethernet
+            case .lan: return .lan
+            case .bluetooth: return .bluetooth
             }
         }
 
