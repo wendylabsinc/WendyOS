@@ -397,6 +397,14 @@ actor BluetoothService: Service {
                         guard buffer.readableBytes >= 4 else { break }
                         if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self)
                         {
+                            // Validate message size (cap to UInt16.max for BLE)
+                            if lengthPrefix > UInt32(UInt16.max) {
+                                logger.error(
+                                    "Message size exceeds maximum allowed for BLE",
+                                    metadata: ["length": "\(lengthPrefix)"]
+                                )
+                                return
+                            }
                             expectedLength = Int(lengthPrefix)
                             logger.debug(
                                 "Read message length",

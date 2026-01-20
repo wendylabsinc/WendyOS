@@ -318,7 +318,9 @@
                         }
 
                         for await (deviceId, version) in group {
-                            if let version, var entry = discoveredDevices[deviceId] {
+                            if let version,
+                                var entry = discoveredDevices[deviceId]
+                            {
                                 entry.0.agentVersion = version
                                 discoveredDevices[deviceId] = entry
                             }
@@ -350,20 +352,26 @@
             let connection = try await centralManager.connect(to: peripheral)
 
             // Wait for connection to be ready
-            let state = await connection.state()
-            if state != .connected {
-                for await newState in await connection.stateUpdates() {
-                    if newState == .connected {
-                        break
-                    }
-                    if case .disconnected = newState {
+            switch await connection.state() {
+            case .connected:
+                ()
+            case .disconnected, .connecting:
+                stateUpdates: for await newState in await connection.stateUpdates() {
+                    switch newState {
+                    case .connected:
+                        break stateUpdates
+                    case .disconnected:
                         throw BluetoothVersionResolutionError.connectionFailed
+                    case .connecting:
+                        continue stateUpdates
                     }
                 }
             }
 
+            // TODO: Replace with async defer in Swift 6.3
             defer {
-                Task {
+                Task { [logger] in
+                    logger.debug("Disconnecting from peripheral during cleanup")
                     await connection.disconnect()
                 }
             }
@@ -372,8 +380,10 @@
             let psm = L2CAPPSM(rawValue: WendyBluetoothUUIDs.l2capPSM)
             let channel = try await connection.openL2CAPChannel(psm: psm)
 
+            // TODO: Replace with async defer in Swift 6.3
             defer {
-                Task {
+                Task { [logger] in
+                    logger.debug("Closing L2CAP channel during cleanup")
                     await channel.close()
                 }
             }
@@ -404,7 +414,14 @@
                             as: UInt32.self
                         )
                     else {
+                        // Reset and continue waiting for more data
+                        receiveBuffer.moveReaderIndex(to: readerIndex)
                         continue
+                    }
+
+                    // Validate message size (cap to UInt16.max for BLE)
+                    if messageLength > UInt32(UInt16.max) {
+                        throw BluetoothVersionResolutionError.messageTooLarge
                     }
 
                     if receiveBuffer.readableBytes >= messageLength {
@@ -436,5 +453,6 @@
         case connectionFailed
         case unexpectedResponse
         case connectionClosed
+        case messageTooLarge
     }
 #endif

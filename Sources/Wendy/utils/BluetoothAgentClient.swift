@@ -84,7 +84,13 @@ actor BluetoothAgentClient {
                     }
                 }
             } catch is TimeoutError {
-                await connection.disconnect()
+                // Verify connection state before disconnecting to avoid race condition
+                switch await connection.state() {
+                case .disconnected:
+                    break  // Already disconnected, no action needed
+                case .connected, .connecting:
+                    await connection.disconnect()
+                }
                 throw BluetoothAgentError.connectionTimeout(
                     peripheralId: peripheralId,
                     timeout: connectionTimeout
@@ -124,12 +130,19 @@ actor BluetoothAgentClient {
 
         do {
             let result = try await body(client)
+            logger.debug("Closing channel and disconnecting", metadata: ["id": "\(peripheralId)"])
             await channel.close()
             await connection.disconnect()
+            logger.debug("Cleanup completed successfully", metadata: ["id": "\(peripheralId)"])
             return result
         } catch {
+            logger.debug(
+                "Cleaning up after error",
+                metadata: ["id": "\(peripheralId)", "error": "\(error)"]
+            )
             await channel.close()
             await connection.disconnect()
+            logger.debug("Cleanup after error completed", metadata: ["id": "\(peripheralId)"])
             throw error
         }
     }
@@ -300,11 +313,10 @@ actor BluetoothAgentClient {
             )
         }
 
-        // Send with length prefix (4-byte big-endian)
+        // Send with length prefix (2-byte big-endian)
         var sendBuffer = ByteBuffer()
-        sendBuffer.writeLengthPrefixed(as: UInt32.self, endianness: .big) { buffer in
-            buffer.writeData(commandData)
-            return buffer.writerIndex
+        try sendBuffer.writeLengthPrefixed(endianness: .big, as: UInt16.self) { buffer in
+            buffer.writeBytes(commandBytes)
         }
 
         logger.debug(
@@ -372,8 +384,8 @@ actor BluetoothAgentClient {
         for try await data in channel.incoming() {
             buffer.writeData(data)
 
-            // Try to read a length-prefixed message
-            if let message = buffer.readLengthPrefixed(as: UInt32.self, endianness: .big) {
+            // Try to read a length-prefixed message (2-byte big-endian length prefix)
+            if let message = buffer.readLengthPrefixed(endianness: .big, as: UInt16.self) {
                 return message
             }
         }

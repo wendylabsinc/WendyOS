@@ -272,34 +272,28 @@ extension DevicesCollection {
     }
 
     private func resolveBluetoothDeviceAgentVersions() async -> [BluetoothDevice] {
-        await withTaskGroup(of: BluetoothDevice?.self) { group in
+        await withTaskGroup(of: BluetoothDevice.self) { group in
             for device in bluetoothDevices {
                 group.addTask {
-                    do {
-                        let peripheral = Peripheral(
-                            id: BluetoothDeviceID(device.id),
-                            name: device.displayName
-                        )
-                        return try await BluetoothAgentClient.withConnection(
+                    let peripheral = Peripheral(
+                        id: BluetoothDeviceID(device.id),
+                        name: device.displayName
+                    )
+                    var updatedDevice = device
+                    updatedDevice.agentVersion = try? await withRetry(maxAttempts: 3) {
+                        try await BluetoothAgentClient.withConnection(
                             to: peripheral,
                             connectionTimeout: .seconds(10)
                         ) { client in
-                            let version = try await client.getAgentVersion()
-                            var updatedDevice = device
-                            updatedDevice.agentVersion = version
-                            return updatedDevice
+                            try await client.getAgentVersion()
                         }
-                    } catch {
-                        // Failed to resolve version, return device as-is
-                        return device
                     }
+                    return updatedDevice
                 }
             }
 
             return await group.reduce(into: [BluetoothDevice]()) { devices, device in
-                if let device {
-                    devices.append(device)
-                }
+                devices.append(device)
             }
         }
     }
@@ -336,6 +330,28 @@ extension DevicesCollection {
             }
 
             return collection
+        }
+    }
+}
+
+/// Retry an async operation with exponential backoff
+private func withRetry<T>(
+    maxAttempts: Int,
+    initialDelay: Duration = .milliseconds(100),
+    operation: () async throws -> T
+) async throws -> T {
+    precondition(maxAttempts > 0, "maxAttempts must be positive")
+    var attempt = 0
+    while true {
+        attempt += 1
+        do {
+            return try await operation()
+        } catch {
+            guard attempt < maxAttempts else {
+                throw error
+            }
+            let delay = initialDelay * (1 << (attempt - 1))
+            try await Task.sleep(for: delay)
         }
     }
 }
