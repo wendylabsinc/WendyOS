@@ -196,27 +196,20 @@ struct WiFiCommand: AsyncParsableCommand {
                 throw WiFiCommandError.noNetworksFound
             }
 
-            let options = uniqueNetworks.map { network in
-                let signalInfo =
-                    if let strength = network.signalStrength {
-                        " (Signal: \(strength))"
-                    } else {
-                        ""
-                    }
-                return "\(network.ssid)\(signalInfo)"
+            // Build table rows for selection
+            let rows: [[String]] = uniqueNetworks.map { network in
+                [
+                    network.ssid,
+                    network.signalStrength.map { "\($0)" } ?? "Unknown",
+                ]
             }
 
-            let selection = try Noora().singleChoicePrompt(
+            let index = try await cliOutput.selectFromTable(
                 title: "Select a WiFi network",
-                question: "Which network do you want to connect to?",
-                options: options,
-                description: nil,
-                collapseOnSelection: true
+                headers: ["SSID", "Strength"],
+                rows: rows,
+                pageSize: 15
             )
-
-            guard let index = options.firstIndex(of: selection) else {
-                throw WiFiCommandError.selectionFailed
-            }
 
             return uniqueNetworks[index].ssid
         }

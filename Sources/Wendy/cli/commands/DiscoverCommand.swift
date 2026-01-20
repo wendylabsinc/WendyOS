@@ -163,9 +163,8 @@ struct DiscoverCommand: AsyncParsableCommand {
         let discovery = PlatformDeviceDiscovery(logger: logger)
 
         // Transfer ownership of continuation for safe sharing across task group children
-        // AsyncStream.Continuation is thread-safe but Swift's region isolation
-        // doesn't know this, so we use nonisolated(unsafe) to opt out of checking
-        nonisolated(unsafe) let sharedContinuation = consume continuation
+        // AsyncStream.Continuation is Sendable and thread-safe
+        let sharedContinuation = consume continuation
 
         try? await withThrowingDiscardingTaskGroup { group in
             // Refresh task: update table every second so "Last Seen" counter ticks

@@ -40,16 +40,16 @@ struct Agent {
 
         actor LiveData: nonisolated AsyncSequence {
             nonisolated let source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>
-            var networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork] = []
+            var displayedNetworks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork] = []
 
             init(source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>) {
                 self.source = source
             }
 
-            func setNetworks(
+            func setDisplayedNetworks(
                 _ networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork]
             ) {
-                self.networks = networks
+                self.displayedNetworks = networks
             }
 
             nonisolated func makeAsyncIterator() -> AsyncIterator {
@@ -61,7 +61,6 @@ struct Agent {
 
                 func next() async throws -> TableData? {
                     let networks = try await actor.source.listWiFiNetworks(.init()).networks
-                    await actor.setNetworks(networks)
                     // Group networks by SSID and keep the one with highest signal strength
                     let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty })
                     { $0.ssid }
@@ -74,6 +73,9 @@ struct Agent {
                     .sorted(by: {
                         $0.signalStrength > $1.signalStrength
                     })
+
+                    // Store the displayed networks so we can look up by index later
+                    await actor.setDisplayedNetworks(Array(uniqueNetworks))
 
                     let rows = uniqueNetworks.map { network -> TableRow in
                         return [
@@ -97,8 +99,8 @@ struct Agent {
             throw CancellationError()
         }
         let index = try await Noora().selectableTable(initial, updates: data, pageSize: 20)
-        let networks = await data.networks
-        return networks[index].ssid
+        let displayedNetworks = await data.displayedNetworks
+        return displayedNetworks[index].ssid
     }
 
     func connectToWiFi(

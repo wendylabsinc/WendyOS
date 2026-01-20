@@ -5,6 +5,10 @@ import Foundation
 /// - Output only JSON-formatted data
 /// - Avoid interactive prompts (use command-line arguments instead)
 /// - Provide fallback error responses when interactive input would be required
+///
+/// Note: New code should prefer using `cliOutput` from the unified output system
+/// instead of checking `JSONMode.isEnabled` directly. This allows for richer
+/// output modes including JSON streaming.
 public enum JSONMode {
     @TaskLocal
     public static var isEnabled: Bool = false
