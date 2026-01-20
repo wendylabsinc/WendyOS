@@ -1,10 +1,7 @@
 import ArgumentParser
 import Foundation
-import GRPCCore
-import GRPCNIOTransportHTTP2
 import Logging
 import Noora
-import WendyAgentGRPC
 
 struct WiFiCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -27,24 +24,21 @@ struct WiFiCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let networks = try await withAgentGRPCClient(
+            let networks = try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to list wifi networks?"
             ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-                let request = Wendy_Agent_Services_V1_ListWiFiNetworksRequest()
-
                 if JSONMode.isEnabled {
-                    return try await agent.listWiFiNetworks(request).networks
+                    return try await client.listWiFiNetworks()
                 } else {
                     return try await Noora().progressStep(
                         message: "Listing available WiFi networks",
                         successMessage: nil,
                         errorMessage: nil,
                         showSpinner: true
-                    ) { progress in
-                        try await agent.listWiFiNetworks(request)
-                    }.networks
+                    ) { _ in
+                        try await client.listWiFiNetworks()
+                    }
                 }
             }
 
@@ -63,9 +57,7 @@ struct WiFiCommand: AsyncParsableCommand {
             }
         }
 
-        private func formatNetworksAsJSON(
-            _ networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork]
-        ) throws -> String {
+        private func formatNetworksAsJSON(_ networks: [WiFiNetworkInfo]) throws -> String {
             struct NetworkInfo: Codable {
                 let ssid: String
                 let signalStrength: Int?
@@ -74,7 +66,7 @@ struct WiFiCommand: AsyncParsableCommand {
             let networkInfos = networks.map { network in
                 NetworkInfo(
                     ssid: network.ssid,
-                    signalStrength: network.hasSignalStrength ? Int(network.signalStrength) : nil
+                    signalStrength: network.signalStrength
                 )
             }
 
@@ -82,12 +74,14 @@ struct WiFiCommand: AsyncParsableCommand {
             return String(data: jsonData, encoding: .utf8)!
         }
 
-        private func formatNetworksAsText(
-            _ networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork]
-        ) {
+        private func formatNetworksAsText(_ networks: [WiFiNetworkInfo]) {
             for (index, network) in networks.enumerated() {
                 let signalInfo =
-                    network.hasSignalStrength ? " (Signal: \(network.signalStrength))" : ""
+                    if let strength = network.signalStrength {
+                        " (Signal: \(strength))"
+                    } else {
+                        ""
+                    }
                 print("\(index + 1). \(network.ssid)\(signalInfo)")
             }
         }
@@ -108,11 +102,10 @@ struct WiFiCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "Which device do you want to connect to the wifi network on?"
             ) { client in
-                let agent = Agent(client: client)
                 let ssid: String
                 let password: String
 
@@ -124,7 +117,7 @@ struct WiFiCommand: AsyncParsableCommand {
                         description: "Provide --ssid <network_name> to specify the WiFi network"
                     )
                 } else {
-                    ssid = try await agent.discoverSSID()
+                    ssid = try await discoverSSID(client: client)
                 }
 
                 if let _password = self.password {
@@ -142,7 +135,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 logger.debug("Connecting to WiFi network", metadata: ["ssid": "\(ssid)"])
 
                 if JSONMode.isEnabled {
-                    let response = try await agent.connectToWiFi(
+                    let result = try await client.connectToWiFi(
                         ssid: ssid,
                         password: password
                     )
@@ -153,8 +146,8 @@ struct WiFiCommand: AsyncParsableCommand {
 
                     let responseJSON = try JSONEncoder().encode(
                         Response(
-                            success: response.success,
-                            errorMessage: response.hasErrorMessage ? response.errorMessage : nil
+                            success: result.success,
+                            errorMessage: result.errorMessage
                         )
                     )
                     print(String(data: responseJSON, encoding: .utf8)!)
@@ -164,21 +157,68 @@ struct WiFiCommand: AsyncParsableCommand {
                         successMessage: "Connected to \(ssid)",
                         errorMessage: "Failed to connect to \(ssid)",
                         showSpinner: true
-                    ) { progress in
-                        let response = try await agent.connectToWiFi(
+                    ) { _ in
+                        let result = try await client.connectToWiFi(
                             ssid: ssid,
                             password: password
                         )
-                        guard response.success else {
+                        guard result.success else {
                             struct UnableToConnectToWiFiError: Error {
                                 let errorMessage: String
                             }
 
-                            throw UnableToConnectToWiFiError(errorMessage: response.errorMessage)
+                            throw UnableToConnectToWiFiError(
+                                errorMessage: result.errorMessage ?? "Unknown error"
+                            )
                         }
                     }
                 }
             }
+        }
+
+        /// Interactively discover and select a WiFi network
+        private func discoverSSID(client: AgentClient) async throws -> String {
+            let networks = try await client.listWiFiNetworks()
+
+            // Group networks by SSID and keep the one with highest signal strength
+            let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty }) {
+                $0.ssid
+            }
+            .compactMapValues { networksWithSameSsid -> WiFiNetworkInfo? in
+                networksWithSameSsid.max(by: {
+                    ($0.signalStrength ?? 0) < ($1.signalStrength ?? 0)
+                })
+            }
+            .values
+            .sorted(by: { ($0.signalStrength ?? 0) > ($1.signalStrength ?? 0) })
+
+            guard !uniqueNetworks.isEmpty else {
+                throw WiFiCommandError.noNetworksFound
+            }
+
+            let options = uniqueNetworks.map { network in
+                let signalInfo =
+                    if let strength = network.signalStrength {
+                        " (Signal: \(strength))"
+                    } else {
+                        ""
+                    }
+                return "\(network.ssid)\(signalInfo)"
+            }
+
+            let selection = try Noora().singleChoicePrompt(
+                title: "Select a WiFi network",
+                question: "Which network do you want to connect to?",
+                options: options,
+                description: nil,
+                collapseOnSelection: true
+            )
+
+            guard let index = options.firstIndex(of: selection) else {
+                throw WiFiCommandError.selectionFailed
+            }
+
+            return uniqueNetworks[index].ssid
         }
     }
 
@@ -194,26 +234,22 @@ struct WiFiCommand: AsyncParsableCommand {
             let logger = Logger(label: "sh.wendy.cli.wifi.status")
             logger.info("Checking WiFi connection status")
 
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to check the wifi status?"
             ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-                let request = Wendy_Agent_Services_V1_GetWiFiStatusRequest()
-                let response = try await agent.getWiFiStatus(request)
+                let status = try await client.getWiFiStatus()
 
                 if JSONMode.isEnabled {
-                    let statusJSON = try formatStatusAsJSON(response)
+                    let statusJSON = try formatStatusAsJSON(status)
                     print(statusJSON)
                 } else {
-                    formatStatusAsText(response)
+                    formatStatusAsText(status)
                 }
             }
         }
 
-        private func formatStatusAsJSON(
-            _ response: Wendy_Agent_Services_V1_GetWiFiStatusResponse
-        ) throws -> String {
+        private func formatStatusAsJSON(_ status: WiFiStatusInfo) throws -> String {
             struct StatusInfo: Codable {
                 let connected: Bool
                 let ssid: String?
@@ -221,30 +257,30 @@ struct WiFiCommand: AsyncParsableCommand {
             }
 
             let statusInfo = StatusInfo(
-                connected: response.connected,
-                ssid: response.hasSsid ? response.ssid : nil,
-                errorMessage: response.hasErrorMessage ? response.errorMessage : nil
+                connected: status.connected,
+                ssid: status.ssid,
+                errorMessage: status.errorMessage
             )
 
             let jsonData = try JSONEncoder().encode(statusInfo)
             return String(data: jsonData, encoding: .utf8)!
         }
 
-        private func formatStatusAsText(_ response: Wendy_Agent_Services_V1_GetWiFiStatusResponse) {
+        private func formatStatusAsText(_ status: WiFiStatusInfo) {
             print("WiFi Status:")
             print("------------")
 
-            if response.connected {
+            if status.connected {
                 print("Status: Connected")
-                if response.hasSsid {
-                    print("Network: \(response.ssid)")
+                if let ssid = status.ssid {
+                    print("Network: \(ssid)")
                 }
             } else {
                 print("Status: Disconnected")
             }
 
-            if response.hasErrorMessage {
-                print("Error: \(response.errorMessage)")
+            if let errorMessage = status.errorMessage {
+                print("Error: \(errorMessage)")
             }
         }
     }
@@ -261,25 +297,38 @@ struct WiFiCommand: AsyncParsableCommand {
             let logger = Logger(label: "sh.wendy.cli.wifi.disconnect")
             logger.info("Disconnecting from WiFi network")
 
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "Which device do you want to disconnect from wifi?"
             ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-                let request = Wendy_Agent_Services_V1_DisconnectWiFiRequest()
+                let result = try await Noora().progressStep(
+                    message: "Disconnecting from WiFi network...",
+                    successMessage: "Disconnected from WiFi network",
+                    errorMessage: "Failed to disconnect from WiFi network",
+                    showSpinner: true
+                ) { _ in
+                    try await client.disconnectWiFi()
+                }
 
-                print("Disconnecting from WiFi network...")
-
-                let response = try await agent.disconnectWiFi(request)
-
-                if response.success {
-                    print("✅ Successfully disconnected from WiFi network")
-                } else {
-                    let errorMessage =
-                        response.hasErrorMessage ? response.errorMessage : "Unknown error"
-                    print("❌ Failed to disconnect: \(errorMessage)")
+                if !result.success {
+                    let errorMessage = result.errorMessage ?? "Unknown error"
+                    Noora().warning("Disconnect reported failure: \(errorMessage)")
                 }
             }
+        }
+    }
+}
+
+enum WiFiCommandError: Error, CustomStringConvertible {
+    case noNetworksFound
+    case selectionFailed
+
+    var description: String {
+        switch self {
+        case .noNetworksFound:
+            return "No WiFi networks found"
+        case .selectionFailed:
+            return "Failed to select a network"
         }
     }
 }

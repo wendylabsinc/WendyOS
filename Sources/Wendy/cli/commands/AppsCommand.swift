@@ -2,8 +2,6 @@ import ArgumentParser
 import Foundation
 import Logging
 import Noora
-import WendyAgentGRPC
-import WendyShared
 
 struct AppsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -34,20 +32,11 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "Removing application"
             ) { client in
-                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
-                    wrapping: client
-                )
-
-                _ = try await containers.deleteContainer(
-                    .with {
-                        $0.appName = appName
-                        $0.deleteImage = purgeImage
-                    }
-                )
+                try await client.removeApp(name: appName, purgeImage: purgeImage)
 
                 if purgeImage {
                     Noora().success("Removed application and its image.")
@@ -70,16 +59,11 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "Stopping application"
             ) { client in
-                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
-                    wrapping: client
-                )
-                _ = try await containers.stopContainer(
-                    .with { $0.appName = appName }
-                )
+                try await client.stopApp(name: appName)
                 Noora().info("Stop request sent")
             }
         }
@@ -94,40 +78,24 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "Listing applications"
             ) { client in
-                let rows: [[String]] =
-                    try await Wendy_Agent_Services_V1_WendyContainerService.Client(
-                        wrapping: client
-                    )
-                    .listContainers(.init()) { containers in
-                        var rows: [[String]] = []
+                let apps = try await client.listApps()
 
-                        for try await container in containers.messages {
-                            let state =
-                                switch container.container.runningState {
-                                case .running: "Running"
-                                case .stopped: "Stopped"
-                                case .UNRECOGNIZED: "Unknown"
-                                }
-                            let failures = "\(container.container.failureCount)"
-
-                            rows.append([
-                                container.container.appName,
-                                container.container.appVersion,
-                                state,
-                                failures,
-                            ])
-                        }
-
-                        return rows
-                    }
-
-                guard !rows.isEmpty else {
+                guard !apps.isEmpty else {
                     Noora().info("No applications found.")
                     return
+                }
+
+                let rows: [[String]] = apps.map { app in
+                    [
+                        app.name,
+                        app.version,
+                        app.runningState.rawValue,
+                        "\(app.failureCount)",
+                    ]
                 }
 
                 Noora().table(

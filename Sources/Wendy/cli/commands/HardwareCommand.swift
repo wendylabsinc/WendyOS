@@ -1,9 +1,6 @@
 import ArgumentParser
 import Foundation
-import GRPCCore
-import GRPCNIOTransportHTTP2
 import Logging
-import WendyAgentGRPC
 
 struct HardwareCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -23,7 +20,12 @@ struct HardwareCommand: AsyncParsableCommand {
         let logger = Logger(label: "hardware.discovery")
 
         do {
-            let capabilities = try await discoverHardware()
+            let capabilities = try await withAgentClient(
+                agentConnectionOptions,
+                title: "For which device do you want to discover hardware?"
+            ) { client in
+                try await client.listHardware(categoryFilter: category)
+            }
 
             if JSONMode.isEnabled {
                 try outputJSON(capabilities)
@@ -36,36 +38,14 @@ struct HardwareCommand: AsyncParsableCommand {
         }
     }
 
-    private func discoverHardware() async throws
-        -> [Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse.HardwareCapability]
-    {
-        return try await withAgentGRPCClient(
-            agentConnectionOptions,
-            title: "For which device do you want to discover hardware?"
-        ) { client in
-            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-
-            var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
-            if let categoryFilter = category {
-                request.categoryFilter = categoryFilter
-            }
-
-            let response = try await agent.listHardwareCapabilities(request)
-            return response.capabilities
-        }
-    }
-
-    private func outputJSON(
-        _ capabilities: [Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse
-            .HardwareCapability]
-    ) throws {
+    private func outputJSON(_ capabilities: [HardwareCapability]) throws {
         let jsonCapabilities = capabilities.map { capability in
             return [
                 "category": capability.category,
                 "devicePath": capability.devicePath,
-                "description": capability.description_p,
+                "description": capability.description,
                 "properties": capability.properties,
-            ]
+            ] as [String: Any]
         }
 
         let jsonData = try JSONSerialization.data(
@@ -76,11 +56,7 @@ struct HardwareCommand: AsyncParsableCommand {
         print(jsonString)
     }
 
-    private func outputText(
-        _ capabilities: [Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse
-            .HardwareCapability],
-        logger: Logger
-    ) {
+    private func outputText(_ capabilities: [HardwareCapability], logger: Logger) {
         if capabilities.isEmpty {
             if let categoryFilter = category {
                 print("No \(categoryFilter) hardware found on this device.")
@@ -106,7 +82,7 @@ struct HardwareCommand: AsyncParsableCommand {
 
             for capability in categoryCapabilities.sorted(by: { $0.devicePath < $1.devicePath }) {
                 print("  🔧 \(capability.devicePath)")
-                print("     Description: \(capability.description_p)")
+                print("     Description: \(capability.description)")
 
                 if !capability.properties.isEmpty {
                     print("     Properties:")
@@ -126,7 +102,7 @@ struct HardwareCommand: AsyncParsableCommand {
             "Summary: \(totalDevices) hardware device\(totalDevices == 1 ? "" : "s") across \(categoryCount) categor\(categoryCount == 1 ? "y" : "ies")"
         )
 
-        if category == nil {
+        if self.category == nil {
             print("\nTip: Use --category <type> to filter by specific hardware type")
             print(
                 "Available categories: audio, camera, gpu, gpio, i2c, input, network, serial, spi, storage, usb"

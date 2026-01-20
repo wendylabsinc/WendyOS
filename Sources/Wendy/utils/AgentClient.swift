@@ -37,7 +37,7 @@ func withAgentClient<R: Sendable>(
             return try await withAgentGRPCClient(endpoint, title: title) { client in
                 try await body(.grpc(client))
             }
-        } catch  where defaultDevice {
+        } catch where defaultDevice {
             // If default device failed, try again without default
             let newDevice = try await connectionOptions.readWithBluetooth(
                 title: title,
@@ -77,7 +77,7 @@ private func executeWithDevice<R: Sendable>(
     }
 }
 
-// MARK: - WiFi Commands via AgentClient
+// MARK: - WiFi Commands
 
 extension AgentClient {
     /// List available WiFi networks
@@ -171,7 +171,11 @@ extension AgentClient {
             )
         }
     }
+}
 
+// MARK: - Agent Info Commands
+
+extension AgentClient {
     /// Get agent version
     func getAgentVersion() async throws -> String {
         switch self {
@@ -183,6 +187,119 @@ extension AgentClient {
 
         case .bluetooth(let client):
             return try await client.getAgentVersion()
+        }
+    }
+}
+
+// MARK: - Apps Commands
+
+extension AgentClient {
+    /// List applications on the device
+    func listApps() async throws -> [AppInfo] {
+        switch self {
+        case .grpc(let client):
+            let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
+            return try await containers.listContainers(.init()) { response in
+                var apps: [AppInfo] = []
+                for try await container in response.messages {
+                    let state: AppInfo.RunningState =
+                        switch container.container.runningState {
+                        case .running: .running
+                        case .stopped: .stopped
+                        case .UNRECOGNIZED: .unknown
+                        }
+                    apps.append(AppInfo(
+                        name: container.container.appName,
+                        version: container.container.appVersion,
+                        runningState: state,
+                        failureCount: Int(container.container.failureCount)
+                    ))
+                }
+                return apps
+            }
+
+        case .bluetooth(let client):
+            let apps = try await client.listApps()
+            return apps.map { app in
+                // Bluetooth proto uses string state field instead of enum
+                let state: AppInfo.RunningState =
+                    switch app.state.lowercased() {
+                    case "running": .running
+                    case "stopped": .stopped
+                    default: .unknown
+                    }
+                return AppInfo(
+                    name: app.appName,
+                    version: app.appVersion,
+                    runningState: state,
+                    failureCount: Int(app.failureCount)
+                )
+            }
+        }
+    }
+
+    /// Stop a running application
+    func stopApp(name: String) async throws {
+        switch self {
+        case .grpc(let client):
+            let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
+            _ = try await containers.stopContainer(.with { $0.appName = name })
+
+        case .bluetooth(let client):
+            _ = try await client.stopApp(name: name)
+        }
+    }
+
+    /// Remove an application from the device
+    func removeApp(name: String, purgeImage: Bool) async throws {
+        switch self {
+        case .grpc(let client):
+            let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
+            _ = try await containers.deleteContainer(.with {
+                $0.appName = name
+                $0.deleteImage = purgeImage
+            })
+
+        case .bluetooth(let client):
+            _ = try await client.removeApp(name: name, purgeImage: purgeImage)
+        }
+    }
+}
+
+// MARK: - Hardware Commands
+
+extension AgentClient {
+    /// List hardware capabilities on the device
+    /// Note: Bluetooth uses a simplified HardwareInfo proto with different fields
+    func listHardware(categoryFilter: String? = nil) async throws -> [HardwareCapability] {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
+            if let categoryFilter {
+                request.categoryFilter = categoryFilter
+            }
+            let response = try await agent.listHardwareCapabilities(request)
+            return response.capabilities.map { capability in
+                HardwareCapability(
+                    category: capability.category,
+                    devicePath: capability.devicePath,
+                    description: capability.description_p,
+                    properties: capability.properties
+                )
+            }
+
+        case .bluetooth(let client):
+            // Bluetooth proto uses simplified HardwareInfo with type/name/available
+            let capabilities = try await client.listHardware()
+            return capabilities.map { capability in
+                HardwareCapability(
+                    category: capability.type,
+                    devicePath: capability.name,
+                    description: capability.available ? "Available" : "Unavailable",
+                    properties: [:]
+                )
+            }
         }
     }
 }
@@ -208,4 +325,24 @@ struct WiFiStatusInfo: Sendable {
 struct WiFiDisconnectResult: Sendable {
     let success: Bool
     let errorMessage: String?
+}
+
+struct AppInfo: Sendable {
+    enum RunningState: String, Sendable {
+        case running = "Running"
+        case stopped = "Stopped"
+        case unknown = "Unknown"
+    }
+
+    let name: String
+    let version: String
+    let runningState: RunningState
+    let failureCount: Int
+}
+
+struct HardwareCapability: Sendable {
+    let category: String
+    let devicePath: String
+    let description: String
+    let properties: [String: String]
 }
