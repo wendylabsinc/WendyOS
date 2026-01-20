@@ -1,0 +1,9 @@
+{
+    "appId": "sh.wendy.examples.vlm",
+    "version": "1.0.0",
+    "language": "python",
+    "entitlements": [
+        {"type": "gpu"},
+        {"type": "network", "mode": "host"}
+    ]
+}

@@ -1,0 +1,4 @@
+# Extraction script (not needed in container)
+extract_engine.sh
+
+# Note: Pre-built engine files (*.engine) are now included in the image for fast startup

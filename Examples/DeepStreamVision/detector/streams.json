@@ -1,0 +1,9 @@
+{
+  "streams": [
+    {
+      "name": "camera1",
+      "url": "rtsp://jetson:jetsontest@192.168.68.69:554/stream1",
+      "enabled": true
+    }
+  ]
+}

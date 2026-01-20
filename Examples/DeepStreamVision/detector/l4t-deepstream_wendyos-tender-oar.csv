@@ -1,0 +1,598 @@
+# Device nodes (required for GPU access)
+dev, /dev/nvidiactl
+dev, /dev/nvidia0
+dev, /dev/nvhost-gpu
+dev, /dev/nvhost-ctrl-gpu
+dev, /dev/nvhost-as-gpu
+dev, /dev/nvhost-dbg-gpu
+dev, /dev/nvhost-prof-gpu
+dev, /dev/nvhost-ctxsw-gpu
+dev, /dev/nvhost-sched-gpu
+dev, /dev/nvhost-tsg-gpu
+
+# Video decode device (hardware video decoding)
+dev, /dev/v4l2-nvdec
+
+# DRI devices (for graphics/display if needed)
+dev, /dev/dri/card*
+dev, /dev/dri/renderD*
+dir, /dev/dri/by-path
+
+# CUDA Runtime (required by all CUDA applications)
+sym, /usr/local/cuda-12.6/lib/libcudart.so.12
+lib, /usr/local/cuda-12.6/lib/libcudart.so.12.6.68
+
+# cuBLAS - Linear algebra (REQUIRED by PyTorch)
+sym, /usr/local/cuda-12.6/lib/libcublas.so.12
+lib, /usr/local/cuda-12.6/lib/libcublas.so.12.6.1.4
+sym, /usr/local/cuda-12.6/lib/libcublasLt.so.12
+lib, /usr/local/cuda-12.6/lib/libcublasLt.so.12.6.1.4
+
+# cuDNN - Deep learning primitives (REQUIRED by PyTorch)
+sym, /usr/lib/libcudnn.so.9
+lib, /usr/lib/libcudnn.so.9.3.0
+sym, /usr/lib/libcudnn_ops.so.9
+lib, /usr/lib/libcudnn_ops.so.9.3.0
+sym, /usr/lib/libcudnn_cnn.so.9
+lib, /usr/lib/libcudnn_cnn.so.9.3.0
+sym, /usr/lib/libcudnn_adv.so.9
+lib, /usr/lib/libcudnn_adv.so.9.3.0
+sym, /usr/lib/libcudnn_graph.so.9
+lib, /usr/lib/libcudnn_graph.so.9.3.0
+sym, /usr/lib/libcudnn_engines_precompiled.so.9
+lib, /usr/lib/libcudnn_engines_precompiled.so.9.3.0
+sym, /usr/lib/libcudnn_engines_runtime_compiled.so.9
+lib, /usr/lib/libcudnn_engines_runtime_compiled.so.9.3.0
+sym, /usr/lib/libcudnn_heuristic.so.9
+lib, /usr/lib/libcudnn_heuristic.so.9.3.0
+
+# cuSPARSE - Sparse matrix operations (used by PyTorch sparse tensors)
+sym, /usr/local/cuda-12.6/lib/libcusparse.so.12
+lib, /usr/local/cuda-12.6/lib/libcusparse.so.12.5.3.3
+
+# cuSPARSELt - Lightweight sparse matrix operations
+lib, /usr/lib/libcusparseLt.so.0
+lib, /usr/lib/libcusparseLt.so.0.8.1.1
+
+# cuSOLVER - Linear solvers (used by torch.linalg operations)
+sym, /usr/local/cuda-12.6/lib/libcusolver.so.11
+lib, /usr/local/cuda-12.6/lib/libcusolver.so.11.6.4.69
+sym, /usr/local/cuda-12.6/lib/libcusolverMg.so.11
+lib, /usr/local/cuda-12.6/lib/libcusolverMg.so.11.6.4.69
+
+# cuRAND - Random number generation (used by torch.rand with CUDA)
+sym, /usr/local/cuda-12.6/lib/libcurand.so.10
+lib, /usr/local/cuda-12.6/lib/libcurand.so.10.3.7.68
+
+# cuFFT - Fast Fourier Transform (used by torch.fft)
+sym, /usr/local/cuda-12.6/lib/libcufft.so
+sym, /usr/local/cuda-12.6/lib/libcufft.so.11
+lib, /usr/local/cuda-12.6/lib/libcufft.so.11.2.6.59
+
+# NVRTC - Runtime compilation (used by torch.jit)
+sym, /usr/local/cuda-12.6/lib/libnvrtc.so.12
+lib, /usr/local/cuda-12.6/lib/libnvrtc.so.12.6.68
+sym, /usr/local/cuda-12.6/lib/libnvrtc-builtins.so.12.6
+lib, /usr/local/cuda-12.6/lib/libnvrtc-builtins.so.12.6.68
+
+# nvJitLink - JIT Linker (required by PyTorch JIT compilation and torch.compile)
+sym, /usr/local/cuda-12.6/lib/libnvJitLink.so.12
+lib, /usr/local/cuda-12.6/lib/libnvJitLink.so.12.6.68
+
+# NVTX - NVIDIA Tools Extension for profiling (used by PyTorch profiler)
+sym, /usr/local/cuda-12.6/lib/libnvToolsExt.so.1
+lib, /usr/local/cuda-12.6/lib/libnvToolsExt.so.1.0.0
+
+# CUPTI - CUDA Profiling Tools Interface (used by PyTorch profiler)
+sym, /usr/local/cuda-12.6/lib/libcupti.so.12
+lib, /usr/local/cuda-12.6/lib/libcupti.so.2024.3.1
+
+# NVJPEG - Hardware JPEG encoding/decoding
+sym, /usr/local/cuda-12.6/lib/libnvjpeg.so.12
+lib, /usr/local/cuda-12.6/lib/libnvjpeg.so.12.3.3.54
+
+# NPP - Image processing primitives (used by vision operations)
+sym, /usr/local/cuda-12.6/lib/libnppc.so.12
+lib, /usr/local/cuda-12.6/lib/libnppc.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppial.so.12
+lib, /usr/local/cuda-12.6/lib/libnppial.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppicc.so.12
+lib, /usr/local/cuda-12.6/lib/libnppicc.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppidei.so.12
+lib, /usr/local/cuda-12.6/lib/libnppidei.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppif.so.12
+lib, /usr/local/cuda-12.6/lib/libnppif.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppig.so.12
+lib, /usr/local/cuda-12.6/lib/libnppig.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppim.so.12
+lib, /usr/local/cuda-12.6/lib/libnppim.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppist.so.12
+lib, /usr/local/cuda-12.6/lib/libnppist.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppisu.so.12
+lib, /usr/local/cuda-12.6/lib/libnppisu.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnppitc.so.12
+lib, /usr/local/cuda-12.6/lib/libnppitc.so.12.3.1.54
+sym, /usr/local/cuda-12.6/lib/libnpps.so.12
+lib, /usr/local/cuda-12.6/lib/libnpps.so.12.3.1.54
+
+# Tegra core libraries (libnvrm_gpu, etc.)
+lib, /usr/lib/libnvrm_gpu.so
+lib, /usr/lib/libnvrm_chip.so
+lib, /usr/lib/libnvrm_mem.so
+lib, /usr/lib/libnvrm_sync.so
+lib, /usr/lib/libnvrm_host1x.so
+lib, /usr/lib/libnvdc.so
+lib, /usr/lib/libnvddk_2d_v2.so
+lib, /usr/lib/libnvddk_vic.so
+lib, /usr/lib/libnvimp.so
+lib, /usr/lib/libnvphs.so
+lib, /usr/lib/libnvidia-rmapi-tegra.so.540.4.0
+lib, /usr/lib/libnvidia-tls.so.540.4.0
+lib, /usr/lib/libnvidia-glcore.so.540.4.0
+lib, /usr/lib/libnvidia-glsi.so.540.4.0
+
+# Tegra-specific libraries (video processing) - in /usr/lib/ directly on Yocto
+sym, /usr/lib/libnvbufsurface.so
+sym, /usr/lib/libnvbufsurface.so.1
+lib, /usr/lib/libnvbufsurface.so.1.0.0
+sym, /usr/lib/libnvbufsurftransform.so
+sym, /usr/lib/libnvbufsurftransform.so.1
+lib, /usr/lib/libnvbufsurftransform.so.1.0.0
+lib, /usr/lib/libnvbuf_fdmap.so.1.0.0
+sym, /usr/lib/libnvdsbufferpool.so
+sym, /usr/lib/libnvdsbufferpool.so.1
+lib, /usr/lib/libnvdsbufferpool.so.1.0.0
+lib, /usr/lib/libnvid_mapper.so.1.0.0
+
+# NvSci libraries (NVIDIA Software Communication Interface)
+sym, /usr/lib/libnvscibuf.so
+lib, /usr/lib/libnvscibuf.so.1
+sym, /usr/lib/libnvscicommon.so
+lib, /usr/lib/libnvscicommon.so.1
+sym, /usr/lib/libnvscisync.so
+lib, /usr/lib/libnvscisync.so.1
+sym, /usr/lib/libnvscistream.so
+lib, /usr/lib/libnvscistream.so.1
+lib, /usr/lib/libnvscievent.so
+lib, /usr/lib/libnvsciipc.so
+
+# NVMM multimedia libraries (media framework)
+lib, /usr/lib/libnvmm.so
+lib, /usr/lib/libnvmm_utils.so
+lib, /usr/lib/libnvmm_contentpipe.so
+lib, /usr/lib/libnvmm_parser.so
+
+# EGL/OpenGL libraries (for GPU rendering)
+lib, /usr/lib/libEGL_nvidia.so.0
+lib, /usr/lib/libGLESv2_nvidia.so.2
+lib, /usr/lib/libnvidia-eglcore.so.540.4.0
+
+# CUDA driver (critical for all GPU operations)
+sym, /usr/lib/libcuda.so
+sym, /usr/lib/libcuda.so.1
+lib, /usr/lib/libcuda.so.1.1
+
+# TensorRT - Inference optimization (required by torch-tensorrt)
+sym, /usr/lib/libnvinfer.so
+sym, /usr/lib/libnvinfer.so.10
+lib, /usr/lib/libnvinfer.so.10.3.0
+sym, /usr/lib/libnvinfer_plugin.so
+sym, /usr/lib/libnvinfer_plugin.so.10
+lib, /usr/lib/libnvinfer_plugin.so.10.3.0
+lib, /usr/lib/libnvinfer_builder_resource.so.10.3.0
+
+# cuFile - GPUDirect Storage (required by PyTorch 2.8.0)
+sym, /usr/local/cuda-12.6/lib/libcufile.so
+sym, /usr/local/cuda-12.6/lib/libcufile.so.0
+lib, /usr/local/cuda-12.6/lib/libcufile.so.1.11.1
+
+# TensorRT ONNX Parser - Model import (required by torch-tensorrt)
+sym, /usr/lib/libnvonnxparser.so
+sym, /usr/lib/libnvonnxparser.so.10
+lib, /usr/lib/libnvonnxparser.so.10.3.0
+
+# CUDA DLA Runtime - Deep Learning Accelerator
+sym, /usr/local/cuda-12.6/lib/libcudla.so
+sym, /usr/local/cuda-12.6/lib/libcudla.so.1
+lib, /usr/local/cuda-12.6/lib/libcudla.so.1.0.0
+
+# DeepStream SDK 7.1 Libraries (only present if deepstream-7.1 is installed)
+# Environment variable for GStreamer to find DeepStream plugins
+env, GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0/deepstream
+env, LD_LIBRARY_PATH=/opt/nvidia/deepstream/deepstream-7.1/lib
+
+# Mount entire library directory for DeepStream
+dir, /opt/nvidia/deepstream/deepstream-7.1/lib
+
+# DeepStream symlink
+dir, /opt/nvidia/deepstream/deepstream
+
+# DeepStream GStreamer plugins directories
+dir, /usr/lib/aarch64-linux-gnu/nvidia
+
+# DeepStream core libraries
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_helper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_batch_jpegenc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_inferutils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_osd.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgbroker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv.so.1.0.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_yml_parser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_utils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dsanalytics.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lljpegenc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvtxhelper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dewarper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer_server.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_smartrecord.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_inferbase.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_3d_gst.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_dewarper.so
+
+# Tegra container passthrough libraries (provides additional NVIDIA libs for containers)
+dir, /usr/share/nvidia-container-passthrough
+
+# GStreamer NVIDIA custom helper (required by DeepStream)
+# May be in /usr/lib/aarch64-linux-gnu/nvidia/ or /usr/share/nvidia-container-passthrough/
+sym, /usr/lib/aarch64-linux-gnu/nvidia/libgstnvcustomhelper.so
+lib, /usr/lib/aarch64-linux-gnu/nvidia/libgstnvcustomhelper.so.1.0.0
+sym, /usr/lib/aarch64-linux-gnu/nvidia/libgstnvdsseimeta.so
+lib, /usr/lib/aarch64-linux-gnu/nvidia/libgstnvdsseimeta.so.1.0.0
+# Fallback to container passthrough location
+lib, /usr/share/nvidia-container-passthrough/usr/lib/aarch64-linux-gnu/nvidia/libgstnvcustomhelper.so
+lib, /usr/share/nvidia-container-passthrough/usr/lib/aarch64-linux-gnu/nvidia/libgstnvcustomhelper.so.1.0.0
+lib, /usr/share/nvidia-container-passthrough/usr/lib/aarch64-linux-gnu/nvidia/libgstnvdsseimeta.so
+lib, /usr/share/nvidia-container-passthrough/usr/lib/aarch64-linux-gnu/nvidia/libgstnvdsseimeta.so.1.0.0
+
+# Tegra platform information (required for GPU driver initialization)
+dir, /sys/devices/soc0
+dir, /proc/device-tree
+
+# YAML-CPP library (required by DeepStream plugins)
+lib, /usr/lib/libnvrm_surface.so
+lib, /usr/lib/libnvos.so
+
+# Additional Tegra libraries (pyds dependencies)
+lib, /usr/lib/libnvsocsys.so
+lib, /usr/lib/libnvtegrahv.so
+lib, /usr/lib/libnvvic.so
+lib, /usr/lib/libnvrm_stream.so
+lib, /usr/lib/libnvcolorutil.so
+
+# EGL vendor configuration (required for nvbufsurftransform)
+dir, /usr/share/glvnd/egl_vendor.d
+
+# Additional EGL/GL libraries
+
+# ========================================
+
+lib, /usr/lib/libnvdla_compiler.so
+
+lib, /usr/lib/libnvcudla.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so.1
+
+# ========================================
+
+# ========================================
+# Additional DeepStream Plugin Dependencies
+# ========================================
+
+# NVIDIA DLA runtime
+
+# GStreamer RTSP server
+
+# JSON GLib
+
+# Pango text rendering
+
+# NVIDIA DLA runtime
+lib, /usr/lib/libnvdla_runtime.so
+
+# GStreamer RTSP server
+lib, /usr/lib/libgstrtspserver-1.0.so.0
+lib, /usr/lib/libgstrtspserver-1.0.so.0.2212.0
+
+# JSON GLib
+lib, /usr/lib/libjson-glib-1.0.so.0
+lib, /usr/lib/libjson-glib-1.0.so.0.800.0
+
+# Pango text rendering
+lib, /usr/lib/libpango-1.0.so.0
+lib, /usr/lib/libpango-1.0.so.0.5200.1
+lib, /usr/lib/libpangocairo-1.0.so.0
+lib, /usr/lib/libpangocairo-1.0.so.0.5200.1
+lib, /usr/lib/libpangoft2-1.0.so.0
+lib, /usr/lib/libpangoft2-1.0.so.0.5200.1
+
+# Symlinks for GStreamer plugin dependencies
+sym, /usr/lib/libpango-1.0.so.0
+sym, /usr/lib/libpangocairo-1.0.so.0
+sym, /usr/lib/libpangoft2-1.0.so.0
+sym, /usr/lib/libjson-glib-1.0.so.0
+sym, /usr/lib/libgstrtspserver-1.0.so.0
+
+# FriBidi (BiDirectional text support for Pango)
+sym, /usr/lib/libfribidi.so.0
+lib, /usr/lib/libfribidi.so.0.4.0
+
+# DeepStream dewarper library (needed by deepstream_bins plugin)
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dewarper.so
+
+# HarfBuzz (text shaping for Pango)
+sym, /usr/lib/libharfbuzz.so.0
+lib, /usr/lib/libharfbuzz.so.0.60830.0
+
+# ==========================================
+# Additional Dependencies for DeepStream Container
+# ==========================================
+
+# YAML C++ library 0.7 (required by DeepStream plugins, different from container's 0.8)
+sym, /usr/lib/libyaml-cpp.so.0.7
+lib, /usr/lib/libyaml-cpp.so.0.7.0
+
+# EGL libraries for GPU-accelerated operations
+sym, /usr/lib/libEGL.so.1
+lib, /usr/lib/libEGL.so.1.1.0
+lib, /usr/lib/libEGL_nvidia.so.0
+lib, /usr/lib/aarch64-linux-gnu/tegra-egl/libEGL_nvidia.so.0
+
+# ========================================
+# DeepStream 7.1 Complete Dependencies
+# ========================================
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so.1.16.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_A2Vtemplate.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_audioimpl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_videoimpl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_alignment_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_common.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_depth2point_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_depth_datasource.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_gl_datarender.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_gles_ensemble_render.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_glprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_infer_postprocess_lidar_detection.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_lidar_preprocess_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_multisensor_mixer.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_sensor_fusion_cluster.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_v2x_infer_custom_postprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_v2x_infer_custom_preprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_video_databridge.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_audio_allocator.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_audiotransform.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_batch_jpegenc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_csvparser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_custom_sequence_preprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dewarper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dsanalytics.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer_custom_parser_audio.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infercustomparser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_inferlogger.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_inferutils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidar_custom_postprocess_impl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidar_custom_preprocess_impl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidarfileread.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidarfilewrite.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_logger.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_mem_allocator.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_mqtt_proto.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgbroker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv.so.1.0.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv_audio.so.1.0.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvtxhelper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_dgpu.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_jetson.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_orin.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_osd.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_rest_server.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_asr_grpc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_audio_proto.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_tts.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_service_maker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_utils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_vpicanmatch.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_yml_parser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_3d_gst.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_audio.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_customhelper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_helper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_inferbase.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_ipcmeta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_smartrecord.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_tensor.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libpostprocess_impl.so
+
+# DeepStream GStreamer plugins directory
+lib, /usr/lib/gstreamer-1.0/deepstream/libcustom2d_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libgstnvvideoconvert.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgstA2Vtemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dbridge.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dfilter.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dmixer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_audiotemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_deepstream_bins.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dewarper.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsanalytics.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsexample.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_infer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_inferaudio.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_logger.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_metamux.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgbroker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgconv.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistream.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistreamtiler.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvmultiurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_of.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_ofvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_osd.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_postprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_segvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_text_to_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_tracker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_videotemplate.so
+
+# GL/GLES libraries for GPU-accelerated operations
+sym, /usr/lib/libGLESv2.so.2
+lib, /usr/lib/libGLESv2.so.2.1.0
+lib, /usr/lib/libGLESv2_nvidia.so.2
+sym, /usr/lib/libGLESv1_CM.so.1
+lib, /usr/lib/libGLESv1_CM.so.1.2.0
+lib, /usr/lib/libGLESv1_CM_nvidia.so.1
+sym, /usr/lib/libGLdispatch.so.0
+lib, /usr/lib/libGLdispatch.so.0.0.0
+
+# DRM devices for EGL/headless GPU operations
+dev-char, /dev/dri/card0
+dev-char, /dev/dri/renderD128
+sym, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so.1
+sym, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv.so
+sym, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv_audio.so
+
+# GStreamer DeepStream plugins (mounted individually)
+lib, /usr/lib/gstreamer-1.0/deepstream/libcustom2d_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libgstnvvideoconvert.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgstA2Vtemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dbridge.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dfilter.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dmixer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_audiotemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_deepstream_bins.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dewarper.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsanalytics.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsexample.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_infer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_inferaudio.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_logger.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_metamux.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgbroker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgconv.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistream.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistreamtiler.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvmultiurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_of.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_ofvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_osd.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_postprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_segvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_text_to_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_tracker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_videotemplate.so
+
+# DeepStream Components - Added Wed Dec 17 19:12:21 UTC 2025
+# Merged from deepstream_components.csv
+
+dir, /opt/nvidia/deepstream/deepstream-7.1/lib
+dir, /usr/lib/aarch64-linux-gnu/gstreamer-1.0/deepstream
+dir, /usr/lib/gstreamer-1.0/deepstream
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcivetweb.so.1.16.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_A2Vtemplate.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_audioimpl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libcustom_videoimpl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_alignment_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_common.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_depth2point_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_depth_datasource.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_gl_datarender.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_gles_ensemble_render.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_glprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_infer_postprocess_lidar_detection.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_lidar_preprocess_datafilter.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_multisensor_mixer.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_sensor_fusion_cluster.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_v2x_infer_custom_postprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_v2x_infer_custom_preprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_3d_video_databridge.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_audio_allocator.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_audiotransform.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_batch_jpegenc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_csvparser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_custom_sequence_preprocess.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dewarper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_dsanalytics.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infer_custom_parser_audio.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_infercustomparser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_inferlogger.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_inferutils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidar_custom_postprocess_impl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidar_custom_preprocess_impl.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidarfileread.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_lidarfilewrite.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_logger.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_mem_allocator.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_mqtt_proto.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgbroker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv.so.1.0.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_msgconv_audio.so.1.0.0
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvtxhelper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_dgpu.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_jetson.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_opticalflow_orin.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_osd.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_rest_server.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_asr_grpc.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_audio_proto.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_riva_tts.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_service_maker.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_utils.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_vpicanmatch.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_yml_parser.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_3d_gst.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_audio.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_customhelper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_helper.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_inferbase.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_ipcmeta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_meta.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_smartrecord.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libnvdsgst_tensor.so
+lib, /opt/nvidia/deepstream/deepstream-7.1/lib/libpostprocess_impl.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libcustom2d_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libgstnvvideoconvert.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgstA2Vtemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dbridge.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dfilter.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_3dmixer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_audiotemplate.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_deepstream_bins.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dewarper.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsanalytics.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_dsexample.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_infer.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_inferaudio.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_logger.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_metamux.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgbroker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_msgconv.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistream.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_multistreamtiler.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvmultiurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_nvurisrcbin.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_of.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_ofvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_osd.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_postprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_preprocess.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_segvisual.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_text_to_speech.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_tracker.so
+lib, /usr/lib/gstreamer-1.0/deepstream/libnvdsgst_videotemplate.so

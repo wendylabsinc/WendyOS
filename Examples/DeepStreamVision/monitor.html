@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepStream Vision Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .status.online {
+            background: #10b981;
+            color: white;
+        }
+
+        .status.offline {
+            background: #ef4444;
+            color: white;
+        }
+
+        .status.checking {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card h2 .indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #94a3b8;
+        }
+
+        .card h2 .indicator.online {
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+        }
+
+        .card h2 .indicator.offline {
+            background: #ef4444;
+        }
+
+        .metric {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .metric-label {
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        .metric-value {
+            color: #1e293b;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .descriptions {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .description-item {
+            background: #f8fafc;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            display: flex;
+            gap: 15px;
+        }
+
+        .description-item .image-container {
+            flex-shrink: 0;
+        }
+
+        .description-item .image-container img {
+            width: 150px;
+            height: auto;
+            border-radius: 5px;
+            object-fit: cover;
+        }
+
+        .description-item .content {
+            flex: 1;
+        }
+
+        .description-item .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .description-item .timestamp {
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .description-item .class-badge {
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .description-item .text {
+            color: #334155;
+            line-height: 1.6;
+        }
+
+        .description-item .meta {
+            color: #94a3b8;
+            font-size: 11px;
+            margin-top: 8px;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .logs-section {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .log-line {
+            margin: 5px 0;
+            padding: 2px 0;
+        }
+
+        .log-line.error {
+            color: #f87171;
+        }
+
+        .log-line.warning {
+            color: #fbbf24;
+        }
+
+        .log-line.success {
+            color: #34d399;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 DeepStream Vision Monitor</h1>
+            <p style="color: #64748b; margin: 10px 0;">Real-time monitoring for YOLO11 + Qwen2.5-VL on Jetson Orin Nano</p>
+            <div style="margin: 15px 0; display: flex; align-items: center; gap: 10px;">
+                <label style="color: #64748b; font-weight: 500;">Device:</label>
+                <input type="text" id="device-input" value="wendyos-tender-oar.local"
+                       style="padding: 8px 12px; border: 2px solid #e2e8f0; border-radius: 5px; font-size: 14px; flex: 1; max-width: 300px;">
+                <button class="btn" onclick="updateDevice()">Update</button>
+                <span class="status checking" id="overall-status">Checking...</span>
+            </div>
+            <div style="margin-top: 10px;">
+                <button class="btn" onclick="refreshAll()">🔄 Refresh All</button>
+                <button class="btn" onclick="testVLM()">🖼️ Test VLM</button>
+                <button class="btn" onclick="toggleLogs()">📋 Toggle Logs</button>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2><span class="indicator" id="detector-indicator"></span>DeepStream Detector</h2>
+                <div class="metric">
+                    <span class="metric-label">Status</span>
+                    <span class="metric-value" id="detector-status">Checking...</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">FPS</span>
+                    <span class="metric-value" id="detector-fps">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Detections</span>
+                    <span class="metric-value" id="detector-detections">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Endpoint</span>
+                    <span class="metric-value" style="font-size: 12px;">:9090/metrics</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2><span class="indicator" id="vlm-indicator"></span>VLM Service</h2>
+                <div class="metric">
+                    <span class="metric-label">Status</span>
+                    <span class="metric-value" id="vlm-status">Checking...</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Model</span>
+                    <span class="metric-value" id="vlm-model">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">GPU Memory</span>
+                    <span class="metric-value" id="vlm-memory">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Endpoint</span>
+                    <span class="metric-value" style="font-size: 12px;">:8090</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2><span class="indicator" id="gpu-indicator"></span>GPU Stats</h2>
+                <div class="metric">
+                    <span class="metric-label">Status</span>
+                    <span class="metric-value" id="gpu-status">Checking...</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Utilization</span>
+                    <span class="metric-value" id="gpu-util">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Memory Used</span>
+                    <span class="metric-value" id="gpu-mem">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Temperature</span>
+                    <span class="metric-value" id="gpu-temp">-</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Live Video Stream -->
+        <div class="card full-width" style="max-width: 100%;">
+            <h2><span class="indicator online" id="video-indicator"></span>Live Detection Stream</h2>
+            <div style="width: 100%; text-align: center; background: #000; border-radius: 8px; overflow: hidden;">
+                <img id="video-stream"
+                     src="http://localhost:8080/api/detector/stream"
+                     style="max-width: 100%; height: auto; display: block; margin: 0 auto;"
+                     alt="Live video stream with detections"
+                     onerror="this.style.display='none'; document.getElementById('video-error').style.display='block';">
+                <div id="video-error" style="display: none; padding: 40px; color: #94a3b8;">
+                    <p>Stream unavailable. Make sure the detector is running and the local proxy is active.</p>
+                    <p style="font-size: 14px; margin-top: 10px;">Run: python3 local_proxy.py wendyos-tender-oar.local</p>
+                </div>
+            </div>
+            <div class="metric" style="margin-top: 15px;">
+                <span class="metric-label">Stream Endpoint</span>
+                <span class="metric-value" style="font-size: 12px;">http://localhost:8080/api/detector/stream</span>
+            </div>
+        </div>
+
+        <div class="card full-width">
+            <h2>🎯 Detection Classes (YOLO11)</h2>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px;">
+                <span style="background: #e0e7ff; color: #3730a3; padding: 5px 15px; border-radius: 20px; font-size: 13px;">person</span>
+                <span style="background: #dbeafe; color: #1e40af; padding: 5px 15px; border-radius: 20px; font-size: 13px;">bicycle</span>
+                <span style="background: #fef3c7; color: #92400e; padding: 5px 15px; border-radius: 20px; font-size: 13px;">car</span>
+                <span style="background: #fecaca; color: #991b1b; padding: 5px 15px; border-radius: 20px; font-size: 13px;">motorcycle</span>
+                <span style="background: #d1fae5; color: #065f46; padding: 5px 15px; border-radius: 20px; font-size: 13px;">bus</span>
+                <span style="background: #e0e7ff; color: #3730a3; padding: 5px 15px; border-radius: 20px; font-size: 13px;">truck</span>
+                <span style="background: #fce7f3; color: #831843; padding: 5px 15px; border-radius: 20px; font-size: 13px;">...and 74 more COCO classes</span>
+            </div>
+        </div>
+
+        <div class="card full-width" id="descriptions-card">
+            <h2>💬 VLM Descriptions <span id="vlm-desc-count" style="font-size: 14px; color: #64748b; font-weight: normal;"></span></h2>
+            <div class="descriptions" id="descriptions-container">
+                <p style="color: #64748b;">Loading VLM descriptions...</p>
+            </div>
+        </div>
+
+        <div class="card full-width" id="logs-card" style="display: none;">
+            <h2>📋 System Logs</h2>
+            <div class="logs-section" id="logs-container">
+                <div class="log-line">Initializing monitor...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Use local proxy server (runs on localhost:8080)
+        const BASE_URL = 'http://localhost:8080';
+        let descriptions = [];
+
+        function updateDevice() {
+            log('Device configuration handled by local proxy server', 'info');
+            log('To change device, restart local_proxy.py with new hostname', 'info');
+            refreshAll();
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            log('Monitor started - using local proxy at localhost:8080', 'success');
+            document.getElementById('device-input').value = 'Configured via proxy';
+            document.getElementById('device-input').disabled = true;
+        });
+
+        function log(message, type = 'info') {
+            const logsContainer = document.getElementById('logs-container');
+            const logLine = document.createElement('div');
+            logLine.className = `log-line ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            logLine.textContent = `[${timestamp}] ${message}`;
+            logsContainer.appendChild(logLine);
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        async function checkService(endpoint, name) {
+            try {
+                log(`Checking ${name}...`, 'info');
+                const response = await fetch(`${BASE_URL}${endpoint}`);
+                if (response.ok) {
+                    log(`✓ ${name} is online`, 'success');
+                    return await response.text();
+                }
+                throw new Error(`HTTP ${response.status}`);
+            } catch (error) {
+                log(`✗ ${name} failed: ${error.message}`, 'error');
+                console.error(`Error fetching ${url}:`, error);
+                return null;
+            }
+        }
+
+        async function checkDetector() {
+            const data = await checkService('/api/detector/metrics', 'Detector');
+            const indicator = document.getElementById('detector-indicator');
+            const status = document.getElementById('detector-status');
+
+            if (data) {
+                indicator.classList.add('online');
+                status.textContent = '✅ Online';
+
+                // Parse FPS
+                const fpsMatch = data.match(/deepstream_fps{[^}]*}\s+([\d.]+)/);
+                if (fpsMatch) {
+                    document.getElementById('detector-fps').textContent = parseFloat(fpsMatch[1]).toFixed(1);
+                }
+
+                // Parse detections - sum all detections across all classes
+                const detectionsMatches = data.matchAll(/deepstream_detections_total{[^}]*}\s+([\d.]+)/g);
+                let totalDetections = 0;
+                for (const match of detectionsMatches) {
+                    totalDetections += parseInt(match[1]);
+                }
+                if (totalDetections > 0) {
+                    document.getElementById('detector-detections').textContent = totalDetections;
+                }
+            } else {
+                indicator.classList.remove('online');
+                indicator.classList.add('offline');
+                status.textContent = '❌ Offline';
+            }
+        }
+
+        async function checkVLM() {
+            const data = await checkService('/api/vlm/stats', 'VLM');
+            const indicator = document.getElementById('vlm-indicator');
+            const status = document.getElementById('vlm-status');
+
+            if (data) {
+                try {
+                    const json = JSON.parse(data);
+                    indicator.classList.add('online');
+                    status.textContent = '✅ Online';
+                    document.getElementById('vlm-model').textContent = 'Qwen2.5-VL-3B-Instruct';
+                    document.getElementById('vlm-memory').textContent =
+                        `${(json.memory_allocated_gb || 0).toFixed(2)}GB`;
+                } catch (e) {
+                    indicator.classList.add('online');
+                    status.textContent = '✅ Online';
+                }
+            } else {
+                indicator.classList.remove('online');
+                indicator.classList.add('offline');
+                status.textContent = '❌ Offline';
+            }
+        }
+
+        async function checkGPU() {
+            const data = await checkService('/api/gpu/metrics', 'GPU Stats');
+            const indicator = document.getElementById('gpu-indicator');
+            const status = document.getElementById('gpu-status');
+
+            if (data) {
+                indicator.classList.add('online');
+                status.textContent = '✅ Online';
+
+                // Parse GPU metrics
+                const utilMatch = data.match(/jetson_gpu_utilization_percent\s+([\d.]+)/);
+                if (utilMatch) {
+                    document.getElementById('gpu-util').textContent = `${parseFloat(utilMatch[1]).toFixed(0)}%`;
+                }
+
+                const memMatch = data.match(/jetson_gpu_memory_used_mb\s+([\d.]+)/);
+                if (memMatch) {
+                    const memMB = parseFloat(memMatch[1]);
+                    document.getElementById('gpu-mem').textContent = `${(memMB / 1024).toFixed(2)}GB`;
+                }
+
+                const tempMatch = data.match(/jetson_gpu_temperature_celsius\s+([\d.]+)/);
+                if (tempMatch) {
+                    document.getElementById('gpu-temp').textContent = `${parseFloat(tempMatch[1]).toFixed(1)}°C`;
+                }
+            } else {
+                indicator.classList.remove('online');
+                indicator.classList.add('offline');
+                status.textContent = '❌ Offline';
+            }
+        }
+
+        async function testVLM() {
+            log('Testing VLM with sample request...', 'info');
+
+            const testImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+            try {
+                const response = await fetch(`http://${DEVICE}:8090/describe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: testImage,
+                        prompt: 'What do you see in this image?'
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    log(`VLM responded: ${result.description.substring(0, 50)}...`, 'success');
+                    addDescription(result.description);
+                } else {
+                    log(`VLM test failed: HTTP ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`VLM test error: ${error.message}`, 'error');
+            }
+        }
+
+        async function fetchVLMDescriptions() {
+            try {
+                const response = await fetch(`${BASE_URL}/api/detector/vlm_descriptions`);
+                if (response.ok) {
+                    const data = await response.json();
+                    renderDescriptions(data.descriptions);
+                    document.getElementById('vlm-desc-count').textContent = `(${data.count} recent)`;
+                    return true;
+                }
+            } catch (error) {
+                console.log('VLM descriptions fetch error:', error);
+            }
+            return false;
+        }
+
+        function renderDescriptions(descriptions) {
+            const container = document.getElementById('descriptions-container');
+
+            if (!descriptions || descriptions.length === 0) {
+                container.innerHTML = '<p style="color: #64748b;">No VLM descriptions yet. Waiting for high-confidence detections...</p>';
+                return;
+            }
+
+            container.innerHTML = descriptions.map(d => {
+                const timestamp = new Date(d.timestamp).toLocaleTimeString();
+                const trackInfo = d.track_id ? `Track #${d.track_id}` : 'No track';
+                return `
+                <div class="description-item">
+                    <div class="image-container">
+                        <img src="data:image/jpeg;base64,${d.image_b64}" alt="${d.class_name} detection">
+                    </div>
+                    <div class="content">
+                        <div class="header">
+                            <span class="class-badge">${d.class_name}</span>
+                            <span class="timestamp">${timestamp}</span>
+                        </div>
+                        <div class="text">${d.description}</div>
+                        <div class="meta">${trackInfo} | ${d.stream_name} | ${d.latency_ms}ms</div>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function addDescription(text) {
+            // Legacy function for manual test
+            const container = document.getElementById('descriptions-container');
+            const item = document.createElement('div');
+            item.className = 'description-item';
+            item.innerHTML = `
+                <div class="content">
+                    <div class="timestamp">${new Date().toLocaleTimeString()}</div>
+                    <div class="text">${text}</div>
+                </div>
+            `;
+            container.insertBefore(item, container.firstChild);
+        }
+
+        function toggleLogs() {
+            const logsCard = document.getElementById('logs-card');
+            logsCard.style.display = logsCard.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function refreshAll() {
+            log('Refreshing all services...', 'info');
+            document.getElementById('overall-status').textContent = 'Checking...';
+            document.getElementById('overall-status').className = 'status checking';
+
+            await Promise.all([
+                checkDetector(),
+                checkVLM(),
+                checkGPU(),
+                fetchVLMDescriptions()
+            ]);
+
+            // Check overall status
+            const allOnline =
+                document.getElementById('detector-indicator').classList.contains('online') &&
+                document.getElementById('vlm-indicator').classList.contains('online') &&
+                document.getElementById('gpu-indicator').classList.contains('online');
+
+            const status = document.getElementById('overall-status');
+            if (allOnline) {
+                status.textContent = '✅ All Services Online';
+                status.className = 'status online';
+                log('All services are healthy', 'success');
+            } else {
+                status.textContent = '⚠️ Some Services Offline';
+                status.className = 'status offline';
+                log('Some services are not responding', 'warning');
+            }
+        }
+
+        // Initial check
+        log('Monitor started', 'success');
+        refreshAll();
+
+        // Auto-refresh every 5 seconds
+        setInterval(refreshAll, 5000);
+    </script>
+</body>
+</html>

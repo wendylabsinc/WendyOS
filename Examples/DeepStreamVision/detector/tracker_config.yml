@@ -1,0 +1,63 @@
+%YAML:1.0
+################################################################################
+# NvDCF Tracker Configuration for DeepStream 7.1
+# Based on: config_tracker_NvDCF_perf.yml from NVIDIA samples
+# Optimized for Jetson Orin with YOLO11n detection
+################################################################################
+
+BaseConfig:
+  minDetectorConfidence: 0.0    # Use nvinfer's threshold, don't filter here
+
+TargetManagement:
+  enableBboxUnClipping: 1       # Unclip bbox if near image border
+  maxTargetsPerStream: 150      # Max objects to track per stream
+
+  # Creation & Termination Policy
+  minIouDiff4NewTarget: 0.5     # IOU threshold for creating new vs existing target
+  minTrackerConfidence: 0.2     # Below this, track in shadow mode
+  probationAge: 3               # Frames before track is confirmed
+  maxShadowTrackingAge: 30      # Frames to predict without detection
+  earlyTerminationAge: 1        # Kill unconfirmed tracks early
+
+TrajectoryManagement:
+  useUniqueID: 0                # Use simple IDs (not 64-bit unique)
+
+DataAssociator:
+  dataAssociatorType: 0         # DEFAULT
+  associationMatcherType: 0     # GREEDY (faster than GLOBAL)
+  checkClassMatch: 1            # Only associate same-class objects
+
+  # Thresholds for valid association candidates
+  minMatchingScore4Overall: 0.0
+  minMatchingScore4SizeSimilarity: 0.5
+  minMatchingScore4Iou: 0.0
+  minMatchingScore4VisualSimilarity: 0.6
+
+  # Weights for association scoring
+  matchingScoreWeight4VisualSimilarity: 0.6
+  matchingScoreWeight4SizeSimilarity: 0.0
+  matchingScoreWeight4Iou: 0.4
+
+StateEstimator:
+  stateEstimatorType: 1         # SIMPLE (faster on Jetson than REGULAR)
+
+  # Kalman filter noise parameters
+  processNoiseVar4Loc: 2.0      # Process noise for bbox center
+  processNoiseVar4Size: 1.0     # Process noise for bbox size
+  processNoiseVar4Vel: 0.1      # Process noise for velocity
+  measurementNoiseVar4Detector: 4.0   # Detector measurement noise
+  measurementNoiseVar4Tracker: 16.0   # Tracker localization noise
+
+VisualTracker:
+  visualTrackerType: 1          # NvDCF
+
+  # Feature Extraction
+  useColorNames: 1              # Color histogram features (good for vehicles)
+  useHog: 0                     # HOG disabled (slower, marginal benefit)
+  featureImgSizeLevel: 2        # 1-5, 2 is balanced for Jetson
+  featureFocusOffsetFactor_y: -0.2  # Focus slightly above center (better for people)
+
+  # Correlation Filter
+  filterLr: 0.075               # DCF filter learning rate
+  filterChannelWeightsLr: 0.1   # Channel weights learning rate
+  gaussianSigma: 0.75           # Gaussian sigma for desired response

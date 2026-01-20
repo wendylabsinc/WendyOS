@@ -1,0 +1,47 @@
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+onnx-file=/app/yolo11n.onnx
+model-engine-file=/app/model_b2_gpu0_fp16.engine
+labelfile-path=/app/labels.txt
+batch-size=2
+network-mode=2
+num-detected-classes=80
+interval=1
+gie-unique-id=1
+process-mode=1
+
+# Network type: 0=detector (standard for YOLO)
+network-type=0
+
+# Cluster mode: 2=NMS (required for YOLO)
+cluster-mode=2
+
+# YOLO11 uses center padding - REQUIRED for proper detection
+maintain-aspect-ratio=1
+symmetric-padding=1
+
+# Network input configuration
+model-color-format=0
+
+# Input dimensions for ONNX model (CHW format: 3 channels, 640x640)
+# Required when ONNX has dynamic dimensions (exported with --dynamic)
+infer-dims=3;640;640
+
+# Force implicit batch dimension (required for dynamic ONNX models)
+force-implicit-batch-dim=1
+
+# Custom YOLO library from https://github.com/marcoslucianops/DeepStream-Yolo
+custom-lib-path=/app/lib/libnvdsinfer_custom_impl_Yolo.so
+
+# Custom engine builder - builds TensorRT engine with YOLO optimizations
+engine-create-func-name=NvDsInferYoloCudaEngineGet
+
+# Custom parse function - parses YOLO output tensors
+parse-bbox-func-name=NvDsInferParseYolo
+
+[class-attrs-all]
+nms-iou-threshold=0.45
+# Raised from 0.25 to 0.4 to reduce false positives (e.g. motorcycle→airplane)
+pre-cluster-threshold=0.4
+topk=300
