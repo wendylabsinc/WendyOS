@@ -149,7 +149,8 @@ struct AgentConnectionOptions: ParsableArguments {
         ) { _ in
             while true {
                 try Task.checkCancellation()
-                let devices = try await discovery.findAllDevices()
+                // Skip BLE - only LAN is usable for gRPC commands like `wendy run`
+                let devices = try await discovery.findDevices(includeBluetooth: false)
                     .groupedDevices()
                     .filter { $0.interfaces.contains(where: { $0.type == "LAN" }) }
 

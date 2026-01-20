@@ -16,16 +16,35 @@ extension DeviceDiscovery {
 
 extension DeviceDiscovery {
     public func findAllDevices() async throws -> DevicesCollection {
-        async let usbDevices = findUSBDevices()
-        async let ethernetDevices = findEthernetInterfaces()
-        async let lanDevices = findLANDevices()
-        async let bluetoothDevices = findBluetoothDevices()
+        try await findDevices(includeBluetooth: true)
+    }
 
-        return try await DevicesCollection(
-            usb: usbDevices,
-            ethernet: ethernetDevices,
-            lan: lanDevices,
-            bluetooth: bluetoothDevices
-        )
+    /// Find devices with optional Bluetooth scanning.
+    /// BLE scan takes 5+ seconds, so skip when not needed (e.g., `wendy run`).
+    public func findDevices(includeBluetooth: Bool) async throws -> DevicesCollection {
+        if includeBluetooth {
+            async let usbDevices = findUSBDevices()
+            async let ethernetDevices = findEthernetInterfaces()
+            async let lanDevices = findLANDevices()
+            async let bluetoothDevices = findBluetoothDevices()
+
+            return try await DevicesCollection(
+                usb: usbDevices,
+                ethernet: ethernetDevices,
+                lan: lanDevices,
+                bluetooth: bluetoothDevices
+            )
+        } else {
+            async let usbDevices = findUSBDevices()
+            async let ethernetDevices = findEthernetInterfaces()
+            async let lanDevices = findLANDevices()
+
+            return try await DevicesCollection(
+                usb: usbDevices,
+                ethernet: ethernetDevices,
+                lan: lanDevices,
+                bluetooth: []
+            )
+        }
     }
 }

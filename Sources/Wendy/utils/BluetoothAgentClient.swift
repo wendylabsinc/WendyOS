@@ -3,8 +3,10 @@ import Foundation
 import Logging
 import NIOCore
 import NIOFoundationCompat
+import SwiftProtobuf
 import WendyAgentGRPC
 import WendyShared
+
 
 /// Client for communicating with a WendyOS agent over Bluetooth L2CAP
 ///
@@ -385,7 +387,7 @@ actor BluetoothAgentClient {
             buffer.writeData(data)
 
             // Try to read a length-prefixed message (2-byte big-endian length prefix)
-            if let message = buffer.readLengthPrefixed(endianness: .big, as: UInt16.self) {
+            if let message = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self) {
                 return message
             }
         }
