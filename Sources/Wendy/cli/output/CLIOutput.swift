@@ -19,6 +19,15 @@ public protocol CLIOutput: Sendable {
     /// Emit a table with headers and rows
     func table(headers: [String], rows: [[String]])
 
+    /// Display a streaming table that updates in real-time.
+    /// In interactive mode, shows a live-updating table.
+    /// In JSON mode, emits each update as a JSON line.
+    func streamingTable<T: Encodable & Sendable>(
+        initial: T,
+        updates: AsyncStream<T>,
+        renderTable: @escaping @Sendable (T) -> (headers: [String], rows: [[String]])
+    ) async
+
     /// Select an item from a table interactively. Returns the index of the selected row.
     /// In JSON mode, this throws an error requiring explicit selection via CLI args.
     func selectFromTable(
@@ -136,6 +145,28 @@ extension CLIOutput {
         // Default: just print each line as it comes
         try await operation { @Sendable line in
             print(line)
+        }
+    }
+
+    public func streamingTable<T: Encodable & Sendable>(
+        initial: T,
+        updates: AsyncStream<T>,
+        renderTable: @Sendable (T) -> (headers: [String], rows: [[String]])
+    ) async {
+        // Default: print each update as JSON
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(initial),
+           let string = String(data: data, encoding: .utf8) {
+            print(string)
+            fflush(stdout)
+        }
+        for await update in updates {
+            if let data = try? encoder.encode(update),
+               let string = String(data: data, encoding: .utf8) {
+                print(string)
+                fflush(stdout)
+            }
         }
     }
 }

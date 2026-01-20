@@ -40,6 +40,38 @@ public struct NooraRenderer: CLIOutput, Sendable {
         Noora().table(headers: headers, rows: rows)
     }
 
+    public func streamingTable<T: Encodable & Sendable>(
+        initial: T,
+        updates: AsyncStream<T>,
+        renderTable: @escaping @Sendable (T) -> (headers: [String], rows: [[String]])
+    ) async {
+        let initialRendered = renderTable(initial)
+        let tableData = TableData(
+            columns: initialRendered.headers.map { TableColumn(title: $0) },
+            rows: initialRendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) } }
+        )
+
+        // Convert AsyncStream<T> to AsyncStream<TableData> for Noora
+        let (stream, continuation) = AsyncStream<TableData>.makeStream()
+
+        // Use async let to run producer and consumer concurrently with structured concurrency
+        async let producer: Void = {
+            for await value in updates {
+                let rendered = renderTable(value)
+                let tableData = TableData(
+                    columns: rendered.headers.map { TableColumn(title: $0) },
+                    rows: rendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) } }
+                )
+                continuation.yield(tableData)
+            }
+            continuation.finish()
+        }()
+
+        async let consumer: Void = Noora().table(tableData, updates: stream)
+
+        _ = await (producer, consumer)
+    }
+
     public func selectFromTable(
         title: String?,
         headers: [String],

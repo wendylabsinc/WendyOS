@@ -270,16 +270,6 @@ public struct DevicesCollection: Encodable, Sendable {
             }
         }
 
-        /// Stable sort key for consistent ordering of devices with same name
-        var sortKey: String {
-            switch self {
-            case .usb(let device): return device.serialNumber ?? "\(device.vendorId)-\(device.productId)"
-            case .ethernet(let device): return device.name
-            case .lan(let device): return device.hostname
-            case .bluetooth(let device): return device.id
-            }
-        }
-
         public var description: String {
             var string = ""
             switch self {
