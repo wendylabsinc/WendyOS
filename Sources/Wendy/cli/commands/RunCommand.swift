@@ -628,8 +628,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 options: executableTargets
             )
         }
+        // Use the executable target name for image naming to match what swift container plugin uses
+        let appName = executableTarget.name.lowercased()
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let appName = url.lastPathComponent.lowercased()
 
         try await withAgentGRPCClientAndEndpoint(
             agentConnectionOptions,
