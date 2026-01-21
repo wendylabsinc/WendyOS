@@ -21,7 +21,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.1.0"),
         .package(url: "https://github.com/grpc/grpc-swift-extras.git", from: "2.1.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
-        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.5.0"),
+        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
         .package(
             url: "https://github.com/grpc/grpc-swift-nio-transport.git",
             from: "2.3.0"
@@ -108,6 +108,7 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "Hummingbird", package: "hummingbird"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
@@ -144,6 +145,7 @@ let package = Package(
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .target(name: "OpenTelemetryGRPC"),
             ]
         ),
         .target(

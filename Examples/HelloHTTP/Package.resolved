@@ -1,5 +1,5 @@
 {
-  "originHash" : "78d7a3ea6877e8944db01604482698e7cfa6e54bd2cd3a3933db431a16c8315e",
+  "originHash" : "afb8e80250550f91bb24658a32c78cfdfe714da9734c5eaf6946c4ddea1fbde4",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -56,6 +56,15 @@
       }
     },
     {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
+        "version" : "1.7.0"
+      }
+    },
+    {
       "identity" : "swift-asn1",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
@@ -98,6 +107,15 @@
       "state" : {
         "revision" : "671108c96644956dddcd89dd59c203dcdb36cec7",
         "version" : "1.1.4"
+      }
+    },
+    {
+      "identity" : "swift-container-plugin",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-container-plugin",
+      "state" : {
+        "revision" : "197fb15bec2674e0520e0139395a5e4f1faf9da7",
+        "version" : "1.2.0"
       }
     },
     {

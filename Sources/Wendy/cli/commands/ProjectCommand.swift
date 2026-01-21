@@ -80,8 +80,16 @@ struct ListCommand: ModifyProjectCommand {
 
         // Check if wendy.json exists
         guard FileManager.default.fileExists(atPath: wendyJsonPath) else {
-            print("❌ No wendy.json found in current directory")
-            print("Run 'wendy project init' to initialize a new project")
+            if JSONMode.isEnabled {
+                JSONErrorResponse(
+                    error: "config_not_found",
+                    reason: "No wendy.json found in current directory",
+                    suggestion: "Run 'wendy project init' to initialize a new project"
+                ).print()
+            } else {
+                print("❌ No wendy.json found in current directory")
+                print("Run 'wendy project init' to initialize a new project")
+            }
             throw ProjectError.configNotFound(path: wendyJsonPath)
         }
 

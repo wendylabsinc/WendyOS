@@ -24,9 +24,6 @@ struct WiFiCommand: AsyncParsableCommand {
             abstract: "List available WiFi networks."
         )
 
-        @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-        var json: Bool = false
-
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
@@ -37,7 +34,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
                 let request = Wendy_Agent_Services_V1_ListWiFiNetworksRequest()
 
-                if json {
+                if JSONMode.isEnabled {
                     return try await agent.listWiFiNetworks(request).networks
                 } else {
                     return try await Noora().progressStep(
@@ -52,8 +49,12 @@ struct WiFiCommand: AsyncParsableCommand {
             }
 
             if networks.count == 0 {
-                Noora().info("No WiFi networks found.")
-            } else if json {
+                if JSONMode.isEnabled {
+                    print("[]")
+                } else {
+                    Noora().info("No WiFi networks found.")
+                }
+            } else if JSONMode.isEnabled {
                 let networksJSON = try formatNetworksAsJSON(networks)
                 print(networksJSON)
             } else {
@@ -104,9 +105,6 @@ struct WiFiCommand: AsyncParsableCommand {
         @Option(name: .shortAndLong, help: "Password for the WiFi network")
         var password: String?
 
-        @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-        var json: Bool = false
-
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
@@ -120,17 +118,22 @@ struct WiFiCommand: AsyncParsableCommand {
 
                 if let _ssid = self.ssid {
                     ssid = _ssid
+                } else if JSONMode.isEnabled {
+                    jsonModeRequiresArgument(
+                        argument: "ssid",
+                        description: "Provide --ssid <network_name> to specify the WiFi network"
+                    )
                 } else {
                     ssid = try await agent.discoverSSID()
                 }
 
                 if let _password = self.password {
                     password = _password
-                } else if json {
+                } else if JSONMode.isEnabled {
                     password = ""
                 } else {
-                    password = Noora().textPrompt(
-                        title: "Enter the password for the WiFi network",
+                    password = try secureTextPrompt(
+                        title: "Enter the password for '\(ssid)'",
                         prompt: "Password"
                     )
                 }
@@ -138,7 +141,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 let logger = Logger(label: "sh.wendy.cli.wifi.connect")
                 logger.debug("Connecting to WiFi network", metadata: ["ssid": "\(ssid)"])
 
-                if json {
+                if JSONMode.isEnabled {
                     let response = try await agent.connectToWiFi(
                         ssid: ssid,
                         password: password
@@ -185,9 +188,6 @@ struct WiFiCommand: AsyncParsableCommand {
             abstract: "Check the current WiFi connection status."
         )
 
-        @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-        var json: Bool = false
-
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
@@ -202,7 +202,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 let request = Wendy_Agent_Services_V1_GetWiFiStatusRequest()
                 let response = try await agent.getWiFiStatus(request)
 
-                if json {
+                if JSONMode.isEnabled {
                     let statusJSON = try formatStatusAsJSON(response)
                     print(statusJSON)
                 } else {

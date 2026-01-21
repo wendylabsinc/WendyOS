@@ -1,10 +1,22 @@
 #!/bin/bash
+set -e
 
 ## There are times that the `./dev-update-agent.sh` doesn't work, so we need to use this script to update the agent manually.
-read -p "Enter hostname [wendyos-merry-aurora.local]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-wendyos-merry-aurora.local}
-SSH_USER=${SSH_USER:-root}
 
+# Get hostname from first argument or prompt
+if [ -n "$1" ]; then
+    HOSTNAME="$1"
+else
+    read -p "Enter hostname [wendyos-merry-aurora.local]: " HOSTNAME
+    HOSTNAME=${HOSTNAME:-wendyos-merry-aurora.local}
+fi
+
+# Add .local suffix if missing
+if [[ ! "$HOSTNAME" == *.local ]]; then
+    HOSTNAME="${HOSTNAME}.local"
+fi
+
+SSH_USER=${SSH_USER:-root}
 
 # Locally build the WendyCLI binary for the device's architecture (aarch64-swift-linux-musl) with debug not release mode.
 swiftly run swift build --scratch-path .agent-build --product wendy-agent --swift-sdk aarch64-swift-linux-musl

@@ -1,5 +1,5 @@
 {
-  "originHash" : "7f0259bd0668862885be85949530d196469c885622dec0ddda496fcbc077379b",
+  "originHash" : "f09c6b4c00fe58f00dc99095cb07944f4b77aa79e1814f247a15eee5f9158369",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/orlandos-nl/DNSClient.git",
       "state" : {
-        "revision" : "2d4174e4fbe75cc2f31d2fa2d384f486e5fe63b5",
-        "version" : "2.5.0"
+        "revision" : "ae146fd47b64df4222fdb455d520763be9b98b58",
+        "version" : "2.6.1"
       }
     },
     {
