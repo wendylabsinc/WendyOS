@@ -40,7 +40,7 @@ gi.require_version('Gst', '1.0')
 from gi.repository import GLib, Gst
 
 import pyds
-from flask import Flask, Response
+from flask import Flask, Response, request
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, REGISTRY
 
 # Import VLM client
@@ -186,6 +186,9 @@ class VLMIntegration:
         self.worker_thread = None
         self.consecutive_timeouts = 0
         self.max_consecutive_timeouts = 3  # Disable VLM after 3 consecutive timeouts
+
+        # Custom prompt override (set via API)
+        self.custom_prompt = None  # When set, overrides class-specific prompts
 
         # Auto-reconnection
         self.last_reconnect_attempt = 0
@@ -534,9 +537,9 @@ class VLMIntegration:
             # Crop detection - make a copy since frame_data may be reused
             crop = frame_data[y1:y2, x1:x2].copy()
 
-            # Get appropriate prompt for class
+            # Get appropriate prompt for class (or use custom prompt if set)
             class_name = obj_meta.obj_label if obj_meta.obj_label else 'object'
-            prompt = get_prompt_for_class(class_name)
+            prompt = self.custom_prompt if self.custom_prompt else get_prompt_for_class(class_name)
 
             # Queue the request (non-blocking)
             # Note: Pending marker already set by try_claim_for_description()
@@ -641,6 +644,36 @@ class MetricsServer:
                 'consecutive_timeouts': self.vlm_integration.consecutive_timeouts
             }
 
+        @self.app.route('/api/vlm_prompt', methods=['GET'])
+        def get_vlm_prompt():
+            """Get the current VLM prompt"""
+            if self.vlm_integration is None:
+                return {'error': 'VLM not configured'}, 503
+
+            return {
+                'custom_prompt': self.vlm_integration.custom_prompt,
+                'using_custom': self.vlm_integration.custom_prompt is not None
+            }
+
+        @self.app.route('/api/vlm_prompt', methods=['POST'])
+        def set_vlm_prompt():
+            """Set a custom VLM prompt (or clear it)"""
+            if self.vlm_integration is None:
+                return {'error': 'VLM not configured'}, 503
+
+            data = request.get_json() or {}
+            prompt = data.get('prompt')
+
+            # Empty string or None clears the custom prompt
+            if not prompt or prompt.strip() == '':
+                self.vlm_integration.custom_prompt = None
+                logger.info("VLM custom prompt cleared - using class-specific prompts")
+                return {'success': True, 'custom_prompt': None, 'using_custom': False}
+            else:
+                self.vlm_integration.custom_prompt = prompt.strip()
+                logger.info(f"VLM custom prompt set: {self.vlm_integration.custom_prompt[:50]}...")
+                return {'success': True, 'custom_prompt': self.vlm_integration.custom_prompt, 'using_custom': True}
+
         @self.app.route('/stream')
         def stream():
             """MJPEG stream endpoint with bounding boxes"""
@@ -691,7 +724,7 @@ class MetricsServer:
         logger.info(f"MJPEG stream available at http://0.0.0.0:{self.port}/stream")
 
     def _run(self):
-        self.app.run(host='0.0.0.0', port=self.port, debug=False)
+        self.app.run(host='0.0.0.0', port=self.port, debug=False, threaded=True)
 
 
 def get_frame_data_from_buffer(gst_buffer, frame_meta):

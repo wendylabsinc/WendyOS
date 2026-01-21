@@ -18,7 +18,7 @@ Then open monitor.html in your browser.
 import sys
 import logging
 import requests
-from flask import Flask, jsonify, Response
+from flask import Flask, jsonify, Response, request
 
 # Configure logging
 logging.basicConfig(
@@ -178,6 +178,30 @@ def proxy_vlm_status():
     if response:
         return jsonify(response.json())
     return jsonify({'available': False, 'reason': 'unavailable'}), 503
+
+
+@app.route('/api/detector/vlm_prompt', methods=['GET'])
+def proxy_get_vlm_prompt():
+    """Proxy to get current VLM prompt"""
+    url = f"http://{DEVICE}:9090/api/vlm_prompt"
+    response = fetch_with_timeout(url, timeout=5)
+    if response:
+        return jsonify(response.json())
+    return jsonify({'error': 'unavailable'}), 503
+
+
+@app.route('/api/detector/vlm_prompt', methods=['POST'])
+def proxy_set_vlm_prompt():
+    """Proxy to set VLM prompt"""
+    url = f"http://{DEVICE}:9090/api/vlm_prompt"
+    try:
+        response = requests.post(url, json=request.get_json(), timeout=5)
+        if response.status_code == 200:
+            return jsonify(response.json())
+        return jsonify({'error': f'HTTP {response.status_code}'}), response.status_code
+    except Exception as e:
+        logger.warning(f"Failed to set VLM prompt: {e}")
+        return jsonify({'error': str(e)}), 503
 
 
 if __name__ == '__main__':

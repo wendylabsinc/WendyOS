@@ -281,9 +281,16 @@
                     <span class="metric-label">GPU Memory</span>
                     <span class="metric-value" id="vlm-memory">-</span>
                 </div>
-                <div class="metric">
-                    <span class="metric-label">Endpoint</span>
-                    <span class="metric-value" style="font-size: 12px;">:8090</span>
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;">
+                    <label style="color: #64748b; font-size: 13px; display: block; margin-bottom: 8px;">
+                        Custom Prompt <span id="prompt-status" style="font-size: 11px; color: #94a3b8;">(using defaults)</span>
+                    </label>
+                    <textarea id="vlm-prompt-input" placeholder="Enter custom prompt for VLM descriptions..."
+                        style="width: 100%; padding: 8px; border: 1px solid #e2e8f0; border-radius: 5px; font-size: 13px; resize: vertical; min-height: 60px;"></textarea>
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn" onclick="setVLMPrompt()" style="padding: 6px 12px; font-size: 12px;">Set Prompt</button>
+                        <button class="btn" onclick="clearVLMPrompt()" style="padding: 6px 12px; font-size: 12px; background: #94a3b8;">Clear</button>
+                    </div>
                 </div>
             </div>
 
@@ -488,6 +495,81 @@
             }
         }
 
+        async function loadVLMPrompt(forceUpdate = false) {
+            try {
+                // Don't overwrite if user is actively editing (unless forced)
+                const input = document.getElementById('vlm-prompt-input');
+                if (!forceUpdate && document.activeElement === input) {
+                    return; // User is typing, don't overwrite
+                }
+
+                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const status = document.getElementById('prompt-status');
+                    if (data.using_custom && data.custom_prompt) {
+                        input.value = data.custom_prompt;
+                        status.textContent = '(custom prompt active)';
+                        status.style.color = '#10b981';
+                    } else {
+                        input.value = '';
+                        status.textContent = '(using defaults)';
+                        status.style.color = '#94a3b8';
+                    }
+                }
+            } catch (error) {
+                console.log('Failed to load VLM prompt:', error);
+            }
+        }
+
+        async function setVLMPrompt() {
+            const input = document.getElementById('vlm-prompt-input');
+            const prompt = input.value.trim();
+            if (!prompt) {
+                log('Please enter a prompt first', 'warning');
+                return;
+            }
+            try {
+                log(`Setting VLM prompt: "${prompt.substring(0, 50)}..."`, 'info');
+                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    log('VLM prompt updated successfully', 'success');
+                    document.getElementById('prompt-status').textContent = '(custom prompt active)';
+                    document.getElementById('prompt-status').style.color = '#10b981';
+                } else {
+                    log('Failed to set VLM prompt', 'error');
+                }
+            } catch (error) {
+                log(`Error setting prompt: ${error.message}`, 'error');
+            }
+        }
+
+        async function clearVLMPrompt() {
+            try {
+                log('Clearing custom VLM prompt...', 'info');
+                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: '' })
+                });
+                if (response.ok) {
+                    document.getElementById('vlm-prompt-input').value = '';
+                    document.getElementById('prompt-status').textContent = '(using defaults)';
+                    document.getElementById('prompt-status').style.color = '#94a3b8';
+                    log('VLM prompt cleared - using class-specific defaults', 'success');
+                } else {
+                    log('Failed to clear VLM prompt', 'error');
+                }
+            } catch (error) {
+                log(`Error clearing prompt: ${error.message}`, 'error');
+            }
+        }
+
         async function testVLM() {
             log('Testing VLM with sample request...', 'info');
 
@@ -586,7 +668,8 @@
                 checkDetector(),
                 checkVLM(),
                 checkGPU(),
-                fetchVLMDescriptions()
+                fetchVLMDescriptions(),
+                loadVLMPrompt()
             ]);
 
             // Check overall status
