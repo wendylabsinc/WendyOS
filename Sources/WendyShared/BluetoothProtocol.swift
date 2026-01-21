@@ -3,13 +3,13 @@ import Foundation
 /// UUIDs for the WendyOS Bluetooth service
 public enum WendyBluetoothUUIDs {
     /// The main service UUID for WendyOS devices
-    public static let serviceUUID = "E7A90001-1234-5678-90AB-CDEF01234567"
+    public static let serviceUUID = "7565E9EB-4C20-4B67-9272-D708B397B631"
 
     /// Characteristic for sending commands to the agent
-    public static let commandCharacteristicUUID = "E7A90002-1234-5678-90AB-CDEF01234567"
+    public static let commandCharacteristicUUID = "7565E9EB-4C20-4B67-9272-D708B397B632"
 
     /// Characteristic for receiving responses from the agent
-    public static let responseCharacteristicUUID = "E7A90003-1234-5678-90AB-CDEF01234567"
+    public static let responseCharacteristicUUID = "7565E9EB-4C20-4B67-9272-D708B397B633"
 
     /// L2CAP PSM for bidirectional communication
     /// BlueZ typically assigns PSM 128 (0x80) for unprivileged L2CAP channels

@@ -229,6 +229,10 @@ struct MockDeviceDiscovery: DeviceDiscovery {
     func findLANDevices() async throws -> [LANDevice] {
         return lanDevices
     }
+
+    func findBluetoothDevices() async throws -> [BluetoothDevice] {
+        return []
+    }
 }
 
 // Logger for testing - avoid bootstrapping the global logger

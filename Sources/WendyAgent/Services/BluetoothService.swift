@@ -22,12 +22,11 @@ actor BluetoothService: Service {
     private static let legacyAdvertisingMaxBytes = 31
     private static let flagsFieldBytes = 3
     private static let localNameHeaderBytes = 2
-    
+
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
     private var peripheralManager: PeripheralManager?
-    private let hardwareDiscoverer = SystemHardwareDiscoverer()
 
     init() {
         let uid = String(getuid())
@@ -214,6 +213,9 @@ actor BluetoothService: Service {
             throw BluetoothServiceError.invalidConfiguration
         }
 
+        // deviceName was already extracted above for logging
+        let shortName = deviceName
+
         // Calculate approximate advertising data size:
         // - Flags: flagsFieldBytes
         // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
@@ -221,9 +223,9 @@ actor BluetoothService: Service {
         // If name is too long, truncate it
         let maxNameLength = Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
         let advertisingName: String
-        if deviceName.utf8.count > maxNameLength {
+        if shortName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
-            var truncated = deviceName
+            var truncated = shortName
             while truncated.utf8.count > maxNameLength && !truncated.isEmpty {
                 truncated.removeLast()
             }
@@ -231,14 +233,14 @@ actor BluetoothService: Service {
             logger.debug(
                 "Truncated advertising name to fit legacy limit",
                 metadata: [
-                    "original": "\(deviceName)",
+                    "original": "\(shortName)",
                     "truncated": "\(advertisingName)",
-                    "originalBytes": "\(deviceName.utf8.count)",
+                    "originalBytes": "\(shortName.utf8.count)",
                     "truncatedBytes": "\(advertisingName.utf8.count)",
                 ]
             )
         } else {
-            advertisingName = deviceName
+            advertisingName = shortName
         }
 
         let advertisementData = AdvertisementData(
@@ -366,63 +368,27 @@ actor BluetoothService: Service {
     private func handleChannel(_ channel: any L2CAPChannel) async {
         logger.debug("Starting to handle Bluetooth channel...")
         var messagesReceived = 0
+        var stream = channel.incoming().makeAsyncIterator()
         var buffer = ByteBuffer()
-        var expectedLength: Int?
 
         do {
-            for try await data in channel.incoming() {
-                logger.debug(
-                    "Received Bluetooth data chunk",
-                    metadata: [
-                        "chunkSize": "\(data.count)",
-                        "bufferSize": "\(buffer.readableBytes)",
-                    ]
-                )
-
-                buffer.writeData(data)
-
-                // Process complete messages from buffer
-                while true {
-                    // If we don't know the expected length yet, try to read it
-                    if expectedLength == nil {
-                        guard buffer.readableBytes >= 4 else { break }
-                        if let lengthPrefix = buffer.readInteger(endianness: .big, as: UInt32.self) {
-                            expectedLength = Int(lengthPrefix)
-                            logger.debug(
-                                "Read message length",
-                                metadata: ["expectedLength": "\(lengthPrefix)"]
-                            )
-                        } else {
-                            logger.error("Failed to read message length from Bluetooth buffer")
-                            expectedLength = nil
-                            break
-                        }
-                    }
-
-                    // Check if we have the complete message
-                    guard let length = expectedLength, buffer.readableBytes >= length else { break }
-
-                    // Extract the complete message
-                    guard let messageData = buffer.readData(length: length) else {
-                        logger.error("Failed to read Bluetooth message data from buffer")
-                        expectedLength = nil
-                        break
-                    }
-                    expectedLength = nil
-
+            while !Task.isCancelled {
+                // Process complete messages from buffer using length-prefixed framing
+                while let messageSlice = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self) {
                     messagesReceived += 1
+
                     logger.debug(
                         "Received complete Bluetooth message",
                         metadata: [
                             "messageNumber": "\(messagesReceived)",
-                            "messageSize": "\(messageData.count)",
+                            "messageSize": "\(messageSlice.readableBytes)",
                         ]
                     )
 
                     // Parse protobuf command and process
                     do {
                         let command = try Wendy_Agent_Services_V1_BluetoothCommand(
-                            serializedBytes: messageData
+                            serializedBytes: messageSlice.readableBytesView
                         )
                         let response = await processCommand(command)
                         let responseData = try response.serializedData()
@@ -444,6 +410,14 @@ actor BluetoothService: Service {
                         }
                     }
                 }
+
+                // Reclaim memory from processed messages
+                buffer.discardReadBytes()
+
+                // Wait for more data
+                // TODO: Add timeout using Swift 6.3's withTimeout
+                guard let data = try await stream.next() else { break }
+                buffer.writeData(data)
             }
         } catch {
             let errorString = String(describing: error)
@@ -472,8 +446,9 @@ actor BluetoothService: Service {
 
     private func sendLengthPrefixed(_ data: Data, on channel: any L2CAPChannel) async throws {
         var buffer = ByteBuffer()
-        buffer.writeInteger(UInt32(data.count), endianness: .big)
-        buffer.writeData(data)
+        try buffer.writeLengthPrefixed(endianness: .big, as: UInt16.self) { buffer in
+            buffer.writeData(data)
+        }
         try await channel.send(Data(buffer.readableBytesView))
     }
 
@@ -671,7 +646,9 @@ actor BluetoothService: Service {
         return response
     }
 
-    private func handleAppsStop(appName: String) async throws
+    private func handleAppsStop(
+        appName: String
+    ) async throws
         -> Wendy_Agent_Services_V1_AppsStopResponse
     {
         logger.debug("Bluetooth: Stopping app", metadata: ["app": "\(appName)"])
@@ -730,7 +707,8 @@ actor BluetoothService: Service {
     {
         logger.debug("Bluetooth: Listing hardware capabilities")
 
-        let capabilities = try await hardwareDiscoverer.discoverCapabilities(categoryFilter: nil)
+        let discoverer = SystemHardwareDiscoverer()
+        let capabilities = try await discoverer.discoverCapabilities(categoryFilter: nil)
 
         var response = Wendy_Agent_Services_V1_HardwareListResponse()
         response.capabilities = capabilities.map { cap in
