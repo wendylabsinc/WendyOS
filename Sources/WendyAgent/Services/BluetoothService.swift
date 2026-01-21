@@ -221,7 +221,8 @@ actor BluetoothService: Service {
         // - Complete Local Name: localNameHeaderBytes + name.utf8.count bytes
         // Total must be <= legacyAdvertisingMaxBytes for legacy advertising
         // If name is too long, truncate it
-        let maxNameLength = Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
+        let maxNameLength =
+            Self.legacyAdvertisingMaxBytes - Self.flagsFieldBytes - Self.localNameHeaderBytes
         let advertisingName: String
         if shortName.utf8.count > maxNameLength {
             // Truncate to fit, ensuring we don't cut in the middle of a multi-byte character
@@ -374,7 +375,10 @@ actor BluetoothService: Service {
         do {
             while !Task.isCancelled {
                 // Process complete messages from buffer using length-prefixed framing
-                while let messageSlice = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self) {
+                while let messageSlice = buffer.readLengthPrefixedSlice(
+                    endianness: .big,
+                    as: UInt16.self
+                ) {
                     messagesReceived += 1
 
                     logger.debug(

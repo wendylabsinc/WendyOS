@@ -155,7 +155,8 @@
             return devices
         }
 
-        public func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws {
+        public func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws
+        {
             var seenDevices: Set<String> = []
 
             // Run PTR query with 3-second timeout
@@ -472,7 +473,10 @@
             throw BluetoothVersionResolutionError.connectionClosed
         }
 
-        private func withTimeout<T: Sendable>(of duration: Duration, operation: @Sendable @escaping () async throws -> T) async throws -> T {
+        private func withTimeout<T: Sendable>(
+            of duration: Duration,
+            operation: @Sendable @escaping () async throws -> T
+        ) async throws -> T {
             try await withThrowingTaskGroup(of: T.self) { group in
                 group.addTask {
                     try await operation()

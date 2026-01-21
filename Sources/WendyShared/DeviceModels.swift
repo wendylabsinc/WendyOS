@@ -178,7 +178,8 @@ public struct DevicesCollection: Encodable, Sendable {
                 if hasConflictingLAN {
                     // Different LAN device with same display name - create separate group using hostname
                     let uniqueKey = "lan:\(device.hostname)"
-                    var group = deviceGroups[uniqueKey] ?? (displayName: device.displayName, interfaces: [])
+                    var group =
+                        deviceGroups[uniqueKey] ?? (displayName: device.displayName, interfaces: [])
                     group.interfaces.append(.lan(device))
                     deviceGroups[uniqueKey] = group
                 } else {
@@ -190,7 +191,9 @@ public struct DevicesCollection: Encodable, Sendable {
                 }
             } else {
                 // No existing group - create new one
-                deviceGroups[normalizedName] = (displayName: device.displayName, interfaces: [.lan(device)])
+                deviceGroups[normalizedName] = (
+                    displayName: device.displayName, interfaces: [.lan(device)]
+                )
             }
         }
 
@@ -338,7 +341,8 @@ public struct DevicesCollection: Encodable, Sendable {
         /// Stable sort key for consistent ordering of devices with same name
         var sortKey: String {
             switch self {
-            case .usb(let device): return device.serialNumber ?? "\(device.vendorId)-\(device.productId)"
+            case .usb(let device):
+                return device.serialNumber ?? "\(device.vendorId)-\(device.productId)"
             case .ethernet(let device): return device.name
             case .lan(let device): return device.hostname
             case .bluetooth(let device): return device.id

@@ -76,7 +76,9 @@
             return mockLANDevices
         }
 
-        func findBluetoothDevices(resolveAgentVersion: Bool = false) async throws -> [BluetoothDevice] {
+        func findBluetoothDevices(
+            resolveAgentVersion: Bool = false
+        ) async throws -> [BluetoothDevice] {
             // Bluetooth discovery not implemented in mock
             return []
         }
