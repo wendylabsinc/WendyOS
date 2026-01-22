@@ -86,10 +86,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {
-        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.3.0/\(swiftVersion)-RELEASE_wendyos_aarch64.artifactbundle.zip"
+        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.4.0/\(swiftVersion)-RELEASE_wendyos_aarch64.artifactbundle.zip"
     }
     var sdkChecksum: String {
-        "d1f198fe5ce827e4f7f0d812a4c180c0b09831affafe520a254d4f0ce0c53ae9"
+        "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e"
     }
 
     // Deploy mode should always run detached
@@ -521,21 +521,15 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 installSDK = true
             } else {
                 installSDK = Noora().yesOrNoChoicePrompt(
-                    question: "Do you want to install the WendyOS Swift SDK?"
+                    question: "Do you want to install/update the WendyOS Swift SDK?"
                 )
             }
 
             if installSDK {
-                try await cliOutput.withStreamingOutput(
-                    title: "Installing SDK",
-                    maxLines: 15
-                ) { emit in
-                    try await swiftPM.installSDK(
-                        from: sdkDownloadURL,
-                        checksum: sdkChecksum,
-                        onOutput: emit
-                    )
-                }
+                try await swiftPM.installSDK(
+                    from: sdkDownloadURL,
+                    checksum: sdkChecksum
+                )
                 cliOutput.success("WendyOS SDK ready to use")
             }
         }
@@ -563,8 +557,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 ) { emit in
                     try await swiftPM.installSDK(
                         from: sdkDownloadURL,
-                        checksum: sdkChecksum,
-                        onOutput: emit
+                        checksum: sdkChecksum
                     )
                 }
                 cliOutput.success("Swift \(swiftVersion) Installed")

@@ -186,101 +186,31 @@ public struct SwiftPM: Sendable {
 
     public func installSDK(
         from url: String,
-        checksum: String,
-        onOutput: (@Sendable (String) async throws -> Void)? = nil
+        checksum: String
     ) async throws {
         let flags = ["sdk", "install", url, "--checksum", checksum]
 
-        if let onOutput {
-            // Use PTY for streaming output
-            var scriptArgs = ["-q", "-F", "/dev/null"]
-            scriptArgs.append(contentsOf: path.split(separator: " ").map(String.init))
-            scriptArgs.append(contentsOf: flags)
+        let args = arguments(flags)
+        let result = try await Subprocess.run(
+            .name(executableName),
+            arguments: args,
+            output: .string(limit: 10_000),
+            error: .string(limit: 10_000)
+        )
 
-            // Helper to strip ANSI escape sequences and control characters from PTY output
-            func sanitizePTYOutput(_ line: String) -> String {
-                var result = line
-                while let escRange = result.range(
-                    of: "\u{1B}\\[[0-9;]*[A-Za-z~]",
-                    options: .regularExpression
-                ) {
-                    result.removeSubrange(escRange)
+        guard result.terminationStatus.isSuccess else {
+            let exitCode =
+                switch result.terminationStatus {
+                case .exited(let code), .unhandledException(let code):
+                    Int(code)
                 }
-                while let oscRange = result.range(
-                    of: "\u{1B}\\][^\u{07}\u{1B}]*[\u{07}]",
-                    options: .regularExpression
-                ) {
-                    result.removeSubrange(oscRange)
-                }
-                result = result.replacingOccurrences(of: "\r", with: "")
-                return result
-            }
 
-            let result = try await Subprocess.run(
-                Subprocess.Executable.name("script"),
-                arguments: Subprocess.Arguments(scriptArgs)
-            ) { _, stdin, stdout, stderr in
-                try await stdin.finish()
-
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        for try await line in stdout.lines() {
-                            let sanitized = sanitizePTYOutput(line)
-                            if !sanitized.isEmpty {
-                                try await onOutput(sanitized)
-                            }
-                        }
-                    }
-                    group.addTask {
-                        for try await line in stderr.lines() {
-                            let sanitized = sanitizePTYOutput(line)
-                            if !sanitized.isEmpty {
-                                try await onOutput(sanitized)
-                            }
-                        }
-                    }
-                    try await group.waitForAll()
-                }
-            }
-
-            guard result.terminationStatus.isSuccess else {
-                let exitCode =
-                    switch result.terminationStatus {
-                    case .exited(let code), .unhandledException(let code):
-                        Int(code)
-                    }
-
-                throw SubprocessError.nonZeroExit(
-                    command: "script " + scriptArgs.joined(separator: " "),
-                    exitCode: exitCode,
-                    output: "",
-                    error: ""
-                )
-            }
-        } else {
-            // Non-streaming version
-            let args = arguments(flags)
-            let result = try await Subprocess.run(
-                .name(executableName),
-                arguments: args,
-                output: .string(limit: 10_000),
-                error: .string(limit: 10_000)
+            throw SubprocessError.nonZeroExit(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: result.standardError ?? ""
             )
-
-            guard result.terminationStatus.isSuccess else {
-                let exitCode =
-                    switch result.terminationStatus {
-                    case .exited(let code), .unhandledException(let code):
-                        Int(code)
-                    }
-
-                throw SubprocessError.nonZeroExit(
-                    command: args.description,
-                    exitCode: exitCode,
-                    output: result.standardOutput ?? "",
-                    error: result.standardError ?? ""
-                )
-            }
         }
     }
 
