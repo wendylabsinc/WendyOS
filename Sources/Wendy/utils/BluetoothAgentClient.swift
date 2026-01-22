@@ -28,7 +28,8 @@ actor BluetoothAgentClient {
         _ body: @escaping @Sendable (BluetoothAgentClient) async throws -> R
     ) async throws -> R {
         let centralManager = CentralManager()
-
+        try await centralManager.waitUntilReady()
+        
         logger.debug("Connecting to peripheral", metadata: ["id": "\(peripheral.id)"])
 
         // Connect to the peripheral
@@ -36,10 +37,10 @@ actor BluetoothAgentClient {
 
         // Wait for connection to be ready
         let state = await connection.state()
-        if state != .connected {
+        findConnection: if state != .connected {
             for await newState in await connection.stateUpdates() {
                 if newState == .connected {
-                    break
+                    break findConnection
                 }
                 if case .disconnected = newState {
                     throw BluetoothAgentError.connectionFailed("Peripheral disconnected")
@@ -200,16 +201,14 @@ actor BluetoothAgentClient {
         let commandData = try command.serializedData()
 
         // Send with length prefix (4-byte big-endian)
-        var lengthPrefix = Data(count: 4)
-        let length = UInt32(commandData.count)
-        lengthPrefix[0] = UInt8((length >> 24) & 0xFF)
-        lengthPrefix[1] = UInt8((length >> 16) & 0xFF)
-        lengthPrefix[2] = UInt8((length >> 8) & 0xFF)
-        lengthPrefix[3] = UInt8(length & 0xFF)
+        var sendBuffer = ByteBuffer()
+        try sendBuffer.writeLengthPrefixed(endianness: .big, as: UInt16.self) { buffer in
+            buffer.writeData(commandData)
+        }
 
         logger.debug("Sending command", metadata: ["length": "\(commandData.count)"])
 
-        try await channel.send(lengthPrefix + commandData)
+        try await channel.send(Data(buffer: sendBuffer))
 
         // Read response with length prefix
         let responseData = try await readLengthPrefixedMessage()
@@ -226,27 +225,17 @@ actor BluetoothAgentClient {
     }
 
     private func readLengthPrefixedMessage() async throws -> Data {
-        var buffer = Data()
-        var messageLength: UInt32?
+        var buffer = ByteBuffer()
 
-        for try await data in channel.incoming() {
-            buffer.append(data)
+        nextPacket: for try await data in channel.incoming() {
+            buffer.writeData(data)
 
             // Read length prefix if we haven't yet
-            if messageLength == nil && buffer.count >= 4 {
-                let length =
-                    UInt32(buffer[0]) << 24
-                    | UInt32(buffer[1]) << 16
-                    | UInt32(buffer[2]) << 8
-                    | UInt32(buffer[3])
-                messageLength = length
-                buffer = Data(buffer.dropFirst(4))
+            guard let slice = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self) else {
+                continue nextPacket
             }
-
-            // Check if we have the complete message
-            if let length = messageLength, buffer.count >= length {
-                return Data(buffer.prefix(Int(length)))
-            }
+            
+            return Data(buffer: slice)
         }
 
         throw BluetoothAgentError.connectionClosed
