@@ -78,7 +78,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
         init(initial: S) {
             self.results = initial
         }
-        
+
         subscript(index: Int) -> S.Element? {
             if index > results.endIndex {
                 return nil
@@ -90,7 +90,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
             results = value
         }
     }
-    
+
     public func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
         initial: S,
         updates: some AsyncSequence<S, Never> & Sendable,
@@ -117,7 +117,8 @@ public struct NooraRenderer: CLIOutput, Sendable {
                     let rendered = renderTable(value)
                     let tableData = TableData(
                         columns: rendered.headers.map { TableColumn(title: $0) },
-                        rows: rendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) } }
+                        rows: rendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) }
+                        }
                     )
                     await results.set(to: value)
                     continuation.yield(tableData)
@@ -127,12 +128,16 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
             defer { group.cancelAll() }
             repeat {
-                let index = try await Noora().selectableTable(tableData, updates: stream, pageSize: pageSize)
+                let index = try await Noora().selectableTable(
+                    tableData,
+                    updates: stream,
+                    pageSize: pageSize
+                )
                 if let result = await results[index] {
                     return result
                 }
             } while !Task.isCancelled
-            
+
             throw CancellationError()
         }
     }

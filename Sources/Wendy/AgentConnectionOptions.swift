@@ -279,7 +279,8 @@ extension AgentConnectionOptions {
         }
 
         let (stream, continuation) = AsyncStream<DevicesCollection>.makeStream()
-        let device = try await withThrowingTaskGroup(of: Void.self) { group -> DevicesCollection.GroupedDevice in
+        let device = try await withThrowingTaskGroup(of: Void.self) {
+            group -> DevicesCollection.GroupedDevice in
             group.addTask {
                 await DiscoverCommand.runStreamingDiscovery(
                     deviceCache: DeviceCache(),
@@ -290,7 +291,10 @@ extension AgentConnectionOptions {
             }
 
             defer { group.cancelAll() }
-            let emptyDevice = DevicesCollection.GroupedDevice(name: "No device detected yet", interfaces: [])
+            let emptyDevice = DevicesCollection.GroupedDevice(
+                name: "No device detected yet",
+                interfaces: []
+            )
             return try await NooraRenderer().selectFromStreamingTable(
                 initial: [emptyDevice],
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
@@ -310,14 +314,17 @@ extension AgentConnectionOptions {
                 },
                 pageSize: 20,
                 renderTable: { devices in
-                    return (headers: ["Name", "Interfaces"], rows: devices.map { device in
-                        return [
-                            device.name,
-                            device.interfaces
-                                .map { $0.type.rawValue }
-                                .joined(separator: ", ")
-                        ]
-                    })
+                    return (
+                        headers: ["Name", "Interfaces"],
+                        rows: devices.map { device in
+                            return [
+                                device.name,
+                                device.interfaces
+                                    .map { $0.type.rawValue }
+                                    .joined(separator: ", "),
+                            ]
+                        }
+                    )
                 }
             )
         }

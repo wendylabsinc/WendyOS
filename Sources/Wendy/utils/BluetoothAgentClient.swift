@@ -29,7 +29,7 @@ actor BluetoothAgentClient {
     ) async throws -> R {
         let centralManager = CentralManager()
         try await centralManager.waitUntilReady()
-        
+
         logger.debug("Connecting to peripheral", metadata: ["id": "\(peripheral.id)"])
 
         // Connect to the peripheral
@@ -231,10 +231,11 @@ actor BluetoothAgentClient {
             buffer.writeData(data)
 
             // Read length prefix if we haven't yet
-            guard let slice = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self) else {
+            guard let slice = buffer.readLengthPrefixedSlice(endianness: .big, as: UInt16.self)
+            else {
                 continue nextPacket
             }
-            
+
             return Data(buffer: slice)
         }
 

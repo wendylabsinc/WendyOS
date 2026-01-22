@@ -104,7 +104,7 @@ public struct DevicesCollection: Encodable, Sendable {
         return names
     }
 
-    public struct GroupedDevice: Sendable, Hashable, CustomStringConvertible {
+    public struct GroupedDevice: Sendable, Hashable, CustomStringConvertible, Comparable {
         public let name: String
         public let interfaces: [InterfaceInfo]
 
@@ -119,6 +119,10 @@ public struct DevicesCollection: Encodable, Sendable {
         public init(name: String, interfaces: [InterfaceInfo]) {
             self.name = name
             self.interfaces = interfaces
+        }
+
+        public static func < (lhs: GroupedDevice, rhs: GroupedDevice) -> Bool {
+            return lhs.name < rhs.name
         }
     }
 
