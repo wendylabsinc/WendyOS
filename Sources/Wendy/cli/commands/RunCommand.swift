@@ -438,7 +438,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                                 do {
                                     _ = try await docker.getServerVersion()
                                     return
-                                } catch {}
+                                } catch {
+                                    try await Task.sleep(for: .milliseconds(100))
+                                }
                             }
                         } else {
                             Noora().info(
@@ -465,7 +467,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                                 do {
                                     _ = try await docker.getServerVersion()
                                     return
-                                } catch {}
+                                } catch {
+                                    try await Task.sleep(for: .milliseconds(100))
+                                }
                             }
                         } else {
                             Noora().info(

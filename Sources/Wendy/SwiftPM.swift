@@ -2,6 +2,8 @@ import Foundation
 import Noora
 import Subprocess
 @preconcurrency import SystemPackage
+import NIOCore
+import NIOPosix
 
 #if canImport(Darwin)
     import Darwin
@@ -11,12 +13,6 @@ import Subprocess
     import Musl
 #endif
 
-#if canImport(System)
-    import System
-    private typealias PlatformFileDescriptor = System.FileDescriptor
-#else
-    private typealias PlatformFileDescriptor = SystemPackage.FileDescriptor
-#endif
 
 /// Thread-safe buffer for collecting subprocess output
 private actor OutputCollector {
@@ -454,116 +450,94 @@ public struct SwiftPM: Sendable {
         #else
             // Use PTY for line-buffered output (subprocess sees a terminal)
             let (masterFD, slaveFD) = try openPTY()
+            let fdFlags = fcntl(masterFD, F_GETFL)
+            _ = fcntl(masterFD, F_SETFL, fdFlags | O_NONBLOCK)
 
-            // Helper to read lines from PTY master using non-blocking I/O
-            @Sendable func readPTYLines(masterFD: Int32) async throws {
-                // Set non-blocking mode
-                let flags = fcntl(masterFD, F_GETFL)
-                _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
-
-                var buffer = Data()
-                let chunkSize = 1024
-                var readBuffer = [UInt8](repeating: 0, count: chunkSize)
-
-                while !Task.isCancelled {
-                    let bytesRead = read(masterFD, &readBuffer, chunkSize)
-
-                    if bytesRead > 0 {
-                        buffer.append(contentsOf: readBuffer[0..<bytesRead])
-
-                        // Process complete lines
-                        while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                            let lineData = buffer[..<newlineIndex]
-                            buffer = Data(buffer[(newlineIndex + 1)...])
-
-                            if let line = String(data: Data(lineData), encoding: .utf8)?
-                                .trimmingCharacters(in: .init(charactersIn: "\r"))
-                            {
-                                // Strip ANSI escape sequences
-                                var cleaned = line
-                                while let range = cleaned.range(
-                                    of: "\u{1B}\\[[0-9;]*[A-Za-z~]",
-                                    options: .regularExpression
-                                ) {
-                                    cleaned.removeSubrange(range)
-                                }
-                                if !cleaned.isEmpty {
-                                    try await onOutput(cleaned)
-                                }
-                            }
-                        }
-                    } else if bytesRead == 0 {
-                        // EOF
-                        break
-                    } else if errno == EAGAIN || errno == EWOULDBLOCK {
-                        // No data available, yield and retry
-                        try await Task.sleep(for: .milliseconds(10))
-                    } else {
-                        // Actual error
-                        break
+            // Helper to read lines from PTY master using NIO
+            @Sendable func readPTYLines(
+                masterFD: Int32,
+                eventLoopGroup: any EventLoopGroup
+            ) async throws {
+                let channel = try await NIOPipeBootstrap(group: eventLoopGroup)
+                    .channelOption(.allowRemoteHalfClosure, value: true)
+                    .takingOwnershipOfDescriptor(input: masterFD)
+                    .flatMapThrowing { channel in
+                        try NIOAsyncChannel<ByteBuffer, Never>(
+                            wrappingChannelSynchronously: channel
+                        )
                     }
-                }
+                    .get()
 
-                // Flush remaining buffer
-                if !buffer.isEmpty, let line = String(data: buffer, encoding: .utf8) {
-                    try await onOutput(line)
+                try await channel.executeThenClose { inbound, _ in
+                    var buffer = ByteBuffer()
+                    for try await chunk in inbound {
+                        buffer.writeImmutableBuffer(chunk)
+                        while let newlineIndex = buffer.readableBytesView.firstIndex(of: UInt8(ascii: "\n")) {
+                            let lineLength = buffer.readableBytesView.distance(
+                                from: buffer.readableBytesView.startIndex,
+                                to: newlineIndex
+                            )
+                            var line = buffer.readString(length: lineLength) ?? ""
+                            buffer.moveReaderIndex(forwardBy: 1)  // Skip the newline
+                            // Strip ANSI escape sequences (and orphaned sequences split across chunks)
+                            line.replace(/\u{1B}\[[0-9;]*[A-Za-z~]|\[[0-9;]*[A-Za-z~]|\u{1B}/, with: "")
+                            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if line.isEmpty { continue }
+                            try await onOutput(line)
+                        }
+                        buffer.discardReadBytes()
+                    }
                 }
             }
 
             // Extract values before task group to avoid capturing self
             let execName = executableName
             let execArgs = arguments(flags)
-            let slaveFileDescriptor = PlatformFileDescriptor(rawValue: slaveFD)
+            let eventLoopGroup = MultiThreadedEventLoopGroup.singleton
 
             // Store termination status from subprocess
-            let terminationStatus: TerminationStatus
-            do {
-                terminationStatus = try await withThrowingTaskGroup(of: TerminationStatus?.self) {
-                    group in
-                    // Reader task
-                    group.addTask {
-                        try await readPTYLines(masterFD: masterFD)
-                        return nil
-                    }
-
-                    // Subprocess task
-                    group.addTask {
-                        let result = try await Subprocess.run(
-                            Subprocess.Executable.name(execName),
-                            arguments: execArgs,
-                            output: .fileDescriptor(
-                                slaveFileDescriptor,
-                                closeAfterSpawningProcess: true
-                            ),
-                            error: .fileDescriptor(
-                                slaveFileDescriptor,
-                                closeAfterSpawningProcess: false
-                            )
-                        )
-                        return result.terminationStatus
-                    }
-
-                    var status: TerminationStatus?
-                    for try await taskResult in group {
-                        if let terminationStatus = taskResult {
-                            status = terminationStatus
-                            // Subprocess finished, close master to signal EOF to reader
-                            _ = close(masterFD)
-                        }
-                    }
-                    guard let status else {
-                        throw SubprocessError.nonZeroExit(
-                            command: execName,
-                            exitCode: -1,
-                            output: "",
-                            error: "No termination status received"
-                        )
-                    }
-                    return status
+            let terminationStatus = try await withThrowingTaskGroup(
+                of: TerminationStatus?.self
+            ) { group in
+                // Reader task - NIO takes ownership of masterFD
+                group.addTask {
+                    try await readPTYLines(masterFD: masterFD, eventLoopGroup: eventLoopGroup)
+                    return nil
                 }
-            } catch {
-                _ = close(masterFD)
-                throw error
+
+                // Subprocess task
+                group.addTask {
+                    let result = try await Subprocess.run(
+                        Subprocess.Executable.name(execName),
+                        arguments: execArgs,
+                        output: .fileDescriptor(
+                            .init(rawValue: slaveFD),
+                            closeAfterSpawningProcess: true
+                        ),
+                        error: .fileDescriptor(
+                            .init(rawValue: slaveFD),
+                            closeAfterSpawningProcess: true
+                        )
+                    )
+                    return result.terminationStatus
+                }
+
+                var status: TerminationStatus?
+                for try await taskResult in group {
+                    if let terminationStatus = taskResult {
+                        status = terminationStatus
+                        // NIO owns the master FD and will close it when channel closes
+                    }
+                }
+                guard let status else {
+                    throw SubprocessError.nonZeroExit(
+                        command: execName,
+                        exitCode: -1,
+                        output: "",
+                        error: "No termination status received"
+                    )
+                }
+                return status
             }
 
             guard terminationStatus.isSuccess else {

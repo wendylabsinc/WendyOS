@@ -27,7 +27,7 @@ public struct JSONStreamRenderer: CLIOutput, Sendable {
     }
 
     public func result<T: Encodable & Sendable>(_ value: T) {
-        emit(ResultEvent(result: AnyEncodable(value)))
+        emit(ResultEvent(result: value))
     }
 
     public func progress(message: String, percent: Double?) {
@@ -70,23 +70,9 @@ private struct ProgressEvent: Encodable, Sendable {
     let percent: Double?
 }
 
-private struct ResultEvent: Encodable, Sendable {
+private struct ResultEvent<T: Encodable>: Encodable {
     let type = "result"
-    let result: AnyEncodable
+    let result: T
 }
 
-// MARK: - Type-erased Encodable wrapper
 
-private struct AnyEncodable: Encodable, Sendable {
-    private let _encode: @Sendable (Encoder) throws -> Void
-
-    init<T: Encodable & Sendable>(_ value: T) {
-        _encode = { encoder in
-            try value.encode(to: encoder)
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try _encode(encoder)
-    }
-}

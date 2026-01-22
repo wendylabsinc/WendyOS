@@ -225,9 +225,9 @@ private actor BorderedBox {
         ) {
             visibleText.removeSubrange(range)
         }
-        // Also strip OSC sequences
+        // Also strip OSC sequences (terminated by BEL \x07 or ST \x1B\\)
         while let range = visibleText.range(
-            of: "\u{1B}\\][^\u{07}]*\u{07}",
+            of: "\u{1B}\\][^\u{07}\u{1B}]*(?:\u{07}|\u{1B}\\\\)",
             options: .regularExpression
         ) {
             visibleText.removeSubrange(range)

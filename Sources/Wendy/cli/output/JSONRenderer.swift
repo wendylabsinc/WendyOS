@@ -6,7 +6,7 @@ import Synchronization
 public final class JSONRenderer: CLIOutput, Sendable {
     private struct State: Sendable {
         var events: [JSONEvent] = []
-        var finalResult: (any Encodable & Sendable)?
+        var finalResultData: Data?
     }
 
     private let state = Mutex(State())
@@ -34,7 +34,11 @@ public final class JSONRenderer: CLIOutput, Sendable {
     }
 
     public func result<T: Encodable & Sendable>(_ value: T) {
-        state.withLock { $0.finalResult = value }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(value) {
+            state.withLock { $0.finalResultData = data }
+        }
     }
 
     public func progress(message: String, percent: Double?) {
@@ -43,21 +47,12 @@ public final class JSONRenderer: CLIOutput, Sendable {
 
     public func flush() {
         // Copy state while holding lock, then release before I/O
-        let (events, finalResult) = state.withLock { ($0.events, $0.finalResult) }
+        let (events, finalResultData) = state.withLock { ($0.events, $0.finalResultData) }
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        let output: Data
-        if let result = finalResult {
-            if let data = try? encoder.encode(AnyEncodable(result)) {
-                output = data
-            } else {
-                output = encodeResponse(events: events, encoder: encoder)
-            }
-        } else {
-            output = encodeResponse(events: events, encoder: encoder)
-        }
+        let output = finalResultData ?? encodeResponse(events: events, encoder: encoder)
 
         if let string = String(data: output, encoding: .utf8) {
             FileHandle.standardOutput.write(Data((string + "\n").utf8))
@@ -130,18 +125,3 @@ private struct JSONResponse: Encodable {
     }
 }
 
-// MARK: - Type-erased Encodable wrapper
-
-private struct AnyEncodable: Encodable, Sendable {
-    private let _encode: @Sendable (Encoder) throws -> Void
-
-    init<T: Encodable & Sendable>(_ value: T) {
-        _encode = { encoder in
-            try value.encode(to: encoder)
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try _encode(encoder)
-    }
-}
