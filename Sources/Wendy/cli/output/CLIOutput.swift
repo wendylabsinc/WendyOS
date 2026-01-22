@@ -1,5 +1,15 @@
 import Foundation
 
+// Helper to flush stdout in Swift 6
+@inline(__always)
+private func flushStdout() {
+    #if os(Linux)
+        fflush(nil)
+    #else
+        fflush(stdout)
+    #endif
+}
+
 /// Protocol for CLI output rendering. Commands emit structured events
 /// through this interface, and different implementations handle formatting
 /// based on output mode (interactive, JSON, JSON stream).
@@ -160,14 +170,14 @@ extension CLIOutput {
             let string = String(data: data, encoding: .utf8)
         {
             print(string)
-            fflush(stdout)
+            flushStdout()
         }
         for await update in updates {
             if let data = try? encoder.encode(update),
                 let string = String(data: data, encoding: .utf8)
             {
                 print(string)
-                fflush(stdout)
+                flushStdout()
             }
         }
     }
