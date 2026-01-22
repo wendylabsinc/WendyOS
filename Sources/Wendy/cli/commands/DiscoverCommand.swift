@@ -103,7 +103,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                         let discovery = PlatformDeviceDiscovery(logger: logger)
                         while !Task.isCancelled {
                             try await discovery.withLANDeviceDiscovery { device in
-                                await deviceCache.updateFastDevices(with: DevicesCollection(lan: [device]))
+                                await deviceCache.updateFastDevices(
+                                    with: DevicesCollection(lan: [device])
+                                )
                             }
                             try await Task.sleep(for: .seconds(2))
                         }
@@ -114,7 +116,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                         while !Task.isCancelled {
                             let usb = await discovery.findUSBDevices()
                             let ethernet = await discovery.findEthernetInterfaces()
-                            await deviceCache.updateFastDevices(with: DevicesCollection(usb: usb, ethernet: ethernet))
+                            await deviceCache.updateFastDevices(
+                                with: DevicesCollection(usb: usb, ethernet: ethernet)
+                            )
                             try await Task.sleep(for: .seconds(2))
                         }
                     }
@@ -159,7 +163,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                     let connection = connectionParts.joined(separator: ", ")
 
                     // Build interfaces list
-                    let interfaces = device.interfaces.map(\.shortDescription).joined(separator: ", ")
+                    let interfaces = device.interfaces.map(\.shortDescription).joined(
+                        separator: ", "
+                    )
 
                     // Get version from any interface
                     let version = device.interfaces.compactMap(\.agentVersion).first ?? ""
@@ -220,11 +226,15 @@ struct DiscoverCommand: AsyncParsableCommand {
                             var resolvedDevice = device
                             if !skipVersionResolution {
                                 let collection = DevicesCollection(lan: [device])
-                                if let resolved = await collection.resolveLANDeviceAgentVersions().first {
+                                if let resolved = await collection.resolveLANDeviceAgentVersions()
+                                    .first
+                                {
                                     resolvedDevice = resolved
                                 }
                             }
-                            await deviceCache.updateFastDevices(with: DevicesCollection(lan: [resolvedDevice]))
+                            await deviceCache.updateFastDevices(
+                                with: DevicesCollection(lan: [resolvedDevice])
+                            )
                             logger.debug("LAN device found: \(resolvedDevice.hostname)")
                         }
                     } catch is CancellationError {
@@ -252,7 +262,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                         await deviceCache.updateFastDevices(with: DevicesCollection(usb: usb))
                     }
                     if !ethernet.isEmpty {
-                        await deviceCache.updateFastDevices(with: DevicesCollection(ethernet: ethernet))
+                        await deviceCache.updateFastDevices(
+                            with: DevicesCollection(ethernet: ethernet)
+                        )
                     }
 
                     try await Task.sleep(for: .seconds(2))

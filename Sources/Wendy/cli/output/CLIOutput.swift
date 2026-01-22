@@ -157,13 +157,15 @@ extension CLIOutput {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         if let data = try? encoder.encode(initial),
-           let string = String(data: data, encoding: .utf8) {
+            let string = String(data: data, encoding: .utf8)
+        {
             print(string)
             fflush(stdout)
         }
         for await update in updates {
             if let data = try? encoder.encode(update),
-               let string = String(data: data, encoding: .utf8) {
+                let string = String(data: data, encoding: .utf8)
+            {
                 print(string)
                 fflush(stdout)
             }

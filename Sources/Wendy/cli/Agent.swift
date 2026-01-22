@@ -40,7 +40,8 @@ struct Agent {
 
         actor LiveData: nonisolated AsyncSequence {
             nonisolated let source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>
-            var displayedNetworks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork] = []
+            var displayedNetworks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork] =
+                []
 
             init(source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>) {
                 self.source = source

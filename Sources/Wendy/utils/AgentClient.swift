@@ -39,7 +39,7 @@ func withAgentClient<R: Sendable>(
             return try await withAgentGRPCClient(endpoint, title: title) { client in
                 try await body(.grpc(client))
             }
-        } catch where defaultDevice {
+        } catch  where defaultDevice {
             // If default device failed, try again without default
             let newDevice = try await connectionOptions.readWithBluetooth(
                 title: title,
@@ -211,12 +211,14 @@ extension AgentClient {
                         case .stopped: .stopped
                         case .UNRECOGNIZED: .unknown
                         }
-                    apps.append(AppInfo(
-                        name: container.container.appName,
-                        version: container.container.appVersion,
-                        runningState: state,
-                        failureCount: Int(container.container.failureCount)
-                    ))
+                    apps.append(
+                        AppInfo(
+                            name: container.container.appName,
+                            version: container.container.appVersion,
+                            runningState: state,
+                            failureCount: Int(container.container.failureCount)
+                        )
+                    )
                 }
                 return apps
             }
@@ -258,10 +260,12 @@ extension AgentClient {
         switch self {
         case .grpc(let client):
             let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
-            _ = try await containers.deleteContainer(.with {
-                $0.appName = name
-                $0.deleteImage = purgeImage
-            })
+            _ = try await containers.deleteContainer(
+                .with {
+                    $0.appName = name
+                    $0.deleteImage = purgeImage
+                }
+            )
 
         case .bluetooth(let client):
             _ = try await client.removeApp(name: name, purgeImage: purgeImage)

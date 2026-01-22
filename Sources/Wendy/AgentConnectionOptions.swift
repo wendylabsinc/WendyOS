@@ -295,7 +295,8 @@ extension AgentConnectionOptions {
                     .filter { device in
                         // Include devices with LAN or Bluetooth interfaces
                         device.interfaces.contains { interface in
-                            interface.type == .lan || (includeBluetooth && interface.type == .bluetooth)
+                            interface.type == .lan
+                                || (includeBluetooth && interface.type == .bluetooth)
                         }
                     }
 

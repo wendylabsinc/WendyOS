@@ -1,6 +1,6 @@
 import Foundation
-import WendyShared
 import Noora
+import WendyShared
 
 /// An interface with its last-seen timestamp
 struct InterfaceWithTiming {
@@ -199,7 +199,8 @@ actor DeviceCache {
 
         let devices = collection.groupedDevices().map { groupedDevice in
             // Build per-interface timing
-            let interfacesWithTiming = groupedDevice.interfaces.map { interface -> InterfaceWithTiming in
+            let interfacesWithTiming = groupedDevice.interfaces.map {
+                interface -> InterfaceWithTiming in
                 let lastSeen: ContinuousClock.Instant
                 switch interface {
                 case .usb(let device):
@@ -243,7 +244,9 @@ extension DevicesWithTimingResult {
         let staleDisplayThreshold: Duration = .seconds(20)
 
         // Helper to determine the appropriate discovery time for an interface
-        func lastDiscoveryTime(for interface: DevicesCollection.InterfaceInfo) -> ContinuousClock.Instant {
+        func lastDiscoveryTime(
+            for interface: DevicesCollection.InterfaceInfo
+        ) -> ContinuousClock.Instant {
             switch interface {
             case .bluetooth:
                 return lastBLEDiscoveryTime
@@ -307,7 +310,8 @@ extension DevicesWithTimingResult {
                     connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
 
                 // Get agent version from any interface
-                let agentVersion = deviceWithTiming.interfaces
+                let agentVersion =
+                    deviceWithTiming.interfaces
                     .compactMap { $0.interface.agentVersion }
                     .first ?? "Unknown"
 
@@ -321,7 +325,8 @@ extension DevicesWithTimingResult {
                 // Add "Last Seen" value if we're showing that column
                 // Only show interfaces that are stale enough to display
                 if hasStaleInterfaces {
-                    let staleInterfaceTimings = deviceWithTiming.interfaces.compactMap { iface -> String? in
+                    let staleInterfaceTimings = deviceWithTiming.interfaces.compactMap {
+                        iface -> String? in
                         guard isStaleEnoughToDisplay(iface) else {
                             return nil  // Don't show interfaces that are current or barely stale
                         }
@@ -329,7 +334,9 @@ extension DevicesWithTimingResult {
                         return "\(iface.interface.shortDescription): \(seconds)s ago"
                     }
 
-                    let lastSeenText = staleInterfaceTimings.isEmpty ? "-" : staleInterfaceTimings.joined(separator: ", ")
+                    let lastSeenText =
+                        staleInterfaceTimings.isEmpty
+                        ? "-" : staleInterfaceTimings.joined(separator: ", ")
                     row.append("\(lastSeenText)")
                 }
 
