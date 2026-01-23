@@ -61,8 +61,8 @@ struct Agent {
 
                 func next() async throws -> TableData? {
                     let networks = try await actor.source.listWiFiNetworks(.init()).networks
-                    await actor.setNetworks(networks)
                     // Group networks by SSID and keep the one with highest signal strength
+                    // Sort by SSID to maintain stable ordering (prevents selection index drift)
                     let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty })
                     { $0.ssid }
                     .compactMapValues {
@@ -72,8 +72,11 @@ struct Agent {
                     }
                     .values
                     .sorted(by: {
-                        $0.signalStrength > $1.signalStrength
+                        $0.ssid < $1.ssid
                     })
+
+                    // Store the processed networks so the index matches the displayed rows
+                    await actor.setNetworks(uniqueNetworks)
 
                     let rows = uniqueNetworks.map { network -> TableRow in
                         return [
