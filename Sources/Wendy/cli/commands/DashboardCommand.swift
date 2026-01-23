@@ -11,6 +11,8 @@ import WendyAgentGRPC
     @preconcurrency import Glibc
 #elseif canImport(Musl)
     @preconcurrency import Musl
+#elseif os(Windows)
+    import WinSDK
 #endif
 
 /// Flush stdout - fflush is thread-safe and we're doing synchronous terminal I/O.
@@ -159,8 +161,17 @@ struct DashboardCommand: AsyncParsableCommand {
     }
 }
 
+
 /// Get the current terminal height in rows
 private func getTerminalHeight() -> Int {
+    #if os(Windows)
+    var csbi = CONSOLE_SCREEN_BUFFER_INFO()
+    if GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi) {
+        return Int(csbi.srWindow.Bottom - csbi.srWindow.Top + 1)
+    }
+    // Random Default fallback
+    return 24
+    #else
     var ws = winsize()
     if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &ws) == 0 && ws.ws_row > 0 {
         return Int(ws.ws_row)
@@ -173,6 +184,7 @@ private func getTerminalHeight() -> Int {
     }
     // Default fallback
     return 24
+    #endif
 }
 
 actor Dashboard {
