@@ -105,7 +105,7 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw HelperError.launchctlFailed("Failed to load service: \(error)")
+                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "load", reason: "\(error)")
             }
         }
 
@@ -118,7 +118,7 @@ extension HelperCommand {
                     try service.register()
                     print("📄 Registered network daemon with SMAppService")
                 } else {
-                    throw HelperError.unsupportedMacOSVersion
+                    throw CLIError.unsupportedPlatform(reason: "SMAppService requires macOS 13.0 or later")
                 }
             #else
                 print("⚠️  Network daemon installation not supported on this platform")
@@ -203,7 +203,7 @@ extension HelperCommand {
             let plistPath = getLaunchdPlistPath()
 
             guard FileManager.default.fileExists(atPath: plistPath) else {
-                throw HelperError.serviceNotInstalled
+                throw CLIError.serviceNotInstalled(name: "Helper daemon")
             }
 
             let process = Process()
@@ -220,7 +220,7 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw HelperError.launchctlFailed("Failed to start service: \(error)")
+                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "start", reason: "\(error)")
             }
 
             print("✅ Wendy Helper Daemon started")
@@ -249,7 +249,7 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw HelperError.launchctlFailed("Failed to stop service: \(error)")
+                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "stop", reason: "\(error)")
             }
 
             print("✅ Wendy Helper Daemon stopped")
@@ -396,7 +396,7 @@ private func getHelperExecutablePath() throws -> String {
         }
     }
 
-    throw HelperError.helperExecutableNotFound
+    throw CLIError.fileNotFound(path: "wendy-helper")
 }
 
 private func generateLaunchdPlist(
@@ -436,22 +436,3 @@ private func generateLaunchdPlist(
 
 // MARK: - Error Types
 
-enum HelperError: Error, LocalizedError {
-    case serviceNotInstalled
-    case helperExecutableNotFound
-    case launchctlFailed(String)
-    case unsupportedMacOSVersion
-
-    var errorDescription: String? {
-        switch self {
-        case .serviceNotInstalled:
-            return "Helper daemon is not installed. Run 'wendy helper install' first."
-        case .helperExecutableNotFound:
-            return "wendy-helper executable not found. Make sure it's built and in your PATH."
-        case .launchctlFailed(let message):
-            return "launchctl command failed: \(message)"
-        case .unsupportedMacOSVersion:
-            return "SMAppService requires macOS 13.0 or later for privileged daemon installation."
-        }
-    }
-}

@@ -90,7 +90,7 @@ struct ListCommand: ModifyProjectCommand {
                 print("❌ No wendy.json found in current directory")
                 print("Run 'wendy project init' to initialize a new project")
             }
-            throw ProjectError.configNotFound(path: wendyJsonPath)
+            throw CLIError.configNotFound(path: wendyJsonPath)
         }
 
         // Load configuration
@@ -213,7 +213,7 @@ struct AddCommand: ModifyProjectCommand {
                 Run 'wendy project init' to initialize a new project
                 """
             )
-            throw ProjectError.configNotFound(path: wendyJsonPath)
+            throw CLIError.configNotFound(path: wendyJsonPath)
         }
 
         // Load current configuration
@@ -357,7 +357,7 @@ struct AddCommand: ModifyProjectCommand {
             let networkMode: NetworkMode
             if let modeString = mode {
                 guard let parsedMode = NetworkMode(rawValue: modeString) else {
-                    throw ProjectError.invalidMode(mode: modeString, for: type)
+                    throw CLIError.invalidArgument(name: "mode", value: modeString, reason: "Invalid for entitlement type '\(type.rawValue)'")
                 }
                 networkMode = parsedMode
             } else {
@@ -370,7 +370,7 @@ struct AddCommand: ModifyProjectCommand {
             if let modeString = mode {
                 guard let parsedMode = BluetoothEntitlements.BluetoothMode(rawValue: modeString)
                 else {
-                    throw ProjectError.invalidMode(mode: modeString, for: type)
+                    throw CLIError.invalidArgument(name: "mode", value: modeString, reason: "Invalid for entitlement type '\(type.rawValue)'")
                 }
                 bluetoothMode = parsedMode
             } else {
@@ -389,7 +389,7 @@ struct AddCommand: ModifyProjectCommand {
 
         case .persist:
             guard let name, let path else {
-                throw ProjectError.missingPersistArguments
+                throw CLIError.missingArgument(name: "name/path", description: "--name and --path are required for persist entitlement")
             }
 
             return .persist(PersistenceEntitlements(name: name, path: path))
@@ -424,7 +424,7 @@ struct RemoveCommand: ModifyProjectCommand {
         guard FileManager.default.fileExists(atPath: wendyJsonPath) else {
             print("❌ No wendy.json found in \(project)")
             print("Run 'wendy project init' to initialize a new project")
-            throw ProjectError.configNotFound(path: wendyJsonPath)
+            throw CLIError.configNotFound(path: wendyJsonPath)
         }
 
         // Load current configuration
@@ -494,22 +494,3 @@ extension Entitlement {
 
 // MARK: - Errors
 
-enum ProjectError: Error {
-    case configNotFound(path: String)
-    case invalidMode(mode: String, for: EntitlementType)
-    case saveFailed(path: String, error: String)
-    case missingPersistArguments
-
-    var localizedDescription: String {
-        switch self {
-        case .configNotFound(let path):
-            return "Configuration file not found at '\(path)'"
-        case .invalidMode(let mode, let type):
-            return "Invalid mode '\(mode)' for entitlement type '\(type.rawValue)'"
-        case .saveFailed(let path, let error):
-            return "Failed to save configuration to '\(path)': \(error)"
-        case .missingPersistArguments:
-            return "Missing arguments for persist entitlement. `--name` and `--path` are required"
-        }
-    }
-}

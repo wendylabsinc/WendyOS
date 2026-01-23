@@ -172,7 +172,7 @@ public struct SwiftPM: Sendable {
                     Int(code)
                 }
 
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
@@ -189,13 +189,12 @@ public struct SwiftPM: Sendable {
         checksum: String
     ) async throws {
         let flags = ["sdk", "install", url, "--checksum", checksum]
-
         let args = arguments(flags)
         let result = try await Subprocess.run(
             .name(executableName),
             arguments: args,
-            output: .string(limit: 10_000),
-            error: .string(limit: 10_000)
+            output: .string(limit: 100_000),
+            error: .string(limit: 100_000)
         )
 
         guard result.terminationStatus.isSuccess else {
@@ -205,7 +204,7 @@ public struct SwiftPM: Sendable {
                     Int(code)
                 }
 
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
@@ -230,7 +229,7 @@ public struct SwiftPM: Sendable {
                     Int(code)
                 }
 
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
@@ -261,7 +260,7 @@ public struct SwiftPM: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: allArgs.description,
                 exitCode: exitCode,
                 output: "",
@@ -299,7 +298,7 @@ public struct SwiftPM: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: allArgs.description,
                 exitCode: exitCode,
                 output: "",
@@ -364,7 +363,7 @@ public struct SwiftPM: Sendable {
         )
 
         guard result.terminationStatus.isSuccess else {
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: Int(result.terminationStatus.description) ?? -1,
                 output: result.standardOutput ?? "",
@@ -390,7 +389,7 @@ public struct SwiftPM: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
@@ -416,7 +415,7 @@ public struct SwiftPM: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: args.description,
                 exitCode: exitCode,
                 output: result.standardOutput ?? "",
@@ -570,7 +569,7 @@ public func run(
                 }
             }
             guard let status else {
-                throw SubprocessError.nonZeroExit(
+                throw SubprocessError(
                     command: executable.description + " " + arguments.description,
                     exitCode: -1,
                     output: "",
@@ -586,7 +585,7 @@ public func run(
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: executable.description + " " + arguments.description,
                 exitCode: exitCode,
                 output: "",
@@ -594,20 +593,4 @@ public func run(
             )
         }
     #endif
-}
-
-/// Error thrown when a subprocess execution fails.
-public enum SubprocessError: Error, LocalizedError {
-    case nonZeroExit(command: String, exitCode: Int, output: String, error: String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .nonZeroExit(let command, let exitCode, let output, let error):
-            return """
-                Command '\(command)' failed with exit code \(exitCode): \(error)
-
-                \(output)
-                """
-        }
-    }
 }

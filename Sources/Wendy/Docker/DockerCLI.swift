@@ -175,10 +175,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: arguments.description,
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -206,10 +205,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -238,10 +236,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -266,10 +263,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -350,10 +346,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -489,10 +484,9 @@ public struct DockerCLI: Sendable {
                 case .exited(let code), .unhandledException(let code):
                     exitCode = Int(code)
                 }
-                throw SubprocessError.nonZeroExit(
+                throw SubprocessError(
                     command: cpArguments.description,
                     exitCode: exitCode,
-                    terminationReason: cpResult.terminationStatus.description,
                     output: "",
                     error: ""
                 )
@@ -515,10 +509,9 @@ public struct DockerCLI: Sendable {
                 case .exited(let code), .unhandledException(let code):
                     exitCode = Int(code)
                 }
-                throw SubprocessError.nonZeroExit(
+                throw SubprocessError(
                     command: restartArguments.description,
                     exitCode: exitCode,
-                    terminationReason: restartResult.terminationStatus.description,
                     output: "",
                     error: ""
                 )
@@ -553,10 +546,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: createArguments.description,
                 exitCode: exitCode,
-                terminationReason: createResult.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -790,10 +782,9 @@ public struct DockerCLI: Sendable {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: ([self.command] + arguments).joined(separator: " "),
                 exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
                 output: "",
                 error: ""
             )
@@ -812,24 +803,4 @@ public struct DockerCLI: Sendable {
         )
     }
 
-    public enum SubprocessError: Error, LocalizedError {
-        case nonZeroExit(
-            command: String,
-            exitCode: Int,
-            terminationReason: String,
-            output: String,
-            error: String
-        )
-
-        public var errorDescription: String? {
-            switch self {
-            case .nonZeroExit(let command, _, let terminationReason, let output, let error):
-                return """
-                    Command '\(command)' failed with \(terminationReason): \(error)
-
-                    \(output)
-                    """
-            }
-        }
-    }
 }

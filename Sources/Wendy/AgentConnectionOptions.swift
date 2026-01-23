@@ -178,7 +178,7 @@ struct AgentConnectionOptions: ParsableArguments {
             }
         }
 
-        throw InvalidEndpoint()
+        throw CLIError.invalidEndpoint("No valid endpoint found")
     }
 
     var endpoint: Endpoint {
@@ -234,17 +234,6 @@ struct AgentConnectionOptions: ParsableArguments {
             headers: ["Interface", "Details"],
             rows: rows
         )
-    }
-}
-
-struct InvalidEndpoint: Error {}
-struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConvertible {
-    var description: String {
-        "No Wendy devices found"
-    }
-
-    var debugDescription: String {
-        "No Wendy devices found"
     }
 }
 
@@ -350,6 +339,6 @@ extension AgentConnectionOptions {
             }
         }
 
-        throw InvalidEndpoint()
+        throw CLIError.invalidEndpoint("No valid endpoint found")
     }
 }
