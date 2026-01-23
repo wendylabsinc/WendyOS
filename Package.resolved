@@ -1,5 +1,5 @@
 {
-  "originHash" : "851d72773fb5ad5b7c850dfe6d30b681147fdd13276f0d940c370769f14117df",
+  "originHash" : "e7db835eab4788536cf342eeec5491b483292278d0d418f972aa62cd4aa08c4b",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -11,12 +11,21 @@
       }
     },
     {
+      "identity" : "bluetooth",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/wendylabsinc/bluetooth.git",
+      "state" : {
+        "revision" : "570956c252d32c00e45d02e04b09560ab1ea5a15",
+        "version" : "0.1.0"
+      }
+    },
+    {
       "identity" : "dbus",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/edgeengineer/dbus.git",
+      "location" : "https://github.com/wendylabsinc/dbus.git",
       "state" : {
-        "revision" : "b166ef42d254a6191127a1c97b68b342bd6b2dc9",
-        "version" : "0.2.3"
+        "revision" : "4d88300754c806827d919c5274cbfc18baebe9ab",
+        "version" : "0.3.0"
       }
     },
     {
@@ -24,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/orlandos-nl/DNSClient.git",
       "state" : {
-        "revision" : "2d4174e4fbe75cc2f31d2fa2d384f486e5fe63b5",
-        "version" : "2.5.0"
+        "revision" : "ae146fd47b64df4222fdb455d520763be9b98b58",
+        "version" : "2.6.1"
       }
     },
     {
@@ -87,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tuist/Noora.git",
       "state" : {
-        "revision" : "f33556847a6d3facd51886409e23b6906b44de67",
-        "version" : "0.51.0"
+        "revision" : "d157bf198c57687a4bab7d2a1751a3719c60b817",
+        "version" : "0.52.0"
       }
     },
     {
@@ -105,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/onevcat/Rainbow",
       "state" : {
-        "revision" : "16da5c62dd737258c6df2e8c430f8a3202f655a7",
-        "version" : "4.2.0"
+        "revision" : "cdf146ae671b2624917648b61c908d1244b98ca1",
+        "version" : "4.2.1"
       }
     },
     {
@@ -123,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser.git",
       "state" : {
-        "revision" : "cdd0ef3755280949551dc26dee5de9ddeda89f54",
-        "version" : "1.6.2"
+        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
+        "version" : "1.7.0"
       }
     },
     {
@@ -222,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "ce592ae52f982c847a4efc0dd881cc9eb32d29f2",
-        "version" : "1.6.4"
+        "revision" : "bc386b95f2a16ccd0150a8235e7c69eab2b866ca",
+        "version" : "1.8.0"
       }
     },
     {
@@ -240,8 +249,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
-        "revision" : "a18bddb0acf7a40d982b2f128ce73ce4ee31f352",
-        "version" : "2.86.2"
+        "revision" : "a1605a3303a28e14d822dec8aaa53da8a9490461",
+        "version" : "2.92.0"
       }
     },
     {

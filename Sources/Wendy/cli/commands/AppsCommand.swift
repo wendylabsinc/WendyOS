@@ -12,8 +12,51 @@ struct AppsCommand: AsyncParsableCommand {
         subcommands: [
             ListCommand.self,
             Stop.self,
+            Remove.self,
         ]
     )
+
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "remove",
+            abstract: "Stop and remove an application from the device"
+        )
+
+        @Argument(help: "Application name used when the app was created")
+        var appName: String
+
+        @Flag(
+            name: .customLong("purge-image"),
+            help: "Also delete the application image to free disk space"
+        )
+        var purgeImage: Bool = false
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func run() async throws {
+            try await withAgentGRPCClient(
+                agentConnectionOptions,
+                title: "Removing application"
+            ) { client in
+                let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(
+                    wrapping: client
+                )
+
+                _ = try await containers.deleteContainer(
+                    .with {
+                        $0.appName = appName
+                        $0.deleteImage = purgeImage
+                    }
+                )
+
+                if purgeImage {
+                    Noora().success("Removed application and its image.")
+                } else {
+                    Noora().success("Removed application.")
+                }
+            }
+        }
+    }
 
     struct Stop: AsyncParsableCommand {
         static let configuration = CommandConfiguration(

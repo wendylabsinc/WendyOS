@@ -1,4 +1,4 @@
-#if !os(macOS) && !os(Linux)
+#if !os(macOS) && !os(Linux) && !os(Windows)
     import Foundation
     import Logging
 
@@ -21,6 +21,13 @@
 
         public func findLANDevices() async throws -> [LANDevice] {
             logger.warning("LAN device listing is not supported on this platform")
+            return []
+        }
+
+        public func findBluetoothDevices(
+            resolveAgentVersion: Bool = false
+        ) async throws -> [BluetoothDevice] {
+            logger.warning("Bluetooth device listing is not supported on this platform")
             return []
         }
     }

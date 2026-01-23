@@ -1,4 +1,5 @@
 import ArgumentParser
+import AsyncAlgorithms
 import Foundation
 import Logging
 import Noora
@@ -12,117 +13,66 @@ struct DiscoverCommand: AsyncParsableCommand {
     )
 
     enum DeviceType: String, ExpressibleByArgument {
-        case usb, ethernet, lan, all
+        case usb, ethernet, lan, bluetooth, all
     }
 
-    @Option(help: "Device types to list (usb, ethernet, lan, or all)")
+    @Option(help: "Device types to list (usb, ethernet, lan, bluetooth, or all)")
     var type: DeviceType = .all
-
-    @Flag(name: [.customShort("j"), .long], help: "Output in JSON format")
-    var json: Bool = false
 
     @Flag(help: "Skip resolving the agent's version")
     var skipResolveAgentVersion: Bool = false
 
-    func run() async throws {
+    private func discoverDevices() async throws -> DevicesCollection {
         let logger = Logger(label: "sh.wendy.cli.devices")
         let discovery = PlatformDeviceDiscovery(logger: logger)
-        let format = json ? OutputFormat.json : OutputFormat.text
-
         // Collect devices based on the requested type
         var usbDevices: [USBDevice] = []
         var ethernetDevices: [EthernetInterface] = []
         var lanDevices: [LANDevice] = []
+        var bluetoothDevices: [BluetoothDevice] = []
 
         switch type {
         case .usb:
-            if json {
-                usbDevices = await discovery.findUSBDevices()
-            } else {
-                usbDevices = try await Noora().progressStep(
-                    message: "Discovering Wendy USB devices",
-                    successMessage: nil,
-                    errorMessage: nil,
-                    showSpinner: true
-                ) { progress in
-                    await discovery.findUSBDevices()
-                }
-            }
-
+            usbDevices = await discovery.findUSBDevices()
         case .ethernet:
-            if json {
-                ethernetDevices = await discovery.findEthernetInterfaces()
-            } else {
-                ethernetDevices = try await Noora().progressStep(
-                    message: "Discovering Wendy Ethernet interfaces",
-                    successMessage: nil,
-                    errorMessage: nil,
-                    showSpinner: true
-                ) { progress in
-                    await discovery.findEthernetInterfaces()
-                }
-            }
-
+            ethernetDevices = await discovery.findEthernetInterfaces()
         case .lan:
-            if json {
-                lanDevices = try await discovery.findLANDevices()
-            } else {
-                lanDevices = try await Noora().progressStep(
-                    message: "Discovering Wendy LAN devices",
-                    successMessage: nil,
-                    errorMessage: nil,
-                    showSpinner: true
-                ) { progress in
-                    try await discovery.findLANDevices()
-                }
-            }
-
+            lanDevices = try await discovery.findLANDevices()
+        case .bluetooth:
+            bluetoothDevices = try await discovery.findBluetoothDevices()
         case .all:
             // Fetch all types of devices
-            if json {
-                async let _usbDevices = await discovery.findUSBDevices()
-                async let _ethernetDevices = await discovery.findEthernetInterfaces()
-                async let _lanDevices = try await discovery.findLANDevices()
+            async let _usbDevices = await discovery.findUSBDevices()
+            async let _ethernetDevices = await discovery.findEthernetInterfaces()
+            async let _lanDevices = try await discovery.findLANDevices()
+            async let _bluetoothDevices = try await discovery.findBluetoothDevices()
 
-                usbDevices = await _usbDevices
-                ethernetDevices = await _ethernetDevices
-                lanDevices = try await _lanDevices
-            } else {
-                let devices = try await Noora().progressStep(
-                    message: "Discovering all Wendy devices",
-                    successMessage: nil,
-                    errorMessage: nil,
-                    showSpinner: true
-                ) { progress in
-                    async let _usbDevices = await discovery.findUSBDevices()
-                    async let _ethernetDevices = await discovery.findEthernetInterfaces()
-                    async let _lanDevices = try await discovery.findLANDevices()
-
-                    let usb = await _usbDevices
-                    let ethernet = await _ethernetDevices
-                    let lan = try await _lanDevices
-
-                    return (usb, ethernet, lan)
-                }
-
-                usbDevices = devices.0
-                ethernetDevices = devices.1
-                lanDevices = devices.2
-            }
+            usbDevices = await _usbDevices
+            ethernetDevices = await _ethernetDevices
+            lanDevices = try await _lanDevices
+            bluetoothDevices = try await _bluetoothDevices
         }
 
         // Display devices in the requested format
         var collection = DevicesCollection(
             usb: usbDevices,
             ethernet: ethernetDevices,
-            lan: lanDevices
+            lan: lanDevices,
+            bluetooth: bluetoothDevices
         )
 
         if !skipResolveAgentVersion {
             collection = try await collection.resolveAgentVersions()
         }
 
-        if format == .json {
+        return collection
+    }
+
+    func run() async throws {
+        let logger = Logger(label: "sh.wendy.cli.devices")
+
+        if JSONMode.isEnabled {
+            let collection = try await discoverDevices()
             do {
                 let jsonOutput = try collection.toJSON()
                 print(jsonOutput)
@@ -130,24 +80,43 @@ struct DiscoverCommand: AsyncParsableCommand {
                 logger.error("Error serializing to JSON: \(error)")
             }
         } else {
-            if collection.isEmpty {
-                Noora().error(
-                    .alert(
-                        "No Wendy devices found.",
-                        takeaways: [
-                            "Check all cables are plugged in and secure.",
-                            "Ensure the device is powered on and running.",
-                            "If the device is running, try again in a few seconds.",
-                        ]
-                    )
-                )
-            } else {
-                Noora().success(
-                    "Found \(collection.deviceCount) Wendy \(collection.deviceCount == 1 ? "device" : "devices")"
-                )
-                print(collection.toHumanReadableString())
+            let collection = try await Noora().progressStep(message: "Discovering Wendy devices") {
+                progress in
+                try await discoverDevices()
             }
+            let updates = AsyncTimerSequence(interval: .seconds(2), clock: .continuous)
+                .map { _ in
+                    try await discoverDevices().groupedDevices().tableData
+                }
+
+            await Noora().table(collection.groupedDevices().tableData, updates: updates)
         }
+    }
+}
+
+extension [DevicesCollection.GroupedDevice] {
+    fileprivate var tableData: TableData {
+        return TableData(
+            columns: [
+                TableColumn(title: "Name"),
+                TableColumn(title: "Hostname"),
+                TableColumn(title: "Interfaces"),
+                TableColumn(title: "Version"),
+            ],
+            rows: self.map { device in
+                var hostname = ""
+                for case .lan(let lanDevice) in device.interfaces {
+                    hostname = lanDevice.hostname
+                }
+
+                return [
+                    "\(device.name)",
+                    "\(hostname)",
+                    "\(device.interfaces.map { $0.shortDescription }.joined(separator: ", "))",
+                    "\(device.interfaces.compactMap(\.agentVersion).first ?? "Unknown")",
+                ]
+            }
+        )
     }
 }
 
@@ -195,6 +164,12 @@ extension DevicesCollection {
         }
     }
 
+    private func resolveBluetoothDeviceAgentVersions() async -> [BluetoothDevice] {
+        // Bluetooth agent version resolution is done via BLE L2CAP connection
+        // This will be implemented in a subsequent PR
+        return bluetoothDevices
+    }
+
     func resolveAgentVersions() async throws -> DevicesCollection {
         return await withTaskGroup(of: DevicesCollection.self) { group in
             group.addTask {
@@ -212,12 +187,18 @@ extension DevicesCollection {
                 return DevicesCollection(lan: devices)
             }
 
+            group.addTask {
+                let devices = await resolveBluetoothDeviceAgentVersions()
+                return DevicesCollection(bluetooth: devices)
+            }
+
             var collection = DevicesCollection()
 
             for await devices in group {
                 collection.usbDevices.append(contentsOf: devices.usbDevices)
                 collection.ethernetDevices.append(contentsOf: devices.ethernetDevices)
                 collection.lanDevices.append(contentsOf: devices.lanDevices)
+                collection.bluetoothDevices.append(contentsOf: devices.bluetoothDevices)
             }
 
             return collection

@@ -37,6 +37,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
     case bluetooth(BluetoothEntitlements)
     case video(VideoEntitlements)
     case gpu(GPUEntitlements)
+    case persist(PersistenceEntitlements)
     case audio
 
     public func encode(to encoder: Encoder) throws {
@@ -57,6 +58,9 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .gpu(let entitlement):
             try container.encode(EntitlementType.gpu, forKey: .type)
             try entitlement.encode(to: encoder)
+        case .persist(let entitlement):
+            try container.encode(EntitlementType.persist, forKey: .type)
+            try entitlement.encode(to: encoder)
         }
     }
 
@@ -75,6 +79,8 @@ public enum Entitlement: Codable, Sendable, Hashable {
             self = .gpu(try GPUEntitlements(from: decoder))
         case .audio:
             self = .audio
+        case .persist:
+            self = .persist(try PersistenceEntitlements(from: decoder))
         }
     }
 
@@ -89,6 +95,20 @@ public enum EntitlementType: String, Codable, CaseIterable, ExpressibleByArgumen
     case audio
     case bluetooth
     case gpu
+    case persist
+}
+
+public struct PersistenceEntitlements: Codable, Sendable, Hashable {
+    /// The name of the volume to persist
+    public let name: String
+
+    /// The path inside the container to mount the persisted volume at
+    public let path: String
+
+    public init(name: String, path: String) {
+        self.name = name
+        self.path = path
+    }
 }
 
 public struct BluetoothEntitlements: Codable, Sendable, Hashable {
@@ -108,7 +128,52 @@ public struct GPUEntitlements: Codable, Sendable, Hashable {
 }
 
 public struct VideoEntitlements: Codable, Sendable, Hashable {
-    public init() {}
+    /// Video entitlement modes for V4L2 device access.
+    public enum VideoMode: String, Codable, Sendable, Hashable, CaseIterable,
+        CustomStringConvertible
+    {
+        /// Bind and allow all detected V4L2 device nodes.
+        case all
+
+        /// Bind and allow only the explicit device list.
+        case allowlist
+
+        public var description: String {
+            switch self {
+            case .all:
+                return "All"
+            case .allowlist:
+                return "Allowlist"
+            }
+        }
+    }
+
+    public var mode: VideoMode
+    public var allowlist: [String]
+
+    /// Defaults to `.all` mode and a single `/dev/video0` whitelist entry.
+    public init(mode: VideoMode = .all, allowlist: [String] = []) {
+        self.mode = mode
+        self.allowlist = allowlist
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case allowlist
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decodeIfPresent(VideoMode.self, forKey: .mode) ?? .all
+        self.allowlist =
+            try container.decodeIfPresent([String].self, forKey: .allowlist) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(allowlist, forKey: .allowlist)
+    }
 }
 
 public struct AudioEntitlements: Codable, Sendable, Hashable {

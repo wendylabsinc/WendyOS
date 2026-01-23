@@ -10,23 +10,32 @@ struct WendyCLI {
         LoggingSystem.bootstrap { label in
             let level =
                 ProcessInfo.processInfo.environment["LOG_LEVEL"]
-                .flatMap(Logger.Level.init) ?? .info
+                .flatMap(Logger.Level.init(rawValue:)) ?? .info
 
             var logger = StreamLogHandler.standardError(label: label)
             logger.logLevel = level
             return logger
         }
 
+        // Check for global --json flag in arguments
+        let jsonMode =
+            ProcessInfo.processInfo.arguments.contains("--json")
+            || ProcessInfo.processInfo.arguments.contains("-j")
+
         // Track command execution with analytics
         if let analytics = try? AnalyticsService(config: getConfig().analytics) {
             await analytics.trackCommandExecution {
-                await WendyCommand.main()
+                await withJSONMode(enabled: jsonMode) {
+                    await WendyCommand.main()
+                }
             }
             // Ensure all events are sent before exiting
             await analytics.flush()
         } else {
             // Analytics not available, run normally
-            await WendyCommand.main()
+            await withJSONMode(enabled: jsonMode) {
+                await WendyCommand.main()
+            }
         }
     }
 }
@@ -66,4 +75,10 @@ struct WendyCommand: AsyncParsableCommand {
             ),
         ]
     )
+
+    @Flag(
+        name: [.customShort("j"), .long],
+        help: "Output in JSON format. Disables interactive prompts."
+    )
+    var json: Bool = false
 }

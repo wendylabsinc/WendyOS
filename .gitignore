@@ -19,3 +19,4 @@ WendyCLI.app/
 
 # Proto generation sentinel
 .proto-generated
+.agent-build

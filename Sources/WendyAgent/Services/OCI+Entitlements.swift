@@ -2,6 +2,10 @@ import AppConfig
 import Foundation
 import Logging
 
+struct OCIDependencies: Sendable {
+    var directoriesToCreate = [URL]()
+}
+
 extension OCI {
     mutating func setDeviceCapabilities(appName: String) {
         let deviceCapabilities = [
@@ -55,10 +59,47 @@ extension OCI {
         )
     }
 
+    struct AvailableDevices: Sendable {
+        let devices: [Device]
+
+        static func detect() throws -> AvailableDevices {
+            let fm = FileManager.default
+            let devContents = try fm.contentsOfDirectory(atPath: "/dev")
+            return AvailableDevices(
+                devices: devContents.compactMap { device -> Device? in
+                    let devicePath = "/dev/\(device)"
+
+                    // Get device info using stat to find major/minor numbers
+                    var statInfo = stat()
+                    guard stat(devicePath, &statInfo) == 0 else { return nil }
+
+                    // Extract major/minor numbers from st_rdev
+                    // On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & ~0xff)
+                    let rdev = UInt64(statInfo.st_rdev)
+                    let deviceMajor = Int((rdev >> 8) & 0xfff)
+                    let deviceMinor = Int((rdev & 0xff) | ((rdev >> 12) & ~0xff))
+
+                    return Device(
+                        path: devicePath,
+                        type: "c",
+                        major: deviceMajor,
+                        minor: deviceMinor,
+                        fileMode: 0o666,
+                        uid: 0,
+                        gid: 0
+                    )
+                }
+            )
+        }
+    }
+
+    @discardableResult
     mutating func applyEntitlements(
         entitlements: [Entitlement],
-        appName: String
-    ) {
+        appName: String,
+        availableDevices: AvailableDevices,
+        persistenceBasePath: URL
+    ) -> OCIDependencies {
         let logger = Logger(label: #file)
         logger.debug(
             "applyEntitlements called",
@@ -68,6 +109,7 @@ extension OCI {
             ]
         )
         var didSetDeviceCapabilities = false
+        var dependencies = OCIDependencies()
 
         for entitlement in entitlements {
             logger.trace(
@@ -75,6 +117,24 @@ extension OCI {
                 metadata: ["entitlement": .string("\(entitlement)")]
             )
             switch entitlement {
+            case .persist(let persistenceEntitlements):
+                let source = persistenceBasePath.appending(component: persistenceEntitlements.name)
+                dependencies.directoriesToCreate.append(source)
+
+                self.mounts.append(
+                    .init(
+                        destination: persistenceEntitlements.path,
+                        type: "bind",
+                        source: source.path,
+                        options: ["rbind", "nosuid", "noexec"]
+                    )
+                )
+                logger.debug(
+                    "Added persist mount",
+                    metadata: [
+                        "mount": .string("\(persistenceEntitlements.path)")
+                    ]
+                )
             case .gpu(_):
                 logger.info("GPU entitlement detected - adding video group")
                 // Add video group (gid 44) for access to GPU devices
@@ -126,7 +186,25 @@ extension OCI {
             case .bluetooth(let bluetooth):
                 switch bluetooth.mode {
                 case .bluez:
-                    ()  // TODO: Unsupported for now
+                    // Mount D-Bus for BlueZ daemon communication
+                    self.mounts.append(
+                        .init(
+                            destination: "/run/dbus",
+                            type: "bind",
+                            source: "/run/dbus",
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
+
+                    // Also mount /var/run/dbus as some systems use this path
+                    self.mounts.append(
+                        .init(
+                            destination: "/var/run/dbus",
+                            type: "bind",
+                            source: "/var/run/dbus",
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
+                    )
                 case .kernel:
                     for entitlement in entitlements {
                         if case .network(let networkEntitlements) = entitlement,
@@ -232,37 +310,55 @@ extension OCI {
                     didSetDeviceCapabilities = true
                     self.setDeviceCapabilities(appName: appName)
                 }
-            case .video:
-                self.linux.devices.append(
-                    .init(
-                        path: "/dev/video0",
-                        type: "c",
-                        major: 81,
-                        minor: 17,
-                        fileMode: 0o666,
-                        uid: 0,
-                        gid: 0
+            case .video(let video):
+                // Find all video devices in /dev
+                let videoDevices = availableDevices.devices.filter { device in
+                    guard device.path.hasPrefix("/dev/video") else {
+                        return false
+                    }
+
+                    switch video.mode {
+                    case .all:
+                        return true
+                    case .allowlist:
+                        return video.allowlist.contains { allowed in
+                            let allowedName = allowed.replacingOccurrences(of: "/dev/", with: "")
+                            let deviceName = device.path.replacingOccurrences(of: "/dev/", with: "")
+                            return deviceName == allowedName
+                        }
+                    }
+                }
+
+                for device in videoDevices {
+                    self.linux.devices.append(device)
+                    self.mounts.append(
+                        .init(
+                            destination: device.path,
+                            type: "bind",
+                            source: device.path,
+                            options: ["rbind", "nosuid", "noexec"]
+                        )
                     )
-                )
+                }
 
-                self.mounts.append(
-                    .init(
-                        destination: "/dev/video0",
-                        type: "bind",
-                        source: "/dev/video0",
-                        options: ["rbind", "nosuid", "noexec"]
+                if !videoDevices.isEmpty {
+                    // Allow all video4linux devices (major 81)
+                    self.linux.resources?.devices?.append(
+                        DeviceAllowance(allow: true, type: "c", major: 81, access: "rw")
                     )
-                )
 
-                self.linux.resources?.devices?.append(
-                    DeviceAllowance(allow: true, type: "c", major: 81, minor: 17, access: "rw")
-                )
-
-                if !didSetDeviceCapabilities {
-                    didSetDeviceCapabilities = true
-                    self.setDeviceCapabilities(appName: appName)
+                    if !didSetDeviceCapabilities {
+                        didSetDeviceCapabilities = true
+                        self.setDeviceCapabilities(appName: appName)
+                    }
+                } else {
+                    logger.warning(
+                        "Video entitlement requested but no /dev/video* devices found"
+                    )
                 }
             }
         }
+
+        return dependencies
     }
 }

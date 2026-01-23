@@ -28,42 +28,80 @@ struct Agent {
     }
 
     func discoverSSID() async throws -> String {
-        let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+        struct WifiNetwork: Sendable {
+            let ssid: String
+            let signalStrength: Int32
 
-        let networks = try await Noora().progressStep(
-            message: "Listing available WiFi networks",
-            successMessage: nil,
-            errorMessage: nil,
-            showSpinner: true
-        ) { progress in
-            try await agent.listWiFiNetworks(.init())
-        }.networks
-
-        // Group networks by SSID and keep the one with highest signal strength
-        let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty }) { $0.ssid }
-            .compactMapValues {
-                networksWithSameSsid -> Wendy_Agent_Services_V1_ListWiFiNetworksResponse
-                    .WiFiNetwork? in
-                networksWithSameSsid.max(by: { $0.signalStrength < $1.signalStrength })
+            init(network: Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork) {
+                self.ssid = network.ssid
+                self.signalStrength = network.hasSignalStrength ? network.signalStrength : 0
             }
-            .values
-            .sorted(by: {
-                $0.signalStrength > $1.signalStrength
-            })
+        }
 
-        let ssids = uniqueNetworks.map { $0.ssid }
+        actor LiveData: nonisolated AsyncSequence {
+            nonisolated let source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>
+            var networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork] = []
 
-        let index = try await Noora().selectableTable(
-            headers: ["SSID", "Strength"],
-            rows: uniqueNetworks.map { network in
-                let signalDisplay =
-                    network.hasSignalStrength ? "\(network.signalStrength)" : "Unknown"
-                return [network.ssid, signalDisplay]
-            },
-            pageSize: uniqueNetworks.count
+            init(source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>) {
+                self.source = source
+            }
+
+            func setNetworks(
+                _ networks: [Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork]
+            ) {
+                self.networks = networks
+            }
+
+            nonisolated func makeAsyncIterator() -> AsyncIterator {
+                return AsyncIterator(actor: self)
+            }
+
+            struct AsyncIterator: AsyncIteratorProtocol {
+                let actor: LiveData
+
+                func next() async throws -> TableData? {
+                    let networks = try await actor.source.listWiFiNetworks(.init()).networks
+                    // Group networks by SSID and keep the one with highest signal strength
+                    // Sort by SSID to maintain stable ordering (prevents selection index drift)
+                    let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty })
+                    { $0.ssid }
+                    .compactMapValues {
+                        networksWithSameSsid -> Wendy_Agent_Services_V1_ListWiFiNetworksResponse
+                            .WiFiNetwork? in
+                        networksWithSameSsid.max(by: { $0.signalStrength < $1.signalStrength })
+                    }
+                    .values
+                    .sorted(by: {
+                        $0.ssid < $1.ssid
+                    })
+
+                    // Store the processed networks so the index matches the displayed rows
+                    await actor.setNetworks(uniqueNetworks)
+
+                    let rows = uniqueNetworks.map { network -> TableRow in
+                        return [
+                            "\(network.ssid)",
+                            "\(network.hasSignalStrength ? "\(network.signalStrength)" : "Unknown")",
+                        ]
+                    }
+
+                    return TableData(
+                        columns: [TableColumn(title: "SSID"), TableColumn(title: "Strength")],
+                        rows: rows
+                    )
+                }
+            }
+        }
+
+        let data = LiveData(
+            source: Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
         )
-
-        return ssids[index]
+        guard let initial = try await data.makeAsyncIterator().next() else {
+            throw CancellationError()
+        }
+        let index = try await Noora().selectableTable(initial, updates: data, pageSize: 20)
+        let networks = await data.networks
+        return networks[index].ssid
     }
 
     func connectToWiFi(

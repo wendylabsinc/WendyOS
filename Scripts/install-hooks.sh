@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Create hooks directory if it doesn't exist
 mkdir -p .git/hooks

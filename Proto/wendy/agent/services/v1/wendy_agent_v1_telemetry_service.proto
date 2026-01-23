@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package wendy.agent.services.v1;
+
+import "opentelemetry/proto/collector/logs/v1/logs_service.proto";
+import "opentelemetry/proto/collector/metrics/v1/metrics_service.proto";
+
+// Service for streaming telemetry data from the agent to CLI clients.
+// This allows observing logs and metrics from containers running on the device.
+service WendyTelemetryService {
+    // Stream log records from containers running on the device.
+    // Returns OTLP log data that can be displayed or forwarded to a local collector.
+    rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
+
+    // Stream metrics from containers running on the device.
+    // Returns OTLP metrics data that can be displayed or forwarded to a local collector.
+    rpc StreamMetrics(StreamMetricsRequest) returns (stream StreamMetricsResponse);
+}
+
+message StreamLogsRequest {
+    // Optional filter by service name
+    optional string service_name = 1;
+
+    // Optional filter by minimum severity level (TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21)
+    optional int32 min_severity = 2;
+
+    // Optional filter by app/container name
+    optional string app_name = 3;
+}
+
+message StreamLogsResponse {
+    // OTLP logs data using the standard OpenTelemetry format.
+    // Can be forwarded directly to a local OTLP collector.
+    opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest logs = 1;
+}
+
+message StreamMetricsRequest {
+    // Optional filter by service name
+    optional string service_name = 1;
+
+    // Optional filter by metric name prefix
+    optional string metric_name_prefix = 2;
+
+    // Optional filter by app/container name
+    optional string app_name = 3;
+}
+
+message StreamMetricsResponse {
+    // OTLP metrics data using the standard OpenTelemetry format.
+    // Can be forwarded directly to a local OTLP collector.
+    opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest metrics = 1;
+}

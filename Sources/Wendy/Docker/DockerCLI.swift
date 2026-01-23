@@ -6,11 +6,152 @@
 //
 
 import Foundation
+import Logging
 import Subprocess
+
+#if os(macOS)
+    import Darwin
+#elseif canImport(Glibc)
+    import Glibc
+#elseif canImport(Musl)
+    import Musl
+#endif
+
+/// Errors related to Docker container operations
+public enum DockerError: Error, LocalizedError {
+    /// Container was not found (exit code 1 with "No such object" message)
+    case containerNotFound(containerName: String)
+    /// Docker daemon is not running or not accessible
+    case daemonUnavailable(underlyingError: String)
+    /// Permission denied when accessing Docker
+    case permissionDenied(operation: String)
+    /// File not found inside container
+    case fileNotFound(containerName: String, filePath: String)
+    /// Container exists but is not running
+    case containerNotRunning(containerName: String)
+    /// Generic Docker command failure
+    case commandFailed(command: String, exitCode: Int, stderr: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .containerNotFound(let name):
+            return "Container '\(name)' not found"
+        case .daemonUnavailable(let error):
+            return "Docker daemon unavailable: \(error)"
+        case .permissionDenied(let operation):
+            return "Permission denied for Docker operation: \(operation)"
+        case .fileNotFound(let container, let path):
+            return "File '\(path)' not found in container '\(container)'"
+        case .containerNotRunning(let name):
+            return "Container '\(name)' is not running"
+        case .commandFailed(let command, let exitCode, let stderr):
+            return "Docker command '\(command)' failed with exit code \(exitCode): \(stderr)"
+        }
+    }
+}
+
+/// Manages a file-based lock to prevent parallel builds from interfering with each other
+public final class BuildLock: Sendable {
+    private let lockPath: String
+
+    public static let shared = BuildLock()
+
+    private init() {
+        let wendyDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wendy")
+        self.lockPath = wendyDir.appendingPathComponent("build.lock").path
+    }
+
+    /// Acquires a shared lock for building
+    /// Multiple builds can hold shared locks simultaneously, allowing parallel builds
+    /// The lock is automatically released when the closure completes or throws
+    public func withLock<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T
+    {
+        let fd = try acquireForBuild()
+        defer { release(fd: fd) }
+        return try await operation()
+    }
+
+    /// Checks if any builds are currently in progress
+    /// Returns true if one or more builds hold shared locks
+    public func isBuildInProgress() -> Bool {
+        let fd = open(lockPath, O_RDWR)
+        guard fd >= 0 else {
+            // Lock file doesn't exist, no build in progress
+            return false
+        }
+        defer { close(fd) }
+
+        #if os(macOS) || canImport(Glibc) || canImport(Musl)
+            // Try to acquire an exclusive lock (non-blocking)
+            // If we can't get it, shared locks are held by running builds
+            let result = flock(fd, LOCK_EX | LOCK_NB)
+            if result != 0 {
+                // Failed to get exclusive lock, builds are in progress
+                return true
+            }
+
+            // We got the exclusive lock, meaning no builds are running
+            // Release it and return false
+            flock(fd, LOCK_UN)
+        #endif
+
+        return false
+    }
+
+    private func acquireForBuild() throws -> Int32 {
+        // Ensure directory exists
+        let wendyDir = (lockPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(
+            atPath: wendyDir,
+            withIntermediateDirectories: true
+        )
+
+        // Open or create the lock file
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else {
+            throw BuildLockError.unableToCreateLock
+        }
+
+        #if os(macOS) || canImport(Glibc) || canImport(Musl)
+            // Acquire a shared lock, multiple builds can hold this simultaneously
+            let result = flock(fd, LOCK_SH)
+            if result != 0 {
+                close(fd)
+                throw BuildLockError.unableToCreateLock
+            }
+        #endif
+
+        return fd
+    }
+
+    private func release(fd: Int32) {
+        #if os(macOS) || canImport(Glibc) || canImport(Musl)
+            flock(fd, LOCK_UN)
+        #endif
+        close(fd)
+    }
+}
+
+/// Errors related to build lock operations
+public enum BuildLockError: Error, LocalizedError {
+    case buildInProgress
+    case unableToCreateLock
+
+    public var errorDescription: String? {
+        switch self {
+        case .buildInProgress:
+            return "Build in progress, please try again when it finishes"
+        case .unableToCreateLock:
+            return "Unable to create build lock file"
+        }
+    }
+}
 
 /// Represents the Docker CLI interface for managing container images and running containers.
 public struct DockerCLI: Sendable {
     public let command: String
+    private let logger = Logger(label: "sh.wendy.docker")
 
     public init(command: String = "docker") {
         self.command = command
@@ -140,43 +281,62 @@ public struct DockerCLI: Sendable {
     /// Uses host.docker.internal:PORT for cross-platform support (works on both Linux and Docker Desktop).
     /// Disables provenance and SBOM to ensure Docker v2 manifest format (not OCI image index).
     /// Uses registry cache to preserve build cache across builder recreations.
+    /// Acquires a build lock to prevent parallel builds from interfering with builder restarts.
     public func buildxAndPush(
         name: String,
         directory: String = ".",
         registryHostname: String = "host.docker.internal",
-        registryPort: Int = 5000
+        registryPort: Int = 5000,
+        onOutput: @escaping @Sendable (String) async throws -> Void
     ) async throws {
-        let arguments = [
-            "buildx", "build",
-            "--builder", defaultBuilderName,
-            "--platform", "linux/arm64",
-            "--provenance=false",
-            "--sbom=false",
-            "--push",
-            "-t", "\(registryHostname):\(registryPort)/\(name):latest",
-            directory,
-        ]
+        // Acquire shared build lock, allows parallel builds but prevents builder restarts
+        try await BuildLock.shared.withLock {
+            let arguments = [
+                "buildx", "build",
+                "--builder", self.defaultBuilderName,
+                "--platform", "linux/arm64",
+                "--provenance=false",
+                "--sbom=false",
+                "--push",
+                "-t", "\(registryHostname):\(registryPort)/\(name):latest",
+                directory,
+            ]
 
-        let result = try await Subprocess.run(
-            Subprocess.Executable.name(self.command),
-            arguments: Subprocess.Arguments(arguments),
-            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
-        )
+            let result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments)
+            ) { _, stdin, stdout, stderr in
+                try await stdin.finish()
 
-        guard result.terminationStatus.isSuccess else {
-            let exitCode: Int
-            switch result.terminationStatus {
-            case .exited(let code), .unhandledException(let code):
-                exitCode = Int(code)
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        for try await line in stdout.lines() {
+                            try await onOutput(line)
+                        }
+                    }
+                    group.addTask {
+                        for try await line in stderr.lines() {
+                            try await onOutput(line)
+                        }
+                    }
+                    try await group.waitForAll()
+                }
             }
-            throw SubprocessError.nonZeroExit(
-                command: ([self.command] + arguments).joined(separator: " "),
-                exitCode: exitCode,
-                terminationReason: result.terminationStatus.description,
-                output: "",
-                error: ""
-            )
+
+            guard result.terminationStatus.isSuccess else {
+                switch result.terminationStatus {
+                case .unhandledException(2):
+                    throw CancellationError()
+                case .exited(let code), .unhandledException(let code):
+                    throw SubprocessError.nonZeroExit(
+                        command: ([self.command] + arguments).joined(separator: " "),
+                        exitCode: Int(code),
+                        terminationReason: result.terminationStatus.description,
+                        output: "",
+                        error: ""
+                    )
+                }
+            }
         }
     }
 
@@ -265,24 +425,81 @@ public struct DockerCLI: Sendable {
             .appendingPathComponent("buildkit-config.toml")
             .path
 
-        var updatedConfig = false
+        // Update the local config file if this registry isn't configured yet
         if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            if !existingConfig.contains("\(registryHostname):5000") {
+            if !existingConfig.contains("\(registryHostname):\(registryPort)") {
                 existingConfig += "\n\n" + configContent
                 try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
-                updatedConfig = true
             }
         } else {
             try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-            updatedConfig = true
         }
 
+        // Read the desired config from local file
+        let desiredConfig = try String(contentsOfFile: configPath, encoding: .utf8)
+
         if try await hasBuildxBuilder(builderName: defaultBuilderName) {
-            if !updatedConfig {
+            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+
+            // Check if the builder container is actually running
+            // containerNotFound is treated as "not running" since the builder exists but container may not
+            var isRunning: Bool
+            do {
+                isRunning = try await isContainerRunning(containerName: containerName)
+            } catch DockerError.containerNotFound {
+                isRunning = false
+            }
+
+            if !isRunning {
+                // If it isn't, start it with bootstrap
+                let bootstrapArguments: Subprocess.Arguments = [
+                    "buildx", "inspect", "--bootstrap", defaultBuilderName,
+                ]
+                let bootstrapResult = try await Subprocess.run(
+                    Subprocess.Executable.name(self.command),
+                    arguments: bootstrapArguments,
+                    output: .discarded,
+                    error: .discarded
+                )
+
+                // Check if the container is now running after bootstrap
+                do {
+                    isRunning = try await isContainerRunning(containerName: containerName)
+                } catch {
+                    isRunning = false
+                }
+
+                // If bootstrap failed OR the container still doesn't exist, the builder
+                // is likely orphaned (pointing to a dead Docker context like desktop-linux
+                // when the user switched to OrbStack). Remove it and recreate.
+                if !bootstrapResult.terminationStatus.isSuccess || !isRunning {
+                    try? await removeBuildxBuilder(name: defaultBuilderName)
+                    return try await createBuildxBuilder(configPath: configPath)
+                }
+            }
+
+            // Get the container's current config
+            // fileNotFound means config needs to be updated
+            let containerConfig: String?
+            do {
+                containerConfig = try await getContainerFileContents(
+                    containerName: containerName,
+                    filePath: "/etc/buildkit/buildkitd.toml"
+                )
+            } catch DockerError.fileNotFound {
+                containerConfig = nil
+            }
+
+            if containerConfig == desiredConfig {
                 return
             }
 
-            let containerName = "buildx_buildkit_\(defaultBuilderName)0"
+            // Config needs updating, check if any builds are in progress before modifying
+            if BuildLock.shared.isBuildInProgress() {
+                throw BuildLockError.buildInProgress
+            }
+
+            // Copy the updated config to the container
             let cpArguments: Subprocess.Arguments = [
                 "cp",
                 configPath,
@@ -310,6 +527,7 @@ public struct DockerCLI: Sendable {
                 )
             }
 
+            // Restart to apply the new config
             let restartArguments: Subprocess.Arguments = [
                 "restart", containerName,
             ]
@@ -338,7 +556,11 @@ public struct DockerCLI: Sendable {
             return
         }
 
-        // Create builder with configuration
+        try await createBuildxBuilder(configPath: configPath)
+    }
+
+    /// Creates a new buildx builder with the given configuration file.
+    private func createBuildxBuilder(configPath: String) async throws {
         let createArguments: Subprocess.Arguments = [
             "buildx", "create",
             "--name", defaultBuilderName,
@@ -368,6 +590,214 @@ public struct DockerCLI: Sendable {
                 error: ""
             )
         }
+    }
+
+    /// Checks if a Docker container is currently running
+    private func isContainerRunning(containerName: String) async throws -> Bool {
+        let arguments = ["inspect", "-f", "{{.State.Running}}", containerName]
+        let result:
+            Subprocess.CollectedResult<
+                Subprocess.StringOutput<UTF8>, Subprocess.StringOutput<UTF8>
+            >
+        do {
+            result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100, encoding: UTF8.self),
+                error: .string(limit: 10_000, encoding: UTF8.self)
+            )
+        } catch {
+            logger.error(
+                "Failed to execute docker inspect",
+                metadata: [
+                    "container": "\(containerName)",
+                    "error": "\(error.localizedDescription)",
+                ]
+            )
+            throw DockerError.daemonUnavailable(underlyingError: error.localizedDescription)
+        }
+
+        let stderr =
+            result.standardError?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+
+        guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+
+            // Parse stderr to determine the specific error type
+            if stderr.contains("No such object") || stderr.contains("not found") {
+                logger.debug(
+                    "Container not found",
+                    metadata: ["container": "\(containerName)"]
+                )
+                throw DockerError.containerNotFound(containerName: containerName)
+            } else if stderr.contains("permission denied") || stderr.contains("Permission denied") {
+                logger.warning(
+                    "Permission denied accessing Docker",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "stderr": "\(stderr)",
+                    ]
+                )
+                throw DockerError.permissionDenied(
+                    operation: "inspect container '\(containerName)'"
+                )
+            } else if stderr.contains("Cannot connect to the Docker daemon")
+                || stderr.contains("Is the docker daemon running")
+            {
+                logger.error(
+                    "Docker daemon unavailable",
+                    metadata: ["stderr": "\(stderr)"]
+                )
+                throw DockerError.daemonUnavailable(underlyingError: stderr)
+            } else {
+                logger.warning(
+                    "Docker inspect failed",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "exitCode": "\(exitCode)",
+                        "stderr": "\(stderr)",
+                    ]
+                )
+                throw DockerError.commandFailed(
+                    command: "docker inspect",
+                    exitCode: exitCode,
+                    stderr: stderr
+                )
+            }
+        }
+
+        guard let output = result.standardOutput else {
+            logger.warning(
+                "Docker inspect returned no output",
+                metadata: ["container": "\(containerName)"]
+            )
+            return false
+        }
+
+        return output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) == "true"
+    }
+
+    /// Gets the contents of a file inside a Docker container using docker exec cat
+    private func getContainerFileContents(
+        containerName: String,
+        filePath: String
+    ) async throws -> String {
+        let arguments = ["exec", containerName, "cat", filePath]
+        let result:
+            Subprocess.CollectedResult<
+                Subprocess.StringOutput<UTF8>, Subprocess.StringOutput<UTF8>
+            >
+        do {
+            result = try await Subprocess.run(
+                Subprocess.Executable.name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .string(limit: 100_000, encoding: UTF8.self),
+                error: .string(limit: 10_000, encoding: UTF8.self)
+            )
+        } catch {
+            logger.error(
+                "Failed to execute docker exec",
+                metadata: [
+                    "container": "\(containerName)",
+                    "filePath": "\(filePath)",
+                    "error": "\(error.localizedDescription)",
+                ]
+            )
+            throw DockerError.daemonUnavailable(underlyingError: error.localizedDescription)
+        }
+
+        let stderr =
+            result.standardError?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+
+        guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+
+            // Parse stderr to determine the specific error type
+            if stderr.contains("No such container") || stderr.contains("not found") {
+                logger.debug(
+                    "Container not found for file read",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "filePath": "\(filePath)",
+                    ]
+                )
+                throw DockerError.containerNotFound(containerName: containerName)
+            } else if stderr.contains("is not running") {
+                logger.debug(
+                    "Container not running for file read",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "filePath": "\(filePath)",
+                    ]
+                )
+                throw DockerError.containerNotRunning(containerName: containerName)
+            } else if stderr.contains("No such file or directory") {
+                logger.debug(
+                    "File not found in container",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "filePath": "\(filePath)",
+                    ]
+                )
+                throw DockerError.fileNotFound(containerName: containerName, filePath: filePath)
+            } else if stderr.contains("permission denied") || stderr.contains("Permission denied") {
+                logger.warning(
+                    "Permission denied reading file from container",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "filePath": "\(filePath)",
+                        "stderr": "\(stderr)",
+                    ]
+                )
+                throw DockerError.permissionDenied(
+                    operation: "read file '\(filePath)' from container '\(containerName)'"
+                )
+            } else if stderr.contains("Cannot connect to the Docker daemon")
+                || stderr.contains("Is the docker daemon running")
+            {
+                logger.error(
+                    "Docker daemon unavailable",
+                    metadata: ["stderr": "\(stderr)"]
+                )
+                throw DockerError.daemonUnavailable(underlyingError: stderr)
+            } else {
+                logger.warning(
+                    "Docker exec cat failed",
+                    metadata: [
+                        "container": "\(containerName)",
+                        "filePath": "\(filePath)",
+                        "exitCode": "\(exitCode)",
+                        "stderr": "\(stderr)",
+                    ]
+                )
+                throw DockerError.commandFailed(
+                    command: "docker exec cat",
+                    exitCode: exitCode,
+                    stderr: stderr
+                )
+            }
+        }
+
+        guard let output = result.standardOutput else {
+            logger.warning(
+                "Docker exec cat returned no output",
+                metadata: [
+                    "container": "\(containerName)",
+                    "filePath": "\(filePath)",
+                ]
+            )
+            return ""
+        }
+
+        return output
     }
 
     /// Removes a buildx builder.

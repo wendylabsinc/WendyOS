@@ -11,6 +11,7 @@ import _NIOFileSystem
 
 struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
     let logger = Logger(label: "WendyContainerService")
+    let persistenceBasePath: URL
 
     func listLayers(
         request: ServerRequest<Wendy_Agent_Services_V1_ListLayersRequest>,
@@ -287,11 +288,18 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
 
             labels["sh.wendy/app.version"] = appConfig.version
 
+            let hostname = try await String(
+                contentsOf: FilePath("/etc/hostname"),
+                maximumSizeAllowed: .bytes(256)
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
             // Build base environment variables
             // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
             // handled by CDI and added during applyCDIDevice()
             let env = [
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "WENDY_HOSTNAME=\(hostname).local",
             ]
 
             // Infer command and workingDir from the image config, if not provided in the request.
@@ -346,10 +354,19 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 appName: request.appName
             )
 
-            spec.applyEntitlements(
+            let dependencies = spec.applyEntitlements(
                 entitlements: appConfig.entitlements,
-                appName: request.appName
+                appName: request.appName,
+                availableDevices: try OCI.AvailableDevices.detect(),
+                persistenceBasePath: persistenceBasePath
             )
+
+            for directory in dependencies.directoriesToCreate {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+            }
 
             // Apply CDI for GPU if requested
 
@@ -592,6 +609,74 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     ]
                 )
                 throw error
+            }
+
+            return ServerResponse(message: .init())
+        }
+    }
+
+    func deleteContainer(
+        request: ServerRequest<Wendy_Agent_Services_V1_DeleteContainerRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_DeleteContainerResponse> {
+        let request = request.message
+        let appName = request.appName
+        let deleteImage = request.deleteImage
+
+        return try await Containerd.withClient { client in
+            logger.info(
+                "Deleting container",
+                metadata: [
+                    "container-id": .stringConvertible(appName),
+                    "delete-image": .stringConvertible(deleteImage),
+                ]
+            )
+
+            // Capture image name before deletion so we can optionally remove it
+            var imageName: String? = nil
+            do {
+                let container = try await client.getContainer(named: appName)
+                imageName = container.image
+            } catch let error as RPCError where error.code == .notFound {
+                logger.info(
+                    "Container not found prior to delete, continuing",
+                    metadata: ["container-id": .stringConvertible(appName)]
+                )
+            }
+
+            // Stop and delete the container and its ephemeral snapshot
+            do {
+                try await client.deleteContainer(named: appName)
+            } catch let error as RPCError where error.code == .notFound {
+                logger.info(
+                    "Container already deleted",
+                    metadata: ["container-id": .stringConvertible(appName)]
+                )
+            }
+
+            // Ensure monitor won't auto-restart it
+            await ContainerMonitor.shared.markContainerStopped(appName)
+
+            // Optionally remove the image to free disk space
+            if deleteImage, let imageName {
+                do {
+                    try await client.deleteImage(named: imageName)
+                    logger.info(
+                        "Deleted container image",
+                        metadata: [
+                            "container-id": .stringConvertible(appName),
+                            "image": .stringConvertible(imageName),
+                        ]
+                    )
+                } catch let error as RPCError where error.code == .notFound {
+                    logger.info(
+                        "Image already deleted",
+                        metadata: [
+                            "container-id": .stringConvertible(appName),
+                            "image": .stringConvertible(imageName),
+                        ]
+                    )
+                }
             }
 
             return ServerResponse(message: .init())

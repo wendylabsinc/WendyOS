@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e
+
+## There are times that the `./dev-update-agent.sh` doesn't work, so we need to use this script to update the agent manually.
+
+# Get hostname from first argument or prompt
+if [ -n "$1" ]; then
+    HOSTNAME="$1"
+else
+    read -p "Enter hostname [wendyos-merry-aurora.local]: " HOSTNAME
+    HOSTNAME=${HOSTNAME:-wendyos-merry-aurora.local}
+fi
+
+# Add .local suffix if missing
+if [[ ! "$HOSTNAME" == *.local ]]; then
+    HOSTNAME="${HOSTNAME}.local"
+fi
+
+SSH_USER=${SSH_USER:-root}
+
+# Locally build the WendyCLI binary for the device's architecture (aarch64-swift-linux-musl) with debug not release mode.
+swiftly run swift build --scratch-path .agent-build --product wendy-agent --swift-sdk aarch64-swift-linux-musl
+
+# SCP the binary to the device
+scp .agent-build/aarch64-swift-linux-musl/debug/wendy-agent "${SSH_USER}@${HOSTNAME}:~/"
+
+# SSH into the device and move/restart
+# Right now it still has to be called `edge-agent` because the service is called `edge-agent` in the Yocto image, we haven't renamed it yet.
+ssh "${SSH_USER}@${HOSTNAME}" "sudo mv ./wendy-agent /usr/local/bin/wendy-agent; sudo systemctl restart edge-agent"

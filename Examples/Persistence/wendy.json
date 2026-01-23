@@ -1,0 +1,11 @@
+{
+  "appId" : "com.example.persistence",
+  "entitlements" : [
+    {
+      "name" : "counter",
+      "path" : "\/app\/",
+      "type" : "persist"
+    }
+  ],
+  "version" : "0.0.1"
+}
