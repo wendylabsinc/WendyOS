@@ -12,10 +12,7 @@ import Noora
     import WinSDK
 #endif
 
-/// Flush stdout - fflush is thread-safe and we're doing synchronous terminal I/O.
-/// On Linux, we use fflush(nil) to avoid Swift 6 concurrency warnings about the
-/// stdout global variable. This flushes all output streams, which is safe but
-/// slightly less efficient. On other platforms we can use stdout directly.
+// Helper to flush stdout in Swift 6
 @inline(__always)
 private func flushStdout() {
     #if os(Linux)

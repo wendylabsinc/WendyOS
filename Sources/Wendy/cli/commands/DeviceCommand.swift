@@ -30,9 +30,10 @@ struct DeviceCommand: AsyncParsableCommand {
                 ]
             ),
             CommandGroup(
-                name: "Debugging",
+                name: "Observability",
                 subcommands: [
-                    HardwareCommand.self
+                    LogsCommand.self,
+                    DashboardCommand.self,
                 ]
             ),
             CommandGroup(

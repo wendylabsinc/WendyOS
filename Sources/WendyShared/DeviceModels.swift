@@ -5,6 +5,14 @@ public enum OutputFormat {
     case json
 }
 
+/// Types of device interfaces
+public enum InterfaceType: String, Sendable, Hashable {
+    case usb = "USB"
+    case ethernet = "Ethernet"
+    case lan = "LAN"
+    case bluetooth = "Bluetooth"
+}
+
 // Add to DeviceModels.swift or create a separate file like Device.swift in the domain folder
 public protocol Device: Codable, Hashable {
     var isWendyDevice: Bool { get }
@@ -22,16 +30,24 @@ public struct DevicesCollection: Encodable, Sendable {
     public var usbDevices: [USBDevice]
     public var ethernetDevices: [EthernetInterface]
     public var lanDevices: [LANDevice]
+    public var bluetoothDevices: [BluetoothDevice]
 
-    public init(usb: [USBDevice] = [], ethernet: [EthernetInterface] = [], lan: [LANDevice] = []) {
+    public init(
+        usb: [USBDevice] = [],
+        ethernet: [EthernetInterface] = [],
+        lan: [LANDevice] = [],
+        bluetooth: [BluetoothDevice] = []
+    ) {
         self.usbDevices = usb
         self.ethernetDevices = ethernet
         self.lanDevices = lan
+        self.bluetoothDevices = bluetooth
     }
 
     /// Whether the collection contains no devices
     public var isEmpty: Bool {
         return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
+            && bluetoothDevices.isEmpty
     }
 
     /// The number of unique devices (counting each unique device name once)
@@ -44,11 +60,14 @@ public struct DevicesCollection: Encodable, Sendable {
         // Convert to lowercase, remove common prefixes, and normalize separators
         var normalized = name.lowercased()
 
-        // Remove common prefixes
-        let prefixes = ["wendyos device", "wendy device", "device"]
+        // Remove common prefixes (with space or hyphen separator)
+        let prefixes = [
+            "wendyos device", "wendyos-", "wendyos ", "wendy device", "wendy-", "wendy ", "device",
+        ]
         for prefix in prefixes {
-            if normalized.hasPrefix(prefix + " ") {
-                normalized = String(normalized.dropFirst(prefix.count + 1))
+            if normalized.hasPrefix(prefix) {
+                normalized = String(normalized.dropFirst(prefix.count))
+                break  // Only remove one prefix
             }
         }
 
@@ -79,6 +98,9 @@ public struct DevicesCollection: Encodable, Sendable {
         for device in lanDevices {
             names.insert(normalizeDeviceName(device.displayName))
         }
+        for device in bluetoothDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
         return names
     }
 
@@ -87,7 +109,7 @@ public struct DevicesCollection: Encodable, Sendable {
         public let interfaces: [InterfaceInfo]
 
         public var description: String {
-            let interfaceSummary = interfaces.map(\.type).joined(separator: ", ")
+            let interfaceSummary = interfaces.map(\.type.rawValue).joined(separator: ", ")
             if let hostname = interfaces.compactMap(\.lanHostname).first {
                 return "\(name) (\(hostname)) [\(interfaceSummary)]"
             }
@@ -140,19 +162,87 @@ public struct DevicesCollection: Encodable, Sendable {
             deviceGroups[normalizedName] = group
         }
 
-        // Group LAN devices
+        // Group LAN devices - match by display name but don't merge different hostnames
         for device in lanDevices {
             let normalizedName = normalizeDeviceName(device.displayName)
-            var group =
-                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
-            group.displayName = betterDisplayName(group.displayName, device.displayName)
-            group.interfaces.append(.lan(device))
-            deviceGroups[normalizedName] = group
+
+            // Check if there's an existing group AND if it already has a LAN device with different hostname
+            if let existingGroup = deviceGroups[normalizedName] {
+                let hasConflictingLAN = existingGroup.interfaces.contains { iface in
+                    if case .lan(let existing) = iface {
+                        return existing.hostname != device.hostname
+                    }
+                    return false
+                }
+
+                if hasConflictingLAN {
+                    // Different LAN device with same display name - create separate group using hostname
+                    let uniqueKey = "lan:\(device.hostname)"
+                    var group =
+                        deviceGroups[uniqueKey] ?? (displayName: device.displayName, interfaces: [])
+                    group.interfaces.append(.lan(device))
+                    deviceGroups[uniqueKey] = group
+                } else {
+                    // Same device or no LAN conflict - add to existing group
+                    var group = existingGroup
+                    group.displayName = betterDisplayName(group.displayName, device.displayName)
+                    group.interfaces.append(.lan(device))
+                    deviceGroups[normalizedName] = group
+                }
+            } else {
+                // No existing group - create new one
+                deviceGroups[normalizedName] = (
+                    displayName: device.displayName, interfaces: [.lan(device)]
+                )
+            }
         }
 
-        // Sort by display name for consistent output
+        // Group Bluetooth devices - with prefix matching for truncated BLE names
+        for device in bluetoothDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+
+            // First, try exact match
+            if var group = deviceGroups[normalizedName] {
+                group.displayName = betterDisplayName(group.displayName, device.displayName)
+                group.interfaces.append(.bluetooth(device))
+                deviceGroups[normalizedName] = group
+            } else {
+                // Try prefix matching - BLE names may be truncated due to advertising size limits
+                // Find a group whose normalized name starts with the BLE device's normalized name
+                var matchedKey: String?
+                for (key, _) in deviceGroups {
+                    if key.hasPrefix(normalizedName) && !normalizedName.isEmpty {
+                        matchedKey = key
+                        break
+                    }
+                }
+
+                if let key = matchedKey, var group = deviceGroups[key] {
+                    // Found a match - add BLE to existing group, keep the longer display name
+                    group.interfaces.append(.bluetooth(device))
+                    deviceGroups[key] = group
+                } else {
+                    // No match found - create new group
+                    let group = (
+                        displayName: device.displayName,
+                        interfaces: [InterfaceInfo.bluetooth(device)]
+                    )
+                    deviceGroups[normalizedName] = group
+                }
+            }
+        }
+
+        // Sort by display name, then by first interface identifier for stability
         return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }
-            .sorted { $0.name < $1.name }
+            .sorted { lhs, rhs in
+                if lhs.name != rhs.name {
+                    return lhs.name < rhs.name
+                }
+                // Secondary sort by first interface's identifier for stable ordering
+                let lhsKey = lhs.interfaces.first?.sortKey ?? ""
+                let rhsKey = rhs.interfaces.first?.sortKey ?? ""
+                return lhsKey < rhsKey
+            }
     }
 
     /// Information about a specific interface for a device
@@ -160,12 +250,14 @@ public struct DevicesCollection: Encodable, Sendable {
         case usb(USBDevice)
         case ethernet(EthernetInterface)
         case lan(LANDevice)
+        case bluetooth(BluetoothDevice)
 
-        public var type: String {
+        public var type: InterfaceType {
             switch self {
-            case .usb: return "USB"
-            case .ethernet: return "Ethernet"
-            case .lan: return "LAN"
+            case .usb: return .usb
+            case .ethernet: return .ethernet
+            case .lan: return .lan
+            case .bluetooth: return .bluetooth
             }
         }
 
@@ -174,6 +266,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let usb): return usb.usbVersion ?? "USB"
             case .ethernet: return "Ethernet"
             case .lan: return "LAN"
+            case .bluetooth: return "BLE"
             }
         }
 
@@ -208,6 +301,12 @@ public struct DevicesCollection: Encodable, Sendable {
                     string += "LAN: \(device.hostname):\(device.port)"
                 }
                 return string
+            case .bluetooth(let device):
+                string += "Bluetooth: \(device.address)"
+                if device.rssi != 0 {
+                    string += " (RSSI: \(device.rssi))"
+                }
+                return string
             }
         }
 
@@ -216,6 +315,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let device): return device.displayName
             case .ethernet(let device): return device.displayName
             case .lan(let device): return device.displayName
+            case .bluetooth(let device): return device.displayName
             }
         }
 
@@ -224,12 +324,29 @@ public struct DevicesCollection: Encodable, Sendable {
             case .usb(let device): return device.agentVersion
             case .ethernet(let device): return device.agentVersion
             case .lan(let device): return device.agentVersion
+            case .bluetooth(let device): return device.agentVersion
             }
+        }
+
+        public var bluetoothAddress: String? {
+            guard case .bluetooth(let device) = self else { return nil }
+            return device.address
         }
 
         public var lanHostname: String? {
             guard case .lan(let device) = self else { return nil }
             return device.hostname
+        }
+
+        /// Stable sort key for consistent ordering of devices with same name
+        var sortKey: String {
+            switch self {
+            case .usb(let device):
+                return device.serialNumber ?? "\(device.vendorId)-\(device.productId)"
+            case .ethernet(let device): return device.name
+            case .lan(let device): return device.hostname
+            case .bluetooth(let device): return device.id
+            }
         }
     }
 

@@ -57,9 +57,10 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
-        .package(url: "https://github.com/edgeengineer/dbus.git", from: "0.2.3"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
+        .package(url: "https://github.com/wendylabsinc/bluetooth.git", from: "0.1.0"),
+        .package(url: "https://github.com/wendylabsinc/dbus.git", from: "0.3.0"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
@@ -77,6 +78,7 @@ let package = Package(
                 ),
                 .product(name: "Noora", package: "Noora"),
                 .product(name: "DNSClient", package: "DNSClient"),
+                .product(name: "Bluetooth", package: "bluetooth"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyShared"),
@@ -126,6 +128,7 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "Hummingbird", package: "hummingbird"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
@@ -134,6 +137,7 @@ let package = Package(
                 .target(name: "ContainerRegistry"),
                 .target(name: "WendySDK"),
                 .target(name: "OpenTelemetryGRPC"),
+                .product(name: "Bluetooth", package: "bluetooth"),
             ],
             path: "Sources/WendyAgent"
         ),
@@ -159,6 +163,10 @@ let package = Package(
                 ),
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "DNSClient", package: "DNSClient"),
+                .product(name: "Bluetooth", package: "bluetooth"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOFoundationCompat", package: "swift-nio"),
+                .target(name: "WendyAgentGRPC"),
             ]
         ),
         .target(
@@ -166,6 +174,7 @@ let package = Package(
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .target(name: "OpenTelemetryGRPC"),
             ]
         ),
         .target(

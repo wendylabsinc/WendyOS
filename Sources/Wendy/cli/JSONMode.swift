@@ -36,13 +36,20 @@ public struct JSONErrorResponse: Codable {
 }
 
 /// Executes a body with JSON mode enabled.
-/// This propagates the JSON mode setting via TaskLocal to all nested calls.
+/// This propagates the JSON mode setting via TaskLocal to all nested calls,
+/// and also sets the appropriate CLI output renderer.
 public func withJSONMode<T: Sendable>(
     enabled: Bool,
     _ body: @Sendable () async throws -> T
 ) async rethrows -> T {
-    try await JSONMode.$isEnabled.withValue(enabled) {
-        try await body()
+    let output: any CLIOutput = enabled ? JSONRenderer() : NooraRenderer()
+    let mode: OutputMode = enabled ? .json : .interactive
+
+    return try await JSONMode.$isEnabled.withValue(enabled) {
+        try await withCLIOutput(output, mode: mode) {
+            defer { output.flush() }
+            return try await body()
+        }
     }
 }
 

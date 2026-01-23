@@ -1,8 +1,25 @@
 import ArgumentParser
+import Bluetooth
 import Foundation
 import Logging
 import Noora
 import WendyShared
+
+/// Represents the selected device connection type
+enum SelectedDevice: Sendable {
+    case lan(host: String, port: Int, defaultDevice: Bool)
+    case bluetooth(peripheral: Peripheral, address: String)
+
+    var isLAN: Bool {
+        if case .lan = self { return true }
+        return false
+    }
+
+    var isBluetooth: Bool {
+        if case .bluetooth = self { return true }
+        return false
+    }
+}
 
 struct AgentConnectionOptions: ParsableArguments {
     struct Endpoint: ExpressibleByArgument {
@@ -73,9 +90,9 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var agent: Endpoint?
 
-    public init() {}
+    init() {}
 
-    public init(
+    init(
         endpoint: Endpoint?
     ) {
         self.agent = nil
@@ -134,7 +151,7 @@ struct AgentConnectionOptions: ParsableArguments {
                 try Task.checkCancellation()
                 let devices = try await discovery.findAllDevices()
                     .groupedDevices()
-                    .filter { $0.interfaces.contains(where: { $0.type == "LAN" }) }
+                    .filter { $0.interfaces.contains(where: { $0.type == .lan }) }
 
                 if !devices.isEmpty {
                     return devices
@@ -228,5 +245,104 @@ struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConverti
 
     var debugDescription: String {
         "No Wendy devices found"
+    }
+}
+
+// MARK: - Device Selection with Bluetooth Support
+
+extension AgentConnectionOptions {
+    /// Read device selection, including Bluetooth devices when no LAN devices are available
+    /// or when explicitly requested
+    func readWithBluetooth(
+        title: TerminalText?,
+        readDefault: Bool = true,
+        preferBluetooth: Bool = false
+    ) async throws -> SelectedDevice {
+        // If explicit device specified via CLI, use it as LAN
+        if let device {
+            return .lan(host: device.host, port: device.port, defaultDevice: false)
+        }
+
+        if let agent {
+            return .lan(host: agent.host, port: agent.port, defaultDevice: false)
+        }
+
+        if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
+            let endpoint = Endpoint(argument: endpoint)
+        {
+            return .lan(host: endpoint.host, port: endpoint.port, defaultDevice: false)
+        }
+
+        if readDefault, !preferBluetooth, let defaultDevice = Self.defaultDevice() {
+            return .lan(host: defaultDevice.host, port: defaultDevice.port, defaultDevice: true)
+        }
+
+        let discovery = PlatformDeviceDiscovery(
+            logger: Logger(label: "sh.wendy.cli.find-agent")
+        )
+
+        let allDevices = try await Noora().progressStep(
+            message: "Searching for WendyOS devices",
+            successMessage: nil,
+            errorMessage: nil,
+            showSpinner: true
+        ) { _ in
+            while true {
+                try Task.checkCancellation()
+                let devices = try await discovery.findAllDevices()
+                    .groupedDevices()
+                    .filter { device in
+                        // Include devices with LAN or Bluetooth interfaces
+                        device.interfaces.contains { interface in
+                            interface.type == .lan || interface.type == .bluetooth
+                        }
+                    }
+
+                if !devices.isEmpty {
+                    return devices
+                }
+
+                try await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        let device = Noora().singleChoicePrompt(
+            title: title,
+            question: "Select a device",
+            options: allDevices
+        )
+
+        printDeviceDetails(device)
+
+        // Try interfaces in order of preference
+        let sortedInterfaces = device.interfaces.sorted { a, b in
+            // Sort Bluetooth first if preferred, otherwise LAN first
+            if preferBluetooth {
+                return a.type == .bluetooth && b.type != .bluetooth
+            } else {
+                return a.type == .lan && b.type != .lan
+            }
+        }
+
+        for interface in sortedInterfaces {
+            switch interface {
+            case .lan(let lanDevice):
+                return .lan(
+                    host: lanDevice.hostname,
+                    port: lanDevice.port,
+                    defaultDevice: false
+                )
+            case .bluetooth(let btDevice):
+                let peripheral = Peripheral(
+                    id: BluetoothDeviceID(btDevice.id),
+                    name: btDevice.displayName
+                )
+                return .bluetooth(peripheral: peripheral, address: btDevice.address)
+            default:
+                continue
+            }
+        }
+
+        throw InvalidEndpoint()
     }
 }

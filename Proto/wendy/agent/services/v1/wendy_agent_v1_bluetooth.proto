@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package wendy.agent.services.v1;
+
+// Bluetooth command sent from CLI to Agent over L2CAP
+message BluetoothCommand {
+    oneof command {
+        WifiListCommand wifi_list = 1;
+        WifiConnectCommand wifi_connect = 2;
+        WifiStatusCommand wifi_status = 3;
+        WifiDisconnectCommand wifi_disconnect = 4;
+        AppsListCommand apps_list = 5;
+        AppsStopCommand apps_stop = 6;
+        AppsRemoveCommand apps_remove = 7;
+        AgentVersionCommand agent_version = 8;
+        HardwareListCommand hardware_list = 9;
+    }
+}
+
+// Empty commands (no parameters needed)
+message WifiListCommand {}
+message WifiStatusCommand {}
+message WifiDisconnectCommand {}
+message AppsListCommand {}
+message AgentVersionCommand {}
+message HardwareListCommand {}
+
+// Commands with parameters
+message WifiConnectCommand {
+    string ssid = 1;
+    string password = 2;
+}
+
+message AppsStopCommand {
+    string app_name = 1;
+}
+
+message AppsRemoveCommand {
+    string app_name = 1;
+    bool purge_image = 2;
+}
+
+// Bluetooth response sent from Agent to CLI over L2CAP
+message BluetoothResponse {
+    oneof response {
+        WifiListResponse wifi_list = 1;
+        WifiConnectResponse wifi_connect = 2;
+        WifiStatusResponse wifi_status = 3;
+        WifiDisconnectResponse wifi_disconnect = 4;
+        AppsListResponse apps_list = 5;
+        AppsStopResponse apps_stop = 6;
+        AppsRemoveResponse apps_remove = 7;
+        AgentVersionResponse agent_version = 8;
+        HardwareListResponse hardware_list = 9;
+        ErrorResponse error = 10;
+    }
+}
+
+// WiFi responses
+message WifiListResponse {
+    repeated WifiNetworkInfo networks = 1;
+}
+
+message WifiConnectResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message WifiStatusResponse {
+    bool connected = 1;
+    optional string ssid = 2;
+    optional string error_message = 3;
+}
+
+message WifiDisconnectResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// Apps responses
+message AppsListResponse {
+    repeated AppInfo apps = 1;
+}
+
+message AppsStopResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message AppsRemoveResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// Other responses
+message AgentVersionResponse {
+    string version = 1;
+}
+
+message HardwareListResponse {
+    repeated HardwareInfo capabilities = 1;
+}
+
+message ErrorResponse {
+    string message = 1;
+}
+
+// Shared types
+message WifiNetworkInfo {
+    string ssid = 1;
+    optional int32 signal_strength = 2;
+}
+
+message AppInfo {
+    string app_name = 1;
+    string app_version = 2;
+    string state = 3;
+    int32 failure_count = 4;
+}
+
+message HardwareInfo {
+    string type = 1;
+    string name = 2;
+    bool available = 3;
+}

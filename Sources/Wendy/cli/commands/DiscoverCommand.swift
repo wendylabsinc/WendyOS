@@ -13,10 +13,10 @@ struct DiscoverCommand: AsyncParsableCommand {
     )
 
     enum DeviceType: String, ExpressibleByArgument {
-        case usb, ethernet, lan, all
+        case usb, ethernet, lan, bluetooth, all
     }
 
-    @Option(help: "Device types to list (usb, ethernet, lan, or all)")
+    @Option(help: "Device types to list (usb, ethernet, lan, bluetooth, or all)")
     var type: DeviceType = .all
 
     @Flag(help: "Skip resolving the agent's version")
@@ -29,6 +29,7 @@ struct DiscoverCommand: AsyncParsableCommand {
         var usbDevices: [USBDevice] = []
         var ethernetDevices: [EthernetInterface] = []
         var lanDevices: [LANDevice] = []
+        var bluetoothDevices: [BluetoothDevice] = []
 
         switch type {
         case .usb:
@@ -37,22 +38,27 @@ struct DiscoverCommand: AsyncParsableCommand {
             ethernetDevices = await discovery.findEthernetInterfaces()
         case .lan:
             lanDevices = try await discovery.findLANDevices()
+        case .bluetooth:
+            bluetoothDevices = try await discovery.findBluetoothDevices()
         case .all:
             // Fetch all types of devices
             async let _usbDevices = await discovery.findUSBDevices()
             async let _ethernetDevices = await discovery.findEthernetInterfaces()
             async let _lanDevices = try await discovery.findLANDevices()
+            async let _bluetoothDevices = try await discovery.findBluetoothDevices()
 
             usbDevices = await _usbDevices
             ethernetDevices = await _ethernetDevices
             lanDevices = try await _lanDevices
+            bluetoothDevices = try await _bluetoothDevices
         }
 
         // Display devices in the requested format
         var collection = DevicesCollection(
             usb: usbDevices,
             ethernet: ethernetDevices,
-            lan: lanDevices
+            lan: lanDevices,
+            bluetooth: bluetoothDevices
         )
 
         if !skipResolveAgentVersion {
@@ -158,6 +164,12 @@ extension DevicesCollection {
         }
     }
 
+    private func resolveBluetoothDeviceAgentVersions() async -> [BluetoothDevice] {
+        // Bluetooth agent version resolution is done via BLE L2CAP connection
+        // This will be implemented in a subsequent PR
+        return bluetoothDevices
+    }
+
     func resolveAgentVersions() async throws -> DevicesCollection {
         return await withTaskGroup(of: DevicesCollection.self) { group in
             group.addTask {
@@ -175,12 +187,18 @@ extension DevicesCollection {
                 return DevicesCollection(lan: devices)
             }
 
+            group.addTask {
+                let devices = await resolveBluetoothDeviceAgentVersions()
+                return DevicesCollection(bluetooth: devices)
+            }
+
             var collection = DevicesCollection()
 
             for await devices in group {
                 collection.usbDevices.append(contentsOf: devices.usbDevices)
                 collection.ethernetDevices.append(contentsOf: devices.ethernetDevices)
                 collection.lanDevices.append(contentsOf: devices.lanDevices)
+                collection.bluetoothDevices.append(contentsOf: devices.bluetoothDevices)
             }
 
             return collection
