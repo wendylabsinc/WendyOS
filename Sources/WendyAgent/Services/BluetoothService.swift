@@ -246,7 +246,7 @@ actor BluetoothService: Service {
 
         let advertisementData = AdvertisementData(
             localName: advertisingName,
-            serviceUUIDs: []  // Omit UUID to stay under legacy 31-byte limit
+            serviceUUIDs: [BluetoothUUID(serviceUUID)]
         )
 
         logger.debug(
