@@ -38,6 +38,8 @@ public final class JSONRenderer: CLIOutput, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(value) {
             state.withLock { $0.finalResultData = data }
+        } else {
+            assertionFailure("Failed to serialize result to JSON")
         }
     }
 
@@ -56,12 +58,19 @@ public final class JSONRenderer: CLIOutput, Sendable {
 
         if let string = String(data: output, encoding: .utf8) {
             FileHandle.standardOutput.write(Data((string + "\n").utf8))
+        } else {
+            assertionFailure("Failed to serialize result to JSON")
         }
     }
 
     private func encodeResponse(events: [JSONEvent], encoder: JSONEncoder) -> Data {
         let response = JSONResponse(events: events)
-        return (try? encoder.encode(response)) ?? Data()
+        if let data = try? encoder.encode(response) {
+            return data
+        } else {
+            assertionFailure("Failed to serialize result to JSON")
+            return Data()
+        }
     }
 }
 

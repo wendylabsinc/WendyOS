@@ -71,6 +71,8 @@ public func jsonModeRequiresArgument(
     {
         // Use FileHandle to ensure output is flushed before exit
         FileHandle.standardOutput.write(Data((jsonString + "\n").utf8))
+    } else {
+        assertionFailure("Failed to serialize result to JSON")
     }
     _Exit(1)
 }

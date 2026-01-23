@@ -171,6 +171,8 @@ extension CLIOutput {
         {
             print(string)
             flushStdout()
+        } else {
+            assertionFailure("Failed to serialize result to JSON")
         }
         for await update in updates {
             if let data = try? encoder.encode(update),
@@ -178,6 +180,8 @@ extension CLIOutput {
             {
                 print(string)
                 flushStdout()
+            } else {
+                assertionFailure("Failed to serialize result to JSON")
             }
         }
     }
@@ -280,6 +284,8 @@ internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
             let string = String(data: data, encoding: .utf8)
         {
             print(string)
+        } else {
+            assertionFailure("Failed to serialize result to JSON")
         }
     }
 
