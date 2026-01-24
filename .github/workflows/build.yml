@@ -150,7 +150,17 @@ jobs:
       - name: Install Static Linux SDK
         if: ${{ matrix.swift-sdk-url != '' }}
         run: |
-          swift sdk install ${{ matrix.swift-sdk-url }} --checksum ${{ matrix.swift-sdk-checksum }}
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            if swift sdk install ${{ matrix.swift-sdk-url }} --checksum ${{ matrix.swift-sdk-checksum }}; then
+              echo "SDK installed successfully"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          echo "All 3 attempts failed"
+          exit 1
       - name: xcode-select
         if: ${{ matrix.xcode-select != '' }}
         run: |
