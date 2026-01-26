@@ -12,128 +12,420 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e2e8f0;
             min-height: 100vh;
             padding: 20px;
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
 
         .header {
-            background: white;
-            border-radius: 10px;
-            padding: 30px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 30px;
+            padding: 24px;
+            background: rgba(26, 31, 58, 0.6);
+            border-radius: 12px;
+            border: 1px solid rgba(100, 116, 139, 0.2);
         }
 
-        .header h1 {
-            color: #333;
-            font-size: 32px;
-            margin-bottom: 10px;
+        .header-left h1 {
+            font-size: 28px;
+            font-weight: 600;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
-        .header .status {
-            display: inline-block;
-            padding: 5px 15px;
-            border-radius: 20px;
+        .header-left p {
+            color: #94a3b8;
             font-size: 14px;
-            font-weight: bold;
+            margin-top: 6px;
         }
 
-        .status.online {
-            background: #10b981;
-            color: white;
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
         }
 
-        .status.offline {
-            background: #ef4444;
-            color: white;
-        }
-
-        .status.checking {
-            background: #f59e0b;
-            color: white;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .card {
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .card h2 {
-            color: #333;
-            font-size: 18px;
-            margin-bottom: 15px;
+        .device-config {
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        .card h2 .indicator {
-            width: 10px;
-            height: 10px;
+        .device-config label {
+            color: #94a3b8;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .device-config input {
+            padding: 8px 14px;
+            border: 2px solid rgba(100, 116, 139, 0.3);
+            border-radius: 6px;
+            background: rgba(15, 23, 42, 0.6);
+            color: #e2e8f0;
+            font-size: 14px;
+            width: 220px;
+            transition: all 0.2s;
+        }
+
+        .device-config input:focus {
+            outline: none;
+            border-color: #00d4ff;
+            background: rgba(15, 23, 42, 0.8);
+        }
+
+        .device-config input:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .status-badge.online {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .status-badge.offline {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .status-badge.checking {
+            background: rgba(234, 179, 8, 0.2);
+            color: #eab308;
+            border: 1px solid rgba(234, 179, 8, 0.3);
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            background: #94a3b8;
         }
 
-        .card h2 .indicator.online {
-            background: #10b981;
-            box-shadow: 0 0 10px #10b981;
+        .status-indicator.online {
+            background: #22c55e;
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+            animation: pulse 2s infinite;
         }
 
-        .card h2 .indicator.offline {
+        .status-indicator.offline {
             background: #ef4444;
         }
 
+        .status-indicator.checking {
+            background: #eab308;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 212, 255, 0.4);
+        }
+
+        .btn.secondary {
+            background: rgba(100, 116, 139, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.4);
+        }
+
+        .btn.secondary:hover {
+            background: rgba(100, 116, 139, 0.5);
+            box-shadow: none;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: rgba(26, 31, 58, 0.6);
+            border-radius: 12px;
+            padding: 24px;
+            border: 1px solid rgba(100, 116, 139, 0.2);
+            transition: all 0.2s;
+        }
+
+        .card:hover {
+            border-color: rgba(0, 212, 255, 0.3);
+            box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+        }
+
+        .card h2 {
+            font-size: 13px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .metric {
-            margin: 10px 0;
+            margin: 12px 0;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(100, 116, 139, 0.1);
+        }
+
+        .metric:last-child {
+            border-bottom: none;
         }
 
         .metric-label {
-            color: #64748b;
+            color: #94a3b8;
             font-size: 14px;
         }
 
         .metric-value {
-            color: #1e293b;
+            color: #00d4ff;
             font-size: 18px;
-            font-weight: bold;
+            font-weight: 600;
+        }
+
+        .metric-value.status-ok {
+            color: #22c55e;
+        }
+
+        .metric-value.status-error {
+            color: #ef4444;
+        }
+
+        .metric-value.small {
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 400;
         }
 
         .full-width {
             grid-column: 1 / -1;
         }
 
+        /* Stream + Chat side by side */
+        .stream-chat-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stream-card {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stream-card .video-container {
+            flex: 1;
+            min-height: 300px;
+        }
+
+        .chat-card {
+            display: flex;
+            flex-direction: column;
+            max-height: 500px;
+        }
+
+        .chat-card .descriptions {
+            flex: 1;
+            max-height: none;
+            overflow-y: auto;
+        }
+
+        .prompt-inline {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding-top: 12px;
+            margin-top: 12px;
+            border-top: 1px solid rgba(100, 116, 139, 0.2);
+            flex-wrap: wrap;
+        }
+
+        .prompt-inline textarea {
+            flex: 1;
+            min-width: 150px;
+            padding: 8px 12px;
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 6px;
+            background: rgba(15, 23, 42, 0.6);
+            color: #e2e8f0;
+            font-size: 13px;
+            resize: none;
+            height: 36px;
+            font-family: inherit;
+        }
+
+        .prompt-inline textarea:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        .prompt-inline .btn {
+            padding: 8px 14px;
+            font-size: 12px;
+        }
+
+        .prompt-inline .prompt-status {
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .prompt-inline .prompt-status.active {
+            color: #22c55e;
+        }
+
+        @media (max-width: 1024px) {
+            .stream-chat-row {
+                grid-template-columns: 1fr;
+            }
+            .chat-card {
+                max-height: 400px;
+            }
+        }
+
+        /* Video stream section */
+        .video-container {
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .video-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .video-error {
+            padding: 60px 40px;
+            text-align: center;
+            color: #64748b;
+        }
+
+        .video-error p {
+            margin: 10px 0;
+        }
+
+        .video-error code {
+            display: inline-block;
+            background: rgba(100, 116, 139, 0.2);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 13px;
+            color: #94a3b8;
+            margin-top: 10px;
+        }
+
+        /* Detection classes */
+        .class-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .class-tag {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            background: rgba(0, 212, 255, 0.15);
+            color: #00d4ff;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .class-tag.secondary {
+            background: rgba(100, 116, 139, 0.2);
+            color: #94a3b8;
+            border-color: rgba(100, 116, 139, 0.3);
+        }
+
+        /* VLM descriptions */
         .descriptions {
             max-height: 400px;
             overflow-y: auto;
         }
 
+        .descriptions::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .descriptions::-webkit-scrollbar-track {
+            background: rgba(100, 116, 139, 0.1);
+            border-radius: 3px;
+        }
+
+        .descriptions::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.3);
+            border-radius: 3px;
+        }
+
         .description-item {
-            background: #f8fafc;
-            border-left: 4px solid #667eea;
-            padding: 15px;
-            margin-bottom: 15px;
-            border-radius: 5px;
+            background: rgba(15, 23, 42, 0.6);
+            border-left: 3px solid #00d4ff;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-radius: 8px;
             display: flex;
-            gap: 15px;
+            gap: 16px;
         }
 
         .description-item .image-container {
@@ -141,21 +433,24 @@
         }
 
         .description-item .image-container img {
-            width: 150px;
-            height: auto;
-            border-radius: 5px;
+            width: 120px;
+            height: 90px;
+            border-radius: 6px;
             object-fit: cover;
         }
 
         .description-item .content {
             flex: 1;
+            min-width: 0;
         }
 
         .description-item .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         .description-item .timestamp {
@@ -164,91 +459,122 @@
         }
 
         .description-item .class-badge {
-            background: #e0e7ff;
-            color: #3730a3;
-            padding: 3px 10px;
+            background: rgba(0, 212, 255, 0.2);
+            color: #00d4ff;
+            padding: 4px 12px;
             border-radius: 12px;
             font-size: 11px;
             font-weight: 600;
+            border: 1px solid rgba(0, 212, 255, 0.3);
         }
 
         .description-item .text {
-            color: #334155;
+            color: #e2e8f0;
             line-height: 1.6;
+            font-size: 14px;
         }
 
         .description-item .meta {
-            color: #94a3b8;
+            color: #64748b;
             font-size: 11px;
-            margin-top: 8px;
+            margin-top: 10px;
         }
 
-        .btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            margin: 5px;
-        }
 
-        .btn:hover {
-            background: #5568d3;
-        }
-
+        /* Logs section */
         .logs-section {
-            background: #1e293b;
-            color: #e2e8f0;
+            background: rgba(15, 23, 42, 0.8);
             padding: 20px;
             border-radius: 10px;
-            font-family: 'Courier New', monospace;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
             font-size: 12px;
             max-height: 300px;
             overflow-y: auto;
         }
 
+        .logs-section::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .logs-section::-webkit-scrollbar-track {
+            background: rgba(100, 116, 139, 0.1);
+        }
+
+        .logs-section::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.3);
+            border-radius: 3px;
+        }
+
         .log-line {
-            margin: 5px 0;
-            padding: 2px 0;
+            padding: 4px 0;
+            color: #cbd5e1;
+            border-bottom: 1px solid rgba(100, 116, 139, 0.1);
+        }
+
+        .log-line:last-child {
+            border-bottom: none;
         }
 
         .log-line.error {
-            color: #f87171;
+            color: #ef4444;
         }
 
         .log-line.warning {
-            color: #fbbf24;
+            color: #eab308;
         }
 
         .log-line.success {
-            color: #34d399;
+            color: #22c55e;
+        }
+
+        .log-line .time {
+            color: #64748b;
+            margin-right: 10px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #64748b;
+        }
+
+        .desc-count {
+            font-size: 14px;
+            color: #64748b;
+            font-weight: normal;
+            margin-left: 8px;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 DeepStream Vision Monitor</h1>
-            <p style="color: #64748b; margin: 10px 0;">Real-time monitoring for YOLO11 + Qwen2.5-VL on Jetson Orin Nano</p>
-            <div style="margin: 15px 0; display: flex; align-items: center; gap: 10px;">
-                <label style="color: #64748b; font-weight: 500;">Device:</label>
-                <input type="text" id="device-input" value="wendyos-tender-oar.local"
-                       style="padding: 8px 12px; border: 2px solid #e2e8f0; border-radius: 5px; font-size: 14px; flex: 1; max-width: 300px;">
-                <button class="btn" onclick="updateDevice()">Update</button>
-                <span class="status checking" id="overall-status">Checking...</span>
+            <div class="header-left">
+                <h1>
+                    <span class="status-indicator checking" id="overall-indicator"></span>
+                    DeepStream Vision Monitor
+                </h1>
+                <p>Real-time monitoring for YOLO11 + Qwen2.5-VL on Jetson Orin Nano</p>
             </div>
-            <div style="margin-top: 10px;">
-                <button class="btn" onclick="refreshAll()">🔄 Refresh All</button>
-                <button class="btn" onclick="testVLM()">🖼️ Test VLM</button>
-                <button class="btn" onclick="toggleLogs()">📋 Toggle Logs</button>
+            <div class="header-right">
+                <div class="device-config">
+                    <label>Device:</label>
+                    <input type="text" id="device-input" value="wendyos-tender-oar.local">
+                    <button class="btn" onclick="updateDevice()">Update</button>
+                </div>
+                <span class="status-badge checking" id="overall-status">Checking...</span>
             </div>
+        </div>
+
+        <div class="actions" style="margin-bottom: 20px;">
+            <button class="btn" onclick="refreshAll()">Refresh All</button>
+            <button class="btn secondary" onclick="testVLM()">Test VLM</button>
+            <button class="btn secondary" onclick="toggleLogs()">Toggle Logs</button>
         </div>
 
         <div class="grid">
             <div class="card">
-                <h2><span class="indicator" id="detector-indicator"></span>DeepStream Detector</h2>
+                <h2><span class="status-indicator" id="detector-indicator"></span>DeepStream Detector</h2>
                 <div class="metric">
                     <span class="metric-label">Status</span>
                     <span class="metric-value" id="detector-status">Checking...</span>
@@ -263,12 +589,12 @@
                 </div>
                 <div class="metric">
                     <span class="metric-label">Endpoint</span>
-                    <span class="metric-value" style="font-size: 12px;">:9090/metrics</span>
+                    <span class="metric-value small">:9090/metrics</span>
                 </div>
             </div>
 
             <div class="card">
-                <h2><span class="indicator" id="vlm-indicator"></span>VLM Service</h2>
+                <h2><span class="status-indicator" id="vlm-indicator"></span>VLM Service</h2>
                 <div class="metric">
                     <span class="metric-label">Status</span>
                     <span class="metric-value" id="vlm-status">Checking...</span>
@@ -281,21 +607,14 @@
                     <span class="metric-label">GPU Memory</span>
                     <span class="metric-value" id="vlm-memory">-</span>
                 </div>
-                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;">
-                    <label style="color: #64748b; font-size: 13px; display: block; margin-bottom: 8px;">
-                        Custom Prompt <span id="prompt-status" style="font-size: 11px; color: #94a3b8;">(using defaults)</span>
-                    </label>
-                    <textarea id="vlm-prompt-input" placeholder="Enter custom prompt for VLM descriptions..."
-                        style="width: 100%; padding: 8px; border: 1px solid #e2e8f0; border-radius: 5px; font-size: 13px; resize: vertical; min-height: 60px;"></textarea>
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn" onclick="setVLMPrompt()" style="padding: 6px 12px; font-size: 12px;">Set Prompt</button>
-                        <button class="btn" onclick="clearVLMPrompt()" style="padding: 6px 12px; font-size: 12px; background: #94a3b8;">Clear</button>
-                    </div>
+                <div class="metric">
+                    <span class="metric-label">Endpoint</span>
+                    <span class="metric-value small">:8090/describe</span>
                 </div>
             </div>
 
             <div class="card">
-                <h2><span class="indicator" id="gpu-indicator"></span>GPU Stats</h2>
+                <h2><span class="status-indicator" id="gpu-indicator"></span>GPU Stats</h2>
                 <div class="metric">
                     <span class="metric-label">Status</span>
                     <span class="metric-value" id="gpu-status">Checking...</span>
@@ -313,51 +632,43 @@
                     <span class="metric-value" id="gpu-temp">-</span>
                 </div>
             </div>
-
         </div>
 
-        <!-- Live Video Stream -->
-        <div class="card full-width" style="max-width: 100%;">
-            <h2><span class="indicator online" id="video-indicator"></span>Live Detection Stream</h2>
-            <div style="width: 100%; text-align: center; background: #000; border-radius: 8px; overflow: hidden;">
-                <img id="video-stream"
-                     src="http://localhost:8080/api/detector/stream"
-                     style="max-width: 100%; height: auto; display: block; margin: 0 auto;"
-                     alt="Live video stream with detections"
-                     onerror="this.style.display='none'; document.getElementById('video-error').style.display='block';">
-                <div id="video-error" style="display: none; padding: 40px; color: #94a3b8;">
-                    <p>Stream unavailable. Make sure the detector is running and the local proxy is active.</p>
-                    <p style="font-size: 14px; margin-top: 10px;">Run: python3 local_proxy.py wendyos-tender-oar.local</p>
+        <!-- Stream + Descriptions Side by Side -->
+        <div class="stream-chat-row">
+            <!-- Live Video Stream -->
+            <div class="card stream-card">
+                <h2><span class="status-indicator online" id="video-indicator"></span>Live Detection Stream</h2>
+                <div class="video-container">
+                    <img id="video-stream"
+                         src="http://localhost:8080/api/detector/stream"
+                         alt="Live video stream with detections"
+                         onerror="this.style.display='none'; document.getElementById('video-error').style.display='block';">
+                    <div id="video-error" class="video-error" style="display: none;">
+                        <p>Stream unavailable</p>
+                        <code>python3 local_proxy.py</code>
+                    </div>
                 </div>
             </div>
-            <div class="metric" style="margin-top: 15px;">
-                <span class="metric-label">Stream Endpoint</span>
-                <span class="metric-value" style="font-size: 12px;">http://localhost:8080/api/detector/stream</span>
-            </div>
-        </div>
 
-        <div class="card full-width">
-            <h2>🎯 Detection Classes (YOLO11)</h2>
-            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px;">
-                <span style="background: #e0e7ff; color: #3730a3; padding: 5px 15px; border-radius: 20px; font-size: 13px;">person</span>
-                <span style="background: #dbeafe; color: #1e40af; padding: 5px 15px; border-radius: 20px; font-size: 13px;">bicycle</span>
-                <span style="background: #fef3c7; color: #92400e; padding: 5px 15px; border-radius: 20px; font-size: 13px;">car</span>
-                <span style="background: #fecaca; color: #991b1b; padding: 5px 15px; border-radius: 20px; font-size: 13px;">motorcycle</span>
-                <span style="background: #d1fae5; color: #065f46; padding: 5px 15px; border-radius: 20px; font-size: 13px;">bus</span>
-                <span style="background: #e0e7ff; color: #3730a3; padding: 5px 15px; border-radius: 20px; font-size: 13px;">truck</span>
-                <span style="background: #fce7f3; color: #831843; padding: 5px 15px; border-radius: 20px; font-size: 13px;">...and 74 more COCO classes</span>
-            </div>
-        </div>
-
-        <div class="card full-width" id="descriptions-card">
-            <h2>💬 VLM Descriptions <span id="vlm-desc-count" style="font-size: 14px; color: #64748b; font-weight: normal;"></span></h2>
-            <div class="descriptions" id="descriptions-container">
-                <p style="color: #64748b;">Loading VLM descriptions...</p>
+            <!-- VLM Descriptions (Chat) -->
+            <div class="card chat-card" id="descriptions-card">
+                <h2>VLM Descriptions <span class="desc-count" id="vlm-desc-count"></span></h2>
+                <div class="descriptions" id="descriptions-container">
+                    <div class="empty-state">Waiting for detections...</div>
+                </div>
+                <!-- Prompt input at bottom of chat -->
+                <div class="prompt-inline">
+                    <textarea id="vlm-prompt-input" placeholder="Custom prompt (leave empty for defaults)"></textarea>
+                    <button class="btn" onclick="setVLMPrompt()">Set</button>
+                    <button class="btn secondary" onclick="clearVLMPrompt()">Clear</button>
+                    <span class="prompt-status" id="prompt-status"></span>
+                </div>
             </div>
         </div>
 
         <div class="card full-width" id="logs-card" style="display: none;">
-            <h2>📋 System Logs</h2>
+            <h2>System Logs</h2>
             <div class="logs-section" id="logs-container">
                 <div class="log-line">Initializing monitor...</div>
             </div>
@@ -387,7 +698,7 @@
             const logLine = document.createElement('div');
             logLine.className = `log-line ${type}`;
             const timestamp = new Date().toLocaleTimeString();
-            logLine.textContent = `[${timestamp}] ${message}`;
+            logLine.innerHTML = `<span class="time">[${timestamp}]</span> ${message}`;
             logsContainer.appendChild(logLine);
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
@@ -397,13 +708,12 @@
                 log(`Checking ${name}...`, 'info');
                 const response = await fetch(`${BASE_URL}${endpoint}`);
                 if (response.ok) {
-                    log(`✓ ${name} is online`, 'success');
+                    log(`${name} is online`, 'success');
                     return await response.text();
                 }
                 throw new Error(`HTTP ${response.status}`);
             } catch (error) {
-                log(`✗ ${name} failed: ${error.message}`, 'error');
-                console.error(`Error fetching ${url}:`, error);
+                log(`${name} failed: ${error.message}`, 'error');
                 return null;
             }
         }
@@ -415,7 +725,10 @@
 
             if (data) {
                 indicator.classList.add('online');
-                status.textContent = '✅ Online';
+                indicator.classList.remove('offline');
+                status.textContent = 'Online';
+                status.classList.add('status-ok');
+                status.classList.remove('status-error');
 
                 // Parse FPS
                 const fpsMatch = data.match(/deepstream_fps{[^}]*}\s+([\d.]+)/);
@@ -430,12 +743,14 @@
                     totalDetections += parseInt(match[1]);
                 }
                 if (totalDetections > 0) {
-                    document.getElementById('detector-detections').textContent = totalDetections;
+                    document.getElementById('detector-detections').textContent = totalDetections.toLocaleString();
                 }
             } else {
                 indicator.classList.remove('online');
                 indicator.classList.add('offline');
-                status.textContent = '❌ Offline';
+                status.textContent = 'Offline';
+                status.classList.remove('status-ok');
+                status.classList.add('status-error');
             }
         }
 
@@ -448,18 +763,25 @@
                 try {
                     const json = JSON.parse(data);
                     indicator.classList.add('online');
-                    status.textContent = '✅ Online';
-                    document.getElementById('vlm-model').textContent = 'Qwen2.5-VL-3B-Instruct';
+                    indicator.classList.remove('offline');
+                    status.textContent = 'Online';
+                    status.classList.add('status-ok');
+                    status.classList.remove('status-error');
+                    document.getElementById('vlm-model').textContent = 'Qwen2.5-VL-3B';
                     document.getElementById('vlm-memory').textContent =
-                        `${(json.memory_allocated_gb || 0).toFixed(2)}GB`;
+                        `${(json.memory_allocated_gb || 0).toFixed(2)} GB`;
                 } catch (e) {
                     indicator.classList.add('online');
-                    status.textContent = '✅ Online';
+                    indicator.classList.remove('offline');
+                    status.textContent = 'Online';
+                    status.classList.add('status-ok');
                 }
             } else {
                 indicator.classList.remove('online');
                 indicator.classList.add('offline');
-                status.textContent = '❌ Offline';
+                status.textContent = 'Offline';
+                status.classList.remove('status-ok');
+                status.classList.add('status-error');
             }
         }
 
@@ -470,7 +792,10 @@
 
             if (data) {
                 indicator.classList.add('online');
-                status.textContent = '✅ Online';
+                indicator.classList.remove('offline');
+                status.textContent = 'Online';
+                status.classList.add('status-ok');
+                status.classList.remove('status-error');
 
                 // Parse GPU metrics
                 const utilMatch = data.match(/jetson_gpu_utilization_percent\s+([\d.]+)/);
@@ -481,7 +806,7 @@
                 const memMatch = data.match(/jetson_gpu_memory_used_mb\s+([\d.]+)/);
                 if (memMatch) {
                     const memMB = parseFloat(memMatch[1]);
-                    document.getElementById('gpu-mem').textContent = `${(memMB / 1024).toFixed(2)}GB`;
+                    document.getElementById('gpu-mem').textContent = `${(memMB / 1024).toFixed(2)} GB`;
                 }
 
                 const tempMatch = data.match(/jetson_gpu_temperature_celsius\s+([\d.]+)/);
@@ -491,16 +816,17 @@
             } else {
                 indicator.classList.remove('online');
                 indicator.classList.add('offline');
-                status.textContent = '❌ Offline';
+                status.textContent = 'Offline';
+                status.classList.remove('status-ok');
+                status.classList.add('status-error');
             }
         }
 
         async function loadVLMPrompt(forceUpdate = false) {
             try {
-                // Don't overwrite if user is actively editing (unless forced)
                 const input = document.getElementById('vlm-prompt-input');
                 if (!forceUpdate && document.activeElement === input) {
-                    return; // User is typing, don't overwrite
+                    return;
                 }
 
                 const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`);
@@ -510,11 +836,11 @@
                     if (data.using_custom && data.custom_prompt) {
                         input.value = data.custom_prompt;
                         status.textContent = '(custom prompt active)';
-                        status.style.color = '#10b981';
+                        status.classList.add('active');
                     } else {
                         input.value = '';
                         status.textContent = '(using defaults)';
-                        status.style.color = '#94a3b8';
+                        status.classList.remove('active');
                     }
                 }
             } catch (error) {
@@ -537,10 +863,9 @@
                     body: JSON.stringify({ prompt: prompt })
                 });
                 if (response.ok) {
-                    const data = await response.json();
                     log('VLM prompt updated successfully', 'success');
                     document.getElementById('prompt-status').textContent = '(custom prompt active)';
-                    document.getElementById('prompt-status').style.color = '#10b981';
+                    document.getElementById('prompt-status').classList.add('active');
                 } else {
                     log('Failed to set VLM prompt', 'error');
                 }
@@ -560,7 +885,7 @@
                 if (response.ok) {
                     document.getElementById('vlm-prompt-input').value = '';
                     document.getElementById('prompt-status').textContent = '(using defaults)';
-                    document.getElementById('prompt-status').style.color = '#94a3b8';
+                    document.getElementById('prompt-status').classList.remove('active');
                     log('VLM prompt cleared - using class-specific defaults', 'success');
                 } else {
                     log('Failed to clear VLM prompt', 'error');
@@ -616,7 +941,7 @@
             const container = document.getElementById('descriptions-container');
 
             if (!descriptions || descriptions.length === 0) {
-                container.innerHTML = '<p style="color: #64748b;">No VLM descriptions yet. Waiting for high-confidence detections...</p>';
+                container.innerHTML = '<div class="empty-state">No VLM descriptions yet. Waiting for high-confidence detections...</div>';
                 return;
             }
 
@@ -641,13 +966,15 @@
         }
 
         function addDescription(text) {
-            // Legacy function for manual test
             const container = document.getElementById('descriptions-container');
             const item = document.createElement('div');
             item.className = 'description-item';
             item.innerHTML = `
                 <div class="content">
-                    <div class="timestamp">${new Date().toLocaleTimeString()}</div>
+                    <div class="header">
+                        <span class="class-badge">test</span>
+                        <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+                    </div>
                     <div class="text">${text}</div>
                 </div>
             `;
@@ -661,8 +988,12 @@
 
         async function refreshAll() {
             log('Refreshing all services...', 'info');
-            document.getElementById('overall-status').textContent = 'Checking...';
-            document.getElementById('overall-status').className = 'status checking';
+
+            const overallStatus = document.getElementById('overall-status');
+            const overallIndicator = document.getElementById('overall-indicator');
+            overallStatus.textContent = 'Checking...';
+            overallStatus.className = 'status-badge checking';
+            overallIndicator.className = 'status-indicator checking';
 
             await Promise.all([
                 checkDetector(),
@@ -678,14 +1009,15 @@
                 document.getElementById('vlm-indicator').classList.contains('online') &&
                 document.getElementById('gpu-indicator').classList.contains('online');
 
-            const status = document.getElementById('overall-status');
             if (allOnline) {
-                status.textContent = '✅ All Services Online';
-                status.className = 'status online';
+                overallStatus.textContent = 'All Services Online';
+                overallStatus.className = 'status-badge online';
+                overallIndicator.className = 'status-indicator online';
                 log('All services are healthy', 'success');
             } else {
-                status.textContent = '⚠️ Some Services Offline';
-                status.className = 'status offline';
+                overallStatus.textContent = 'Some Services Offline';
+                overallStatus.className = 'status-badge offline';
+                overallIndicator.className = 'status-indicator offline';
                 log('Some services are not responding', 'warning');
             }
         }

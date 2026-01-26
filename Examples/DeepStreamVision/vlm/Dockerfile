@@ -17,6 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy pre-downloaded Qwen2.5-VL-3B-Instruct model EARLY for better layer caching
+# This way, changes to Python dependencies don't invalidate the model layer
+# Download once with: hf download Qwen/Qwen2.5-VL-3B-Instruct --local-dir ./models/Qwen2.5-VL-3B-Instruct
+# The model is ~6GB and copied directly into the image
+COPY models/Qwen2.5-VL-3B-Instruct /app/models/Qwen2.5-VL-3B-Instruct
+
 # Upgrade pip to fix dependency resolution issues in Ubuntu 22.04
 RUN pip3 install --no-cache-dir --upgrade pip
 
@@ -35,7 +41,6 @@ RUN pip3 install --no-cache-dir \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
 # Install ML and service dependencies from PyPI
-# Install huggingface-hub first for model downloading (doesn't require CUDA)
 RUN pip3 install --no-cache-dir \
     huggingface-hub \
     transformers>=4.36.0 \
@@ -45,12 +50,6 @@ RUN pip3 install --no-cache-dir \
     numpy==1.26.4 \
     qwen-vl-utils \
     av
-
-# Copy pre-downloaded Qwen2.5-VL-3B-Instruct model from local machine
-# This is kept separate from Docker build cache for faster iteration
-# Download once with: hf download Qwen/Qwen2.5-VL-3B-Instruct --local-dir ./models/Qwen2.5-VL-3B-Instruct
-# The model is ~6GB and copied directly into the image
-COPY models/Qwen2.5-VL-3B-Instruct /app/models/Qwen2.5-VL-3B-Instruct
 
 # Set working directory
 WORKDIR /app
