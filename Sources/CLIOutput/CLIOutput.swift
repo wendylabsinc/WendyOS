@@ -44,11 +44,11 @@ public protocol CLIOutput: Sendable {
     /// Display a streaming table that updates in real-time.
     /// In interactive mode, shows a live-updating table.
     /// In JSON mode, emits each update as a JSON line.
-    func streamingTable<T: Encodable & Sendable>(
+    func streamingTable<T: Encodable & Sendable, E: Error>(
         initial: T,
-        updates: AsyncStream<T>,
+        updates: some AsyncSequence<T, E> & Sendable,
         renderTable: @escaping @Sendable (T) -> (headers: [String], rows: [[String]])
-    ) async
+    ) async throws
 
     /// Select an item from a table interactively. Returns the index of the selected row.
     /// In JSON mode, this throws an error requiring explicit selection via CLI args.
@@ -227,11 +227,11 @@ extension CLIOutput {
         try await operation({ _ in })
     }
 
-    public func streamingTable<T: Encodable & Sendable>(
+    public func streamingTable<T: Encodable & Sendable, E: Error>(
         initial: T,
-        updates: AsyncStream<T>,
+        updates: some AsyncSequence<T, E> & Sendable,
         renderTable: @Sendable (T) -> (headers: [String], rows: [[String]])
-    ) async {
+    ) async throws {
         // Default: print each update as JSON
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -243,7 +243,7 @@ extension CLIOutput {
         } else {
             assertionFailure("Failed to serialize result to JSON")
         }
-        for await update in updates {
+        for try await update in updates {
             if let data = try? encoder.encode(update),
                 let string = String(data: data, encoding: .utf8)
             {
@@ -354,7 +354,7 @@ public var isJSONOutputMode: Bool {
 // MARK: - Default output (fallback)
 
 /// Default CLI output that writes to stdout. Used as fallback when no context is set.
-internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
+internal struct DefaultCLIOutput: CLIOutput, Sendable {
     static let shared = DefaultCLIOutput()
 
     func success(_ message: String) {

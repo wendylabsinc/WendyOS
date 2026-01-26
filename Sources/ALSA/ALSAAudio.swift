@@ -5,6 +5,8 @@
     #elseif canImport(Musl)
         import Musl
     #endif
+    import NIOCore
+    import Subprocess
 
     /// Represents an ALSA audio device
     public struct ALSAAudioDevice: Sendable {
@@ -129,14 +131,7 @@
     }
 
     /// ALSA PCM capture stream using arecord subprocess
-    ///
-    /// This type uses `@unchecked Sendable` because:
-    /// - The underlying process pipes are thread-safe for reads
-    /// - The process handle is immutable after initialization
-    /// - All mutable state is synchronized via the process lifecycle
-    public final class ALSACaptureStream: @unchecked Sendable {
-        private let process: Foundation.Process
-        private let pipe: Pipe
+    public struct ALSACaptureStream: Sendable {
         public let cardIndex: Int
         public let deviceIndex: Int
         public let sampleRate: UInt32
@@ -161,109 +156,43 @@
                     "arecord not found. Please install alsa-utils package."
                 )
             }
-
-            // Create pipe for reading audio data
-            self.pipe = Pipe()
-
-            // Set up arecord process
-            // arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw -
-            let process = Foundation.Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/arecord")
-            process.arguments = [
-                "-D", "plughw:\(cardIndex),\(deviceIndex)",
-                "-f", "S16_LE",  // 16-bit signed little-endian
-                "-r", "\(sampleRate)",  // Sample rate
-                "-c", "\(channels)",  // Channels
-                "-t", "raw",  // Raw PCM output (no WAV header)
-                "--buffer-size=4096",  // Buffer size in frames
-                "-",  // Output to stdout
-            ]
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-
-            self.process = process
-
-            do {
-                try process.run()
-            } catch {
-                throw ALSAError.deviceOpenFailed("Failed to start arecord: \(error)")
-            }
         }
 
-        deinit {
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-
-        /// Read audio frames into a buffer
-        /// Returns the number of frames read, or throws on error
-        public func read(into buffer: UnsafeMutableRawPointer, frameCount: Int) throws -> Int {
-            let bufferSize = frameCount * bytesPerFrame
-            let data = pipe.fileHandleForReading.readData(ofLength: bufferSize)
-
-            guard !data.isEmpty else {
-                if !process.isRunning {
-                    throw ALSAError.readFailed("arecord process terminated unexpectedly")
-                }
-                return 0
-            }
-
-            data.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self), count: data.count)
-            return data.count / bytesPerFrame
-        }
-
-        /// Read audio data and return as Data
-        public func readData(frameCount: Int) throws -> Data {
-            let bufferSize = frameCount * bytesPerFrame
-            let data = pipe.fileHandleForReading.readData(ofLength: bufferSize)
-
-            guard !data.isEmpty else {
-                if !process.isRunning {
-                    throw ALSAError.readFailed("arecord process terminated unexpectedly")
-                }
-                return Data()
-            }
-
-            return data
-        }
-
-        /// Stop the capture
-        public func stop() {
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-    }
-
-    // MARK: - Streaming API using proper patterns
-
-    extension ALSACaptureStream {
-        /// Stream audio data using structured concurrency
-        ///
-        /// Usage:
-        /// ```swift
-        /// try await stream.withAudioData(framesPerChunk: 2400) { data in
-        ///     // Process audio data
-        /// }
-        /// ```
         public func withAudioData(
-            framesPerChunk: Int = 2400,
-            handler: @Sendable (Data) async throws -> Void
+            framesPerChunk: Int,
+            handler: @Sendable @escaping (ByteBuffer) async throws -> Void
         ) async throws {
-            while !Task.isCancelled {
-                let data = try readData(frameCount: framesPerChunk)
-                if !data.isEmpty {
-                    try await handler(data)
-                } else {
-                    // No data available, check if process is still running
-                    if !process.isRunning {
-                        break
+            let device = "plughw:\(cardIndex),\(deviceIndex)"
+
+            _ = try await Subprocess.run(
+                .path("/usr/bin/arecord"),
+                arguments: [
+                    "-D", device,
+                    "-f", "S16_LE",
+                    "-r", "\(sampleRate)",
+                    "-c", "\(channels)",
+                    "-t", "raw",
+                    "-q",  // Quiet mode
+                    "-",  // Output to stdout
+                ]
+            ) { execution, stdin, stdout, _ in
+                do {
+                    for try await chunk in stdout {
+                        try Task.checkCancellation()
+
+                        var buffer = ByteBuffer()
+                        chunk.withUnsafeBytes { bytes in
+                            _ = buffer.writeBytes(bytes)
+                        }
+                        try await handler(buffer)
                     }
-                    try await Task.sleep(for: .milliseconds(10))
+                    try await stdin.finish()
+                    try execution.send(signal: .interrupt)
+                } catch {
+                    try execution.send(signal: .kill)
+                    throw error
                 }
             }
-            stop()
         }
     }
 #endif

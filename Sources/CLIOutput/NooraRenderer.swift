@@ -43,11 +43,11 @@ public struct NooraRenderer: CLIOutput, Sendable {
         noora.table(headers: headers, rows: rows)
     }
 
-    public func streamingTable<T: Encodable & Sendable>(
+    public func streamingTable<T: Encodable & Sendable, E: Error>(
         initial: T,
-        updates: AsyncStream<T>,
+        updates: some AsyncSequence<T, E> & Sendable,
         renderTable: @escaping @Sendable (T) -> (headers: [String], rows: [[String]])
-    ) async {
+    ) async throws {
         let initialRendered = renderTable(initial)
         let tableData = TableData(
             columns: initialRendered.headers.map { TableColumn(title: $0) },
@@ -59,7 +59,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
         // Use async let to run producer and consumer concurrently with structured concurrency
         async let producer: Void = {
-            for await value in updates {
+            for try await value in updates {
                 let rendered = renderTable(value)
                 let tableData = TableData(
                     columns: rendered.headers.map { TableColumn(title: $0) },
@@ -72,7 +72,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
         async let consumer: Void = noora.table(tableData, updates: stream)
 
-        _ = await (producer, consumer)
+        _ = try await (producer, consumer)
     }
 
     private actor Results<S: BidirectionalCollection> where S.Index == Int, S.Element: Sendable {

@@ -1,6 +1,8 @@
 import Foundation
 import Logging
+import NIOCore
 import Subprocess
+import _NIOFileSystem
 
 #if os(Linux)
     import ALSA
@@ -12,6 +14,7 @@ public struct AudioDevice: Sendable {
     public let name: String
     public let description: String
     public let type: AudioDeviceType
+    public let source: AudioSource
     public let isDefault: Bool
     public let cardIndex: Int
     public let deviceIndex: Int
@@ -19,6 +22,11 @@ public struct AudioDevice: Sendable {
     public enum AudioDeviceType: Sendable {
         case input  // Microphone/source
         case output  // Speaker/sink
+    }
+
+    public enum AudioSource: Sendable {
+        case pipewire  // PipeWire-managed device (including Bluetooth)
+        case alsa  // Direct ALSA device
     }
 
     /// ALSA device identifier (e.g., "plughw:0,0")
@@ -51,7 +59,7 @@ public typealias PipeWireError = AudioError
 
 /// Manager for interacting with ALSA audio system
 public actor PipeWireManager {
-    private let logger = Logger(label: "AudioManager")
+    private nonisolated let logger = Logger(label: "AudioManager")
 
     // Track which device is currently selected as "default" (by ID)
     private var defaultInputId: UInt32?
@@ -97,6 +105,17 @@ public actor PipeWireManager {
             typeFilter: AudioDevice.AudioDeviceType? = nil
         ) async throws -> [AudioDevice] {
             do {
+                // Quick check if PipeWire is running
+                let pidofResult = try await Subprocess.run(
+                    .name("pidof"),
+                    arguments: ["pipewire"],
+                    output: .string(limit: 1024)
+                )
+                guard pidofResult.terminationStatus.isSuccess else {
+                    logger.debug("PipeWire not running, skipping wpctl")
+                    return []
+                }
+
                 let result = try await Subprocess.run(
                     .name("wpctl"),
                     arguments: ["status"],
@@ -120,10 +139,12 @@ public actor PipeWireManager {
         }
 
         /// Parse wpctl status output to extract audio devices
-        private func parseWpctlOutput(
-            _ output: String,
-            typeFilter: AudioDevice.AudioDeviceType?
-        ) -> [AudioDevice] {
+        private func
+            parseWpctlOutput(
+                _ output: String,
+                typeFilter: AudioDevice.AudioDeviceType?
+            ) -> [AudioDevice]
+        {
             var devices: [AudioDevice] = []
             let lines = output.components(separatedBy: "\n")
 
@@ -260,6 +281,7 @@ public actor PipeWireManager {
                         name: displayName,
                         description: description,
                         type: deviceType,
+                        source: .pipewire,
                         isDefault: isDefault,
                         cardIndex: 0,  // Not applicable for PipeWire devices
                         deviceIndex: 0
@@ -297,6 +319,7 @@ public actor PipeWireManager {
                             name: alsaDevice.name,
                             description: "\(alsaDevice.cardName) - Input",
                             type: .input,
+                            source: .alsa,
                             isDefault: isDefault,
                             cardIndex: alsaDevice.cardIndex,
                             deviceIndex: alsaDevice.deviceIndex
@@ -316,6 +339,7 @@ public actor PipeWireManager {
                             name: alsaDevice.name,
                             description: "\(alsaDevice.cardName) - Output",
                             type: .output,
+                            source: .alsa,
                             isDefault: isDefault,
                             cardIndex: alsaDevice.cardIndex,
                             deviceIndex: alsaDevice.deviceIndex
@@ -359,12 +383,12 @@ public actor PipeWireManager {
     ) async throws -> String {
         let devices = try await listDevices(typeFilter: type)
 
-        if let id = id, id != 0 {
+        if let id, id != 0 {
             guard let device = devices.first(where: { $0.id == id }) else {
                 throw AudioError.deviceNotFound(id)
             }
-            // For PipeWire devices (cardIndex == 0), return the PipeWire node ID
-            if device.cardIndex == 0 && device.deviceIndex == 0 {
+            // For PipeWire devices, return the PipeWire node ID
+            if device.source == .pipewire {
                 return "pipewire:\(device.id)"
             }
             return device.alsaDevice
@@ -373,7 +397,7 @@ public actor PipeWireManager {
         // Use default
         let defaultId = type == .input ? defaultInputId : defaultOutputId
         if let defaultId = defaultId, let device = devices.first(where: { $0.id == defaultId }) {
-            if device.cardIndex == 0 && device.deviceIndex == 0 {
+            if device.source == .pipewire {
                 return "pipewire:\(device.id)"
             }
             return device.alsaDevice
@@ -383,7 +407,7 @@ public actor PipeWireManager {
         guard let first = devices.first else {
             throw AudioError.deviceNotFound(0)
         }
-        if first.cardIndex == 0 && first.deviceIndex == 0 {
+        if first.source == .pipewire {
             return "pipewire:\(first.id)"
         }
         return first.alsaDevice
@@ -395,12 +419,15 @@ public actor PipeWireManager {
     ///   - deviceId: Device ID to stream from (nil for default)
     ///   - updateRateHz: Update rate in Hz (1-60)
     ///   - handler: Called for each audio level update
-    public func withAudioLevels(
+    ///
+    /// Note: This method is nonisolated to avoid blocking the actor during I/O.
+    nonisolated public func withAudioLevels(
         deviceId: UInt32?,
         updateRateHz: UInt32,
         handler: @Sendable @escaping (Float, Float) async throws -> Void
     ) async throws {
         #if os(Linux)
+            // Get device string while isolated, then release the actor
             let deviceString = try await getALSADevice(forId: deviceId, type: .input)
             let rate = max(1, min(60, updateRateHz))
             let sampleRate: UInt32 = 48000
@@ -411,15 +438,13 @@ public actor PipeWireManager {
             // Check if this is a PipeWire device
             if deviceString.hasPrefix("pipewire:") {
                 let nodeId = String(deviceString.dropFirst("pipewire:".count))
-                let stream = try PipeWireCaptureStream(
+                try await streamFromPipeWire(
                     nodeId: nodeId,
                     sampleRate: sampleRate,
-                    channels: 1
-                )
-
-                while !Task.isCancelled {
-                    let data = try stream.readData(frameCount: samplesPerUpdate)
-                    let levels = Self.calculateLevels(from: data)
+                    channels: 1,
+                    framesPerChunk: samplesPerUpdate
+                ) { buffer in
+                    let levels = Self.calculateLevels(from: buffer)
                     try await handler(levels.peakDb, levels.rmsDb)
                 }
             } else {
@@ -432,9 +457,8 @@ public actor PipeWireManager {
                     latencyMicroseconds: 50000
                 )
 
-                while !Task.isCancelled {
-                    let data = try stream.readData(frameCount: samplesPerUpdate)
-                    let levels = Self.calculateLevels(from: data)
+                try await stream.withAudioData(framesPerChunk: samplesPerUpdate) { buffer in
+                    let levels = Self.calculateLevels(from: buffer)
                     try await handler(levels.peakDb, levels.rmsDb)
                 }
             }
@@ -450,16 +474,19 @@ public actor PipeWireManager {
     ///   - sampleRate: Sample rate in Hz
     ///   - channels: Number of channels
     ///   - handler: Called for each audio chunk with (data, timestampNs)
-    public func withAudioStream(
+    ///
+    /// Note: This method is nonisolated to avoid blocking the actor during I/O.
+    nonisolated public func withAudioStream(
         deviceId: UInt32?,
         sampleRate: UInt32,
         channels: UInt32,
-        handler: @Sendable @escaping (Data, UInt64) async throws -> Void
+        handler: @Sendable @escaping (ByteBuffer, UInt64) async throws -> Void
     ) async throws {
         #if os(Linux)
             let rate = sampleRate == 0 ? 48000 : sampleRate
             let chans = channels == 0 ? 1 : channels
 
+            // Get device string while isolated, then release the actor
             let deviceString = try await getALSADevice(forId: deviceId, type: .input)
             logger.debug(
                 "Starting audio stream",
@@ -477,16 +504,14 @@ public actor PipeWireManager {
             // Check if this is a PipeWire device
             if deviceString.hasPrefix("pipewire:") {
                 let nodeId = String(deviceString.dropFirst("pipewire:".count))
-                let stream = try PipeWireCaptureStream(
+                try await streamFromPipeWire(
                     nodeId: nodeId,
                     sampleRate: rate,
-                    channels: chans
-                )
-
-                while !Task.isCancelled {
-                    let data = try stream.readData(frameCount: framesPerChunk)
+                    channels: chans,
+                    framesPerChunk: framesPerChunk
+                ) { buffer in
                     let timestampNs = DispatchTime.now().uptimeNanoseconds - startTime
-                    try await handler(data, timestampNs)
+                    try await handler(buffer, timestampNs)
                 }
             } else {
                 // Use ALSA for hardware devices
@@ -498,10 +523,9 @@ public actor PipeWireManager {
                     latencyMicroseconds: 50000
                 )
 
-                while !Task.isCancelled {
-                    let data = try stream.readData(frameCount: framesPerChunk)
+                try await stream.withAudioData(framesPerChunk: framesPerChunk) { buffer in
                     let timestampNs = DispatchTime.now().uptimeNanoseconds - startTime
-                    try await handler(data, timestampNs)
+                    try await handler(buffer, timestampNs)
                 }
             }
         #else
@@ -542,49 +566,18 @@ public actor PipeWireManager {
         return stream
     }
 
-    /// Stream raw PCM audio from a device
-    public func streamAudio(
-        deviceId: UInt32?,
-        sampleRate: UInt32,
-        channels: UInt32
-    ) -> AsyncThrowingStream<(data: Data, timestampNs: UInt64), Error> {
-        let (stream, continuation) = AsyncThrowingStream<(data: Data, timestampNs: UInt64), Error>
-            .makeStream()
-
-        let task = Task { [self] in
-            do {
-                try await withAudioStream(
-                    deviceId: deviceId,
-                    sampleRate: sampleRate,
-                    channels: channels
-                ) { data, timestampNs in
-                    continuation.yield((data: data, timestampNs: timestampNs))
-                }
-                continuation.finish()
-            } catch {
-                continuation.finish(throwing: error)
-            }
-        }
-
-        continuation.onTermination = { _ in
-            task.cancel()
-        }
-
-        return stream
-    }
-
     // MARK: - Private Helpers
 
     /// Calculate peak and RMS levels from PCM data
-    private static func calculateLevels(from data: Data) -> (peakDb: Float, rmsDb: Float) {
-        guard !data.isEmpty else {
+    private static func calculateLevels(from buffer: ByteBuffer) -> (peakDb: Float, rmsDb: Float) {
+        guard buffer.readableBytes > 0 else {
             return (peakDb: -96.0, rmsDb: -96.0)
         }
 
         var peak: Int16 = 0
         var sumSquares: Float = 0
 
-        data.withUnsafeBytes { buffer in
+        buffer.readableBytesSpan.withUnsafeBytes { buffer in
             let samples = buffer.bindMemory(to: Int16.self)
             for sample in samples {
                 let absSample = abs(sample)
@@ -596,7 +589,7 @@ public actor PipeWireManager {
             }
         }
 
-        let sampleCount = data.count / 2
+        let sampleCount = Int(buffer.readableBytes / 2)
         let rms = sqrt(sumSquares / Float(max(1, sampleCount)))
 
         // Convert to dB (0 dB = max amplitude)
@@ -607,83 +600,54 @@ public actor PipeWireManager {
     }
 }
 
-// MARK: - PipeWire Capture Stream
+// MARK: - PipeWire Capture Helpers
 
 #if os(Linux)
-    /// PipeWire PCM capture stream using pw-record subprocess
-    /// This handles audio capture from PipeWire-managed devices (including Bluetooth)
-    final class PipeWireCaptureStream: @unchecked Sendable {
-        private let process: Foundation.Process
-        private let pipe: Pipe
-        public let nodeId: String
-        public let sampleRate: UInt32
-        public let channels: UInt32
-        private let bytesPerFrame: Int
+    extension PipeWireManager {
+        /// Stream audio from a PipeWire node using pw-record with async I/O
+        ///
+        /// - Parameters:
+        ///   - nodeId: PipeWire node ID to capture from
+        ///   - sampleRate: Sample rate in Hz
+        ///   - channels: Number of channels
+        ///   - framesPerChunk: Number of frames per chunk to yield
+        ///   - handler: Called for each audio chunk
+        private func streamFromPipeWire(
+            nodeId: String,
+            sampleRate: UInt32,
+            channels: UInt32,
+            framesPerChunk: Int,
+            handler: @Sendable @escaping (ByteBuffer) async throws -> Void
+        ) async throws {
+            let bytesPerFrame = Int(channels) * 2  // 16-bit = 2 bytes per sample
+            let bytesPerChunk = framesPerChunk * bytesPerFrame
 
-        init(nodeId: String, sampleRate: UInt32, channels: UInt32) throws {
-            self.nodeId = nodeId
-            self.sampleRate = sampleRate
-            self.channels = channels
-            self.bytesPerFrame = Int(channels) * 2  // 16-bit = 2 bytes per sample
+            _ = try await Subprocess.run(
+                .path("/usr/bin/pw-record"),
+                arguments: [
+                    "--target", nodeId,
+                    "--format", "s16",
+                    "--rate", "\(sampleRate)",
+                    "--channels", "\(channels)",
+                    "-",  // Output to stdout
+                ]
+            ) { execution, stdin, stdout, _ in
+                do {
+                    for try await chunk in stdout {
+                        try Task.checkCancellation()
 
-            // Check if pw-record is available
-            guard FileManager.default.fileExists(atPath: "/usr/bin/pw-record") else {
-                throw AudioError.commandFailed(
-                    "pw-record not found. Please install pipewire package."
-                )
-            }
-
-            // Create pipe for reading audio data
-            self.pipe = Pipe()
-
-            // Set up pw-record process
-            // pw-record --target <node-id> --format s16 --rate 48000 --channels 1 -
-            let process = Foundation.Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/pw-record")
-            process.arguments = [
-                "--target", nodeId,
-                "--format", "s16",
-                "--rate", "\(sampleRate)",
-                "--channels", "\(channels)",
-                "-",  // Output to stdout
-            ]
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-
-            self.process = process
-
-            do {
-                try process.run()
-            } catch {
-                throw AudioError.commandFailed("Failed to start pw-record: \(error)")
-            }
-        }
-
-        deinit {
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-
-        /// Read audio data and return as Data
-        func readData(frameCount: Int) throws -> Data {
-            let bufferSize = frameCount * bytesPerFrame
-            let data = pipe.fileHandleForReading.readData(ofLength: bufferSize)
-
-            guard !data.isEmpty else {
-                if !process.isRunning {
-                    throw AudioError.commandFailed("pw-record process terminated unexpectedly")
+                        var buffer = ByteBuffer()
+                        chunk.withUnsafeBytes { bytes in
+                            _ = buffer.writeBytes(bytes)
+                        }
+                        try await handler(buffer)
+                    }
+                    try await stdin.finish()
+                    try execution.send(signal: .interrupt)
+                } catch {
+                    try execution.send(signal: .kill)
+                    throw error
                 }
-                return Data()
-            }
-
-            return data
-        }
-
-        /// Stop the capture
-        func stop() {
-            if process.isRunning {
-                process.terminate()
             }
         }
     }

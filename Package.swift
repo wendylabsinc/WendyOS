@@ -197,7 +197,10 @@ let package = Package(
         ),
         .target(
             name: "ALSA",
-            dependencies: []
+            dependencies: [
+                .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "_NIOFileSystem", package: "swift-nio"),
+            ]
         ),
         .target(
             name: "ContainerdGRPC",

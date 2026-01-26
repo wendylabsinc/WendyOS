@@ -141,19 +141,16 @@ struct WendyAudioService: Wendy_Agent_Services_V1_WendyAudioService.ServiceProto
         )
 
         return StreamingServerResponse { writer in
-            let audioStream = await pipeWireManager.streamAudio(
+            try await pipeWireManager.withAudioStream(
                 deviceId: deviceId == 0 ? nil : deviceId,
                 sampleRate: sampleRate,
                 channels: channels
-            )
-
-            for try await (data, timestampNs) in audioStream {
+            ) { buffer, timestampNs in
                 var chunk = Wendy_Agent_Services_V1_AudioChunk()
-                chunk.pcmData = data
+                chunk.pcmData = Data(buffer: buffer)
                 chunk.timestampNs = timestampNs
                 chunk.sampleRate = sampleRate
                 chunk.channels = channels
-
                 try await writer.write(chunk)
             }
 

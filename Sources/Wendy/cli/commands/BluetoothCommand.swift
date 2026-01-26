@@ -47,9 +47,6 @@ struct BluetoothCommand: AsyncParsableCommand {
             abstract: "List paired or connected Bluetooth devices."
         )
 
-        @Option(help: "Number of rows to display per page")
-        var pageSize: Int = 10
-
         @Flag(name: .customLong("stream"), help: "Show live updates")
         var stream: Bool = false
 
@@ -59,26 +56,34 @@ struct BluetoothCommand: AsyncParsableCommand {
             try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to list Bluetooth devices?"
-            ) { agent in
+            ) { [stream] agent in
                 if JSONMode.isEnabled && !stream {
                     // One-time JSON output
                     let devices = try await agent.listBluetoothDevices()
                     cliOutput.result(devices)
                 } else {
-                    cliOutput.info("Press Ctrl+C to exit.")
+                    if !JSONMode.isEnabled {
+                        cliOutput.info("Press Ctrl+C to exit")
+                    }
 
                     // Live table showing paired or connected devices
                     let scanner = PairedDevicesScanner(source: agent)
 
-                    guard let initial = try await scanner.makeAsyncIterator().next(),
-                        !initial.rows.isEmpty
-                    else {
-                        cliOutput.info("No paired or connected Bluetooth devices found.")
-                        return
+                    // // Use non-selectable live table
+                    try await cliOutput.streamingTable(
+                        initial: [],
+                        updates: scanner
+                    ) { devices -> (headers: [String], rows: [[String]]) in
+                        return (
+                            headers: ["Name", "Address", "Type", "Status"],
+                            rows: devices.map { device in
+                                [
+                                    device.name, device.address, device.deviceTypeDisplay,
+                                    device.connectedStatus,
+                                ]
+                            }
+                        )
                     }
-
-                    // Use non-selectable live table
-                    await cliOutput.withStreamingOutput(initial, updates: scanner)
                 }
             }
         }
@@ -570,6 +575,18 @@ struct BluetoothDeviceInfo: Codable, Sendable {
         self.icon = proto.hasIcon ? proto.icon : nil
     }
 
+    // Initializer for Bluetooth L2CAP proto type
+    init(from proto: Wendy_Agent_Services_V1_BluetoothDeviceInfo) {
+        self.name = proto.name.isEmpty ? "Unknown" : proto.name
+        self.address = proto.address
+        self.rssi = proto.hasRssi ? Int(proto.rssi) : nil
+        self.paired = proto.paired
+        self.connected = proto.connected
+        self.trusted = proto.trusted
+        self.deviceType = proto.deviceType.isEmpty ? "unknown" : proto.deviceType
+        self.icon = proto.hasIcon ? proto.icon : nil
+    }
+
     var displayName: String {
         if name.isEmpty || name == "Unknown" {
             return address
@@ -705,17 +722,10 @@ private func resolveBluetoothDevice(
 // MARK: - Paired/Connected Devices Scanner (for list command)
 
 actor PairedDevicesScanner: nonisolated AsyncSequence {
-    typealias Element = TableData
+    nonisolated let source: AgentClient
 
-    nonisolated let source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>
-    private(set) var currentDevices: [BluetoothDeviceInfo] = []
-
-    init(source: Wendy_Agent_Services_V1_WendyAgentService.Client<GRPCTransport>) {
+    init(source: AgentClient) {
         self.source = source
-    }
-
-    func setDevices(_ devices: [BluetoothDeviceInfo]) {
-        self.currentDevices = devices
     }
 
     nonisolated func makeAsyncIterator() -> AsyncIterator {
@@ -725,45 +735,10 @@ actor PairedDevicesScanner: nonisolated AsyncSequence {
     struct AsyncIterator: AsyncIteratorProtocol {
         let scanner: PairedDevicesScanner
 
-        func next() async throws -> TableData? {
+        func next() async throws -> [BluetoothDeviceInfo]? {
             // Poll interval for paired devices status
             try await Task.sleep(for: .seconds(2))
-
-            let response = try await scanner.source.listBluetoothDevices(
-                .with { $0.pairedOnly = false }
-            )
-
-            let devices = response.devices
-                .map { BluetoothDeviceInfo(from: $0) }
-                .filter { $0.paired || $0.connected }
-                .sorted { bluetoothDevice1, bluetoothDevice2 in
-                    // Sort by: connected first, then by name
-                    if bluetoothDevice1.connected != bluetoothDevice2.connected {
-                        return bluetoothDevice1.connected
-                    }
-                    return bluetoothDevice1.name < bluetoothDevice2.name
-                }
-
-            await scanner.setDevices(devices)
-
-            let rows: [TableRow] = devices.map { bluetoothDevice in
-                [
-                    "\(bluetoothDevice.name)",
-                    "\(bluetoothDevice.address)",
-                    "\(bluetoothDevice.deviceTypeDisplay)",
-                    "\(bluetoothDevice.connectedStatus)",
-                ]
-            }
-
-            return TableData(
-                columns: [
-                    TableColumn(title: "Name"),
-                    TableColumn(title: "Address"),
-                    TableColumn(title: "Type"),
-                    TableColumn(title: "Status"),
-                ],
-                rows: rows
-            )
+            return try await scanner.source.listBluetoothDevices()
         }
     }
 }

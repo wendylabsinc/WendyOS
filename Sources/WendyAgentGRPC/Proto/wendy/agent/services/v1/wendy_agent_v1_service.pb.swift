@@ -35,9 +35,17 @@ public struct Wendy_Agent_Services_V1_ResponseStatus: Sendable {
   public enum Level: SwiftProtobuf.Enum, Swift.CaseIterable {
     public typealias RawValue = Int
     case unspecified // = 0
+
+    /// Successful operation without extra details.
     case success // = 1
+
+    /// Successful operation with informational message.
     case info // = 2
+
+    /// Successful operation with warning message.
     case warning // = 3
+
+    /// Failed operation; success should be false.
     case error // = 4
     case UNRECOGNIZED(Int)
 

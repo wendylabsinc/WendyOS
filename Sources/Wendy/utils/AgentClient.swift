@@ -207,8 +207,7 @@ extension AgentClient {
             let response = try await agent.listBluetoothDevices(request)
             return response.devices.map { BluetoothDeviceInfo(from: $0) }
         case .bluetooth(let client):
-            let devices = try await client.listBluetoothDevices(pairedOnly: false)
-            return devices.map { BluetoothDeviceInfo(from: $0) }
+            return try await client.listBluetoothDevices(pairedOnly: false)
         }
     }
 
