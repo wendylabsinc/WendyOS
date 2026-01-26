@@ -74,6 +74,18 @@ actor BluetoothAgentClient {
         }
     }
 
+    func listBluetoothDevices(pairedOnly: Bool) async throws -> [BluetoothDeviceInfo] {
+        var command = Wendy_Agent_Services_V1_BluetoothCommand()
+        command.bluetoothList = Wendy_Agent_Services_V1_BluetoothListCommand()
+        command.bluetoothList.pairedOnly = pairedOnly
+
+        let response = try await sendCommand(command)
+        guard case .bluetoothList(let bluetoothList) = response.response else {
+            throw BluetoothAgentError.unexpectedResponse
+        }
+        return bluetoothList.devices.map { BluetoothDeviceInfo(from: $0) }
+    }
+    
     // MARK: - WiFi Commands
 
     func listWiFiNetworks() async throws -> [Wendy_Agent_Services_V1_WifiNetworkInfo] {

@@ -56,6 +56,7 @@ struct LogsCommand: AsyncParsableCommand {
 
     func run() async throws {
         let minSeverity: Int32? = level.flatMap { parseSeverityLevel($0) }
+
         // Reconnection loop - keeps trying to connect when agent restarts
         while !Task.isCancelled {
             do {

@@ -205,7 +205,9 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
     public func withProgressBar<T: Sendable>(
         message: String,
-        operation: @escaping @Sendable (@escaping (Double) -> Void) async throws -> T
+        successMessage: String,
+        errorMessage: String,
+        operation: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await noora.progressBarStep(message: message) { updateProgress in
             try await operation(updateProgress)

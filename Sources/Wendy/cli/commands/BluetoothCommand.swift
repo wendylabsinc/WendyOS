@@ -50,23 +50,19 @@ struct BluetoothCommand: AsyncParsableCommand {
         @Option(help: "Number of rows to display per page")
         var pageSize: Int = 10
 
+        @Flag(name: .customLong("stream"), help: "Show live updates")
+        var stream: Bool = false
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentGRPCClient(
+            try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to list Bluetooth devices?"
-            ) { client in
-                let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-
-                if JSONMode.isEnabled {
+            ) { agent in
+                if JSONMode.isEnabled && !stream {
                     // One-time JSON output
-                    let response = try await agent.listBluetoothDevices(
-                        .with { $0.pairedOnly = false }
-                    )
-                    let devices = response.devices
-                        .map { BluetoothDeviceInfo(from: $0) }
-                        .filter { $0.paired || $0.connected }
+                    let devices = try await agent.listBluetoothDevices()
                     cliOutput.result(devices)
                 } else {
                     cliOutput.info("Press Ctrl+C to exit.")
@@ -82,7 +78,7 @@ struct BluetoothCommand: AsyncParsableCommand {
                     }
 
                     // Use non-selectable live table
-                    await Noora().table(initial, updates: scanner)
+                    await cliOutput.withStreamingOutput(initial, updates: scanner)
                 }
             }
         }

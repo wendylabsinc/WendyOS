@@ -56,19 +56,18 @@ struct AudioCommand: AsyncParsableCommand {
                 if json {
                     return try await audio.listAudioDevices(request).devices
                 } else {
-                    return try await Noora().progressStep(
+                    return try await cliOutput.withProgress(
                         message: "Listing audio devices",
-                        successMessage: nil,
-                        errorMessage: nil,
-                        showSpinner: true
-                    ) { _ in
+                        successMessage: "Audio devices listed successfully",
+                        errorMessage: "Failed to list audio devices"
+                    ) { [request] in
                         try await audio.listAudioDevices(request)
                     }.devices
                 }
             }
 
             if devices.isEmpty {
-                Noora().info("No audio devices found.")
+                cliOutput.info("No audio devices found.")
             } else if json {
                 try outputJSON(devices)
             } else {
@@ -156,12 +155,11 @@ struct AudioCommand: AsyncParsableCommand {
                 var request = Wendy_Agent_Services_V1_SetDefaultAudioDeviceRequest()
                 request.deviceID = deviceId
 
-                let response = try await Noora().progressStep(
+                let response = try await cliOutput.withProgress(
                     message: "Setting default audio device to \(deviceId)",
                     successMessage: "Default audio device set to \(deviceId)",
-                    errorMessage: "Failed to set default audio device",
-                    showSpinner: true
-                ) { _ in
+                    errorMessage: "Failed to set default audio device"
+                ) { [request] in
                     try await audio.setDefaultAudioDevice(request)
                 }
 
@@ -405,12 +403,11 @@ private func selectAudioDevice<T: GRPCCore.ClientTransport>(
     var request = Wendy_Agent_Services_V1_ListAudioDevicesRequest()
     request.typeFilter = deviceType
 
-    let response = try await Noora().progressStep(
+    let response = try await cliOutput.withProgress(
         message: "Fetching audio devices",
-        successMessage: nil,
-        errorMessage: nil,
-        showSpinner: true
-    ) { _ in
+        successMessage: "Audio devices fetched successfully",
+        errorMessage: "Failed to fetch audio devices"
+    ) { [request] in
         try await audio.listAudioDevices(request)
     }
 

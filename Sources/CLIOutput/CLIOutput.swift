@@ -90,7 +90,9 @@ public protocol CLIOutput: Sendable {
     /// In interactive mode, shows a progress bar. In JSON mode, runs silently.
     func withProgressBar<T: Sendable>(
         message: String,
-        operation: @escaping @Sendable (@escaping (Double) -> Void) async throws -> T
+        successMessage: String,
+        errorMessage: String,
+        operation: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// Execute an async operation with progress bar indication and label updates.
@@ -209,7 +211,9 @@ extension CLIOutput {
 
     public func withProgressBar<T: Sendable>(
         message: String,
-        operation: @Sendable (@escaping (Double) -> Void) async throws -> T
+        successMessage: String,
+        errorMessage: String,
+        operation: @Sendable @escaping (@escaping @Sendable (Double) -> Void) async throws -> T
     ) async throws -> T {
         // Default: just run the operation with no-op progress callback
         try await operation({ _ in })

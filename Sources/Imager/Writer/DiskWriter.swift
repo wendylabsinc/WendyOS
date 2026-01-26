@@ -66,7 +66,7 @@ public protocol DiskWriter: Sendable {
     func write(
         imagePath: String,
         drive: Drive,
-        progressHandler: @escaping (DiskWriteProgress) -> Void
+        progressHandler: @escaping @Sendable (DiskWriteProgress) -> Void
     ) async throws
 
     /// Write an image from a zip archive directly to a drive, streaming the decompression.

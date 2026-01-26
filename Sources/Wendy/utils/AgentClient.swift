@@ -199,6 +199,19 @@ extension AgentClient {
         }
     }
 
+    func listBluetoothDevices() async throws -> [BluetoothDeviceInfo] {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            let request = Wendy_Agent_Services_V1_ListBluetoothDevicesRequest()
+            let response = try await agent.listBluetoothDevices(request)
+            return response.devices.map { BluetoothDeviceInfo(from: $0) }
+        case .bluetooth(let client):
+            let devices = try await client.listBluetoothDevices(pairedOnly: false)
+            return devices.map { BluetoothDeviceInfo(from: $0) }
+        }
+    }
+
     /// Connect to a WiFi network
     func connectToWiFi(ssid: String, password: String) async throws -> WiFiConnectResult {
         switch self {
