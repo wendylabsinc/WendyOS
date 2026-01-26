@@ -2,18 +2,18 @@
 import PackageDescription
 
 #if os(Windows)
-let packageDependencies: [Package.Dependency] = [
-    .package(path: "../async-http-client"),
-    .package(path: "../hummingbird"),
-    .package(path: "../DNSClient"),
-    .package(path: "../grpc-swift-nio-transport"),
-    .package(path: "../swift-nio"),
-    .package(path: "../swift-nio-ssl"),
-    .package(path: "../swift-nio-extras"),
-    .package(path: "../Rainbow"),
-]
+    let packageDependencies: [Package.Dependency] = [
+        .package(path: "../async-http-client"),
+        .package(path: "../hummingbird"),
+        .package(path: "../DNSClient"),
+        .package(path: "../grpc-swift-nio-transport"),
+        .package(path: "../swift-nio"),
+        .package(path: "../swift-nio-ssl"),
+        .package(path: "../swift-nio-extras"),
+        .package(path: "../Rainbow"),
+    ]
 #else
-let packageDependencies: [Package.Dependency] = [
+    let packageDependencies: [Package.Dependency] = [
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
         .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
@@ -22,7 +22,7 @@ let packageDependencies: [Package.Dependency] = [
             from: "2.3.0"
         ),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
-]
+    ]
 #endif
 
 let package = Package(

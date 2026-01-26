@@ -24,7 +24,9 @@
             return []
         }
 
-        public func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice] {
+        public func findBluetoothDevices(
+            resolveAgentVersion: Bool
+        ) async throws -> [BluetoothDevice] {
             logger.debug("Listing Bluetooth devices on Windows not supported yet")
             return []
         }
@@ -56,7 +58,9 @@
 
                 if let found = try? await queryMDNSService(serviceType, timeout: timeoutSeconds) {
                     for device in found {
-                        if !devices.contains(where: { $0.id == device.id || $0.hostname == device.hostname }) {
+                        if !devices.contains(where: {
+                            $0.id == device.id || $0.hostname == device.hostname
+                        }) {
                             devices.append(device)
                         }
                     }
@@ -68,7 +72,10 @@
         }
 
         /// Query a specific mDNS service type using raw sockets
-        private func queryMDNSService(_ serviceType: String, timeout: Int) async throws -> [LANDevice] {
+        private func queryMDNSService(
+            _ serviceType: String,
+            timeout: Int
+        ) async throws -> [LANDevice] {
             // Create UDP socket
             let sock = socket(AF_INET, SOCK_DGRAM, Int32(IPPROTO_UDP.rawValue))
             guard sock != INVALID_SOCKET else {
@@ -110,9 +117,18 @@
                 mreq.imr_multiaddr.S_un.S_addr = inet_addr("224.0.0.251")
                 mreq.imr_interface.S_un.S_addr = inet_addr(interfaceAddr)
 
-                let joinResult = setsockopt(sock, Int32(IPPROTO_IP), IP_ADD_MEMBERSHIP, &mreq, Int32(MemoryLayout<ip_mreq>.size))
+                let joinResult = setsockopt(
+                    sock,
+                    Int32(IPPROTO_IP),
+                    IP_ADD_MEMBERSHIP,
+                    &mreq,
+                    Int32(MemoryLayout<ip_mreq>.size)
+                )
                 if joinResult == 0 {
-                    logger.debug("Joined multicast on interface", metadata: ["ip": "\(interfaceAddr)"])
+                    logger.debug(
+                        "Joined multicast on interface",
+                        metadata: ["ip": "\(interfaceAddr)"]
+                    )
                 }
             }
 
@@ -131,12 +147,25 @@
             for interfaceAddr in interfaces {
                 var ifAddr = in_addr()
                 ifAddr.S_un.S_addr = inet_addr(interfaceAddr)
-                setsockopt(sock, Int32(IPPROTO_IP), IP_MULTICAST_IF, &ifAddr, Int32(MemoryLayout<in_addr>.size))
+                setsockopt(
+                    sock,
+                    Int32(IPPROTO_IP),
+                    IP_MULTICAST_IF,
+                    &ifAddr,
+                    Int32(MemoryLayout<in_addr>.size)
+                )
 
                 _ = query.withUnsafeBytes { queryPtr in
                     withUnsafePointer(to: &destAddr) { destPtr in
                         destPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                            sendto(sock, queryPtr.baseAddress, Int32(query.count), 0, sockPtr, Int32(MemoryLayout<sockaddr_in>.size))
+                            sendto(
+                                sock,
+                                queryPtr.baseAddress,
+                                Int32(query.count),
+                                0,
+                                sockPtr,
+                                Int32(MemoryLayout<sockaddr_in>.size)
+                            )
                         }
                     }
                 }
@@ -161,12 +190,17 @@
                 }
 
                 if bytesReceived > 0 {
-                    let responseData = Array(UnsafeBufferPointer(start: buffer, count: Int(bytesReceived)))
+                    let responseData = Array(
+                        UnsafeBufferPointer(start: buffer, count: Int(bytesReceived))
+                    )
                     logger.trace("Received mDNS response", metadata: ["bytes": "\(bytesReceived)"])
                     if let device = parseMDNSResponse(responseData, serviceType: serviceType) {
                         if !devices.contains(where: { $0.id == device.id }) {
                             devices.append(device)
-                            logger.debug("Found device", metadata: ["id": "\(device.id)", "hostname": "\(device.hostname)"])
+                            logger.debug(
+                                "Found device",
+                                metadata: ["id": "\(device.id)", "hostname": "\(device.hostname)"]
+                            )
                         }
                     }
                 } else {
@@ -191,10 +225,9 @@
 
                 // Skip virtual adapters
                 let nameLower = device.name.lowercased()
-                if nameLower.contains("vethernet") ||
-                   nameLower.contains("virtualbox") ||
-                   nameLower.contains("vmware") ||
-                   nameLower.contains("virtual") {
+                if nameLower.contains("vethernet") || nameLower.contains("virtualbox")
+                    || nameLower.contains("vmware") || nameLower.contains("virtual")
+                {
                     continue
                 }
 
@@ -205,9 +238,9 @@
                 let byte1 = parts[0]
                 let byte2 = parts[1]
 
-                let isPrivateLAN = (byte1 == 192 && byte2 == 168) ||
-                                   byte1 == 10 ||
-                                   (byte1 == 172 && byte2 >= 16 && byte2 <= 31)
+                let isPrivateLAN =
+                    (byte1 == 192 && byte2 == 168) || byte1 == 10
+                    || (byte1 == 172 && byte2 >= 16 && byte2 <= 31)
 
                 if isPrivateLAN {
                     interfaces.append(ipString)
@@ -279,7 +312,10 @@
                 guard nameEnd + 10 <= data.count else { break }
 
                 let recordType = UInt16(data[nameEnd]) << 8 | UInt16(data[nameEnd + 1])
-                logger.trace("Parsing record", metadata: ["name": "\(recordName)", "type": "\(recordType)"])
+                logger.trace(
+                    "Parsing record",
+                    metadata: ["name": "\(recordName)", "type": "\(recordType)"]
+                )
 
                 // Check if this record is for our service type
                 if recordName.contains("_wendyos") || recordName.contains("_edgeos") {
@@ -292,11 +328,20 @@
 
                 if recordType == 33 {  // SRV record
                     guard recordDataStart + 6 < data.count else { break }
-                    port = Int(UInt16(data[recordDataStart + 4]) << 8 | UInt16(data[recordDataStart + 5]))
+                    port = Int(
+                        UInt16(data[recordDataStart + 4]) << 8 | UInt16(data[recordDataStart + 5])
+                    )
                     hostname = readDNSName(data, offset: recordDataStart + 6)
-                    logger.trace("SRV record", metadata: ["hostname": "\(hostname ?? "nil")", "port": "\(port ?? 0)"])
+                    logger.trace(
+                        "SRV record",
+                        metadata: ["hostname": "\(hostname ?? "nil")", "port": "\(port ?? 0)"]
+                    )
                 } else if recordType == 16 {  // TXT record
-                    let parsed = parseTXTRecords(data, offset: recordDataStart, length: Int(dataLength))
+                    let parsed = parseTXTRecords(
+                        data,
+                        offset: recordDataStart,
+                        length: Int(dataLength)
+                    )
                     for (key, value) in parsed {
                         txtRecords[key] = value
                     }
@@ -308,13 +353,17 @@
 
             // Only return WendyOS/EdgeOS devices
             if !isWendyService {
-                logger.trace("Skipping non-WendyOS response", metadata: ["hostname": "\(hostname ?? "unknown")"])
+                logger.trace(
+                    "Skipping non-WendyOS response",
+                    metadata: ["hostname": "\(hostname ?? "unknown")"]
+                )
                 return nil
             }
             guard let host = hostname, let p = port else { return nil }
 
             // Extract device info from TXT records
-            let deviceId = txtRecords["id"] ?? txtRecords["uuid"] ?? txtRecords["identifier"] ?? host
+            let deviceId =
+                txtRecords["id"] ?? txtRecords["uuid"] ?? txtRecords["identifier"] ?? host
             let displayName = txtRecords["name"] ?? txtRecords["displayName"] ?? deviceId
 
             return LANDevice(
@@ -372,7 +421,8 @@
         }
 
         /// Parse TXT record into key=value pairs
-        private func parseTXTRecords(_ data: [UInt8], offset: Int, length: Int) -> [String: String] {
+        private func parseTXTRecords(_ data: [UInt8], offset: Int, length: Int) -> [String: String]
+        {
             var records: [String: String] = [:]
             guard offset < data.count else { return records }
             let end = min(offset + length, data.count)

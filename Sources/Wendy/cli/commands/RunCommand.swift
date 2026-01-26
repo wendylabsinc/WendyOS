@@ -511,40 +511,40 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     func checkSwiftRequirements() async throws {
         #if os(Windows)
-        return // Swiftly unavailble on Windows
+            return  // Swiftly unavailble on Windows
         #else
-        let swiftPM = SwiftPM()
+            let swiftPM = SwiftPM()
 
-        // Check with spinner
-        let (installedSDKs, installedSwiftVersions) = try await cliOutput.withProgress(
-            message: "Checking Swift requirements",
-            successMessage: "Swift environment ready",
-            errorMessage: "Failed to check Swift requirements"
-        ) {
-            async let sdks = try await swiftPM.listSDKs()
-            async let versions = try await swiftPM.listSwiftVersions()
-            return try await (sdks, versions)
-        }
-
-        if !installedSDKs.contains(swiftSDK) {
-            let installSDK: Bool
-
-            if shouldAutoAccept {
-                installSDK = true
-            } else {
-                installSDK = Noora().yesOrNoChoicePrompt(
-                    question: "Do you want to install/update the WendyOS Swift SDK?"
-                )
+            // Check with spinner
+            let (installedSDKs, installedSwiftVersions) = try await cliOutput.withProgress(
+                message: "Checking Swift requirements",
+                successMessage: "Swift environment ready",
+                errorMessage: "Failed to check Swift requirements"
+            ) {
+                async let sdks = try await swiftPM.listSDKs()
+                async let versions = try await swiftPM.listSwiftVersions()
+                return try await (sdks, versions)
             }
 
-            if installSDK {
-                try await swiftPM.installSDK(
-                    from: sdkDownloadURL,
-                    checksum: sdkChecksum
-                )
-                cliOutput.success("WendyOS SDK ready to use")
+            if !installedSDKs.contains(swiftSDK) {
+                let installSDK: Bool
+
+                if shouldAutoAccept {
+                    installSDK = true
+                } else {
+                    installSDK = Noora().yesOrNoChoicePrompt(
+                        question: "Do you want to install/update the WendyOS Swift SDK?"
+                    )
+                }
+
+                if installSDK {
+                    try await swiftPM.installSDK(
+                        from: sdkDownloadURL,
+                        checksum: sdkChecksum
+                    )
+                    cliOutput.success("WendyOS SDK ready to use")
+                }
             }
-        }
         #endif
     }
 
