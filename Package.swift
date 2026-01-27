@@ -45,7 +45,7 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
         .package(url: "https://github.com/wendylabsinc/bluetooth.git", from: "0.1.0"),
         .package(url: "https://github.com/wendylabsinc/dbus.git", from: "0.3.0"),
-        .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
+        .package(url: "https://github.com/wendylabsinc/TOMLKit.git", from: "0.7.0"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
