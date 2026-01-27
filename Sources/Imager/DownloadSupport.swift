@@ -207,11 +207,7 @@ public final class ImageDownloader: ImageDownloading {
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
         #if os(Windows)
-            return try await extractImageWindows(
-                from: path,
-                to: directory,
-                progressHandler: progressHandler
-            )
+            throw DownloadError.extractionFailed("Windows extraction not implemented yet")
         #else
             // Prefer streaming a single .img for accurate progress. Fallback to unzip -o when needed.
             let unzipPath = try findExecutable(name: "unzip", standardPath: "/usr/bin/unzip")
@@ -345,106 +341,6 @@ public final class ImageDownloader: ImageDownloading {
             return imgPath
         #endif
     }
-
-    #if os(Windows)
-        private func extractImageWindows(
-            from path: String,
-            to directory: String,
-            progressHandler: @escaping (Progress) -> Void
-        ) async throws -> String {
-            // Use tar (available on Windows 10+) to list and extract ZIP contents
-            let tarPath = "C:\\Windows\\System32\\tar.exe"
-            guard FileManager.default.fileExists(atPath: tarPath) else {
-                throw DownloadError.extractionFailed("tar.exe not found. Windows 10+ is required.")
-            }
-
-            // 1) List archive contents to find .img file and get size estimate
-            let listProc = Process()
-            listProc.executableURL = URL(fileURLWithPath: tarPath)
-            listProc.arguments = ["-tzf", path]
-            let listOut = Pipe()
-            listProc.standardOutput = listOut
-            listProc.standardError = Pipe()
-            try listProc.run()
-            listProc.waitUntilExit()
-
-            while true {
-                let data = outPipe.fileHandleForReading.readData(ofLength: 1 << 18)  // 256 KiB
-                if data.isEmpty {
-                    break
-                }
-            }
-
-            guard let imgFilename = imgEntry else {
-                throw DownloadError.extractionFailed("No .img file found in archive")
-            }
-
-            // Get the compressed size as rough estimate (uncompressed size not easily available with tar -t on Windows)
-            let zipAttrs = try FileManager.default.attributesOfItem(atPath: path)
-            let zipSize = (zipAttrs[.size] as? Int64) ?? 0
-
-            // Estimate uncompressed size as ~2-3x compressed (rough heuristic for .img in ZIP)
-            let estimatedSize = zipSize * 3
-
-            let progress = Progress(totalUnitCount: estimatedSize)
-            progress.completedUnitCount = 0
-            progressHandler(progress)
-
-            // 2) Extract the specific .img file using tar
-            // Ensure destination directory exists
-            try FileManager.default.createDirectory(
-                atPath: directory,
-                withIntermediateDirectories: true
-            )
-
-            let extractProc = Process()
-            extractProc.executableURL = URL(fileURLWithPath: tarPath)
-            extractProc.arguments = ["-xzf", path, "-C", directory, imgFilename]
-            extractProc.standardOutput = Pipe()
-            let errorPipe = Pipe()
-            extractProc.standardError = errorPipe
-
-            try extractProc.run()
-
-            // Simulate progress during extraction (tar doesn't provide real-time progress)
-            let estimatorQueue = DispatchQueue(label: "wendy.windows.extract")
-            let estimator = DispatchSource.makeTimerSource(queue: estimatorQueue)
-            let startTime = Date()
-            estimator.schedule(deadline: .now() + 0.5, repeating: 0.5)
-            estimator.setEventHandler {
-                let elapsed = Date().timeIntervalSince(startTime)
-                // Progress gradually from 0% to 95% over ~30 seconds
-                let estFraction = min(0.95, 0.05 + elapsed / 30.0)
-                progress.completedUnitCount = Int64((estFraction * Double(estimatedSize)).rounded())
-                progressHandler(progress)
-            }
-            estimator.resume()
-
-            extractProc.waitUntilExit()
-            estimator.cancel()
-
-            guard extractProc.terminationStatus == 0 else {
-                let errorMsg =
-                    String(
-                        data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
-                        encoding: .utf8
-                    ) ?? "Unknown error"
-                throw DownloadError.extractionFailed("tar extraction failed: \(errorMsg)")
-            }
-
-            // Force 100%
-            progress.completedUnitCount = estimatedSize
-            progressHandler(progress)
-
-            // Find the extracted .img file
-            let imgPath = try await validateImage(at: directory)
-
-            // Best-effort cleanup: remove the zip to save space
-            try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
-
-            return imgPath
-        }
-    #endif
 
     private func validateImage(at directory: String) async throws -> String {
         // Find the .img file in the extracted directory

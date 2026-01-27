@@ -58,7 +58,7 @@ public func run(
                 exitCode = Int(code)
             }
             throw SubprocessError.nonZeroExit(
-                command: executableName + " " + arguments(flags).description,
+                command: executable.description + " " + arguments.description,
                 exitCode: exitCode,
                 output: "",
                 error: ""
