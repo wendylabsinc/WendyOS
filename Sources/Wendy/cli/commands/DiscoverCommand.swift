@@ -95,7 +95,7 @@ struct DiscoverCommand: AsyncParsableCommand {
             let (updates, continuation) = AsyncStream<DevicesCollection>.makeStream()
 
             // Run discovery and output concurrently using structured concurrency
-            async let discoveryTask: Void = runStreamingDiscovery(
+            async let discoveryTask: Void = DiscoverCommand.runStreamingDiscovery(
                 deviceCache: deviceCache,
                 resolveBluetoothVersionInline: !skipResolveAgentVersion,
                 skipVersionResolution: skipResolveAgentVersion,
@@ -115,6 +115,7 @@ struct DiscoverCommand: AsyncParsableCommand {
                         case .lan(let lan):
                             connectionParts.append(lan.hostname)
                         case .bluetooth(let ble):
+                            connectionParts.append("BLE: \(ble.address)")
                             connectionParts.append("RSSI: \(ble.rssi)")
                         case .usb, .ethernet:
                             break
@@ -139,7 +140,7 @@ struct DiscoverCommand: AsyncParsableCommand {
         }
     }
 
-    private func runStreamingDiscovery(
+    static func runStreamingDiscovery(
         deviceCache: DeviceCache,
         resolveBluetoothVersionInline: Bool,
         skipVersionResolution: Bool,

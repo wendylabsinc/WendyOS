@@ -72,6 +72,76 @@ public struct NooraRenderer: CLIOutput, Sendable {
         _ = await (producer, consumer)
     }
 
+    private actor Results<S: BidirectionalCollection> where S.Index == Int, S.Element: Sendable {
+        var results: S
+
+        init(initial: S) {
+            self.results = initial
+        }
+
+        subscript(index: Int) -> S.Element? {
+            if index > results.endIndex {
+                return nil
+            }
+            return results[index]
+        }
+
+        func set(to value: S) {
+            results = value
+        }
+    }
+
+    public func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
+        initial: S,
+        updates: some AsyncSequence<S, Never> & Sendable,
+        pageSize: Int,
+        renderTable: @escaping @Sendable ([S.Element]) -> (headers: [String], rows: [[String]])
+    ) async throws -> S.Element where S.Index == Int, S.Element: Sendable & Comparable {
+        let initialRendered = renderTable(initial.sorted())
+
+        let tableData = TableData(
+            columns: initialRendered.headers.map { TableColumn(title: $0) },
+            rows: initialRendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) } }
+        )
+
+        // Convert AsyncStream<T> to AsyncStream<TableData> for Noora
+        let (stream, continuation) = AsyncStream<TableData>.makeStream()
+
+        // Use async let to run producer and consumer concurrently with structured concurrency
+        return try await withThrowingTaskGroup(of: Void.self) { group in
+            let results = Results<[S.Element]>(initial: initial.sorted())
+
+            group.addTask { [updates] in
+                for await value in updates {
+                    let value = value.sorted()
+                    let rendered = renderTable(value)
+                    let tableData = TableData(
+                        columns: rendered.headers.map { TableColumn(title: $0) },
+                        rows: rendered.rows.map { row in row.map { TerminalText(stringLiteral: $0) }
+                        }
+                    )
+                    await results.set(to: value)
+                    continuation.yield(tableData)
+                }
+                continuation.finish()
+            }
+
+            defer { group.cancelAll() }
+            repeat {
+                let index = try await Noora().selectableTable(
+                    tableData,
+                    updates: stream,
+                    pageSize: pageSize
+                )
+                if let result = await results[index] {
+                    return result
+                }
+            } while !Task.isCancelled
+
+            throw CancellationError()
+        }
+    }
+
     public func selectFromTable(
         title: String?,
         headers: [String],

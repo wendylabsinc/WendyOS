@@ -356,7 +356,14 @@ struct InitCommand: AsyncParsableCommand {
             appId: appId,
             version: "0.0.1",
             language: language.rawValue,
-            entitlements: []
+            entitlements: [
+                .audio,
+                .bluetooth(.init(mode: .bluez)),
+                .network(.init(mode: .host)),
+                .video(.init(mode: .all)),
+                .persist(.init(name: "app-\(appId)", path: "/mnt/app")),
+                .persist(.init(name: "wendy-shared", path: "/mnt/shared")),
+            ]
         )
 
         if language == .python {

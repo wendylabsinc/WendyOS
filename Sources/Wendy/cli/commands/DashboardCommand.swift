@@ -46,10 +46,6 @@ struct DashboardCommand: AsyncParsableCommand {
     @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
     func run() async throws {
-        let endpoint = try await agentConnectionOptions.read(
-            title: "For which device do you want to view the dashboard?"
-        )
-
         let dashboard = Dashboard()
 
         // Enter alternate screen buffer and hide cursor
@@ -69,7 +65,7 @@ struct DashboardCommand: AsyncParsableCommand {
             group.addTask {
                 while !Task.isCancelled {
                     do {
-                        try await withAgentGRPCClient(endpoint, title: "") { client in
+                        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
                             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                                 wrapping: client
                             )
@@ -105,7 +101,7 @@ struct DashboardCommand: AsyncParsableCommand {
             group.addTask { [service, app] in
                 while !Task.isCancelled {
                     do {
-                        try await withAgentGRPCClient(endpoint, title: "") { client in
+                        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
                             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                                 wrapping: client
                             )

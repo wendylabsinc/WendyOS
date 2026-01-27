@@ -82,19 +82,8 @@ func withAgentGRPCClient<R: Sendable>(
     title: TerminalText,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
-    let endpoint = try await connectionOptions.read(title: title)
-    do {
-        return try await withAgentGRPCClient(endpoint, title: title) { client in
-            return try await body(client)
-        }
-    } catch  where endpoint.defaultDevice {
-        let endpoint = try await connectionOptions.read(
-            title: title,
-            readDefault: false
-        )
-        return try await withAgentGRPCClient(endpoint, title: title) { client in
-            return try await body(client)
-        }
+    return try await withAgentGRPCClientAndEndpoint(connectionOptions, title: title) { client, _ in
+        return try await body(client)
     }
 }
 
@@ -115,19 +104,42 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
         @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
         async throws -> R
 ) async throws -> R {
-    let endpoint = try await connectionOptions.read(title: title)
-    do {
-        return try await _withAgentGRPCClient(endpoint, title: title) { client, endpoint in
-            return try await body(client, endpoint)
-        }
-    } catch  where endpoint.defaultDevice {
-        let endpoint = try await connectionOptions.read(
+    func fallback() async throws -> R {
+        switch try await connectionOptions.read(
             title: title,
-            readDefault: false
-        )
-        return try await _withAgentGRPCClient(endpoint, title: title) { client, endpoint in
-            return try await body(client, endpoint)
+            readDefault: false,
+            includeBluetooth: false
+        ) {
+        case .lan(let host, let port, let defaultDevice):
+            let endpoint = AgentConnectionOptions.Endpoint(
+                host: host,
+                port: port,
+                defaultDevice: defaultDevice
+            )
+            return try await withAgentGRPCClient(endpoint, title: title) { client in
+                return try await body(client, endpoint)
+            }
+        case .bluetooth:
+            throw CancellationError()
         }
+    }
+
+    switch try await connectionOptions.read(title: title) {
+    case .lan(let host, let port, let defaultDevice):
+        do {
+            let endpoint = AgentConnectionOptions.Endpoint(
+                host: host,
+                port: port,
+                defaultDevice: defaultDevice
+            )
+            return try await withAgentGRPCClient(endpoint, title: title) { client in
+                return try await body(client, endpoint)
+            }
+        } catch  where defaultDevice {
+            return try await fallback()
+        }
+    case .bluetooth:
+        return try await fallback()
     }
 }
 

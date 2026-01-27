@@ -117,10 +117,15 @@ struct DeviceCommand: AsyncParsableCommand {
             )
 
             var config = getConfig()
-            config.defaultDevice = endpoint.host
+            switch endpoint {
+            case .lan(let host, _, _):
+                config.defaultDevice = host
+            case .bluetooth:
+                ()
+            }
             try config.save()
 
-            Noora().success("Default device set to \(endpoint.host)")
+            Noora().success("Default device set to \(config.defaultDevice ?? "none")")
         }
     }
 
@@ -254,77 +259,70 @@ struct DeviceCommand: AsyncParsableCommand {
                     metadata: cloudClient.metadata
                 )
 
-                let endpoint = try await agentConnectionOptions.read(title: "Provisioning device")
-                try await withAgentGRPCClient(endpoint, title: "Provisioning device") { client in
-                    let agent = Agent(client: client)
-                    try await agent.provision(
-                        enrollmentToken: tokenResponse.enrollmentToken,
-                        assetID: tokenResponse.assetID,
-                        organizationID: org.id,
-                        cloudHost: endpoint.host
-                    )
-                }
-                return endpoint
-            }
-
-            func getWifiStatus() async throws -> Wendy_Agent_Services_V1_GetWiFiStatusResponse {
-                while !Task.isCancelled {
-                    do {
-                        return try await withAgentGRPCClient(
-                            endpoint,
-                            title: "Checking agent status"
-                        ) { client in
-                            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
-                                wrapping: client
-                            )
-                            let response = try await agent.getAgentVersion(.init())
-                            Noora().info("Agent is provisioned (version: \(response.version))")
-                            return try await agent.getWiFiStatus(.init())
-                        }
-                    } catch {
-                        continue  // Failed to check agent status, try again
+                try await withAgentClient(agentConnectionOptions, title: "Provisioning device") {
+                    agent in
+                    switch agent {
+                    case .grpc(let client):
+                        let agent = Agent(client: client)
+                        try await agent.provision(
+                            enrollmentToken: tokenResponse.enrollmentToken,
+                            assetID: tokenResponse.assetID,
+                            organizationID: org.id,
+                            cloudHost: cloudClient.cloudHost
+                        )
+                    case .bluetooth(let client):
+                        // TODO: Implement Bluetooth provisioning
+                        throw CancellationError()
                     }
                 }
-
-                throw CancellationError()
             }
 
-            let status = try await getWifiStatus()
+            func getWifiStatus() async throws -> WiFiStatusInfo {
+                while true {
+                    try Task.checkCancellation()
+                    do {
+                        return try await withAgentClient(
+                            agentConnectionOptions,
+                            title: "Checking agent status"
+                        ) { agent in
+                            try await agent.getWiFiStatus()
+                        }
+                    } catch {
+                        continue
+                    }
+                }
+            }
 
-            try await withAgentGRPCClient(
-                endpoint,
+            try await withAgentClient(
+                agentConnectionOptions,
                 title: "Listing available WiFi networks"
-            ) { client in
-                let agent = Agent(client: client)
+            ) { agent in
+                let setupWifi = Noora().yesOrNoChoicePrompt(
+                    question: "Do you want to setup WiFi?",
+                    collapseOnSelection: false
+                )
 
-                if !status.connected {
-                    let setupWifi = Noora().yesOrNoChoicePrompt(
-                        question: "Do you want to setup WiFi?",
-                        collapseOnSelection: false
-                    )
+                if setupWifi {
+                    while !Task.isCancelled {
+                        let ssid = try await agent.discoverSSID()
 
-                    if setupWifi {
-                        while !Task.isCancelled {
-                            let ssid = try await agent.discoverSSID()
+                        let password = try secureTextPrompt(
+                            title: "Enter the password for '\(ssid)'",
+                            prompt: "Password"
+                        )
 
-                            let password = try secureTextPrompt(
-                                title: "Enter the password for '\(ssid)'",
-                                prompt: "Password"
+                        let result = try await agent.connectToWiFi(
+                            ssid: ssid,
+                            password: password
+                        )
+
+                        if result.success {
+                            Noora().success("Connected to WiFi network \(ssid)")
+                            break
+                        } else {
+                            Noora().error(
+                                "Failed to connect to WiFi network: \(result.errorMessage ?? "Unknown error")"
                             )
-
-                            let result = try await agent.connectToWiFi(
-                                ssid: ssid,
-                                password: password
-                            )
-
-                            if result.success {
-                                Noora().success("Connected to WiFi network \(ssid)")
-                                break
-                            } else {
-                                Noora().error(
-                                    "Failed to connect to WiFi network: \(result.errorMessage)"
-                                )
-                            }
                         }
                     }
                 }
@@ -335,17 +333,20 @@ struct DeviceCommand: AsyncParsableCommand {
                         collapseOnSelection: false
                     )
 
-                    guard shouldUpdate else {
-                        return
-                    }
+                guard shouldUpdate, case .grpc(let client) = agent else {
+                    return
+                }
 
-                    // TODO: Detect platform of remote device
-                    // Default to Linux aarch64 for device updates during setup
-                    let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
-                    let success = try await Noora().progressBarStep(message: "Updating Device") {
-                        updateProgress in
-                        try await agent.update(fromBinary: binary, onProgress: updateProgress)
-                    }
+                // TODO: Detect platform of remote device
+                // Default to Linux aarch64 for device updates during setup
+                let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
+                let success = try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
+                    try await Agent(client: client).update(
+                        fromBinary: binary,
+                        onProgress: updateProgress
+                    )
+                }
 
                     guard success else {
                         Noora().error("Failed to update agent")

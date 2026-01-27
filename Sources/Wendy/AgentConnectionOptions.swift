@@ -15,6 +15,13 @@ enum SelectedDevice: Sendable {
         return false
     }
 
+    var isDefaultDevice: Bool {
+        if case .lan(_, _, let defaultDevice) = self {
+            return defaultDevice
+        }
+        return false
+    }
+
     var isBluetooth: Bool {
         if case .bluetooth = self { return true }
         return false
@@ -107,80 +114,6 @@ struct AgentConnectionOptions: ParsableArguments {
         return nil
     }
 
-    func read(
-        title: TerminalText?,
-        readDefault: Bool = true
-    ) async throws -> Endpoint {
-        if let device {
-            return device
-        }
-
-        if let agent {
-            return agent
-        }
-
-        if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
-            let endpoint = Endpoint(argument: endpoint)
-        {
-            return endpoint
-        }
-
-        if readDefault, let defaultDevice = Self.defaultDevice() {
-            return defaultDevice
-        }
-
-        // In JSON mode, we cannot prompt for device selection
-        if JSONMode.isEnabled {
-            jsonModeRequiresArgument(
-                argument: "device",
-                description:
-                    "Provide --device <hostname:port> or set WENDY_AGENT environment variable"
-            )
-        }
-
-        let discovery = PlatformDeviceDiscovery(
-            logger: Logger(label: "sh.wendy.cli.find-agent")
-        )
-        let lanDevices = try await Noora().progressStep(
-            message: "Searching for WendyOS devices",
-            successMessage: nil,
-            errorMessage: nil,
-            showSpinner: true
-        ) { _ in
-            while true {
-                try Task.checkCancellation()
-                let devices = try await discovery.findAllDevices()
-                    .groupedDevices()
-                    .filter { $0.interfaces.contains(where: { $0.type == .lan }) }
-
-                if !devices.isEmpty {
-                    return devices
-                }
-
-                try await Task.sleep(for: .seconds(1))
-            }
-        }
-
-        let device = Noora().singleChoicePrompt(
-            title: title,
-            question: "Select a device",
-            options: lanDevices
-        )
-
-        printDeviceDetails(device)
-
-        for interface in device.interfaces {
-            if case .lan(let lanDevice) = interface {
-                return Endpoint(
-                    host: lanDevice.hostname,
-                    port: lanDevice.port
-                )
-            }
-        }
-
-        throw InvalidEndpoint()
-    }
-
     var endpoint: Endpoint {
         get throws {
             if let device {
@@ -253,7 +186,7 @@ struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConverti
 extension AgentConnectionOptions {
     /// Read device selection, including Bluetooth devices when no LAN devices are available
     /// or when explicitly requested
-    func readWithBluetooth(
+    func read(
         title: TerminalText?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
@@ -278,55 +211,60 @@ extension AgentConnectionOptions {
             return .lan(host: defaultDevice.host, port: defaultDevice.port, defaultDevice: true)
         }
 
-        let discovery = PlatformDeviceDiscovery(
-            logger: Logger(label: "sh.wendy.cli.find-agent")
-        )
-
-        let allDevices = try await Noora().progressStep(
-            message: "Searching for WendyOS devices",
-            successMessage: nil,
-            errorMessage: nil,
-            showSpinner: true
-        ) { _ in
-            while true {
-                try Task.checkCancellation()
-                let devices = try await discovery.findDevices(includeBluetooth: includeBluetooth)
-                    .groupedDevices()
-                    .filter { device in
-                        // Include devices with LAN or Bluetooth interfaces
-                        device.interfaces.contains { interface in
-                            interface.type == .lan
-                                || (includeBluetooth && interface.type == .bluetooth)
-                        }
-                    }
-
-                if !devices.isEmpty {
-                    return devices
-                }
-
-                try await Task.sleep(for: .seconds(1))
+        let (stream, continuation) = AsyncStream<DevicesCollection>.makeStream()
+        let device = try await withThrowingTaskGroup(of: Void.self) {
+            group -> DevicesCollection.GroupedDevice in
+            group.addTask {
+                await DiscoverCommand.runStreamingDiscovery(
+                    deviceCache: DeviceCache(),
+                    resolveBluetoothVersionInline: false,
+                    skipVersionResolution: true,
+                    continuation: continuation
+                )
             }
-        }
 
-        let device = Noora().singleChoicePrompt(
-            title: title,
-            question: "Select a device",
-            options: allDevices
-        )
+            defer { group.cancelAll() }
+            let emptyDevice = DevicesCollection.GroupedDevice(
+                name: "No device detected yet",
+                interfaces: []
+            )
+            return try await NooraRenderer().selectFromStreamingTable(
+                initial: [emptyDevice],
+                updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
+                    if collection.isEmpty {
+                        return [emptyDevice]
+                    }
+                    return collection.groupedDevices().filter { device in
+                        let interfaces = device.interfaces.map(\.type)
+                        if interfaces.contains(.lan) {
+                            return true
+                        }
+                        if interfaces.contains(.bluetooth), includeBluetooth {
+                            return true
+                        }
+                        return false
+                    }
+                },
+                pageSize: 20,
+                renderTable: { devices in
+                    return (
+                        headers: ["Name", "Interfaces"],
+                        rows: devices.map { device in
+                            return [
+                                device.name,
+                                device.interfaces
+                                    .map { $0.type.rawValue }
+                                    .joined(separator: ", "),
+                            ]
+                        }
+                    )
+                }
+            )
+        }
 
         printDeviceDetails(device)
 
-        // Try interfaces in order of preference
-        let sortedInterfaces = device.interfaces.sorted { a, b in
-            // Sort Bluetooth first if preferred, otherwise LAN first
-            if preferBluetooth {
-                return a.type == .bluetooth && b.type != .bluetooth
-            } else {
-                return a.type == .lan && b.type != .lan
-            }
-        }
-
-        for interface in sortedInterfaces {
+        for interface in device.interfaces {
             switch interface {
             case .lan(let lanDevice):
                 return .lan(
