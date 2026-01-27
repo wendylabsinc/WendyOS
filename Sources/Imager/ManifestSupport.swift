@@ -48,6 +48,8 @@ public struct DeviceInfo: Codable {
     public let latestNightlyVersion: String?
     public let latestVersionReleaseDate: Date?
     public let latestNightlyReleaseDate: Date?
+    public let latestVersionPath: String?
+    public let latestNightlyPath: String?
     public let stability: DeviceStability
 
     public init(
@@ -56,6 +58,8 @@ public struct DeviceInfo: Codable {
         latestNightlyVersion: String? = nil,
         latestVersionReleaseDate: Date? = nil,
         latestNightlyReleaseDate: Date? = nil,
+        latestVersionPath: String? = nil,
+        latestNightlyPath: String? = nil,
         stability: DeviceStability = .stable
     ) {
         self.name = name
@@ -63,6 +67,8 @@ public struct DeviceInfo: Codable {
         self.latestNightlyVersion = latestNightlyVersion
         self.latestVersionReleaseDate = latestVersionReleaseDate
         self.latestNightlyReleaseDate = latestNightlyReleaseDate
+        self.latestVersionPath = latestVersionPath
+        self.latestNightlyPath = latestNightlyPath
         self.stability = stability
     }
 }
@@ -229,6 +235,8 @@ public final class ManifestManager: ManifestManaging {
             var latestNightlyVersion: String? = nil
             var latestNightlyReleaseDate: Date? = nil
             var latestVersionReleaseDate: Date? = nil
+            var latestNightlyPath: String? = nil
+            var latestVersionPath: String? = nil
 
             // Only fetch device manifest if it has a manifest path
             if !info.manifest_path.isEmpty {
@@ -245,6 +253,7 @@ public final class ManifestManager: ManifestManaging {
                         let stableVersion = deviceManifest.versions[info.latest]
                     {
                         latestVersionReleaseDate = stableVersion.release_date
+                        latestVersionPath = stableVersion.path
                     }
 
                     // Find the latest nightly build
@@ -263,6 +272,7 @@ public final class ManifestManager: ManifestManaging {
                         if let latestNightly = sortedNightlyVersions.first {
                             latestNightlyVersion = latestNightly.key
                             latestNightlyReleaseDate = latestNightly.value.release_date
+                            latestNightlyPath = latestNightly.value.path
                         }
                     }
                 } catch {
@@ -270,6 +280,8 @@ public final class ManifestManager: ManifestManaging {
                     latestNightlyVersion = nil
                     latestNightlyReleaseDate = nil
                     latestVersionReleaseDate = nil
+                    latestNightlyPath = nil
+                    latestVersionPath = nil
                 }
             }
 
@@ -280,6 +292,8 @@ public final class ManifestManager: ManifestManaging {
                     latestNightlyVersion: latestNightlyVersion,
                     latestVersionReleaseDate: latestVersionReleaseDate,
                     latestNightlyReleaseDate: latestNightlyReleaseDate,
+                    latestVersionPath: latestVersionPath,
+                    latestNightlyPath: latestNightlyPath,
                     stability: info.stability ?? .stable
                 )
             )

@@ -325,21 +325,25 @@ struct OSCommand: AsyncParsableCommand {
                 let deviceRows = devices.map { device -> [String] in
                     let version: String
                     let createdAt: String
+                    let path: String
                     if nightly {
                         version = device.latestNightlyVersion ?? "—"
                         createdAt = device.latestNightlyReleaseDate.map {
                             createdAtFormatter.string(from: $0)
                         } ?? "—"
+                        path = device.latestNightlyPath ?? "—"
                     } else {
                         version = device.latestVersion.isEmpty ? "—" : device.latestVersion
                         createdAt = device.latestVersionReleaseDate.map {
                             createdAtFormatter.string(from: $0)
                         } ?? "—"
+                        path = device.latestVersionPath ?? "—"
                     }
                     return [
                         device.name,
                         version,
                         createdAt,
+                        path,
                     ]
                 }
 
@@ -348,6 +352,7 @@ struct OSCommand: AsyncParsableCommand {
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
                         "Created At",
+                        "Path",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count
