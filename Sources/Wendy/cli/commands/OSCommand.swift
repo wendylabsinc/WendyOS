@@ -317,16 +317,29 @@ struct OSCommand: AsyncParsableCommand {
 
                 let devices = familyOptions[familyIndex].1
 
+                let createdAtFormatter = DateFormatter()
+                createdAtFormatter.locale = Locale(identifier: "en_US_POSIX")
+                createdAtFormatter.timeZone = TimeZone.current
+                createdAtFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+
                 let deviceRows = devices.map { device -> [String] in
                     let version: String
+                    let createdAt: String
                     if nightly {
                         version = device.latestNightlyVersion ?? "—"
+                        createdAt = device.latestNightlyReleaseDate.map {
+                            createdAtFormatter.string(from: $0)
+                        } ?? "—"
                     } else {
                         version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                        createdAt = device.latestVersionReleaseDate.map {
+                            createdAtFormatter.string(from: $0)
+                        } ?? "—"
                     }
                     return [
                         device.name,
                         version,
+                        createdAt,
                     ]
                 }
 
@@ -334,6 +347,7 @@ struct OSCommand: AsyncParsableCommand {
                     headers: [
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
+                        "Created At",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count

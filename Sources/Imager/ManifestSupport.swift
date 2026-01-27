@@ -46,17 +46,23 @@ public struct DeviceInfo: Codable {
     public let name: String
     public let latestVersion: String
     public let latestNightlyVersion: String?
+    public let latestVersionReleaseDate: Date?
+    public let latestNightlyReleaseDate: Date?
     public let stability: DeviceStability
 
     public init(
         name: String,
         latestVersion: String,
         latestNightlyVersion: String? = nil,
+        latestVersionReleaseDate: Date? = nil,
+        latestNightlyReleaseDate: Date? = nil,
         stability: DeviceStability = .stable
     ) {
         self.name = name
         self.latestVersion = latestVersion
         self.latestNightlyVersion = latestNightlyVersion
+        self.latestVersionReleaseDate = latestVersionReleaseDate
+        self.latestNightlyReleaseDate = latestNightlyReleaseDate
         self.stability = stability
     }
 }
@@ -221,6 +227,8 @@ public final class ManifestManager: ManifestManaging {
         var deviceInfos: [DeviceInfo] = []
         for (name, info) in mainManifest.devices {
             var latestNightlyVersion: String? = nil
+            var latestNightlyReleaseDate: Date? = nil
+            var latestVersionReleaseDate: Date? = nil
 
             // Only fetch device manifest if it has a manifest path
             if !info.manifest_path.isEmpty {
@@ -231,6 +239,13 @@ public final class ManifestManager: ManifestManaging {
                         DeviceManifest.self,
                         from: deviceManifestData
                     )
+
+                    // Capture stable release date (if available).
+                    if !info.latest.isEmpty,
+                        let stableVersion = deviceManifest.versions[info.latest]
+                    {
+                        latestVersionReleaseDate = stableVersion.release_date
+                    }
 
                     // Find the latest nightly build
                     let nightlyVersions = deviceManifest.versions.filter {
@@ -245,11 +260,16 @@ public final class ManifestManager: ManifestManaging {
                             // Dates are equal, use semantic version as tiebreaker
                             return self.compareSemanticVersions(lhs.key, rhs.key)
                         }
-                        latestNightlyVersion = sortedNightlyVersions.first?.key
+                        if let latestNightly = sortedNightlyVersions.first {
+                            latestNightlyVersion = latestNightly.key
+                            latestNightlyReleaseDate = latestNightly.value.release_date
+                        }
                     }
                 } catch {
                     // If we can't fetch the device manifest, just skip the nightly version
                     latestNightlyVersion = nil
+                    latestNightlyReleaseDate = nil
+                    latestVersionReleaseDate = nil
                 }
             }
 
@@ -258,6 +278,8 @@ public final class ManifestManager: ManifestManaging {
                     name: name,
                     latestVersion: info.latest,
                     latestNightlyVersion: latestNightlyVersion,
+                    latestVersionReleaseDate: latestVersionReleaseDate,
+                    latestNightlyReleaseDate: latestNightlyReleaseDate,
                     stability: info.stability ?? .stable
                 )
             )
