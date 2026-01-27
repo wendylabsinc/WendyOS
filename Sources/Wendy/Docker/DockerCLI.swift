@@ -377,15 +377,6 @@ public struct DockerCLI: Sendable {
         registryHostname: String,
         registryPort: Int
     ) async throws {
-        // Create buildkitd.toml configuration
-        // Include multiple registry configurations to handle different networking scenarios
-        let configContent = """
-            [registry."\(registryHostname):\(registryPort)"]
-                http = true
-                insecure = true
-
-            """
-
         let wendyDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wendy")
 
@@ -396,17 +387,17 @@ public struct DockerCLI: Sendable {
             .appendingPathComponent("buildkit-config.toml")
             .path
 
-        // Update the local config file if this registry isn't configured yet
-        if var existingConfig = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            if !existingConfig.contains("\(registryHostname):\(registryPort)") {
-                existingConfig += "\n\n" + configContent
-                try existingConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
-            }
-        } else {
-            try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+        // Parse existing config or create new one using structured TOML handling
+        var config = BuildkitConfig.loadOrCreate(from: configPath)
+
+        // Add registry if not already configured
+        if !config.hasRegistry(hostname: registryHostname, port: registryPort) {
+            config.addRegistry(hostname: registryHostname, port: registryPort)
+            let tomlOutput = config.toTOML()
+            try tomlOutput.write(toFile: configPath, atomically: true, encoding: .utf8)
         }
 
-        // Read the desired config from local file
+        // Read back for comparison (ensures consistent encoding from TOMLKit)
         let desiredConfig = try String(contentsOfFile: configPath, encoding: .utf8)
 
         if try await hasBuildxBuilder(builderName: defaultBuilderName) {
