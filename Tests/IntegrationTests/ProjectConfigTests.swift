@@ -13,6 +13,27 @@ struct ProjectConfigTests {
         return try JSONDecoder().decode(AppConfig.self, from: json)
     }
 
+    func saveConfig(_ config: AppConfig, at url: URL) throws {
+        let json = try JSONEncoder().encode(config)
+        try json.write(to: url.appending(path: "wendy.json"))
+    }
+
+    func createEmptyProject() async throws -> URL {
+        let projectDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+
+        var initCommand = InitCommand()
+        initCommand.projectPath = projectDir.path()
+        initCommand.language = .swift
+
+        try await initCommand.run()
+
+        var config = try loadConfig(at: projectDir)
+        config.entitlements = []
+        try saveConfig(config, at: projectDir)
+        return projectDir
+    }
+
     func createProject() async throws -> URL {
         let projectDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
@@ -25,7 +46,18 @@ struct ProjectConfigTests {
 
         let config = try loadConfig(at: projectDir)
 
-        #expect(config.entitlements.isEmpty)
+        #expect(config.entitlements.contains(.audio))
+        #expect(config.entitlements.contains(.bluetooth(.init(mode: .bluez))))
+        #expect(config.entitlements.contains(.network(.init(mode: .host))))
+        #expect(config.entitlements.contains(.video(.init(mode: .all))))
+        #expect(
+            config.entitlements.contains(
+                .persist(.init(name: "app-\(config.appId)", path: "/mnt/app"))
+            )
+        )
+        #expect(
+            config.entitlements.contains(.persist(.init(name: "wendy-shared", path: "/mnt/shared")))
+        )
         #expect(config.version == "0.0.1")
         return projectDir
     }
@@ -94,7 +126,7 @@ struct ProjectConfigTests {
     }
 
     @Test func canCreateProject() async throws {
-        _ = try await createProject()
+        _ = try await createEmptyProject()
     }
 
     @Test(
@@ -109,7 +141,7 @@ struct ProjectConfigTests {
     func canAddEntitlement(
         _ entitlement: Entitlement
     ) async throws {
-        let projectDir = try await createProject()
+        let projectDir = try await createEmptyProject()
         try await addEntitlement(entitlement, to: projectDir)
     }
 
@@ -125,7 +157,8 @@ struct ProjectConfigTests {
     func canRemoveEntitlement(
         _ entitlement: Entitlement
     ) async throws {
-        let projectDir = try await createProject()
+        let projectDir = try await createEmptyProject()
         try await addEntitlement(entitlement, to: projectDir)
+        try await removeEntitlement(entitlement, from: projectDir)
     }
 }
