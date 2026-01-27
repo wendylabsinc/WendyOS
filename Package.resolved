@@ -1,5 +1,5 @@
 {
-  "originHash" : "e7db835eab4788536cf342eeec5491b483292278d0d418f972aa62cd4aa08c4b",
+  "originHash" : "7a728f89b4d256f802176806508fb70d066ddc98d5ff0352b6f97184787dd344",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -341,6 +341,15 @@
       "state" : {
         "revision" : "61e4ca4b81b9e09e2ec863b00c340eb13497dac6",
         "version" : "1.5.0"
+      }
+    },
+    {
+      "identity" : "tomlkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/wendylabsinc/TOMLKit.git",
+      "state" : {
+        "revision" : "a0f2a06f3aaf3955a2be03028afdd1908a3d3c1e",
+        "version" : "0.7.0"
       }
     },
     {

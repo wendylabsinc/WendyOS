@@ -193,9 +193,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let dockerContext = await docker.currentContext()
 
         let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
-        let endpoint = try await agentConnectionOptions.read(title: title)
-        try await _withAgentGRPCClient(
-            endpoint,
+        try await withAgentGRPCClientAndEndpoint(
+            agentConnectionOptions,
             title: title
         ) { [name, dockerContext] client, endpoint in
             // Build additional properties for analytics

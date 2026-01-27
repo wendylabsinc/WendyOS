@@ -38,38 +38,10 @@ struct LogsCommand: AsyncParsableCommand {
 
     func run() async throws {
         let minSeverity: Int32? = level.flatMap { parseSeverityLevel($0) }
-
-        // For JSON output, we need a device specified to avoid interactive prompts
-        let endpoint: AgentConnectionOptions.Endpoint
-        if json {
-            // Try to get endpoint without interactive prompts
-            if let device = agentConnectionOptions.device ?? agentConnectionOptions.agent {
-                endpoint = device
-            } else if let envEndpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
-                let parsed = AgentConnectionOptions.Endpoint(argument: envEndpoint)
-            {
-                endpoint = parsed
-            } else if let defaultDevice = AgentConnectionOptions.defaultDevice() {
-                endpoint = defaultDevice
-            } else {
-                // Output JSON error to stderr
-                let errorJSON = """
-                    {"error":"no_device","message":"--json requires a device to be specified via --device, WENDY_AGENT environment variable, or a default device."}
-                    """
-                FileHandle.standardError.write(Data((errorJSON + "\n").utf8))
-                throw ExitCode.failure
-            }
-        } else {
-            endpoint = try await agentConnectionOptions.read(
-                title: "For which device do you want to stream logs?"
-            )
-            Noora().info("Streaming logs from device... (Press Ctrl+C to stop)")
-        }
-
         // Reconnection loop - keeps trying to connect when agent restarts
         while !Task.isCancelled {
             do {
-                try await withAgentGRPCClient(endpoint, title: "") { client in
+                try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
                     let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                         wrapping: client
                     )

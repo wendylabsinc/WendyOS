@@ -22,7 +22,7 @@ func withAgentClient<R: Sendable>(
     includeBluetooth: Bool = true,
     _ body: @escaping @Sendable (AgentClient) async throws -> R
 ) async throws -> R {
-    let selectedDevice = try await connectionOptions.readWithBluetooth(
+    let selectedDevice = try await connectionOptions.read(
         title: title,
         preferBluetooth: preferBluetooth,
         includeBluetooth: includeBluetooth
@@ -41,7 +41,7 @@ func withAgentClient<R: Sendable>(
             }
         } catch  where defaultDevice {
             // If default device failed, try again without default
-            let newDevice = try await connectionOptions.readWithBluetooth(
+            let newDevice = try await connectionOptions.read(
                 title: title,
                 readDefault: false,
                 preferBluetooth: preferBluetooth,
@@ -83,6 +83,81 @@ private func executeWithDevice<R: Sendable>(
 // MARK: - WiFi Commands
 
 extension AgentClient {
+
+    func discoverSSID() async throws -> String {
+        struct WifiNetwork: Sendable {
+            let ssid: String
+            let signalStrength: Int32
+
+            init(network: Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork) {
+                self.ssid = network.ssid
+                self.signalStrength = network.hasSignalStrength ? network.signalStrength : 0
+            }
+        }
+
+        actor LiveData: nonisolated AsyncSequence {
+            nonisolated let source: AgentClient
+            var displayedNetworks: [WiFiNetworkInfo] =
+                []
+
+            init(source: AgentClient) {
+                self.source = source
+            }
+
+            func setDisplayedNetworks(
+                _ networks: [WiFiNetworkInfo]
+            ) {
+                self.displayedNetworks = networks
+            }
+
+            nonisolated func makeAsyncIterator() -> AsyncIterator {
+                return AsyncIterator(actor: self)
+            }
+
+            struct AsyncIterator: AsyncIteratorProtocol {
+                let actor: LiveData
+
+                func next() async throws -> TableData? {
+                    let networks = try await actor.source.listWiFiNetworks()
+                    // Group networks by SSID and keep the one with highest signal strength
+                    // Sort by SSID to maintain stable ordering (prevents selection index drift)
+                    let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty })
+                    { $0.ssid }
+                    .compactMapValues { networksWithSameSsid -> WiFiNetworkInfo? in
+                        networksWithSameSsid.max(by: {
+                            ($0.signalStrength ?? 0) < ($1.signalStrength ?? 0)
+                        })
+                    }
+                    .values
+                    .sorted(by: { ($0.signalStrength ?? 0) > ($1.signalStrength ?? 0) })
+
+                    // Store the displayed networks so we can look up by index later
+                    await actor.setDisplayedNetworks(uniqueNetworks)
+
+                    let rows = uniqueNetworks.map { network -> TableRow in
+                        return [
+                            "\(network.ssid)",
+                            "\(network.signalStrength?.description ?? "Unknown")",
+                        ]
+                    }
+
+                    return TableData(
+                        columns: [TableColumn(title: "SSID"), TableColumn(title: "Strength")],
+                        rows: rows
+                    )
+                }
+            }
+        }
+
+        let data = LiveData(source: self)
+        guard let initial = try await data.makeAsyncIterator().next() else {
+            throw CancellationError()
+        }
+        let index = try await Noora().selectableTable(initial, updates: data, pageSize: 20)
+        let displayedNetworks = await data.displayedNetworks
+        return displayedNetworks[index].ssid
+    }
+
     /// List available WiFi networks
     func listWiFiNetworks() async throws -> [WiFiNetworkInfo] {
         switch self {

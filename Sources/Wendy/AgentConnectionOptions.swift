@@ -15,6 +15,13 @@ enum SelectedDevice: Sendable {
         return false
     }
 
+    var isDefaultDevice: Bool {
+        if case .lan(_, _, let defaultDevice) = self {
+            return defaultDevice
+        }
+        return false
+    }
+
     var isBluetooth: Bool {
         if case .bluetooth = self { return true }
         return false
@@ -107,80 +114,6 @@ struct AgentConnectionOptions: ParsableArguments {
         return nil
     }
 
-    func read(
-        title: TerminalText?,
-        readDefault: Bool = true
-    ) async throws -> Endpoint {
-        if let device {
-            return device
-        }
-
-        if let agent {
-            return agent
-        }
-
-        if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
-            let endpoint = Endpoint(argument: endpoint)
-        {
-            return endpoint
-        }
-
-        if readDefault, let defaultDevice = Self.defaultDevice() {
-            return defaultDevice
-        }
-
-        // In JSON mode, we cannot prompt for device selection
-        if JSONMode.isEnabled {
-            jsonModeRequiresArgument(
-                argument: "device",
-                description:
-                    "Provide --device <hostname:port> or set WENDY_AGENT environment variable"
-            )
-        }
-
-        let discovery = PlatformDeviceDiscovery(
-            logger: Logger(label: "sh.wendy.cli.find-agent")
-        )
-        let lanDevices = try await Noora().progressStep(
-            message: "Searching for WendyOS devices",
-            successMessage: nil,
-            errorMessage: nil,
-            showSpinner: true
-        ) { _ in
-            while true {
-                try Task.checkCancellation()
-                let devices = try await discovery.findAllDevices()
-                    .groupedDevices()
-                    .filter { $0.interfaces.contains(where: { $0.type == .lan }) }
-
-                if !devices.isEmpty {
-                    return devices
-                }
-
-                try await Task.sleep(for: .seconds(1))
-            }
-        }
-
-        let device = Noora().singleChoicePrompt(
-            title: title,
-            question: "Select a device",
-            options: lanDevices
-        )
-
-        printDeviceDetails(device)
-
-        for interface in device.interfaces {
-            if case .lan(let lanDevice) = interface {
-                return Endpoint(
-                    host: lanDevice.hostname,
-                    port: lanDevice.port
-                )
-            }
-        }
-
-        throw InvalidEndpoint()
-    }
-
     var endpoint: Endpoint {
         get throws {
             if let device {
@@ -253,7 +186,7 @@ struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConverti
 extension AgentConnectionOptions {
     /// Read device selection, including Bluetooth devices when no LAN devices are available
     /// or when explicitly requested
-    func readWithBluetooth(
+    func read(
         title: TerminalText?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
