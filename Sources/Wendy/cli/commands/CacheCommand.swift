@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Imager
 import Logging
 import Noora
 
@@ -69,8 +70,10 @@ struct CacheCommand: AsyncParsableCommand {
             )
 
             if cachedImages.contains(where: { $0.status != .ready }) {
+                let cacheHint = primaryCacheDirectory().path
                 print(
-                    "\nSome cache entries look incomplete. Remove the corresponding folders under \(cacheDirectory().path) if you need to reclaim space."
+                    "\nSome cache entries look incomplete. Remove the corresponding folders under "
+                        + "\(cacheHint) if you need to reclaim space."
                 )
             }
         }
@@ -196,17 +199,19 @@ struct CacheCommand: AsyncParsableCommand {
                 }
             }
 
-            let root = cacheDirectory(fileManager: fileManager)
             var failures: [(String, String)] = []
+            let roots = cacheDirectories(fileManager: fileManager)
 
             for entry in targets {
-                let path = root.appendingPathComponent(entry.device)
-                do {
-                    if fileManager.fileExists(atPath: path.path) {
-                        try fileManager.removeItem(at: path)
+                for root in roots {
+                    let path = root.appendingPathComponent(entry.device)
+                    do {
+                        if fileManager.fileExists(atPath: path.path) {
+                            try fileManager.removeItem(at: path)
+                        }
+                    } catch {
+                        failures.append((entry.device, error.localizedDescription))
                     }
-                } catch {
-                    failures.append((entry.device, error.localizedDescription))
                 }
             }
 
@@ -281,57 +286,81 @@ private struct CachedImageEntry: Codable {
     let status: CachedImageStatus
 }
 
-private func cacheDirectory(fileManager: FileManager = .default) -> URL {
-    fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".wendy/cache/images")
+private func primaryCacheDirectory(fileManager: FileManager = .default) -> URL {
+    let legacy =
+        fileManager.homeDirectoryForCurrentUser
+        .appendingPathComponent(".wendy/cache/images")
+    return (try? fileManager.cacheDirectory(.images)) ?? legacy
+}
+
+private func cacheDirectories(fileManager: FileManager = .default) -> [URL] {
+    let legacy =
+        fileManager.homeDirectoryForCurrentUser
+        .appendingPathComponent(".wendy/cache/images")
+    let systemCache = (try? fileManager.cacheDirectory(.images)) ?? legacy
+
+    if systemCache.path == legacy.path {
+        return [systemCache]
+    }
+
+    return [systemCache, legacy]
 }
 
 private func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
-    let root = cacheDirectory(fileManager: fileManager)
-    guard fileManager.fileExists(atPath: root.path) else { return [] }
+    let roots = cacheDirectories(fileManager: fileManager)
+    var entriesByDevice: [String: CachedImageEntry] = [:]
 
-    let contents: [URL]
-    do {
-        contents = try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )
-    } catch {
-        throw ValidationError("Failed to read cache directory: \(error.localizedDescription)")
-    }
+    for root in roots {
+        guard fileManager.fileExists(atPath: root.path) else { continue }
 
-    var entries: [CachedImageEntry] = []
-
-    for url in contents {
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-        guard values?.isDirectory == true else { continue }
-
-        let (version, timestamp) = readCacheMetadata(at: url)
-        let imageURL = findImageFile(in: url, fileManager: fileManager)
-        let size = directorySize(of: url, fileManager: fileManager)
-
-        let status: CachedImageStatus
-        if imageURL != nil {
-            status = .ready
-        } else if size > 0 {
-            status = .incomplete
-        } else {
-            status = .empty
+        let contents: [URL]
+        do {
+            contents = try fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            throw ValidationError(
+                "Failed to read cache directory \(root.path): "
+                    + error.localizedDescription
+            )
         }
 
-        entries.append(
-            CachedImageEntry(
-                device: url.lastPathComponent,
+        for url in contents {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory == true else { continue }
+
+            let device = url.lastPathComponent
+            if entriesByDevice[device] != nil {
+                continue
+            }
+
+            let (version, timestamp) = readCacheMetadata(at: url)
+            let imageURL = findImageFile(in: url, fileManager: fileManager)
+            let size = directorySize(of: url, fileManager: fileManager)
+
+            let status: CachedImageStatus
+            if imageURL != nil {
+                status = .ready
+            } else if size > 0 {
+                status = .incomplete
+            } else {
+                status = .empty
+            }
+
+            entriesByDevice[device] = CachedImageEntry(
+                device: device,
                 version: version,
                 cachedAt: timestamp,
                 imagePath: imageURL?.path,
                 sizeBytes: size,
                 status: status
             )
-        )
+        }
     }
 
-    return entries.sorted { $0.device < $1.device }
+    return entriesByDevice.values.sorted { $0.device < $1.device }
 }
 
 private func readCacheMetadata(at url: URL) -> (String?, Date?) {
