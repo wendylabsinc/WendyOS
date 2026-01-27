@@ -427,17 +427,35 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             // Get the latest image information for the device
-            let (imageUrl, imageSize, latestVersion) = try await manifestManager.getLatestImageInfo(
+            let (imageUrl, imageSize, latestVersion, releaseDate) = try await manifestManager.getLatestImageInfo(
                 for: selectedDeviceName,
                 nightly: nightly
             )
 
-            noora.info(
-                """
-                📥 Found image: \(imageUrl.lastPathComponent)
-                   Version: \(latestVersion)
-                   Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))
-                """
+            let createdAtFormatter = DateFormatter()
+            createdAtFormatter.locale = Locale(identifier: "en_US_POSIX")
+            createdAtFormatter.timeZone = TimeZone.current
+            createdAtFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+
+            noora.info("📥 Found image for \(selectedDeviceName)")
+            noora.table(
+                headers: [
+                    "Image",
+                    "Version",
+                    "Size",
+                    "Created At",
+                ],
+                rows: [
+                    [
+                        imageUrl.lastPathComponent,
+                        latestVersion,
+                        ByteCountFormatter.string(
+                            fromByteCount: Int64(imageSize),
+                            countStyle: .file
+                        ),
+                        createdAtFormatter.string(from: releaseDate),
+                    ]
+                ]
             )
 
             // Download and extract as separate progress bars when not using cache

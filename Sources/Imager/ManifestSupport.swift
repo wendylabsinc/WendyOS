@@ -69,11 +69,11 @@ public protocol ManifestManaging: Sendable {
     /// - Parameters:
     ///   - deviceName: The name of the device
     ///   - nightly: If true, fetches the latest nightly build; otherwise fetches the latest stable release
-    /// - Returns: The image URL, size, and version string
+    /// - Returns: The image URL, size, version string, and release date
     func getLatestImageInfo(
         for deviceName: String,
         nightly: Bool
-    ) async throws -> (url: URL, size: Int, version: String)
+    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date)
 
     /// Fetches all available devices from the manifest
     /// - Returns: Array of available device information
@@ -145,7 +145,7 @@ public final class ManifestManager: ManifestManaging {
     public func getLatestImageInfo(
         for deviceName: String,
         nightly: Bool = false
-    ) async throws -> (url: URL, size: Int, version: String) {
+    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date) {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
@@ -206,7 +206,7 @@ public final class ManifestManager: ManifestManaging {
         // Get the image URL
         let imageUrl = URL(string: "\(baseUrl)/\(versionInfo.path)")!
 
-        return (imageUrl, versionInfo.size_bytes, versionString)
+        return (imageUrl, versionInfo.size_bytes, versionString, versionInfo.release_date)
     }
 
     public func getAvailableDevices() async throws -> [DeviceInfo] {
