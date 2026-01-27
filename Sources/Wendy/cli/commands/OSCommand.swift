@@ -427,10 +427,11 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             // Get the latest image information for the device
-            let (imageUrl, imageSize, latestVersion, releaseDate) = try await manifestManager.getLatestImageInfo(
-                for: selectedDeviceName,
-                nightly: nightly
-            )
+            let (imageUrl, imageSize, latestVersion, releaseDate) =
+                try await manifestManager.getLatestImageInfo(
+                    for: selectedDeviceName,
+                    nightly: nightly
+                )
 
             let createdAtFormatter = DateFormatter()
             createdAtFormatter.locale = Locale(identifier: "en_US_POSIX")
