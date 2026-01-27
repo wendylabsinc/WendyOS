@@ -317,32 +317,46 @@ struct OSCommand: AsyncParsableCommand {
 
                 let devices = familyOptions[familyIndex].1
 
-                let createdAtFormatter = DateFormatter()
-                createdAtFormatter.locale = Locale(identifier: "en_US_POSIX")
-                createdAtFormatter.timeZone = TimeZone.current
-                createdAtFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+                let timestampFormatter = DateFormatter()
+                timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
+                timestampFormatter.timeZone = TimeZone.current
+                timestampFormatter.dateFormat = "MMM d yyyy h:mma zzz"
 
                 let deviceRows = devices.map { device -> [String] in
                     let version: String
-                    let createdAt: String
+                    let uploadedAt: String
+                    let downloadedAt: String
                     let path: String
                     if nightly {
                         version = device.latestNightlyVersion ?? "—"
-                        createdAt = device.latestNightlyReleaseDate.map {
-                            createdAtFormatter.string(from: $0)
+                        uploadedAt = device.latestNightlyReleaseDate.map {
+                            timestampFormatter.string(from: $0)
+                        } ?? "—"
+                        downloadedAt = cachedImageDownloadDate(
+                            deviceName: device.name,
+                            nightly: true
+                        ).map {
+                            timestampFormatter.string(from: $0)
                         } ?? "—"
                         path = device.latestNightlyPath ?? "—"
                     } else {
                         version = device.latestVersion.isEmpty ? "—" : device.latestVersion
-                        createdAt = device.latestVersionReleaseDate.map {
-                            createdAtFormatter.string(from: $0)
+                        uploadedAt = device.latestVersionReleaseDate.map {
+                            timestampFormatter.string(from: $0)
+                        } ?? "—"
+                        downloadedAt = cachedImageDownloadDate(
+                            deviceName: device.name,
+                            nightly: false
+                        ).map {
+                            timestampFormatter.string(from: $0)
                         } ?? "—"
                         path = device.latestVersionPath ?? "—"
                     }
                     return [
                         device.name,
                         version,
-                        createdAt,
+                        uploadedAt,
+                        downloadedAt,
                         path,
                     ]
                 }
@@ -351,7 +365,8 @@ struct OSCommand: AsyncParsableCommand {
                     headers: [
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
-                        "Created At",
+                        "Uploaded At",
+                        "Downloaded At",
                         "Path",
                     ],
                     rows: deviceRows,
@@ -452,10 +467,15 @@ struct OSCommand: AsyncParsableCommand {
                     nightly: nightly
                 )
 
-            let createdAtFormatter = DateFormatter()
-            createdAtFormatter.locale = Locale(identifier: "en_US_POSIX")
-            createdAtFormatter.timeZone = TimeZone.current
-            createdAtFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+            let timestampFormatter = DateFormatter()
+            timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
+            timestampFormatter.timeZone = TimeZone.current
+            timestampFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+
+            let downloadedAt = cachedImageDownloadDate(
+                deviceName: selectedDeviceName,
+                nightly: nightly
+            )
 
             noora.info("📥 Found image for \(selectedDeviceName)")
             noora.table(
@@ -463,7 +483,8 @@ struct OSCommand: AsyncParsableCommand {
                     "Image",
                     "Version",
                     "Size",
-                    "Created At",
+                    "Uploaded At",
+                    "Downloaded At",
                 ],
                 rows: [
                     [
@@ -473,7 +494,8 @@ struct OSCommand: AsyncParsableCommand {
                             fromByteCount: Int64(imageSize),
                             countStyle: .file
                         ),
-                        createdAtFormatter.string(from: releaseDate),
+                        timestampFormatter.string(from: releaseDate),
+                        downloadedAt.map { timestampFormatter.string(from: $0) } ?? "—",
                     ]
                 ]
             )
@@ -637,6 +659,69 @@ private func cacheDirectories(fileManager: FileManager = .default) -> [URL] {
     }
 
     return [systemCache, legacy]
+}
+
+private func cachedImageDownloadDate(
+    deviceName: String,
+    nightly: Bool,
+    fileManager: FileManager = .default
+) -> Date? {
+    let roots = cacheDirectories(fileManager: fileManager)
+    let versionFolder = nightly ? "nightly" : "stable"
+    var newest: Date? = nil
+
+    for root in roots {
+        let deviceRoot = root.appendingPathComponent(deviceName)
+        let candidates = [
+            deviceRoot.appendingPathComponent(versionFolder),
+            deviceRoot,
+        ]
+
+        for candidate in candidates {
+            if let date = latestImageFileDate(in: candidate, fileManager: fileManager) {
+                if newest == nil || date > newest! {
+                    newest = date
+                }
+            }
+        }
+    }
+
+    return newest
+}
+
+private func latestImageFileDate(
+    in directory: URL,
+    fileManager: FileManager = .default
+) -> Date? {
+    guard fileManager.fileExists(atPath: directory.path) else { return nil }
+    guard
+        let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [
+                .isRegularFileKey,
+                .creationDateKey,
+                .contentModificationDateKey,
+            ],
+            options: [.skipsHiddenFiles]
+        )
+    else { return nil }
+
+    var newest: Date? = nil
+    for case let fileURL as URL in enumerator {
+        guard fileURL.pathExtension.lowercased() == "img" else { continue }
+
+        let values = try? fileURL.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
+        let date = values?.creationDate ?? values?.contentModificationDate
+        if let date {
+            if newest == nil || date > newest! {
+                newest = date
+            }
+        }
+    }
+
+    return newest
 }
 
 private func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
