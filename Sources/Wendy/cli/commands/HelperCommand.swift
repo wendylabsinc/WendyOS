@@ -105,7 +105,11 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "load", reason: "\(error)")
+                throw CLIError.serviceOperationFailed(
+                    service: "launchctl",
+                    operation: "load",
+                    reason: "\(error)"
+                )
             }
         }
 
@@ -118,7 +122,9 @@ extension HelperCommand {
                     try service.register()
                     print("📄 Registered network daemon with SMAppService")
                 } else {
-                    throw CLIError.unsupportedPlatform(reason: "SMAppService requires macOS 13.0 or later")
+                    throw CLIError.unsupportedPlatform(
+                        reason: "SMAppService requires macOS 13.0 or later"
+                    )
                 }
             #else
                 print("⚠️  Network daemon installation not supported on this platform")
@@ -220,7 +226,11 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "start", reason: "\(error)")
+                throw CLIError.serviceOperationFailed(
+                    service: "launchctl",
+                    operation: "start",
+                    reason: "\(error)"
+                )
             }
 
             print("✅ Wendy Helper Daemon started")
@@ -249,7 +259,11 @@ extension HelperCommand {
             if process.terminationStatus != 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw CLIError.serviceOperationFailed(service: "launchctl", operation: "stop", reason: "\(error)")
+                throw CLIError.serviceOperationFailed(
+                    service: "launchctl",
+                    operation: "stop",
+                    reason: "\(error)"
+                )
             }
 
             print("✅ Wendy Helper Daemon stopped")
@@ -435,4 +449,3 @@ private func generateLaunchdPlist(
 }
 
 // MARK: - Error Types
-

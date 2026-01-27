@@ -227,7 +227,7 @@ struct DeviceCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let endpoint = try await withCloudGRPCClient(title: "Setup agent") { cloudClient in
+            try await withCloudGRPCClient(title: "Setup agent") { cloudClient in
                 let orgs = try await cloudClient.listOrganizations()
 
                 if orgs.isEmpty {
@@ -267,7 +267,7 @@ struct DeviceCommand: AsyncParsableCommand {
                             organizationID: org.id,
                             cloudHost: cloudClient.cloudHost
                         )
-                    case .bluetooth(let client):
+                    case .bluetooth:
                         // TODO: Implement Bluetooth provisioning
                         throw CancellationError()
                     }

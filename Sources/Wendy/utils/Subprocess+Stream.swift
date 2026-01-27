@@ -150,7 +150,7 @@ public func run(
                 }
             }
             guard let status else {
-                throw SubprocessError.nonZeroExit(
+                throw SubprocessError(
                     command: executable.description + " " + arguments.description,
                     exitCode: -1,
                     output: "",
@@ -166,7 +166,7 @@ public func run(
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
+            throw SubprocessError(
                 command: executable.description + " " + arguments.description,
                 exitCode: exitCode,
                 output: "",
@@ -201,19 +201,3 @@ public func run(
         return (masterFD, slaveFD)
     }
 #endif
-
-/// Error thrown when a subprocess execution fails.
-public enum SubprocessError: Error, CustomStringConvertible {
-    case nonZeroExit(command: String, exitCode: Int, output: String, error: String)
-
-    public var description: String {
-        switch self {
-        case .nonZeroExit(let command, let exitCode, let output, let error):
-            return """
-                Command '\(command)' failed with exit code \(exitCode): \(error)
-
-                \(output)
-                """
-        }
-    }
-}

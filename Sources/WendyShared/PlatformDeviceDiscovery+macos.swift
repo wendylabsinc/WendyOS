@@ -208,49 +208,4 @@
             }
         }
     }
-
-    extension CentralManager {
-        public func waitUntilReady(timeout: Duration = .seconds(5)) async throws {
-            let logger = Logger(label: "sh.wendy.bluetooth.centralmanager")
-            // Wait for Bluetooth to be ready
-            let startTime = ContinuousClock.now
-
-            var state = self.state()
-            while state != .poweredOn {
-                if ContinuousClock.now - startTime > timeout {
-                    logger.warning(
-                        "Timeout waiting for Bluetooth to be ready",
-                        metadata: ["lastState": "\(state)"]
-                    )
-                    throw CancellationError()
-                }
-
-                if state == .poweredOff || state == .unauthorized || state == .unsupported {
-                    logger.warning(
-                        "Bluetooth not available",
-                        metadata: ["state": "\(state)"]
-                    )
-                    throw CancellationError()
-                }
-
-                // Wait for state updates
-                for await newState in stateUpdates() {
-                    state = newState
-                    if state == .poweredOn {
-                        break
-                    }
-                    if state == .poweredOff || state == .unauthorized || state == .unsupported {
-                        logger.warning(
-                            "Bluetooth not available",
-                            metadata: ["state": "\(state)"]
-                        )
-                        throw CancellationError()
-                    }
-                    if ContinuousClock.now - startTime > timeout {
-                        break
-                    }
-                }
-            }
-        }
-    }
 #endif

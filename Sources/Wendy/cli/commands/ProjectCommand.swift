@@ -357,7 +357,11 @@ struct AddCommand: ModifyProjectCommand {
             let networkMode: NetworkMode
             if let modeString = mode {
                 guard let parsedMode = NetworkMode(rawValue: modeString) else {
-                    throw CLIError.invalidArgument(name: "mode", value: modeString, reason: "Invalid for entitlement type '\(type.rawValue)'")
+                    throw CLIError.invalidArgument(
+                        name: "mode",
+                        value: modeString,
+                        reason: "Invalid for entitlement type '\(type.rawValue)'"
+                    )
                 }
                 networkMode = parsedMode
             } else {
@@ -370,7 +374,11 @@ struct AddCommand: ModifyProjectCommand {
             if let modeString = mode {
                 guard let parsedMode = BluetoothEntitlements.BluetoothMode(rawValue: modeString)
                 else {
-                    throw CLIError.invalidArgument(name: "mode", value: modeString, reason: "Invalid for entitlement type '\(type.rawValue)'")
+                    throw CLIError.invalidArgument(
+                        name: "mode",
+                        value: modeString,
+                        reason: "Invalid for entitlement type '\(type.rawValue)'"
+                    )
                 }
                 bluetoothMode = parsedMode
             } else {
@@ -389,7 +397,10 @@ struct AddCommand: ModifyProjectCommand {
 
         case .persist:
             guard let name, let path else {
-                throw CLIError.missingArgument(name: "name/path", description: "--name and --path are required for persist entitlement")
+                throw CLIError.missingArgument(
+                    name: "name/path",
+                    description: "--name and --path are required for persist entitlement"
+                )
             }
 
             return .persist(PersistenceEntitlements(name: name, path: path))
@@ -493,4 +504,3 @@ extension Entitlement {
 }
 
 // MARK: - Errors
-
