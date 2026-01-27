@@ -329,27 +329,31 @@ struct OSCommand: AsyncParsableCommand {
                     let path: String
                     if nightly {
                         version = device.latestNightlyVersion ?? "—"
-                        uploadedAt = device.latestNightlyReleaseDate.map {
-                            timestampFormatter.string(from: $0)
-                        } ?? "—"
-                        downloadedAt = cachedImageDownloadDate(
-                            deviceName: device.name,
-                            nightly: true
-                        ).map {
-                            timestampFormatter.string(from: $0)
-                        } ?? "—"
+                        uploadedAt =
+                            device.latestNightlyReleaseDate.map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        downloadedAt =
+                            cachedImageDownloadDate(
+                                deviceName: device.name,
+                                nightly: true
+                            ).map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
                         path = device.latestNightlyPath ?? "—"
                     } else {
                         version = device.latestVersion.isEmpty ? "—" : device.latestVersion
-                        uploadedAt = device.latestVersionReleaseDate.map {
-                            timestampFormatter.string(from: $0)
-                        } ?? "—"
-                        downloadedAt = cachedImageDownloadDate(
-                            deviceName: device.name,
-                            nightly: false
-                        ).map {
-                            timestampFormatter.string(from: $0)
-                        } ?? "—"
+                        uploadedAt =
+                            device.latestVersionReleaseDate.map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        downloadedAt =
+                            cachedImageDownloadDate(
+                                deviceName: device.name,
+                                nightly: false
+                            ).map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
                         path = device.latestVersionPath ?? "—"
                     }
                     return [
