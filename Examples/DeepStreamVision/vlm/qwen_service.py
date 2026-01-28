@@ -180,7 +180,7 @@ def load_model():
         logger.info("="*60)
 
         vlm = Qwen25VLM()
-        vlm.load(use_int4=True)  # INT4 quantization using Jetson-optimized bitsandbytes
+        vlm.load(use_int4=True)  # INT4 quantization - worked with transformers 4.x
 
         model = vlm.model
         processor = vlm.processor

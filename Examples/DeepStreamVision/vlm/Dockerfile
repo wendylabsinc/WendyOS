@@ -1,10 +1,10 @@
-# Qwen2.5-VL Vision-Language Model Service
-# Optimized for Jetson with INT4 quantization using Jetson-compatible bitsandbytes
+# Qwen3-VL Vision-Language Model Service
+# Optimized for Jetson Orin Nano with INT4 quantization using Jetson-compatible bitsandbytes
 # Model is baked into the image for fast startup (no downloads needed)
 
 FROM ubuntu:22.04
 
-# Install system dependencies and native libraries
+# Install system dependencies and native libraries for bitsandbytes
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
@@ -17,37 +17,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-downloaded Qwen2.5-VL-3B-Instruct model EARLY for better layer caching
-# This way, changes to Python dependencies don't invalidate the model layer
-# Download once with: hf download Qwen/Qwen2.5-VL-3B-Instruct --local-dir ./models/Qwen2.5-VL-3B-Instruct
-# The model is ~6GB and copied directly into the image
-COPY models/Qwen2.5-VL-3B-Instruct /app/models/Qwen2.5-VL-3B-Instruct
+# Copy pre-downloaded Qwen3-VL-2B model EARLY for better layer caching
+# Download once with: huggingface-cli download Qwen/Qwen3-VL-2B-Instruct --local-dir ./models/Qwen3-VL-2B-Instruct
+COPY models/Qwen3-VL-2B-Instruct /app/models/Qwen3-VL-2B-Instruct
 
-# Upgrade pip to fix dependency resolution issues in Ubuntu 22.04
+# Upgrade pip
 RUN pip3 install --no-cache-dir --upgrade pip
 
-# Install PyTorch from NVIDIA's Jetson-optimized wheels FIRST
-# These are pre-compiled for ARM64 and optimized for Jetson with CUDA 12.6
-# This leverages CDI-mapped CUDA/cuDNN from the host system
+# Install PyTorch from Jetson AI Lab (ARM64-optimized, uses CDI-mapped CUDA)
 RUN pip3 install --no-cache-dir \
     torch==2.8.0 \
     torchvision==0.23.0 \
     torchaudio==2.8.0 \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
-# Install bitsandbytes from Jetson AI Lab (ARM64-compatible build)
+# Install bitsandbytes from Jetson AI Lab (ARM64-compatible build with CUDA kernels)
+# This is critical - the PyPI version does NOT work on Jetson
 RUN pip3 install --no-cache-dir \
     bitsandbytes \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
-# Install ML and service dependencies from PyPI
+# Install ML and service dependencies
+# transformers >= 4.57.0 required for Qwen3-VL support
 RUN pip3 install --no-cache-dir \
     huggingface-hub \
-    transformers>=4.36.0 \
+    "transformers>=4.57.0" \
     accelerate \
     flask \
     pillow \
-    numpy==1.26.4 \
+    "numpy<2" \
     qwen-vl-utils \
     av
 
@@ -55,15 +53,13 @@ RUN pip3 install --no-cache-dir \
 WORKDIR /app
 
 # Copy service script
-COPY qwen_service.py /app/
-
-# Make executable
-RUN chmod +x /app/qwen_service.py
+COPY qwen3_service.py /app/
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Expose API port
 EXPOSE 8090
 
-CMD ["python3", "/app/qwen_service.py"]
+CMD ["python3", "/app/qwen3_service.py"]

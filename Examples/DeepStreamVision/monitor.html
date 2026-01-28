@@ -554,7 +554,7 @@
                     <span class="status-indicator checking" id="overall-indicator"></span>
                     DeepStream Vision Monitor
                 </h1>
-                <p>Real-time monitoring for YOLO11 + Qwen2.5-VL on Jetson Orin Nano</p>
+                <p>Real-time monitoring for YOLO11 + VLM on Jetson Orin Nano</p>
             </div>
             <div class="header-right">
                 <div class="device-config">
@@ -767,7 +767,7 @@
                     status.textContent = 'Online';
                     status.classList.add('status-ok');
                     status.classList.remove('status-error');
-                    document.getElementById('vlm-model').textContent = 'Qwen2.5-VL-3B';
+                    document.getElementById('vlm-model').textContent = json.model_name || 'Unknown';
                     document.getElementById('vlm-memory').textContent =
                         `${(json.memory_allocated_gb || 0).toFixed(2)} GB`;
                 } catch (e) {

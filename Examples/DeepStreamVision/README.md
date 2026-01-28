@@ -5,7 +5,7 @@ Real-time object detection and scene understanding on Jetson devices using DeepS
 ## What This Does
 
 - **YOLO Detection**: Runs YOLO11n at 20+ FPS on Jetson Orin
-- **VLM Descriptions**: Optional AI scene descriptions using Qwen2.5-VL
+- **VLM Descriptions**: Optional AI scene descriptions using Qwen3-VL
 - **Live Dashboard**: Web UI showing detections, metrics, and video stream
 - **Prometheus Metrics**: FPS, latency, detection counts for monitoring
 
@@ -113,14 +113,14 @@ ENV HF_TOKEN=hf_your_token_here
 HF_TOKEN=hf_your_token_here wendy run --device <device>.local --detach
 ```
 
-**Note:** The Qwen2.5-VL-3B model is pre-downloaded in the vlm/models directory, so you don't need a token for basic operation.
+**Note:** The Qwen3-VL-2B-Instruct model is cached on the device, so you don't need a token for basic operation.
 
 ## Services
 
 | Service | Port | Description |
 |---------|------|-------------|
 | detector | 9090 | YOLO detection, Prometheus metrics, MJPEG stream |
-| vlm | 8090 | Qwen2.5-VL vision language model |
+| vlm | 8090 | Qwen3-VL-2B vision language model (INT4) |
 | gpu-stats | 9091 | GPU temperature, memory, utilization |
 | dashboard | 8080 | Web dashboard |
 
@@ -165,9 +165,10 @@ ssh root@<device>.local 'ctr -n default task exec detector cat /proc/1/fd/1' | t
 ```
 
 ### VLM not responding
-- VLM takes ~60 seconds to load the model
+- VLM takes ~10 minutes to load on first run (model quantization)
+- Subsequent starts are faster (~60 seconds)
 - Check health: `curl http://<device>.local:8090/health`
-- VLM requires ~2GB GPU memory
+- VLM requires ~1.5GB GPU memory (INT4 quantization)
 
 ### Low FPS
 - Check GPU temperature: `ssh root@<device>.local 'cat /sys/class/thermal/thermal_zone*/temp'`
@@ -199,9 +200,9 @@ DeepStreamVision/
 │   ├── detector.py       # Main detection code
 │   ├── streams.json      # Camera configuration
 │   └── nvinfer_config.txt # TensorRT inference config
-├── vlm/          # Vision language model
-│   ├── qwen_service.py   # Qwen2.5-VL API server
-│   └── models/           # Pre-downloaded model
+├── vlm/                  # Vision language model
+│   ├── qwen3_service.py  # Qwen3-VL API server (INT4 quantized)
+│   └── models/           # Model cache directory
 ├── gpu-stats/            # GPU monitoring
 ├── dashboard/            # Web UI
 └── monitoring/           # Grafana + Loki stack

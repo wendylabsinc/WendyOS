@@ -55,8 +55,8 @@ class TegrastatsParser:
         metrics = {}
 
         try:
-            # GPU utilization: GR3D_FREQ 99%@1300
-            gpu_match = re.search(r'GR3D_FREQ\s+(\d+)%@(\d+)', line)
+            # GPU utilization: GR3D_FREQ 99%@1300 or GR3D_FREQ 48%@[611]
+            gpu_match = re.search(r'GR3D_FREQ\s+(\d+)%@\[?(\d+)\]?', line)
             if gpu_match:
                 metrics['gpu_utilization'] = int(gpu_match.group(1))
                 metrics['gpu_frequency'] = int(gpu_match.group(2))
@@ -188,7 +188,7 @@ def update_metrics():
     if 'temperatures' in metrics:
         for sensor, temp in metrics['temperatures'].items():
             temperature_gauge.labels(sensor=sensor).set(temp)
-            if sensor == 'GPU':
+            if sensor.lower() == 'gpu':
                 gpu_temperature.set(temp)
 
     # Power metrics

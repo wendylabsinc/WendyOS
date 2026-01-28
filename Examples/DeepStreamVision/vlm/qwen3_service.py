@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""
+Qwen3-VL Vision-Language Model Service
+
+Provides HTTP API for generating image descriptions using Qwen3-VL-2B-Instruct.
+Optimized for Jetson Orin Nano with INT4 quantization.
+
+API Endpoints:
+- POST /describe - Generate image description
+- POST /question - Ask questions about an image
+- GET /health - Health check
+- GET /stats - GPU memory stats
+"""
+
+import logging
+import time
+import base64
+from io import BytesIO
+from datetime import datetime
+
+import torch
+from PIL import Image
+from flask import Flask, request, jsonify
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration, BitsAndBytesConfig
+from qwen_vl_utils import process_vision_info
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# Global model and processor
+model = None
+processor = None
+model_loaded = False
+
+# Configuration
+MODEL_PATH = "/app/models/Qwen3-VL-2B-Instruct"
+MODEL_NAME = "Qwen3-VL-2B-Instruct"
+
+
+def load_model():
+    """Load Qwen3-VL model with INT4 quantization"""
+    global model, processor, model_loaded
+
+    logger.info("=" * 60)
+    logger.info(f"Loading {MODEL_NAME} with INT4 quantization")
+    logger.info(f"Model path: {MODEL_PATH}")
+    logger.info("=" * 60)
+
+    try:
+        # Log environment info
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
+            total_mem = torch.cuda.get_device_properties(0).total_memory
+            logger.info(f"GPU memory: {total_mem / 1024**3:.2f} GB")
+
+        # Load processor
+        logger.info("Loading processor...")
+        processor = AutoProcessor.from_pretrained(
+            MODEL_PATH,
+            trust_remote_code=True,
+            local_files_only=True
+        )
+        logger.info("Processor loaded successfully")
+
+        # Configure INT4 quantization (same as working Qwen2.5-VL setup)
+        logger.info("Configuring INT4 quantization with NF4...")
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
+        )
+
+        # Load model with INT4 quantization
+        logger.info("Loading model (this may take a minute)...")
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            MODEL_PATH,
+            trust_remote_code=True,
+            quantization_config=quantization_config,
+            device_map='cuda',
+            local_files_only=True
+        )
+
+        # Set to eval mode
+        model.eval()
+
+        model_loaded = True
+
+        # Log memory usage
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            logger.info(f"GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+
+        logger.info("=" * 60)
+        logger.info("Model loaded successfully!")
+        logger.info(f"Model: {MODEL_NAME}")
+        logger.info("Quantization: INT4 (NF4)")
+        logger.info("API available at http://0.0.0.0:8090")
+        logger.info("=" * 60)
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}", exc_info=True)
+        model_loaded = False
+        return False
+
+
+def generate_response(image: Image.Image, prompt: str, max_tokens: int = 256) -> str:
+    """Generate response for an image using the loaded model"""
+    global model, processor
+
+    if not model_loaded:
+        raise RuntimeError("Model not loaded")
+
+    # Prepare messages in Qwen VL format
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    # Apply chat template
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+    # Process vision info
+    image_inputs, video_inputs = process_vision_info(messages)
+
+    # Prepare inputs
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    ).to("cuda")
+
+    # Generate response
+    with torch.inference_mode():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=0.7,
+            do_sample=True,
+        )
+
+    # Decode output
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):]
+        for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    response = processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False
+    )[0]
+
+    return response
+
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy' if model_loaded else 'loading',
+        'model_loaded': model_loaded,
+        'model_name': MODEL_NAME,
+        'quantization': 'INT4',
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+
+@app.route('/describe', methods=['POST'])
+def describe():
+    """Generate detailed description for an image"""
+    if not model_loaded:
+        return jsonify({'error': 'Model not loaded yet'}), 503
+
+    request_start = time.time()
+
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'Missing image in request'}), 400
+
+        image_b64 = data['image']
+        prompt = data.get('prompt', 'Describe this image in detail, including objects, people, activities, and scene context.')
+
+        # Decode image
+        try:
+            image_bytes = base64.b64decode(image_b64)
+            image = Image.open(BytesIO(image_bytes))
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+        except Exception as e:
+            logger.error(f"Error decoding image: {e}")
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        logger.info(f"Processing image of size {image.size}")
+
+        # Generate description
+        description = generate_response(image, prompt)
+
+        total_time_ms = (time.time() - request_start) * 1000
+        logger.info(f"Inference completed in {total_time_ms:.1f}ms")
+
+        return jsonify({
+            'description': description,
+            'processing_time_ms': round(total_time_ms, 2),
+            'model': MODEL_NAME,
+            'quantization': 'INT4',
+            'image_size': list(image.size)
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing request: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/question', methods=['POST'])
+def question():
+    """Ask a specific question about an image"""
+    if not model_loaded:
+        return jsonify({'error': 'Model not loaded yet'}), 503
+
+    request_start = time.time()
+
+    try:
+        data = request.json
+        if not data or 'image' not in data or 'question' not in data:
+            return jsonify({'error': 'Missing image or question in request'}), 400
+
+        image_b64 = data['image']
+        question_text = data['question']
+
+        # Decode image
+        try:
+            image_bytes = base64.b64decode(image_b64)
+            image = Image.open(BytesIO(image_bytes))
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+        except Exception as e:
+            logger.error(f"Error decoding image: {e}")
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        logger.info(f"Answering question: {question_text}")
+
+        # Generate answer
+        answer = generate_response(image, question_text)
+
+        total_time_ms = (time.time() - request_start) * 1000
+
+        return jsonify({
+            'answer': answer,
+            'question': question_text,
+            'processing_time_ms': round(total_time_ms, 2),
+            'model': MODEL_NAME
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing question: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/stats')
+def stats():
+    """Get GPU memory stats"""
+    if not torch.cuda.is_available():
+        return jsonify({'error': 'CUDA not available'}), 500
+
+    return jsonify({
+        'cuda_available': torch.cuda.is_available(),
+        'device_name': torch.cuda.get_device_name(0),
+        'memory_allocated_gb': round(torch.cuda.memory_allocated() / 1024**3, 2),
+        'memory_reserved_gb': round(torch.cuda.memory_reserved() / 1024**3, 2),
+        'max_memory_allocated_gb': round(torch.cuda.max_memory_allocated() / 1024**3, 2),
+        'model_loaded': model_loaded,
+        'model_name': MODEL_NAME,
+        'quantization': 'INT4'
+    })
+
+
+if __name__ == '__main__':
+    # Load model at startup
+    load_model()
+
+    # Start Flask server
+    app.run(
+        host='0.0.0.0',
+        port=8090,
+        debug=False,
+        threaded=True
+    )
