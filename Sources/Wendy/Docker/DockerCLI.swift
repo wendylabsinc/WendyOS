@@ -50,6 +50,16 @@ public enum DockerError: Error, LocalizedError {
     }
 }
 
+/// Compression mode for Docker image layers
+public enum ImageCompressionMode: String, Sendable {
+    /// zstd compression - 3-5x faster decompression than gzip, good compression ratio
+    case zstd
+    /// gzip compression - legacy default, slower decompression
+    case gzip
+    /// No compression - fastest for high-bandwidth connections (USB, fast LAN)
+    case uncompressed
+}
+
 /// Manages a file-based lock to prevent parallel builds from interfering with each other
 public final class BuildLock: Sendable {
     private let lockPath: String
@@ -283,17 +293,30 @@ public struct DockerCLI: Sendable {
         directory: String = ".",
         registryHostname: String = "host.docker.internal",
         registryPort: Int = 5000,
+        compression: ImageCompressionMode = .zstd,
         onOutput: @escaping @Sendable (String) async throws -> Void
     ) async throws {
         // Acquire shared build lock, allows parallel builds but prevents builder restarts
         try await BuildLock.shared.withLock {
+            // Build the --output flag based on compression mode
+            // Using OCI media types is required for zstd compression
+            let outputFlag: String
+            switch compression {
+            case .zstd:
+                outputFlag = "type=image,push=true,compression=zstd,oci-mediatypes=true"
+            case .gzip:
+                outputFlag = "type=image,push=true,compression=gzip"
+            case .uncompressed:
+                outputFlag = "type=image,push=true,compression=uncompressed,oci-mediatypes=true"
+            }
+
             let arguments = [
                 "buildx", "build",
                 "--builder", self.defaultBuilderName,
                 "--platform", "linux/arm64",
                 "--provenance=false",
                 "--sbom=false",
-                "--push",
+                "--output", outputFlag,
                 "-t", "\(registryHostname):\(registryPort)/\(name):latest",
                 directory,
             ]
