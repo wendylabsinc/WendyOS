@@ -963,8 +963,7 @@ public struct Containerd: Sendable {
         containerID: String,
         signal: UInt32 = 9
     ) async throws {
-        let tasks = Containerd_Services_Tasks_V1_Tasks.Client(wrapping: client)
-        _ = try await tasks.kill(
+        _ = try await tasksClient.kill(
             .with {
                 $0.containerID = containerID
                 $0.signal = signal
