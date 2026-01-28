@@ -561,4 +561,16 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
         }
     }
+
+    func measureBandwidth(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse> {
+        // Simple echo - return the same payload to measure round-trip bandwidth
+        return ServerResponse(
+            message: .with { response in
+                response.payload = request.message.payload
+            }
+        )
+    }
 }

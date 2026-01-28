@@ -17,6 +17,25 @@ import WendyAgentGRPC
     import AppKit
 #endif
 
+/// Result of bandwidth measurement between CLI and device
+struct BandwidthMeasurement: Sendable {
+    /// Measured bandwidth in MB/s (megabytes per second)
+    let bandwidthMBps: Double
+    /// Round-trip latency in milliseconds
+    let latencyMs: Double
+    /// Recommended compression mode based on measurement
+    let recommendedCompression: ImageCompressionMode
+
+    /// Bandwidth threshold in MB/s above which we skip compression
+    /// USB is typically 160-190 MB/s, zstd decompresses at ~300-500 MB/s on Jetson
+    /// If upload is faster than decompression, uncompressed wins
+    static let uncompressedThresholdMBps: Double = 150.0
+
+    /// Bandwidth threshold below which we definitely want compression
+    /// WiFi/slow LAN typically < 50 MB/s
+    static let compressedThresholdMBps: Double = 50.0
+}
+
 struct RunCommand: AsyncParsableCommand, Sendable {
     enum Error: Swift.Error, CustomStringConvertible {
         case failedToUploadLayers(Int)
@@ -203,6 +222,29 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 buildPhaseProperties["docker_context"] = dockerContext
             }
 
+            // Measure bandwidth to determine optimal compression
+            let compressionMode: ImageCompressionMode = await {
+                do {
+                    let measurement = try await Noora().progressStep(
+                        message: "Measuring connection speed",
+                        successMessage: "Connection speed measured",
+                        errorMessage: "Failed to measure bandwidth",
+                        showSpinner: true
+                    ) { _ in
+                        try await measureBandwidth(client: client)
+                    }
+                    let speedStr = String(format: "%.0f", measurement.bandwidthMBps)
+                    let modeStr = measurement.recommendedCompression == .uncompressed
+                        ? "uncompressed" : "zstd"
+                    cliOutput.info("Connection: \(speedStr) MB/s (using \(modeStr) compression)")
+                    return measurement.recommendedCompression
+                } catch {
+                    // If bandwidth measurement fails, fall back to zstd
+                    cliOutput.info("Using zstd compression (default)")
+                    return ImageCompressionMode.zstd
+                }
+            }()
+
             // Create buildx builder with insecure registry support
             try await executePhase(
                 phase: "builder_setup",
@@ -223,6 +265,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
 
             // Build and push in a single operation for better performance
+            let compression = compressionMode  // Capture as let for Sendable
             try await executePhase(
                 phase: "build_upload",
                 runtime: "dockerfile",
@@ -236,6 +279,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         name: name,
                         registryHostname: endpoint.host,
                         registryPort: 5000,
+                        compression: compression,
                         onOutput: emit
                     )
                 }
@@ -286,6 +330,73 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     $0.restartPolicy = buildRestartPolicy()
                 }
             )
+        )
+    }
+
+    /// Measure bandwidth to the device by sending a test payload
+    /// Returns bandwidth in MB/s and recommended compression mode
+    func measureBandwidth(
+        client: GRPCClient<HTTP2ClientTransport.Posix>
+    ) async throws -> BandwidthMeasurement {
+        let logger = Logger(label: "sh.wendy.cli.run.bandwidth")
+        let agentService = Wendy_Agent_Services_V1_WendyAgentService.Client(
+            wrapping: client
+        )
+
+        // Use 1MB payload for measurement - large enough to get meaningful bandwidth
+        // but small enough to complete quickly
+        let payloadSize = 1024 * 1024  // 1 MB
+        let payload = Data(repeating: 0xAB, count: payloadSize)
+
+        // Warm up with a small request first (connection establishment, TLS handshake)
+        let warmupPayload = Data(repeating: 0xAB, count: 1024)
+        _ = try? await agentService.measureBandwidth(
+            request: .init(message: .with { $0.payload = warmupPayload })
+        )
+
+        // Measure round-trip time for the actual payload
+        let startTime = ContinuousClock.now
+        _ = try await agentService.measureBandwidth(
+            request: .init(message: .with { $0.payload = payload })
+        )
+        let elapsed = ContinuousClock.now - startTime
+        let elapsedSeconds = Double(elapsed.components.seconds) +
+            Double(elapsed.components.attoseconds) / 1_000_000_000_000_000_000
+
+        // Calculate bandwidth (payload sent + echoed back = 2x payload)
+        let totalBytes = Double(payloadSize * 2)
+        let bandwidthBps = totalBytes / elapsedSeconds
+        let bandwidthMBps = bandwidthBps / (1024 * 1024)
+        let latencyMs = elapsedSeconds * 1000
+
+        logger.info(
+            "Bandwidth measurement",
+            metadata: [
+                "bandwidth_mbps": .stringConvertible(String(format: "%.1f", bandwidthMBps)),
+                "latency_ms": .stringConvertible(String(format: "%.1f", latencyMs)),
+            ]
+        )
+
+        // Decide on compression mode based on bandwidth
+        let recommendedCompression: ImageCompressionMode
+        if bandwidthMBps >= BandwidthMeasurement.uncompressedThresholdMBps {
+            // Fast connection (USB, fast LAN) - skip compression
+            recommendedCompression = .uncompressed
+            logger.info("Fast connection detected, using uncompressed transfer")
+        } else if bandwidthMBps <= BandwidthMeasurement.compressedThresholdMBps {
+            // Slow connection (WiFi, slow LAN) - use zstd for best compression
+            recommendedCompression = .zstd
+            logger.info("Slow connection detected, using zstd compression")
+        } else {
+            // Medium speed - use zstd as it's fast to decompress
+            recommendedCompression = .zstd
+            logger.info("Medium speed connection, using zstd compression")
+        }
+
+        return BandwidthMeasurement(
+            bandwidthMBps: bandwidthMBps,
+            latencyMs: latencyMs,
+            recommendedCompression: recommendedCompression
         )
     }
 
