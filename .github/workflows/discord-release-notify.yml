@@ -1,0 +1,47 @@
+name: Notify Discord on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Only notify for semver releases (v0.2.0, v1.0.0-beta.1), not pre-releases like 2025.01.28-123456
+    if: startsWith(github.event.release.tag_name, 'v')
+    steps:
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          NAME="${{ github.event.release.name }}"
+          URL="${{ github.event.release.html_url }}"
+          REPO="${{ github.repository }}"
+
+          # Escape the release body for JSON (truncate to 1500 chars for Discord limits)
+          BODY=$(cat << 'BODY_EOF'
+          ${{ github.event.release.body }}
+          BODY_EOF
+          )
+          SHORT_BODY=$(echo "$BODY" | head -c 1500 | jq -Rs .)
+
+          # Build JSON payload
+          cat > /tmp/discord_payload.json << EOF
+          {
+            "content": "🚀 **New release** for **${REPO}**: **${NAME:-$TAG}**",
+            "embeds": [
+              {
+                "title": "${NAME:-$TAG}",
+                "url": "${URL}",
+                "description": ${SHORT_BODY},
+                "color": 5814783,
+                "footer": { "text": "${REPO} • ${TAG}" }
+              }
+            ]
+          }
+          EOF
+
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d @/tmp/discord_payload.json \
+            "$DISCORD_WEBHOOK_URL"
