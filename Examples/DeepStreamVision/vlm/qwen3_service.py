@@ -41,6 +41,7 @@ model_loaded = False
 # Configuration
 MODEL_PATH = "/app/models/Qwen3-VL-2B-Instruct"
 MODEL_NAME = "Qwen3-VL-2B-Instruct"
+MAX_IMAGE_SIZE = 672  # Resize large images for faster processing
 
 
 def load_model():
@@ -81,16 +82,40 @@ def load_model():
 
         # Load model with INT4 quantization
         logger.info("Loading model (this may take a minute)...")
+
+        # Try Flash Attention 2 if available (significant speedup)
+        attn_impl = None
+        try:
+            import flash_attn
+            attn_impl = "flash_attention_2"
+            logger.info("Flash Attention 2 available - enabling")
+        except ImportError:
+            logger.info("Flash Attention 2 not available - using default attention")
+
+        model_kwargs = {
+            "trust_remote_code": True,
+            "quantization_config": quantization_config,
+            "device_map": 'cuda',
+            "local_files_only": True,
+        }
+        if attn_impl:
+            model_kwargs["attn_implementation"] = attn_impl
+
         model = Qwen3VLForConditionalGeneration.from_pretrained(
             MODEL_PATH,
-            trust_remote_code=True,
-            quantization_config=quantization_config,
-            device_map='cuda',
-            local_files_only=True
+            **model_kwargs
         )
 
         # Set to eval mode
         model.eval()
+
+        # Try torch.compile for faster inference (PyTorch 2.0+)
+        try:
+            logger.info("Compiling model with torch.compile (this may take a few minutes)...")
+            model = torch.compile(model, mode="reduce-overhead")
+            logger.info("Model compiled successfully")
+        except Exception as e:
+            logger.warning(f"torch.compile not available or failed: {e}")
 
         model_loaded = True
 
@@ -150,13 +175,14 @@ def generate_response(image: Image.Image, prompt: str, max_tokens: int = 256) ->
         return_tensors="pt",
     ).to("cuda")
 
-    # Generate response
+    # Generate response with optimizations
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
             max_new_tokens=max_tokens,
-            temperature=0.7,
-            do_sample=True,
+            do_sample=False,  # Greedy decoding - faster than sampling
+            use_cache=True,   # Enable KV cache
+            pad_token_id=processor.tokenizer.pad_token_id,
         )
 
     # Decode output
@@ -207,6 +233,12 @@ def describe():
             image = Image.open(BytesIO(image_bytes))
             if image.mode != 'RGB':
                 image = image.convert('RGB')
+            # Resize large images for faster processing
+            if max(image.size) > MAX_IMAGE_SIZE:
+                ratio = MAX_IMAGE_SIZE / max(image.size)
+                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                image = image.resize(new_size, Image.LANCZOS)
+                logger.info(f"Resized image from {image.size} to {new_size}")
         except Exception as e:
             logger.error(f"Error decoding image: {e}")
             return jsonify({'error': 'Invalid image data'}), 400
@@ -254,6 +286,11 @@ def question():
             image = Image.open(BytesIO(image_bytes))
             if image.mode != 'RGB':
                 image = image.convert('RGB')
+            # Resize large images for faster processing
+            if max(image.size) > MAX_IMAGE_SIZE:
+                ratio = MAX_IMAGE_SIZE / max(image.size)
+                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                image = image.resize(new_size, Image.LANCZOS)
         except Exception as e:
             logger.error(f"Error decoding image: {e}")
             return jsonify({'error': 'Invalid image data'}), 400
