@@ -31,7 +31,7 @@ struct ContainerdDeleteTaskTests {
 
         await tasksClient.setListResponseSequence([
             .with { $0.tasks = [runningTask] },  // Initial list
-            .with { $0.tasks = [exitedTask] },   // After kill, task has exited
+            .with { $0.tasks = [exitedTask] },  // After kill, task has exited
         ])
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
@@ -177,7 +177,7 @@ struct ContainerdDeleteTaskTests {
             .with { $0.tasks = [runningTask] },  // Initial
             .with { $0.tasks = [runningTask] },  // Poll 1 - still running
             .with { $0.tasks = [runningTask] },  // Poll 2 - still running
-            .with { $0.tasks = [exitedTask] },   // Poll 3 - exited
+            .with { $0.tasks = [exitedTask] },  // Poll 3 - exited
         ])
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
@@ -206,7 +206,7 @@ struct ContainerdDeleteTaskTests {
         // Task disappears from list (cleaned up externally)
         await tasksClient.setListResponseSequence([
             .with { $0.tasks = [runningTask] },  // Initial - running
-            .with { $0.tasks = [] },             // Poll - task gone
+            .with { $0.tasks = [] },  // Poll - task gone
         ])
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
@@ -237,7 +237,9 @@ struct ContainerdDeleteTaskTests {
         }
 
         await tasksClient.setListResponse(.with { $0.tasks = [exitedTask] })
-        await tasksClient.setDeleteError(RPCError(code: .permissionDenied, message: "Permission denied"))
+        await tasksClient.setDeleteError(
+            RPCError(code: .permissionDenied, message: "Permission denied")
+        )
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
