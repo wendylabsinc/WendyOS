@@ -1130,15 +1130,14 @@ public struct Containerd: Sendable {
         }
     }
 
-    /// Wait for a task to exit and then delete it.
+    /// Stop a task (send SIGKILL), wait for it to exit, and then delete it.
     /// This function will wait up to the specified timeout for the task to exit.
-    /// If the task is still running after the kill signal, it will wait for it to exit.
-    public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(5)) async throws {
+    public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(10)) async throws {
         let tasks = tasksClient
         let runningTasks = try await tasks.list(.init())
 
         for runningTask in runningTasks.tasks {
-            logger.info(
+            logger.debug(
                 "Found task",
                 metadata: [
                     "container-id": .stringConvertible(runningTask.containerID),
@@ -1148,26 +1147,29 @@ public struct Containerd: Sendable {
             )
 
             guard runningTask.containerID == containerID || runningTask.id == containerID else {
-                logger.debug(
-                    "Ignoring task due to containerID mismatch",
-                    metadata: [
-                        "expected-container-id": .stringConvertible(containerID),
-                        "found-container-id": .stringConvertible(runningTask.containerID),
-                        "found-task-id": .stringConvertible(runningTask.id),
-                    ]
-                )
                 continue
             }
 
-            // If task hasn't exited yet, wait for it to exit
+            // If task hasn't exited yet, send SIGKILL and wait for it to exit
             if !runningTask.hasExitedAt {
                 logger.debug(
-                    "Task is still running, waiting for it to exit",
+                    "Task is still running, sending SIGKILL and waiting for exit",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
+
+                // Send SIGKILL to ensure the process is being terminated
+                do {
+                    try await stopTask(containerID: runningTask.id)
+                } catch let error as RPCError where error.code == .notFound {
+                    // Task already gone, that's fine
+                    logger.debug(
+                        "Task not found when sending SIGKILL, continuing",
+                        metadata: ["task-id": .stringConvertible(runningTask.id)]
+                    )
+                }
 
                 // Wait for task to exit with a timeout
                 let startTime = ContinuousClock.now
