@@ -148,8 +148,11 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let deleteCount = await tasksClient.deleteCallCount
+
         #expect(killCount == 1, "Should have attempted kill")
-        // Delete won't be called because task disappeared from list
+        // Delete is still called on the original task reference from the initial list
+        #expect(deleteCount == 1, "Should still delete the task")
     }
 
     // MARK: - Timeout Scenarios
@@ -213,8 +216,11 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let deleteCount = await tasksClient.deleteCallCount
+
         #expect(killCount == 1, "Should have sent SIGKILL")
-        // Delete won't be called because task is no longer in list
+        // Delete is still called on the original task reference from the initial list
+        #expect(deleteCount == 1, "Should still delete the task")
     }
 
     // MARK: - Delete Error Handling
