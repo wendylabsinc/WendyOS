@@ -7,8 +7,8 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    # Only notify for semver releases (v0.2.0, v1.0.0-beta.1), not pre-releases like 2025.01.28-123456
-    if: startsWith(github.event.release.tag_name, 'v')
+    # Only notify for stable releases, not pre-releases
+    if: ${{ !github.event.release.prerelease }}
     steps:
       - name: Post to Discord
         env:
