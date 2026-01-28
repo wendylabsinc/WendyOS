@@ -486,66 +486,28 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         context: context
                     ).accepted.get()
 
-                    do {
-                        logger.info("Creating task")
-                        try await client.createTask(
-                            containerID: request.appName,
-                            appName: request.appName,
-                            mounts: snapshot.mounts,
-                            stdout: stdout,
-                            stderr: stderr,
-                            runtime: container.runtime.name
-                        )
-                    } catch let error as RPCError where error.code == .alreadyExists {
-                        logger.info(
-                            "Task already exists, re-creating it",
-                            metadata: [
-                                "container-id": .stringConvertible(request.appName)
-                            ]
-                        )
-                        try await client.deleteTask(containerID: request.appName)
-                        logger.debug(
-                            "Task removed, recreating",
-                            metadata: [
-                                "container-id": .stringConvertible(request.appName)
-                            ]
-                        )
-                        try await client.createTask(
-                            containerID: request.appName,
-                            appName: request.appName,
-                            mounts: snapshot.mounts,
-                            stdout: stdout,
-                            stderr: stderr,
-                            runtime: container.runtime.name
-                        )
-                    } catch is RPCError {
-                        logger.error(
-                            "Failed to kill container",
-                            metadata: [
-                                "container-id": .stringConvertible(request.appName)
-                            ]
-                        )
-                        try await client.createTask(
-                            containerID: request.appName,
-                            appName: request.appName,
-                            mounts: snapshot.mounts,
-                            stdout: stdout,
-                            stderr: stderr,
-                            runtime: container.runtime.name
-                        )
-                        logger.debug(
-                            "Task created",
-                            metadata: [
-                                "container-id": .stringConvertible(request.appName)
-                            ]
-                        )
-                    }
+                    // Delete any existing task before creating a new one.
+                    // deleteTask() sends SIGKILL and waits for the process to exit.
+                    logger.debug(
+                        "Cleaning up any existing task before creating new one",
+                        metadata: [
+                            "container-id": .stringConvertible(request.appName)
+                        ]
+                    )
+                    try await client.deleteTask(containerID: request.appName)
+
+                    logger.info("Creating task")
+                    try await client.createTask(
+                        containerID: request.appName,
+                        appName: request.appName,
+                        mounts: snapshot.mounts,
+                        stdout: stdout,
+                        stderr: stderr,
+                        runtime: container.runtime.name
+                    )
 
                     logger.info("Starting task")
                     try await client.runTask(containerID: request.appName)
-
-                    // Mark the container as started in the monitor (reset explicitly stopped flag)
-                    await ContainerMonitor.shared.markContainerStarted(request.appName)
 
                     // Mark the container as started in the monitor (reset explicitly stopped flag)
                     await ContainerMonitor.shared.markContainerStarted(request.appName)
