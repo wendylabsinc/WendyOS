@@ -60,32 +60,17 @@ cd Examples/DeepStreamVision
 This deploys all services in parallel:
 - **detector** - YOLO object detection (port 9090)
 - **gpu-stats** - GPU monitoring (port 9091)
-- **dashboard** - Web UI (port 8080)
 - **vlm** - Vision language model (port 8090, optional)
-
-It also starts a local proxy on your Mac for the monitor dashboard.
 
 ### 4. View the Dashboard
 
-The `start.sh` script starts a local proxy on your Mac that forwards requests to the Jetson.
+Open `monitor.html` in your browser and enter your device hostname (e.g. `wendyos-tender-oar.local`):
 
-**Option A: Local monitor (recommended)**
-
-Open `monitor.html` directly in your browser:
 ```bash
 open monitor.html
-# or just double-click monitor.html in Finder
 ```
 
-This uses the local proxy (http://localhost:8080) to avoid CORS issues.
-
-If you need to restart the proxy manually:
-```bash
-python3 local_proxy.py <your-device>.local
-```
-
-**Option B: Direct device access**
-- Dashboard: `http://<your-device>.local:8080`
+The dashboard connects directly to the device services via CORS. You can also access them individually:
 - Metrics: `http://<your-device>.local:9090/metrics`
 - Stream: `http://<your-device>.local:9090/stream`
 
@@ -122,7 +107,6 @@ HF_TOKEN=hf_your_token_here wendy run --device <device>.local --detach
 | detector | 9090 | YOLO detection, Prometheus metrics, MJPEG stream |
 | vlm | 8090 | Qwen3-VL-2B vision language model (INT4) |
 | gpu-stats | 9091 | GPU temperature, memory, utilization |
-| dashboard | 8080 | Web dashboard |
 
 ## Useful Commands
 
@@ -134,7 +118,8 @@ wendy device apps list --device <device>.local
 wendy device apps stop detector --device <device>.local
 
 # View logs
-ssh root@<device>.local 'ctr -n default task ls'
+wendy device logs --device <device>.local
+wendy device logs --app detector --device <device>.local
 
 # Health checks
 curl http://<device>.local:9090/health
@@ -174,28 +159,26 @@ ssh root@<device>.local 'ctr -n default task exec detector cat /proc/1/fd/1' | t
 - Check GPU temperature: `ssh root@<device>.local 'cat /sys/class/thermal/thermal_zone*/temp'`
 - Reduce streams or batch size in `detector/nvinfer_config.txt`
 
-## Logging (Optional)
+## Viewing Logs
 
-Start Grafana + Loki for centralized logging:
+All services emit logs via OpenTelemetry to the WendyOS agent. Use the Wendy CLI to tail logs:
 
 ```bash
-cd monitoring
-./start-monitoring.sh
-```
+# All logs
+wendy device logs --device <device>.local
 
-Then update `detector/entrypoint.sh` with your Mac's IP:
-```bash
-export LOKI_HOST="192.168.x.x"
+# Filter by service
+wendy device logs --app detector --device <device>.local
+wendy device logs --app vlm --device <device>.local
+wendy device logs --app gpu-stats --device <device>.local
 ```
-
-View logs at http://localhost:3000 with query `{job="deepstream-vision"}`
 
 ## Project Structure
 
 ```
 DeepStreamVision/
 ├── start.sh              # Deploy all services
-├── monitor.html          # Local dashboard (uses proxy)
+├── monitor.html          # Local dashboard (connects directly to device)
 ├── detector/             # YOLO detection service
 │   ├── detector.py       # Main detection code
 │   ├── streams.json      # Camera configuration
@@ -203,13 +186,9 @@ DeepStreamVision/
 ├── vlm/                  # Vision language model
 │   ├── qwen3_service.py  # Qwen3-VL API server (INT4 quantized)
 │   └── models/           # Model cache directory
-├── gpu-stats/            # GPU monitoring
-├── dashboard/            # Web UI
-└── monitoring/           # Grafana + Loki stack
+└── gpu-stats/            # GPU monitoring
 ```
 
 ## More Documentation
 
-- [RUNBOOK.md](RUNBOOK.md) - Operations guide, health checks, troubleshooting
-- [TENSORRT_ENGINE_BUILD.md](TENSORRT_ENGINE_BUILD.md) - TensorRT engine optimization
 - [vlm/HUGGINGFACE_SETUP.md](vlm/HUGGINGFACE_SETUP.md) - HuggingFace token setup

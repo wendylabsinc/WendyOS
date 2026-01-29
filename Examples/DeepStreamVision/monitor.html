@@ -641,12 +641,11 @@
                 <h2><span class="status-indicator online" id="video-indicator"></span>Live Detection Stream</h2>
                 <div class="video-container">
                     <img id="video-stream"
-                         src="http://localhost:8080/api/detector/stream"
+                         src=""
                          alt="Live video stream with detections"
                          onerror="this.style.display='none'; document.getElementById('video-error').style.display='block';">
                     <div id="video-error" class="video-error" style="display: none;">
-                        <p>Stream unavailable</p>
-                        <code>python3 local_proxy.py</code>
+                        <p>Stream unavailable - enter device hostname above</p>
                     </div>
                 </div>
             </div>
@@ -676,21 +675,45 @@
     </div>
 
     <script>
-        // Use local proxy server (runs on localhost:8080)
-        const BASE_URL = 'http://localhost:8080';
+        // Direct device access - no proxy needed (services have CORS headers)
+        let deviceHost = '';
         let descriptions = [];
 
+        function getDetectorUrl(path) { return `http://${deviceHost}:9090${path}`; }
+        function getVlmUrl(path) { return `http://${deviceHost}:8090${path}`; }
+        function getGpuUrl(path) { return `http://${deviceHost}:9091${path}`; }
+
         function updateDevice() {
-            log('Device configuration handled by local proxy server', 'info');
-            log('To change device, restart local_proxy.py with new hostname', 'info');
+            const input = document.getElementById('device-input');
+            deviceHost = input.value.trim();
+            if (!deviceHost) {
+                log('Please enter a device hostname', 'warning');
+                return;
+            }
+            localStorage.setItem('deepstream-device', deviceHost);
+            log(`Device set to ${deviceHost}`, 'info');
+
+            // Update video stream source
+            const videoStream = document.getElementById('video-stream');
+            videoStream.src = getDetectorUrl('/stream');
+            videoStream.style.display = '';
+            document.getElementById('video-error').style.display = 'none';
+
             refreshAll();
         }
 
-        // Initialize on page load
+        // Initialize on page load - restore saved device
         window.addEventListener('DOMContentLoaded', () => {
-            log('Monitor started - using local proxy at localhost:8080', 'success');
-            document.getElementById('device-input').value = 'Configured via proxy';
-            document.getElementById('device-input').disabled = true;
+            const saved = localStorage.getItem('deepstream-device');
+            if (saved) {
+                document.getElementById('device-input').value = saved;
+                deviceHost = saved;
+                log(`Restored device: ${saved}`, 'info');
+                document.getElementById('video-stream').src = getDetectorUrl('/stream');
+                refreshAll();
+            } else {
+                log('Enter your device hostname and click Update', 'info');
+            }
         });
 
         function log(message, type = 'info') {
@@ -703,10 +726,11 @@
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
 
-        async function checkService(endpoint, name) {
+        async function checkService(url, name) {
+            if (!deviceHost) return null;
             try {
                 log(`Checking ${name}...`, 'info');
-                const response = await fetch(`${BASE_URL}${endpoint}`);
+                const response = await fetch(url);
                 if (response.ok) {
                     log(`${name} is online`, 'success');
                     return await response.text();
@@ -719,7 +743,7 @@
         }
 
         async function checkDetector() {
-            const data = await checkService('/api/detector/metrics', 'Detector');
+            const data = await checkService(getDetectorUrl('/metrics'), 'Detector');
             const indicator = document.getElementById('detector-indicator');
             const status = document.getElementById('detector-status');
 
@@ -755,7 +779,7 @@
         }
 
         async function checkVLM() {
-            const data = await checkService('/api/vlm/stats', 'VLM');
+            const data = await checkService(getVlmUrl('/stats'), 'VLM');
             const indicator = document.getElementById('vlm-indicator');
             const status = document.getElementById('vlm-status');
 
@@ -786,7 +810,7 @@
         }
 
         async function checkGPU() {
-            const data = await checkService('/api/gpu/metrics', 'GPU Stats');
+            const data = await checkService(getGpuUrl('/metrics'), 'GPU Stats');
             const indicator = document.getElementById('gpu-indicator');
             const status = document.getElementById('gpu-status');
 
@@ -829,7 +853,7 @@
                     return;
                 }
 
-                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`);
+                const response = await fetch(getDetectorUrl('/api/vlm_prompt'));
                 if (response.ok) {
                     const data = await response.json();
                     const status = document.getElementById('prompt-status');
@@ -857,7 +881,7 @@
             }
             try {
                 log(`Setting VLM prompt: "${prompt.substring(0, 50)}..."`, 'info');
-                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`, {
+                const response = await fetch(getDetectorUrl('/api/vlm_prompt'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ prompt: prompt })
@@ -877,7 +901,7 @@
         async function clearVLMPrompt() {
             try {
                 log('Clearing custom VLM prompt...', 'info');
-                const response = await fetch(`${BASE_URL}/api/detector/vlm_prompt`, {
+                const response = await fetch(getDetectorUrl('/api/vlm_prompt'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ prompt: '' })
@@ -901,7 +925,7 @@
             const testImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
             try {
-                const response = await fetch(`http://${DEVICE}:8090/describe`, {
+                const response = await fetch(getVlmUrl('/describe'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -924,7 +948,7 @@
 
         async function fetchVLMDescriptions() {
             try {
-                const response = await fetch(`${BASE_URL}/api/detector/vlm_descriptions`);
+                const response = await fetch(getDetectorUrl('/api/vlm_descriptions'));
                 if (response.ok) {
                     const data = await response.json();
                     renderDescriptions(data.descriptions);
