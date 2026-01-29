@@ -5,6 +5,7 @@ import Foundation
 import Logging
 import NIOCore
 import NIOFoundationCompat
+import OpenTelemetryGRPC
 import WendyAgentGRPC
 import WendyShared
 import _NIOFileSystem
@@ -556,6 +557,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     )
                 }
 
+                let appName = request.appName
                 try await client.withStdout { stdout, stderr in
                     try await run(stdout: stdout, stderr: stderr)
                 } onStdout: { bytes in
@@ -564,12 +566,34 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             $0.stdoutOutput.data = Data(buffer: bytes)
                         }
                     )
+
+                    // Broadcast to local OTel for CLI clients
+                    if let broadcaster = TelemetryLogBroadcasterHolder.shared.broadcaster {
+                        let output = String(buffer: bytes)
+                        let logRequest = self.createContainerLogRequest(
+                            appName: appName,
+                            output: output,
+                            isStderr: false
+                        )
+                        await broadcaster.broadcastLogs(logRequest)
+                    }
                 } onStderr: { bytes in
                     try await writer.write(
                         .with {
                             $0.stderrOutput.data = Data(buffer: bytes)
                         }
                     )
+
+                    // Broadcast to local OTel for CLI clients
+                    if let broadcaster = TelemetryLogBroadcasterHolder.shared.broadcaster {
+                        let output = String(buffer: bytes)
+                        let logRequest = self.createContainerLogRequest(
+                            appName: appName,
+                            output: output,
+                            isStderr: true
+                        )
+                        await broadcaster.broadcastLogs(logRequest)
+                    }
                 }
 
                 return Metadata()
@@ -680,6 +704,50 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             }
 
             return ServerResponse(message: .init())
+        }
+    }
+
+    /// Creates an OTel log request from container output for broadcasting to CLI clients.
+    private func createContainerLogRequest(
+        appName: String,
+        output: String,
+        isStderr: Bool
+    ) -> Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest {
+        let timestamp = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+
+        var logRecord = Opentelemetry_Proto_Logs_V1_LogRecord()
+        logRecord.timeUnixNano = timestamp
+        logRecord.observedTimeUnixNano = timestamp
+        logRecord.severityNumber = isStderr ? .warn : .info
+        logRecord.severityText = isStderr ? "STDERR" : "STDOUT"
+        logRecord.body = .with { $0.stringValue = output }
+
+        // Add stream type as attribute
+        var streamAttr = Opentelemetry_Proto_Common_V1_KeyValue()
+        streamAttr.key = "stream"
+        streamAttr.value = .with { $0.stringValue = isStderr ? "stderr" : "stdout" }
+        logRecord.attributes.append(streamAttr)
+
+        var scopeLogs = Opentelemetry_Proto_Logs_V1_ScopeLogs()
+        scopeLogs.logRecords = [logRecord]
+
+        var resourceLogs = Opentelemetry_Proto_Logs_V1_ResourceLogs()
+        resourceLogs.scopeLogs = [scopeLogs]
+
+        // Add service name attribute (the app name)
+        var serviceNameAttr = Opentelemetry_Proto_Common_V1_KeyValue()
+        serviceNameAttr.key = "service.name"
+        serviceNameAttr.value = .with { $0.stringValue = appName }
+        resourceLogs.resource.attributes.append(serviceNameAttr)
+
+        // Add wendy.app.name for filtering
+        var appNameAttr = Opentelemetry_Proto_Common_V1_KeyValue()
+        appNameAttr.key = "wendy.app.name"
+        appNameAttr.value = .with { $0.stringValue = appName }
+        resourceLogs.resource.attributes.append(appNameAttr)
+
+        return Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest.with {
+            $0.resourceLogs = [resourceLogs]
         }
     }
 }
