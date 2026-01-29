@@ -234,7 +234,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         try await measureBandwidth(client: client)
                     }
                     let speedStr = String(format: "%.0f", measurement.bandwidthMBps)
-                    let modeStr = measurement.recommendedCompression == .uncompressed
+                    let modeStr =
+                        measurement.recommendedCompression == .uncompressed
                         ? "uncompressed" : "zstd"
                     cliOutput.info("Connection: \(speedStr) MB/s (using \(modeStr) compression)")
                     return measurement.recommendedCompression
@@ -360,8 +361,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             request: .init(message: .with { $0.payload = payload })
         )
         let elapsed = ContinuousClock.now - startTime
-        let elapsedSeconds = Double(elapsed.components.seconds) +
-            Double(elapsed.components.attoseconds) / 1_000_000_000_000_000_000
+        let elapsedSeconds =
+            Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds)
+            / 1_000_000_000_000_000_000
 
         // Calculate bandwidth (payload sent + echoed back = 2x payload)
         let totalBytes = Double(payloadSize * 2)
