@@ -19,46 +19,45 @@ jobs:
           URL="${{ github.event.release.html_url }}"
           REPO="${{ github.repository }}"
 
-          # Escape the release body for JSON (truncate to 800 chars to leave room for install instructions)
-          BODY=$(cat << 'BODY_EOF'
-          ${{ github.event.release.body }}
-          BODY_EOF
-          )
+          # Get release body and truncate to 800 chars
+          BODY='${{ github.event.release.body }}'
           SHORT_BODY=$(echo "$BODY" | head -c 800)
 
-          # Installation instructions
-          INSTALL_INSTRUCTIONS="## Install the Wendy CLI
+          # Installation instructions (using heredoc with <<- to strip leading tabs)
+          read -r -d '' INSTALL_INSTRUCTIONS << 'INSTALL_EOF' || true
+          ## Install the Wendy CLI
 
-**macOS (Homebrew)**
-\`\`\`
-brew install wendylabsinc/tap/wendy
-\`\`\`
+          **macOS (Homebrew)**
+          ```
+          brew install wendylabsinc/tap/wendy
+          ```
 
-**Arch Linux (AUR)**
-\`\`\`
-yay -S wendy
-\`\`\`
+          **Arch Linux (AUR)**
+          ```
+          yay -S wendy
+          ```
 
-**Debian/Ubuntu (APT)**
-\`\`\`
-curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
-\`\`\`
+          **Debian/Ubuntu (APT)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
+          ```
 
-**Fedora/RHEL (DNF/YUM)**
-\`\`\`
-curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
-\`\`\`"
+          **Fedora/RHEL (DNF/YUM)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
+          ```
+          INSTALL_EOF
 
           # Combine release notes with install instructions
           FULL_DESCRIPTION="${SHORT_BODY}
 
-${INSTALL_INSTRUCTIONS}"
+          ${INSTALL_INSTRUCTIONS}"
 
           # Escape for JSON
           ESCAPED_DESC=$(echo "$FULL_DESCRIPTION" | jq -Rs .)
 
           # Build JSON payload
-          cat > /tmp/discord_payload.json << EOF
+          cat > /tmp/discord_payload.json << PAYLOAD_EOF
           {
             "content": "🚀 **New release** for **${REPO}**: **${NAME:-$TAG}**",
             "embeds": [
@@ -71,7 +70,7 @@ ${INSTALL_INSTRUCTIONS}"
               }
             ]
           }
-          EOF
+          PAYLOAD_EOF
 
           curl -sS -X POST -H "Content-Type: application/json" \
             -d @/tmp/discord_payload.json \
