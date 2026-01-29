@@ -71,7 +71,8 @@ def load_model():
         )
         logger.info("Processor loaded successfully")
 
-        # Configure INT4 quantization (same as working Qwen2.5-VL setup)
+        # Configure INT4 quantization with NF4 (best memory efficiency)
+        # Note: No skip_modules available for 4-bit, so entire model gets INT4
         logger.info("Configuring INT4 quantization with NF4...")
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -109,13 +110,13 @@ def load_model():
         # Set to eval mode
         model.eval()
 
-        # Try torch.compile for faster inference (PyTorch 2.0+)
-        try:
-            logger.info("Compiling model with torch.compile (this may take a few minutes)...")
-            model = torch.compile(model, mode="reduce-overhead")
-            logger.info("Model compiled successfully")
-        except Exception as e:
-            logger.warning(f"torch.compile not available or failed: {e}")
+        if torch.cuda.is_available():
+            mem = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f"Model loaded - GPU memory: {mem:.2f}GB")
+
+        # Note: torch.compile is incompatible with bitsandbytes quantized models
+        # The compiled model loses the CB attribute needed for 4-bit inference
+        # Skipping torch.compile when using INT4 quantization
 
         model_loaded = True
 

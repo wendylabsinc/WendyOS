@@ -25,16 +25,20 @@ COPY models/Qwen3-VL-2B-Instruct /app/models/Qwen3-VL-2B-Instruct
 RUN pip3 install --no-cache-dir --upgrade pip
 
 # Install PyTorch from Jetson AI Lab (ARM64-optimized, uses CDI-mapped CUDA)
+# Note: PyTorch 2.9.1 requires libcudss.so.0 which isn't available on WendyOS yet
+# Staying on 2.8.0 until WendyOS CUDA libraries are updated
 RUN pip3 install --no-cache-dir \
     torch==2.8.0 \
     torchvision==0.23.0 \
     torchaudio==2.8.0 \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
-# Install bitsandbytes from Jetson AI Lab (ARM64-compatible build with CUDA kernels)
-# This is critical - the PyPI version does NOT work on Jetson
+# Install bitsandbytes and torchao from Jetson AI Lab (ARM64-compatible builds)
+# These are critical - the PyPI versions do NOT work on Jetson
+# Note: flash-attn requires PyTorch 2.9+ which needs libcudss.so.0 (not yet on WendyOS)
 RUN pip3 install --no-cache-dir \
     bitsandbytes \
+    torchao \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 
 # Install ML and service dependencies
