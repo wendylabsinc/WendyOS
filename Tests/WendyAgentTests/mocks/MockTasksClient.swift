@@ -12,11 +12,73 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
     private var deleteError: Error?
     private var listResponse: Containerd_Services_Tasks_V1_ListTasksResponse = .init()
     private var killError: Error?
+    private var waitError: Error?
+    /// If set, wait() will sleep for this duration before returning (simulates blocking)
+    private var waitDelay: Duration?
+    private var waitResponse: Containerd_Services_Tasks_V1_WaitResponse = .init()
+
+    // MARK: - Call Tracking
+
+    private(set) var killCallCount = 0
+    private(set) var killedContainerIDs: [String] = []
+    private(set) var deleteCallCount = 0
+    private(set) var deletedContainerIDs: [String] = []
+    private(set) var listCallCount = 0
+    private(set) var waitCallCount = 0
+    private(set) var waitedContainerIDs: [String] = []
+
+    // MARK: - Sequential Responses (for polling tests)
+
+    private var listResponseSequence: [Containerd_Services_Tasks_V1_ListTasksResponse] = []
+    private var listCallIndex = 0
 
     // MARK: - Configuration Methods
 
-    func setDeleteError(_ error: Error) {
+    func setDeleteError(_ error: Error?) {
         self.deleteError = error
+    }
+
+    func setKillError(_ error: Error?) {
+        self.killError = error
+    }
+
+    func setWaitError(_ error: Error?) {
+        self.waitError = error
+    }
+
+    /// Make wait() block for the given duration before returning (simulates process exit delay)
+    func setWaitDelay(_ delay: Duration?) {
+        self.waitDelay = delay
+    }
+
+    func setListResponse(_ response: Containerd_Services_Tasks_V1_ListTasksResponse) {
+        self.listResponse = response
+        self.listResponseSequence = []
+    }
+
+    /// Set a sequence of responses for list(). Each call returns the next response.
+    /// After exhausting the sequence, the last response is repeated.
+    func setListResponseSequence(_ responses: [Containerd_Services_Tasks_V1_ListTasksResponse]) {
+        self.listResponseSequence = responses
+        self.listCallIndex = 0
+    }
+
+    func reset() {
+        killCallCount = 0
+        killedContainerIDs = []
+        deleteCallCount = 0
+        deletedContainerIDs = []
+        listCallCount = 0
+        listCallIndex = 0
+        waitCallCount = 0
+        waitedContainerIDs = []
+        deleteError = nil
+        killError = nil
+        waitError = nil
+        waitDelay = nil
+        waitResponse = .init()
+        listResponse = .init()
+        listResponseSequence = []
     }
 
     // MARK: - Convenience Methods (Used in Tests)
@@ -26,10 +88,28 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
         metadata: GRPCCore.Metadata = [:],
         options: GRPCCore.CallOptions = .defaults
     ) async throws -> Containerd_Services_Tasks_V1_DeleteResponse {
+        deleteCallCount += 1
+        deletedContainerIDs.append(message.containerID)
         if let error = deleteError {
             throw error
         }
         return .init()
+    }
+
+    func wait(
+        _ message: Containerd_Services_Tasks_V1_WaitRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults
+    ) async throws -> Containerd_Services_Tasks_V1_WaitResponse {
+        waitCallCount += 1
+        waitedContainerIDs.append(message.containerID)
+        if let delay = waitDelay {
+            try await Task.sleep(for: delay)
+        }
+        if let error = waitError {
+            throw error
+        }
+        return waitResponse
     }
 
     func list(
@@ -37,6 +117,12 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
         metadata: GRPCCore.Metadata = [:],
         options: GRPCCore.CallOptions = .defaults
     ) async throws -> Containerd_Services_Tasks_V1_ListTasksResponse {
+        listCallCount += 1
+        if !listResponseSequence.isEmpty {
+            let response = listResponseSequence[min(listCallIndex, listResponseSequence.count - 1)]
+            listCallIndex += 1
+            return response
+        }
         return listResponse
     }
 
@@ -45,6 +131,8 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
         metadata: GRPCCore.Metadata = [:],
         options: GRPCCore.CallOptions = .defaults
     ) async throws -> SwiftProtobuf.Google_Protobuf_Empty {
+        killCallCount += 1
+        killedContainerIDs.append(message.containerID)
         if let error = killError {
             throw error
         }
@@ -101,7 +189,16 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
                 GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_DeleteResponse>
             ) async throws -> Result
     ) async throws -> Result where Result: Sendable {
-        fatalError("Use convenience method delete(_:metadata:options:) instead")
+        deleteCallCount += 1
+        deletedContainerIDs.append(request.message.containerID)
+        if let error = deleteError {
+            throw error
+        }
+        let clientResponse = GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_DeleteResponse>(
+            message: .init(),
+            metadata: [:]
+        )
+        return try await handleResponse(clientResponse)
     }
 
     func deleteProcess<Result>(
@@ -152,10 +249,18 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
                 GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_ListTasksResponse>
             ) async throws -> Result
     ) async throws -> Result where Result: Sendable {
+        listCallCount += 1
+        let response: Containerd_Services_Tasks_V1_ListTasksResponse
+        if !listResponseSequence.isEmpty {
+            response = listResponseSequence[min(listCallIndex, listResponseSequence.count - 1)]
+            listCallIndex += 1
+        } else {
+            response = listResponse
+        }
         let clientResponse = GRPCCore.ClientResponse<
             Containerd_Services_Tasks_V1_ListTasksResponse
         >(
-            message: listResponse,
+            message: response,
             metadata: [:]
         )
         return try await handleResponse(clientResponse)
@@ -171,7 +276,16 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
                 GRPCCore.ClientResponse<SwiftProtobuf.Google_Protobuf_Empty>
             ) async throws -> Result
     ) async throws -> Result where Result: Sendable {
-        fatalError("Use convenience method kill(_:metadata:options:) instead")
+        killCallCount += 1
+        killedContainerIDs.append(request.message.containerID)
+        if let error = killError {
+            throw error
+        }
+        let clientResponse = GRPCCore.ClientResponse<SwiftProtobuf.Google_Protobuf_Empty>(
+            message: .init(),
+            metadata: [:]
+        )
+        return try await handleResponse(clientResponse)
     }
 
     func exec<Result>(
@@ -327,6 +441,18 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
                 GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_WaitResponse>
             ) async throws -> Result
     ) async throws -> Result where Result: Sendable {
-        fatalError("Not implemented in mock")
+        waitCallCount += 1
+        waitedContainerIDs.append(request.message.containerID)
+        if let delay = waitDelay {
+            try await Task.sleep(for: delay)
+        }
+        if let error = waitError {
+            throw error
+        }
+        let clientResponse = GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_WaitResponse>(
+            message: waitResponse,
+            metadata: [:]
+        )
+        return try await handleResponse(clientResponse)
     }
 }
