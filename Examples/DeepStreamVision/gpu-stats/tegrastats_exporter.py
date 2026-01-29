@@ -22,6 +22,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# OpenTelemetry logging - ships logs to WendyOS OTel collector
+try:
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry._logs import set_logger_provider
+    import opentelemetry.sdk._logs as otel_logs
+
+    resource = Resource.create({"service.name": "gpu-stats"})
+    logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint="http://127.0.0.1:4318/v1/logs"))
+    )
+    set_logger_provider(logger_provider)
+
+    otel_handler = otel_logs.LoggingHandler(logger_provider=logger_provider)
+    logging.getLogger().addHandler(otel_handler)
+    logger.info("OpenTelemetry logging enabled")
+except ImportError:
+    logger.warning("OpenTelemetry SDK not available - logs will not be shipped to OTel")
+except Exception as e:
+    logger.warning(f"Failed to initialize OpenTelemetry logging: {e}")
+
 app = Flask(__name__)
 
 

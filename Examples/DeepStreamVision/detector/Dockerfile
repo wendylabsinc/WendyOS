@@ -99,7 +99,10 @@ RUN pip install --no-cache-dir \
     'numpy>=1.21.0,<2.0' \
     Pillow>=9.0.0 \
     requests>=2.28.0 \
-    opencv-python-headless>=4.5.0
+    opencv-python-headless>=4.5.0 \
+    opentelemetry-api \
+    opentelemetry-sdk \
+    opentelemetry-exporter-otlp-proto-http
 
 # Install DeepStream Python bindings (pyds)
 RUN pip install --no-cache-dir \
@@ -148,8 +151,6 @@ RUN chmod +x /app/detector.py /app/entrypoint.sh
 # Force rebuild: 2026-01-16-v2
 ENV PYTHONUNBUFFERED=1
 ENV GST_DEBUG=1
-ENV LOKI_HOST=192.168.68.62
-
 # EGL configuration for headless GPU operation (no display server required)
 ENV EGL_PLATFORM=device
 

@@ -5,7 +5,10 @@ WORKDIR /app
 RUN pip3 install --no-cache-dir \
     prometheus-client \
     psutil \
-    flask
+    flask \
+    opentelemetry-api \
+    opentelemetry-sdk \
+    opentelemetry-exporter-otlp-proto-http
 
 COPY tegrastats_exporter.py /app/
 

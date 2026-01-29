@@ -51,7 +51,10 @@ RUN pip3 install --no-cache-dir \
     pillow \
     "numpy<2" \
     qwen-vl-utils \
-    av
+    av \
+    opentelemetry-api \
+    opentelemetry-sdk \
+    opentelemetry-exporter-otlp-proto-http
 
 # Set working directory
 WORKDIR /app

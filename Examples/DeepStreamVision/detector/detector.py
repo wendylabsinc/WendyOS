@@ -58,71 +58,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Optional Loki logging - ships logs to Grafana Loki when LOKI_HOST is set
-LOKI_HOST = os.environ.get('LOKI_HOST')
-if LOKI_HOST:
-    import urllib.request
-    import json
-    import time as time_module
+# OpenTelemetry logging - ships logs to WendyOS OTel collector
+try:
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry._logs import set_logger_provider
+    import opentelemetry.sdk._logs as otel_logs
 
-    class LokiHandler(logging.Handler):
-        """Simple Loki log handler - buffers and ships logs via HTTP"""
-        def __init__(self, host, labels=None):
-            super().__init__()
-            self.url = f"http://{host}:3100/loki/api/v1/push"
-            self.labels = labels or {}
-            self.buffer = []
-            self.buffer_size = 10
-            self.last_flush = time_module.time()
-            self.flush_interval = 5.0  # seconds
+    resource = Resource.create({"service.name": "detector"})
+    logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint="http://127.0.0.1:4318/v1/logs"))
+    )
+    set_logger_provider(logger_provider)
 
-        def emit(self, record):
-            try:
-                msg = self.format(record)
-                ts = str(int(record.created * 1e9))  # nanoseconds
-                self.buffer.append([ts, msg])
-
-                # Flush if buffer full or interval passed
-                if len(self.buffer) >= self.buffer_size or \
-                   (time_module.time() - self.last_flush) > self.flush_interval:
-                    self.flush()
-            except Exception:
-                pass  # Don't let logging errors crash the app
-
-        def flush(self):
-            if not self.buffer:
-                return
-            try:
-                labels_str = ','.join(f'{k}="{v}"' for k, v in self.labels.items())
-                payload = {
-                    "streams": [{
-                        "stream": self.labels,
-                        "values": self.buffer
-                    }]
-                }
-                req = urllib.request.Request(
-                    self.url,
-                    data=json.dumps(payload).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'},
-                    method='POST'
-                )
-                urllib.request.urlopen(req, timeout=2)
-                self.buffer = []
-                self.last_flush = time_module.time()
-            except Exception:
-                pass  # Loki unavailable, keep buffer (will drop old on overflow)
-            if len(self.buffer) > 100:
-                self.buffer = self.buffer[-50:]  # Keep recent logs if can't ship
-
-    device_name = os.environ.get('DEVICE_NAME', 'unknown')
-    loki_handler = LokiHandler(LOKI_HOST, labels={
-        'job': 'deepstream-vision',
-        'container': 'detector',
-        'device': device_name
-    })
-    loki_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
-    logging.getLogger().addHandler(loki_handler)
-    logger.info(f"Loki logging enabled, shipping to {LOKI_HOST}:3100")
+    otel_handler = otel_logs.LoggingHandler(logger_provider=logger_provider)
+    logging.getLogger().addHandler(otel_handler)
+    logger.info("OpenTelemetry logging enabled")
+except ImportError:
+    logger.warning("OpenTelemetry SDK not available - logs will not be shipped to OTel")
+except Exception as e:
+    logger.warning(f"Failed to initialize OpenTelemetry logging: {e}")
 
 # Prometheus metrics
 fps_gauge = Gauge('deepstream_fps', 'Frames per second', ['stream'])

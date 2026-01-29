@@ -8,9 +8,6 @@ export GST_DEBUG="1"
 export EGL_PLATFORM="device"
 export CUDA_VER="12.6"
 
-# Loki logging - your Mac's IP address
-export LOKI_HOST="${LOKI_HOST:-192.168.68.62}"
-
 # Clear GStreamer plugin cache to force re-scan
 rm -rf ~/.cache/gstreamer-1.0/ 2>/dev/null
 

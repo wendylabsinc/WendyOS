@@ -1,10 +1,10 @@
 # Hugging Face Setup for VLM Service
 
-The VLM service uses **Qwen2.5-VL-3B-Instruct** for scene understanding. The model is pre-downloaded in this repository, so you can run it without a Hugging Face token.
+The VLM service uses **Qwen3-VL-2B-Instruct** for scene understanding. The model is pre-downloaded in this repository, so you can run it without a Hugging Face token.
 
 ## Do I Need a Token?
 
-**No** - The model files are already in `models/Qwen2.5-VL-3B-Instruct/`. The service works out of the box.
+**No** - The model files are already in `models/Qwen3-VL-2B-Instruct/`. The service works out of the box.
 
 **Yes, if you want to:**
 - Download model updates
@@ -41,7 +41,7 @@ ENV HF_TOKEN=hf_your_token_here
 
 | Model | Size | Memory | Quantization |
 |-------|------|--------|--------------|
-| Qwen2.5-VL-3B-Instruct | ~6GB | ~2GB VRAM | INT4 |
+| Qwen3-VL-2B-Instruct | ~4GB | ~1.5GB VRAM | INT4 |
 
 The model is quantized to INT4 for efficient inference on Jetson devices.
 
@@ -53,11 +53,11 @@ The model is quantized to INT4 for efficient inference on Jetson devices.
 curl http://<device>.local:8090/health
 
 # Should show:
-# {"model_loaded": true, "model_name": "Qwen2.5-VL-3B-Instruct", "quantization": "INT4"}
+# {"model_loaded": true, "model_name": "Qwen3-VL-2B-Instruct", "quantization": "INT4"}
 ```
 
 ### Out of memory
-- VLM requires ~2GB GPU memory
+- VLM requires ~1.5GB GPU memory
 - Stop other GPU processes before starting VLM
 - VLM and detector can run together on Orin (8GB VRAM)
 
