@@ -223,6 +223,42 @@ struct ContainerdDeleteTaskTests {
         #expect(deleteCount == 1, "Should still delete the task")
     }
 
+    @Test("Task never exits - times out and deletes anyway")
+    func taskNeverExits_timesOutAndDeletes() async throws {
+        // Arrange
+        let tasksClient = MockTasksClient()
+
+        let runningTask = Containerd_V1_Types_Process.with {
+            $0.id = "test-task"
+            $0.containerID = "test-container"
+            // No exitedAt - task stays running forever
+        }
+
+        // Task never exits - always returns running state
+        // Use enough responses to cover the timeout period (100ms poll interval)
+        var responses: [Containerd_Services_Tasks_V1_ListTasksResponse] = []
+        for _ in 0..<20 {
+            responses.append(.with { $0.tasks = [runningTask] })
+        }
+        await tasksClient.setListResponseSequence(responses)
+
+        let containerd = try makeContainerd(tasksClient: tasksClient)
+
+        // Act - use a short timeout to keep the test fast
+        try await containerd.deleteTask(
+            containerID: "test-container",
+            waitTimeout: .milliseconds(300)
+        )
+
+        // Assert
+        let killCount = await tasksClient.killCallCount
+        let deleteCount = await tasksClient.deleteCallCount
+
+        #expect(killCount == 1, "Should have sent SIGKILL")
+        // Delete is still attempted even after timeout
+        #expect(deleteCount == 1, "Should delete task even after timeout")
+    }
+
     // MARK: - Delete Error Handling
 
     @Test("Delete fails - propagates error")
