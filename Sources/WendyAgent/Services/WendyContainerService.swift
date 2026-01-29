@@ -3,9 +3,6 @@ import ContainerRegistry
 import ContainerdGRPC
 import Foundation
 import Logging
-import NIOCore
-import NIOFoundationCompat
-import OpenTelemetryGRPC
 import WendyAgentGRPC
 import WendyShared
 import _NIOFileSystem
@@ -319,7 +316,8 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 .isEmpty
             let args: [String]
             if requestCmdIsEmpty {
-                // Compose from config.entrypoint + config.cmd if they exist (following Docker convention)
+                // Compose from config.entrypoint + config.cmd if they exist
+                // (following Docker convention)
                 if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
                     if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
                         args = entrypoint + extraCmd
@@ -468,98 +466,39 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
         let request = request.message
         return StreamingServerResponse { writer in
-            try await Containerd.withClient { client in
-                func run(
-                    stdout: String?,
-                    stderr: String?
-                ) async throws {
-                    let container = try await client.getContainer(named: request.appName)
-                    let snapshot = try await client.mountsSnapshot(named: container.snapshotKey)
+            let appName = request.appName
+            let logStream = try await ContainerLogManager.shared.startContainer(
+                appName: appName,
+                markExplicitStop: true
+            )
 
-                    _ = try await stopContainer(
-                        request: .init(
-                            metadata: Metadata(),
-                            message: .with {
-                                $0.appName = request.appName
+            try await writer.write(
+                .with {
+                    $0.started = .init()
+                }
+            )
+
+            for await chunk in logStream {
+                do {
+                    if chunk.isStderr {
+                        try await writer.write(
+                            .with {
+                                $0.stderrOutput.data = chunk.data
                             }
-                        ),
-                        context: context
-                    ).accepted.get()
-
-                    // Delete any existing task before creating a new one.
-                    // deleteTask() sends SIGKILL and waits for the process to exit.
-                    logger.debug(
-                        "Cleaning up any existing task before creating new one",
-                        metadata: [
-                            "container-id": .stringConvertible(request.appName)
-                        ]
-                    )
-                    try await client.deleteTask(containerID: request.appName)
-
-                    logger.info("Creating task")
-                    try await client.createTask(
-                        containerID: request.appName,
-                        appName: request.appName,
-                        mounts: snapshot.mounts,
-                        stdout: stdout,
-                        stderr: stderr,
-                        runtime: container.runtime.name
-                    )
-
-                    logger.info("Starting task")
-                    try await client.runTask(containerID: request.appName)
-
-                    // Mark the container as started in the monitor (reset explicitly stopped flag)
-                    await ContainerMonitor.shared.markContainerStarted(request.appName)
-
-                    try await writer.write(
-                        .with {
-                            $0.started = .init()
-                        }
-                    )
-                }
-
-                let appName = request.appName
-                try await client.withStdout { stdout, stderr in
-                    try await run(stdout: stdout, stderr: stderr)
-                } onStdout: { bytes in
-                    try await writer.write(
-                        .with {
-                            $0.stdoutOutput.data = Data(buffer: bytes)
-                        }
-                    )
-
-                    // Broadcast to local OTel for CLI clients
-                    if let broadcaster = TelemetryLogBroadcasterHolder.shared.broadcaster {
-                        let output = String(buffer: bytes)
-                        let logRequest = self.createContainerLogRequest(
-                            appName: appName,
-                            output: output,
-                            isStderr: false
                         )
-                        await broadcaster.broadcastLogs(logRequest)
-                    }
-                } onStderr: { bytes in
-                    try await writer.write(
-                        .with {
-                            $0.stderrOutput.data = Data(buffer: bytes)
-                        }
-                    )
-
-                    // Broadcast to local OTel for CLI clients
-                    if let broadcaster = TelemetryLogBroadcasterHolder.shared.broadcaster {
-                        let output = String(buffer: bytes)
-                        let logRequest = self.createContainerLogRequest(
-                            appName: appName,
-                            output: output,
-                            isStderr: true
+                    } else {
+                        try await writer.write(
+                            .with {
+                                $0.stdoutOutput.data = chunk.data
+                            }
                         )
-                        await broadcaster.broadcastLogs(logRequest)
                     }
+                } catch {
+                    break
                 }
-
-                return Metadata()
             }
+
+            return Metadata()
         }
     }
 
@@ -669,47 +608,4 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
         }
     }
 
-    /// Creates an OTel log request from container output for broadcasting to CLI clients.
-    private func createContainerLogRequest(
-        appName: String,
-        output: String,
-        isStderr: Bool
-    ) -> Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest {
-        let timestamp = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
-
-        var logRecord = Opentelemetry_Proto_Logs_V1_LogRecord()
-        logRecord.timeUnixNano = timestamp
-        logRecord.observedTimeUnixNano = timestamp
-        logRecord.severityNumber = isStderr ? .warn : .info
-        logRecord.severityText = isStderr ? "STDERR" : "STDOUT"
-        logRecord.body = .with { $0.stringValue = output }
-
-        // Add stream type as attribute
-        var streamAttr = Opentelemetry_Proto_Common_V1_KeyValue()
-        streamAttr.key = "stream"
-        streamAttr.value = .with { $0.stringValue = isStderr ? "stderr" : "stdout" }
-        logRecord.attributes.append(streamAttr)
-
-        var scopeLogs = Opentelemetry_Proto_Logs_V1_ScopeLogs()
-        scopeLogs.logRecords = [logRecord]
-
-        var resourceLogs = Opentelemetry_Proto_Logs_V1_ResourceLogs()
-        resourceLogs.scopeLogs = [scopeLogs]
-
-        // Add service name attribute (the app name)
-        var serviceNameAttr = Opentelemetry_Proto_Common_V1_KeyValue()
-        serviceNameAttr.key = "service.name"
-        serviceNameAttr.value = .with { $0.stringValue = appName }
-        resourceLogs.resource.attributes.append(serviceNameAttr)
-
-        // Add wendy.app.name for filtering
-        var appNameAttr = Opentelemetry_Proto_Common_V1_KeyValue()
-        appNameAttr.key = "wendy.app.name"
-        appNameAttr.value = .with { $0.stringValue = appName }
-        resourceLogs.resource.attributes.append(appNameAttr)
-
-        return Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest.with {
-            $0.resourceLogs = [resourceLogs]
-        }
-    }
 }
