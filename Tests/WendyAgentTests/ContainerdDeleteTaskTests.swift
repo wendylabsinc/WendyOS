@@ -12,27 +12,19 @@ struct ContainerdDeleteTaskTests {
 
     // MARK: - Happy Path Tests
 
-    @Test("Running task - sends SIGKILL, waits for exit, deletes")
+    @Test("Running task - sends SIGKILL, waits via Wait() RPC, deletes")
     func runningTask_sendsKillWaitsDeletes() async throws {
         // Arrange
         let tasksClient = MockTasksClient()
 
-        // First call: task is running. Second call: task has exited.
         let runningTask = Containerd_V1_Types_Process.with {
             $0.id = "test-task"
             $0.containerID = "test-container"
             // hasExitedAt is false by default (no exitedAt set)
         }
-        let exitedTask = Containerd_V1_Types_Process.with {
-            $0.id = "test-task"
-            $0.containerID = "test-container"
-            $0.exitedAt = .init(date: Date())
-        }
 
-        await tasksClient.setListResponseSequence([
-            .with { $0.tasks = [runningTask] },  // Initial list
-            .with { $0.tasks = [exitedTask] },  // After kill, task has exited
-        ])
+        await tasksClient.setListResponse(.with { $0.tasks = [runningTask] })
+        // Wait() returns immediately (simulates process exiting quickly after SIGKILL)
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
@@ -41,12 +33,14 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
         let killedIDs = await tasksClient.killedContainerIDs
         let deletedIDs = await tasksClient.deletedContainerIDs
 
         #expect(killCount == 1, "Should send SIGKILL once")
         #expect(killedIDs == ["test-task"], "Should kill the correct task")
+        #expect(waitCount == 1, "Should call Wait() RPC once")
         #expect(deleteCount == 1, "Should delete once")
         #expect(deletedIDs == ["test-task"], "Should delete the correct task")
     }
@@ -135,11 +129,10 @@ struct ContainerdDeleteTaskTests {
         }
 
         // Task is running, but kill returns notFound (race condition - task exited between list and kill)
-        await tasksClient.setListResponseSequence([
-            .with { $0.tasks = [runningTask] },
-            .with { $0.tasks = [] },  // Task gone after kill attempt
-        ])
+        await tasksClient.setListResponse(.with { $0.tasks = [runningTask] })
         await tasksClient.setKillError(RPCError(code: .notFound, message: "Task not found"))
+        // Wait() also returns notFound since task is already gone
+        await tasksClient.setWaitError(RPCError(code: .notFound, message: "Task not found"))
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
@@ -148,17 +141,19 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
 
         #expect(killCount == 1, "Should have attempted kill")
-        // Delete is still called on the original task reference from the initial list
+        #expect(waitCount == 1, "Should have attempted Wait() RPC")
+        // Delete is still called on the original task reference
         #expect(deleteCount == 1, "Should still delete the task")
     }
 
     // MARK: - Timeout Scenarios
 
-    @Test("Task exits within timeout - succeeds")
-    func taskExitsWithinTimeout_succeeds() async throws {
+    @Test("Wait() returns after delay - succeeds within timeout")
+    func waitReturnsAfterDelay_succeeds() async throws {
         // Arrange
         let tasksClient = MockTasksClient()
 
@@ -166,19 +161,10 @@ struct ContainerdDeleteTaskTests {
             $0.id = "test-task"
             $0.containerID = "test-container"
         }
-        let exitedTask = Containerd_V1_Types_Process.with {
-            $0.id = "test-task"
-            $0.containerID = "test-container"
-            $0.exitedAt = .init(date: Date())
-        }
 
-        // Task exits after 3 poll cycles
-        await tasksClient.setListResponseSequence([
-            .with { $0.tasks = [runningTask] },  // Initial
-            .with { $0.tasks = [runningTask] },  // Poll 1 - still running
-            .with { $0.tasks = [runningTask] },  // Poll 2 - still running
-            .with { $0.tasks = [exitedTask] },  // Poll 3 - exited
-        ])
+        await tasksClient.setListResponse(.with { $0.tasks = [runningTask] })
+        // Simulate process taking some time to exit after SIGKILL
+        await tasksClient.setWaitDelay(.milliseconds(100))
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
@@ -186,15 +172,17 @@ struct ContainerdDeleteTaskTests {
         try await containerd.deleteTask(containerID: "test-container", waitTimeout: .seconds(2))
 
         // Assert
+        let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
-        let listCount = await tasksClient.listCallCount
 
-        #expect(deleteCount == 1, "Should delete after task exits")
-        #expect(listCount >= 3, "Should have polled multiple times")
+        #expect(killCount == 1, "Should send SIGKILL")
+        #expect(waitCount == 1, "Should call Wait() RPC")
+        #expect(deleteCount == 1, "Should delete after Wait() returns")
     }
 
-    @Test("Task disappears from list during polling - treats as exited")
-    func taskDisappearsDuringPolling_treatsAsExited() async throws {
+    @Test("Wait() returns notFound - task cleaned up externally, still deletes")
+    func waitNotFound_stillDeletes() async throws {
         // Arrange
         let tasksClient = MockTasksClient()
 
@@ -203,58 +191,55 @@ struct ContainerdDeleteTaskTests {
             $0.containerID = "test-container"
         }
 
-        // Task disappears from list (cleaned up externally)
-        await tasksClient.setListResponseSequence([
-            .with { $0.tasks = [runningTask] },  // Initial - running
-            .with { $0.tasks = [] },  // Poll - task gone
-        ])
+        await tasksClient.setListResponse(.with { $0.tasks = [runningTask] })
+        // Wait() returns notFound (task was cleaned up externally)
+        await tasksClient.setWaitError(RPCError(code: .notFound, message: "Task not found"))
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
-        // Act - should succeed (task considered exited when gone from list)
+        // Act - should succeed
         try await containerd.deleteTask(containerID: "test-container", waitTimeout: .seconds(1))
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
 
         #expect(killCount == 1, "Should have sent SIGKILL")
-        // Delete is still called on the original task reference from the initial list
+        #expect(waitCount == 1, "Should have attempted Wait() RPC")
+        // Delete is still called on the original task reference
         #expect(deleteCount == 1, "Should still delete the task")
     }
 
-    @Test("Task never exits - times out and deletes anyway")
-    func taskNeverExits_timesOutAndDeletes() async throws {
+    @Test("Wait() times out - deletes anyway")
+    func waitTimesOut_deletesAnyway() async throws {
         // Arrange
         let tasksClient = MockTasksClient()
 
         let runningTask = Containerd_V1_Types_Process.with {
             $0.id = "test-task"
             $0.containerID = "test-container"
-            // No exitedAt - task stays running forever
         }
 
-        // Task never exits - always returns running state
-        // Use enough responses to cover the timeout period (100ms poll interval)
-        var responses: [Containerd_Services_Tasks_V1_ListTasksResponse] = []
-        for _ in 0..<20 {
-            responses.append(.with { $0.tasks = [runningTask] })
-        }
-        await tasksClient.setListResponseSequence(responses)
+        await tasksClient.setListResponse(.with { $0.tasks = [runningTask] })
+        // Wait() blocks longer than the timeout (simulates process that won't exit)
+        await tasksClient.setWaitDelay(.seconds(10))
 
         let containerd = try makeContainerd(tasksClient: tasksClient)
 
-        // Act - use a short timeout to keep the test fast
+        // Act - use a short timeout so the test completes quickly
         try await containerd.deleteTask(
             containerID: "test-container",
-            waitTimeout: .milliseconds(300)
+            waitTimeout: .milliseconds(200)
         )
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
 
         #expect(killCount == 1, "Should have sent SIGKILL")
+        #expect(waitCount == 1, "Should have attempted Wait() RPC")
         // Delete is still attempted even after timeout
         #expect(deleteCount == 1, "Should delete task even after timeout")
     }

@@ -12,6 +12,10 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
     private var deleteError: Error?
     private var listResponse: Containerd_Services_Tasks_V1_ListTasksResponse = .init()
     private var killError: Error?
+    private var waitError: Error?
+    /// If set, wait() will sleep for this duration before returning (simulates blocking)
+    private var waitDelay: Duration?
+    private var waitResponse: Containerd_Services_Tasks_V1_WaitResponse = .init()
 
     // MARK: - Call Tracking
 
@@ -20,6 +24,8 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
     private(set) var deleteCallCount = 0
     private(set) var deletedContainerIDs: [String] = []
     private(set) var listCallCount = 0
+    private(set) var waitCallCount = 0
+    private(set) var waitedContainerIDs: [String] = []
 
     // MARK: - Sequential Responses (for polling tests)
 
@@ -34,6 +40,15 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
 
     func setKillError(_ error: Error?) {
         self.killError = error
+    }
+
+    func setWaitError(_ error: Error?) {
+        self.waitError = error
+    }
+
+    /// Make wait() block for the given duration before returning (simulates process exit delay)
+    func setWaitDelay(_ delay: Duration?) {
+        self.waitDelay = delay
     }
 
     func setListResponse(_ response: Containerd_Services_Tasks_V1_ListTasksResponse) {
@@ -55,8 +70,13 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
         deletedContainerIDs = []
         listCallCount = 0
         listCallIndex = 0
+        waitCallCount = 0
+        waitedContainerIDs = []
         deleteError = nil
         killError = nil
+        waitError = nil
+        waitDelay = nil
+        waitResponse = .init()
         listResponse = .init()
         listResponseSequence = []
     }
@@ -74,6 +94,22 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
             throw error
         }
         return .init()
+    }
+
+    func wait(
+        _ message: Containerd_Services_Tasks_V1_WaitRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults
+    ) async throws -> Containerd_Services_Tasks_V1_WaitResponse {
+        waitCallCount += 1
+        waitedContainerIDs.append(message.containerID)
+        if let delay = waitDelay {
+            try await Task.sleep(for: delay)
+        }
+        if let error = waitError {
+            throw error
+        }
+        return waitResponse
     }
 
     func list(
@@ -405,6 +441,18 @@ actor MockTasksClient: Containerd_Services_Tasks_V1_Tasks.ClientProtocol {
                 GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_WaitResponse>
             ) async throws -> Result
     ) async throws -> Result where Result: Sendable {
-        fatalError("Not implemented in mock")
+        waitCallCount += 1
+        waitedContainerIDs.append(request.message.containerID)
+        if let delay = waitDelay {
+            try await Task.sleep(for: delay)
+        }
+        if let error = waitError {
+            throw error
+        }
+        let clientResponse = GRPCCore.ClientResponse<Containerd_Services_Tasks_V1_WaitResponse>(
+            message: waitResponse,
+            metadata: [:]
+        )
+        return try await handleResponse(clientResponse)
     }
 }

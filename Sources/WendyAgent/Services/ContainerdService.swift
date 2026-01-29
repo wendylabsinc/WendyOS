@@ -1129,8 +1129,11 @@ public struct Containerd: Sendable {
         }
     }
 
-    /// Stop a task (send SIGKILL), wait for it to exit, and then delete it.
-    /// This function will wait up to the specified timeout for the task to exit.
+    /// Stop a task (send SIGKILL), wait for it to exit via the Wait() RPC, and then delete it.
+    ///
+    /// Uses containerd's canonical lifecycle: Kill() → Wait() → Delete().
+    /// The Wait() RPC blocks until the shim reports the process has exited,
+    /// which is the proper signal that the task is ready for deletion.
     public func deleteTask(containerID: String, waitTimeout: Duration = .seconds(10)) async throws {
         let tasks = tasksClient
         let runningTasks = try await tasks.list(.init())
@@ -1149,17 +1152,17 @@ public struct Containerd: Sendable {
                 continue
             }
 
-            // If task hasn't exited yet, send SIGKILL and wait for it to exit
+            // If task hasn't exited yet, send SIGKILL and wait for exit via Wait() RPC
             if !runningTask.hasExitedAt {
                 logger.debug(
-                    "Task is still running, sending SIGKILL and waiting for exit",
+                    "Task is still running, sending SIGKILL",
                     metadata: [
                         "container-id": .stringConvertible(containerID),
                         "task-id": .stringConvertible(runningTask.id),
                     ]
                 )
 
-                // Send SIGKILL to ensure the process is being terminated
+                // Send SIGKILL to terminate the process
                 do {
                     try await stopTask(containerID: runningTask.id)
                 } catch let error as RPCError where error.code == .notFound {
@@ -1168,40 +1171,71 @@ public struct Containerd: Sendable {
                         "Task not found when sending SIGKILL, continuing",
                         metadata: ["task-id": .stringConvertible(runningTask.id)]
                     )
+                } catch {
+                    // Kill failed unexpectedly; log and continue to wait/delete anyway
+                    logger.warning(
+                        "Failed to send SIGKILL, attempting wait and delete anyway",
+                        metadata: [
+                            "task-id": .stringConvertible(runningTask.id),
+                            "error": .stringConvertible("\(error)"),
+                        ]
+                    )
                 }
 
-                // Wait for task to exit with a timeout
-                let startTime = ContinuousClock.now
-                var hasExited = false
-
-                while !hasExited && (ContinuousClock.now - startTime) < waitTimeout {
-                    try await Task.sleep(for: .milliseconds(100))
-
-                    // Check if task has exited
-                    let updatedTasks = try await tasks.list(.init())
-                    if let updatedTask = updatedTasks.tasks.first(where: {
-                        $0.containerID == runningTask.containerID || $0.id == runningTask.id
-                    }) {
-                        hasExited = updatedTask.hasExitedAt
-                    } else {
-                        // Task no longer in list, consider it exited
-                        hasExited = true
+                // Use containerd's Wait() RPC to block until the shim reports exit.
+                // This is the canonical way to wait for task exit, rather than polling List().
+                logger.debug(
+                    "Waiting for task to exit",
+                    metadata: ["task-id": .stringConvertible(runningTask.id)]
+                )
+                do {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            _ = try await tasks.wait(
+                                .with { $0.containerID = runningTask.id }
+                            )
+                        }
+                        group.addTask {
+                            try await Task.sleep(for: waitTimeout)
+                            throw RPCError(
+                                code: .deadlineExceeded,
+                                message: "Timed out waiting for task \(runningTask.id) to exit"
+                            )
+                        }
+                        // First task to complete wins; cancel the other
+                        _ = try await group.next()
+                        group.cancelAll()
                     }
-                }
-
-                if !hasExited {
+                    logger.debug(
+                        "Task exited",
+                        metadata: ["task-id": .stringConvertible(runningTask.id)]
+                    )
+                } catch let error as RPCError where error.code == .deadlineExceeded {
                     logger.warning(
                         "Task did not exit within timeout, attempting delete anyway",
                         metadata: [
-                            "container-id": .stringConvertible(containerID),
                             "task-id": .stringConvertible(runningTask.id),
                             "timeout": .stringConvertible(waitTimeout),
+                        ]
+                    )
+                } catch let error as RPCError where error.code == .notFound {
+                    logger.debug(
+                        "Task already gone during wait",
+                        metadata: ["task-id": .stringConvertible(runningTask.id)]
+                    )
+                } catch {
+                    // Wait failed unexpectedly; log and proceed to delete attempt anyway
+                    logger.warning(
+                        "Wait for task exit failed, attempting delete",
+                        metadata: [
+                            "task-id": .stringConvertible(runningTask.id),
+                            "error": .stringConvertible("\(error)"),
                         ]
                     )
                 }
             }
 
-            // Now delete the task
+            // Delete the task. Wait() has confirmed the process exited.
             logger.debug(
                 "Deleting task",
                 metadata: [
@@ -1212,28 +1246,17 @@ public struct Containerd: Sendable {
 
             do {
                 _ = try await tasks.delete(
-                    .with {
-                        $0.containerID = runningTask.id
-                    }
+                    .with { $0.containerID = runningTask.id }
                 )
                 logger.debug(
                     "Task deleted successfully",
-                    metadata: [
-                        "container-id": .stringConvertible(containerID),
-                        "task-id": .stringConvertible(runningTask.id),
-                    ]
+                    metadata: ["task-id": .stringConvertible(runningTask.id)]
                 )
-            } catch let error as RPCError {
-                logger.error(
-                    "Failed to delete task",
-                    metadata: [
-                        "container-id": .stringConvertible(containerID),
-                        "task-id": .stringConvertible(runningTask.id),
-                        "error": .stringConvertible(error.message),
-                        "error-code": .stringConvertible(String(describing: error.code)),
-                    ]
+            } catch let error as RPCError where error.code == .notFound {
+                logger.debug(
+                    "Task already deleted",
+                    metadata: ["task-id": .stringConvertible(runningTask.id)]
                 )
-                throw error
             }
         }
     }
