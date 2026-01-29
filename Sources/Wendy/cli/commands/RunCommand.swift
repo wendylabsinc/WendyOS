@@ -17,50 +17,7 @@ import WendyAgentGRPC
     import AppKit
 #endif
 
-/// Result of bandwidth measurement between CLI and device
-struct BandwidthMeasurement: Sendable {
-    /// Measured bandwidth in MB/s (megabytes per second)
-    let bandwidthMBps: Double
-    /// Round-trip latency in milliseconds
-    let latencyMs: Double
-    /// Recommended compression mode based on measurement
-    let recommendedCompression: ImageCompressionMode
-
-    /// Bandwidth threshold in MB/s above which we skip compression
-    /// USB is typically 160-190 MB/s, zstd decompresses at ~300-500 MB/s on Jetson
-    /// If upload is faster than decompression, uncompressed wins
-    static let uncompressedThresholdMBps: Double = 150.0
-
-    /// Bandwidth threshold below which we definitely want compression
-    /// WiFi/slow LAN typically < 50 MB/s
-    static let compressedThresholdMBps: Double = 50.0
-}
-
 struct RunCommand: AsyncParsableCommand, Sendable {
-    enum Error: Swift.Error, CustomStringConvertible {
-        case failedToUploadLayers(Int)
-        case noExecutableTarget
-        case invalidExecutableTarget(String)
-        case multipleExecutableTargets([String])
-        case noManifestFound
-
-        var description: String {
-            switch self {
-            case .failedToUploadLayers:
-                return "Failed to upload"
-            case .noExecutableTarget:
-                return "No executable target found in package"
-            case .invalidExecutableTarget(let name):
-                return "No executable target named '\(name)' found in package"
-            case .multipleExecutableTargets(let names):
-                return
-                    "multiple executable targets available, but none specified: \(names.joined(separator: ", "))"
-            case .noManifestFound:
-                return "No manifest found in Docker image"
-            }
-        }
-    }
-
     static let configuration = CommandConfiguration(
         commandName: "run",
         abstract: "Run Wendy projects."
@@ -203,7 +160,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     }
 
     func runDockerfileApp() async throws {
-        try await checkDockerIsRunning()
+        try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
 
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
@@ -222,34 +179,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 buildPhaseProperties["docker_context"] = dockerContext
             }
 
-            // Measure bandwidth to determine optimal compression
-            let compressionMode: ImageCompressionMode = await {
-                do {
-                    let measurement = try await Noora().progressStep(
-                        message: "Measuring connection speed",
-                        successMessage: "Connection speed measured",
-                        errorMessage: "Failed to measure bandwidth",
-                        showSpinner: true
-                    ) { _ in
-                        try await measureBandwidth(client: client)
-                    }
-                    let speedStr = String(format: "%.0f", measurement.bandwidthMBps)
-                    let modeStr =
-                        measurement.recommendedCompression == .uncompressed
-                        ? "uncompressed" : "zstd"
-                    cliOutput.info("Connection: \(speedStr) MB/s (using \(modeStr) compression)")
-                    return measurement.recommendedCompression
-                } catch {
-                    // If bandwidth measurement fails, fall back to zstd
-                    cliOutput.info("Using zstd compression (default)")
-                    return ImageCompressionMode.zstd
-                }
-            }()
-
             // Create buildx builder with insecure registry support
-            try await executePhase(
+            try await AppBuildHelpers.executePhase(
                 phase: "builder_setup",
                 runtime: "dockerfile",
+                commandName: "wendy run",
                 additionalProperties: buildPhaseProperties
             ) {
                 try await Noora().progressStep(
@@ -266,10 +200,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             }
 
             // Build and push in a single operation for better performance
-            let compression = compressionMode  // Capture as let for Sendable
-            try await executePhase(
+            try await AppBuildHelpers.executePhase(
                 phase: "build_upload",
                 runtime: "dockerfile",
+                commandName: "wendy run",
                 additionalProperties: buildPhaseProperties
             ) {
                 try await cliOutput.withStreamingOutput(
@@ -280,126 +214,42 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         name: name,
                         registryHostname: endpoint.host,
                         registryPort: 5000,
-                        compression: compression,
                         onOutput: emit
                     )
                 }
                 cliOutput.success("Container built and uploaded successfully!")
             }
 
-            try await executePhase(phase: "prepare_container", runtime: "dockerfile") {
+            try await AppBuildHelpers.executePhase(
+                phase: "prepare_container",
+                runtime: "dockerfile",
+                commandName: "wendy run"
+            ) {
                 try await Noora().progressStep(
                     message: "Preparing app",
                     successMessage: "App ready to start",
                     errorMessage: "Failed to prepare app",
                     showSpinner: true
                 ) { _ in
-                    try await createContainerdContainer(
+                    try await AppBuildHelpers.createContainerdContainer(
                         appName: name,
-                        client: client
+                        client: client,
+                        restartPolicy: buildRestartPolicy()
                     )
                 }
             }
 
-            try await executePhase(phase: "start_container", runtime: "dockerfile") {
+            try await AppBuildHelpers.executePhase(
+                phase: "start_container",
+                runtime: "dockerfile",
+                commandName: "wendy run"
+            ) {
                 try await startContainerdContainer(
                     imageName: name,
                     client: client
                 )
             }
         }
-    }
-
-    func createContainerdContainer(
-        appName: String,
-        client: GRPCClient<HTTP2ClientTransport.Posix>
-    ) async throws {
-        let logger = Logger(label: "sh.wendy.cli.run.containerd.create")
-        let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
-            wrapping: client
-        )
-
-        let appConfigData = try await readAppConfigData(logger: logger)
-        _ = try await agentContainers.createContainer(
-            request: .init(
-                message: .with {
-                    // The image is pushed to the device's local registry as just "appName"
-                    // The host.docker.internal:port prefix is only for routing during push
-                    $0.imageName = "\(appName):latest"
-                    $0.appName = appName
-                    $0.appConfig = appConfigData
-                    $0.restartPolicy = buildRestartPolicy()
-                }
-            )
-        )
-    }
-
-    /// Measure bandwidth to the device by sending a test payload
-    /// Returns bandwidth in MB/s and recommended compression mode
-    func measureBandwidth(
-        client: GRPCClient<HTTP2ClientTransport.Posix>
-    ) async throws -> BandwidthMeasurement {
-        let logger = Logger(label: "sh.wendy.cli.run.bandwidth")
-        let agentService = Wendy_Agent_Services_V1_WendyAgentService.Client(
-            wrapping: client
-        )
-
-        // Use 1MB payload for measurement - large enough to get meaningful bandwidth
-        // but small enough to complete quickly
-        let payloadSize = 1024 * 1024  // 1 MB
-        let payload = Data(repeating: 0xAB, count: payloadSize)
-
-        // Warm up with a small request first (connection establishment, TLS handshake)
-        let warmupPayload = Data(repeating: 0xAB, count: 1024)
-        _ = try? await agentService.measureBandwidth(
-            request: .init(message: .with { $0.payload = warmupPayload })
-        )
-
-        // Measure round-trip time for the actual payload
-        let startTime = ContinuousClock.now
-        _ = try await agentService.measureBandwidth(
-            request: .init(message: .with { $0.payload = payload })
-        )
-        let elapsed = ContinuousClock.now - startTime
-        let elapsedSeconds =
-            Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds)
-            / 1_000_000_000_000_000_000
-
-        // Calculate bandwidth (payload sent + echoed back = 2x payload)
-        let totalBytes = Double(payloadSize * 2)
-        let bandwidthBps = totalBytes / elapsedSeconds
-        let bandwidthMBps = bandwidthBps / (1024 * 1024)
-        let latencyMs = elapsedSeconds * 1000
-
-        logger.info(
-            "Bandwidth measurement",
-            metadata: [
-                "bandwidth_mbps": .stringConvertible(String(format: "%.1f", bandwidthMBps)),
-                "latency_ms": .stringConvertible(String(format: "%.1f", latencyMs)),
-            ]
-        )
-
-        // Decide on compression mode based on bandwidth
-        let recommendedCompression: ImageCompressionMode
-        if bandwidthMBps >= BandwidthMeasurement.uncompressedThresholdMBps {
-            // Fast connection (USB, fast LAN) - skip compression
-            recommendedCompression = .uncompressed
-            logger.info("Fast connection detected, using uncompressed transfer")
-        } else if bandwidthMBps <= BandwidthMeasurement.compressedThresholdMBps {
-            // Slow connection (WiFi, slow LAN) - use zstd for best compression
-            recommendedCompression = .zstd
-            logger.info("Slow connection detected, using zstd compression")
-        } else {
-            // Medium speed - use zstd as it's fast to decompress
-            recommendedCompression = .zstd
-            logger.info("Medium speed connection, using zstd compression")
-        }
-
-        return BandwidthMeasurement(
-            bandwidthMBps: bandwidthMBps,
-            latencyMs: latencyMs,
-            recommendedCompression: recommendedCompression
-        )
     }
 
     /// Gracefully stop a container with timeout
@@ -508,191 +358,68 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         }
     }
 
-    func checkDockerIsRunning() async throws {
-        let docker = DockerCLI()
-
-        while true {
-            do {
-                _ = try await docker.getServerVersion()
-                return
-            } catch {
-                // In JSON mode, just fail with an error - cannot prompt to start Docker
-                if JSONMode.isEnabled {
-                    JSONErrorResponse(
-                        error: "docker_not_running",
-                        reason: "Docker is not running",
-                        suggestion:
-                            "Please start Docker Desktop or OrbStack before running this command"
-                    ).print()
-                    throw ExitCode.failure
-                }
-
-                cliOutput.warning("Docker is not running")
-
-                #if os(macOS)
-                    // Check if Docker.app, OrbStack.app is installed
-                    if let url = NSWorkspace.shared.urlForApplication(
-                        withBundleIdentifier: "com.docker.docker"
-                    ) {
-                        Noora().info("Docker Desktop is installed")
-
-                        guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open Docker Desktop?"
-                            )
-                        else {
-                            return
-                        }
-
-                        if NSWorkspace.shared.open(url) {
-                            Noora().info("Opening Docker.app")
-                            while true {
-                                do {
-                                    _ = try await docker.getServerVersion()
-                                    return
-                                } catch {
-                                    try await Task.sleep(for: .milliseconds(100))
-                                }
-                            }
-                        } else {
-                            Noora().info(
-                                "Failed to open Docker Desktop automatically, please open it manually"
-                            )
-                        }
-                        return
-                    } else if let url = NSWorkspace.shared.urlForApplication(
-                        withBundleIdentifier: "com.orbstack.orbstack"
-                    ) {
-                        Noora().info("OrbStack.app is installed")
-
-                        guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open OrbStack?"
-                            )
-                        else {
-                            return
-                        }
-
-                        if NSWorkspace.shared.open(url) {
-                            Noora().info("Opening OrbStack")
-                            while true {
-                                do {
-                                    _ = try await docker.getServerVersion()
-                                    return
-                                } catch {
-                                    try await Task.sleep(for: .milliseconds(100))
-                                }
-                            }
-                        } else {
-                            Noora().info(
-                                "Failed to open OrbStack automatically, please open it manually"
-                            )
-                        }
-                        return
-                    } else {
-                        cliOutput.warning("Docker.app or OrbStack.app is not installed")
-                        guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open the installation guide?"
-                            )
-                        else {
-                            return
-                        }
-
-                        if NSWorkspace.shared.open(
-                            URL(string: "https://docs.docker.com/get-docker/")!
-                        ) {
-                            Noora().info("Opening Docker documentation")
-                        } else {
-                            Noora().error("Failed to open Docker documentation")
-                        }
-                    }
-                #endif
-            }
-        }
-    }
-
-    func checkSwiftRequirements() async throws {
-        let swiftPM = SwiftPM()
-
-        // Check with spinner
-        let (installedSDKs, installedSwiftVersions) = try await cliOutput.withProgress(
-            message: "Checking Swift requirements",
-            successMessage: "Swift environment ready",
-            errorMessage: "Failed to check Swift requirements"
-        ) {
-            async let sdks = try await swiftPM.listSDKs()
-            async let versions = try await swiftPM.listSwiftVersions()
-            return try await (sdks, versions)
-        }
-
-        if !installedSDKs.contains(swiftSDK) {
-            let installSDK: Bool
-
-            if shouldAutoAccept {
-                installSDK = true
-            } else {
-                installSDK = Noora().yesOrNoChoicePrompt(
-                    question: "Do you want to install/update the WendyOS Swift SDK?"
-                )
-            }
-
-            if installSDK {
-                try await swiftPM.installSDK(
-                    from: sdkDownloadURL,
-                    checksum: sdkChecksum
-                )
-                cliOutput.success("WendyOS SDK ready to use")
-            }
-        }
-
-        if !installedSwiftVersions.contains(where: { $0.version.name == swiftVersion }) {
-            let installSwift: Bool
-
-            if shouldAutoAccept {
-                installSwift = true
-            } else {
-                installSwift = Noora().yesOrNoChoicePrompt(
-                    title: "Swift \(swiftVersion) version is not installed yet",
-                    question: "Do you want to install Swift \(swiftVersion)?",
-                    description: """
-                        WendyOS development is tied to a specific Swift toolchain.
-                        We update this version from time to time to ensure compatibility with the latest features.
-                        """
-                )
-            }
-
-            if installSwift {
-                try await cliOutput.withStreamingOutput(
-                    title: "Installing Swift \(swiftVersion)",
-                    maxLines: 15
-                ) { emit in
-                    try await swiftPM.installSDK(
-                        from: sdkDownloadURL,
-                        checksum: sdkChecksum
-                    )
-                }
-                cliOutput.success("Swift \(swiftVersion) Installed")
-            }
-        }
-    }
-
     func runSwiftApp() async throws {
-        try await checkSwiftRequirements()
+        try await AppBuildHelpers.checkSwiftRequirements(
+            swiftVersion: swiftVersion,
+            swiftSDK: swiftSDK,
+            sdkDownloadURL: sdkDownloadURL,
+            sdkChecksum: sdkChecksum,
+            shouldAutoAccept: shouldAutoAccept
+        )
 
         let swiftPM = SwiftPM()
-        let package = try await cliOutput.withProgress(
-            message: "Analyzing package structure",
-            successMessage: "Package structure analyzed",
-            errorMessage: "Failed to analyze package"
-        ) {
-            try await swiftPM.showDependencies()
+        let projectPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cache = PackageCache(projectPath: projectPath)
+
+        // Try to use cached data for executables and plugin status
+        let allExecutables: [SwiftPM.Executable]
+        let packageIdentity: String
+        var hasContainerPlugin: Bool
+
+        if let cached = cache.getValidCache() {
+            // Cache hit - use cached data
+            allExecutables = cached.executables
+            packageIdentity = cached.packageIdentity
+            hasContainerPlugin = cached.hasContainerPlugin
+        } else {
+            // Cache miss - fetch fresh data
+            let package = try await cliOutput.withProgress(
+                message: "Analyzing package structure",
+                successMessage: "Package structure analyzed",
+                errorMessage: "Failed to analyze package"
+            ) {
+                try await swiftPM.showDependencies()
+            }
+
+            let executables = try await cliOutput.withProgress(
+                message: "Finding executables",
+                successMessage: "Found executables",
+                errorMessage: "Failed to find executables"
+            ) {
+                try await swiftPM.showExecutables()
+            }
+
+            allExecutables = executables
+            packageIdentity = package.identity
+            hasContainerPlugin = package.dependencies.contains {
+                $0.url.hasSuffix("swift-container-plugin")
+                    || $0.url.hasSuffix("swift-container-plugin.git")
+            }
+
+            // Write to cache
+            if let hash = try? cache.computePackageSwiftHash() {
+                try? cache.write(
+                    PackageCache.CachedPackageInfo(
+                        packageSwiftHash: hash,
+                        packageIdentity: packageIdentity,
+                        executables: allExecutables,
+                        hasContainerPlugin: hasContainerPlugin
+                    )
+                )
+            }
         }
 
-        if !package.dependencies.contains(where: {
-            $0.url.hasSuffix("swift-container-plugin")
-                || $0.url.hasSuffix("swift-container-plugin.git")
-        }) {
+        if !hasContainerPlugin {
             Noora().info("Container plugin is not installed. Do you want to install it?")
 
             guard
@@ -709,25 +436,21 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 url: "https://github.com/apple/swift-container-plugin",
                 from: "1.0.0"
             )
+
+            // Invalidate cache since Package.swift was modified
+            cache.invalidate()
+            hasContainerPlugin = true
         }
 
-        // Get all executable targets
-        let allExecutables = try await cliOutput.withProgress(
-            message: "Finding executables",
-            successMessage: "Found executables",
-            errorMessage: "Failed to find executables"
-        ) {
-            try await swiftPM.showExecutables()
-        }
         let executableTargets = allExecutables.filter {
-            $0.package == package.identity || $0.package == nil
+            $0.package == packageIdentity || $0.package == nil
         }
 
         // Use specified executable or handle multiple executable targets
         let executableTarget: SwiftPM.Executable
         if let executableName = executable {
             guard let target = executableTargets.first(where: { $0.name == executableName }) else {
-                throw Error.invalidExecutableTarget(executableName)
+                throw AppBuildHelpers.Error.invalidExecutableTarget(executableName)
             }
             executableTarget = target
         } else if executableTargets.isEmpty {
@@ -764,7 +487,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             agentConnectionOptions,
             title: "Which device do you want to run this app on?"
         ) { client, endpoint in
-            try await executePhase(phase: "build_swift_app", runtime: "swift") {
+            try await AppBuildHelpers.executePhase(
+                phase: "build_swift_app",
+                runtime: "swift",
+                commandName: "wendy run"
+            ) {
                 var resources: [(source: String, destination: String)] = []
                 var entrypoint: String?
                 let debugArguments = [
@@ -827,84 +554,33 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 cliOutput.success("Swift app built successfully!")
             }
 
-            try await executePhase(phase: "create_container", runtime: "swift") {
+            try await AppBuildHelpers.executePhase(
+                phase: "create_container",
+                runtime: "swift",
+                commandName: "wendy run"
+            ) {
                 try await cliOutput.withProgress(
                     message: "Creating container",
                     successMessage: "Container created",
                     errorMessage: "Failed to create container"
                 ) {
-                    try await createContainerdContainer(
+                    try await AppBuildHelpers.createContainerdContainer(
                         appName: appName,
-                        client: client
+                        client: client,
+                        restartPolicy: buildRestartPolicy()
                     )
                 }
             }
 
             cliOutput.info("Starting container")
-            try await executePhase(phase: "start_container", runtime: "swift") {
+            try await AppBuildHelpers.executePhase(
+                phase: "start_container",
+                runtime: "swift",
+                commandName: "wendy run"
+            ) {
                 try await startContainerdContainer(imageName: appName, client: client)
             }
         }
     }
 
-    private func readAppConfigData(logger: Logger) async throws -> Data {
-        do {
-            let appConfigData = try Data(contentsOf: URL(fileURLWithPath: "./wendy.json"))
-            // Validate data
-            _ = try JSONDecoder().decode(AppConfig.self, from: appConfigData)
-            return appConfigData
-        } catch {
-            logger.debug("Failed to decode app config", metadata: ["error": .string("\(error)")])
-            Noora().info("No valid wendy.json was found. Using default settings.")
-            return Data()
-        }
-    }
-
-    // MARK: - Phase Analytics
-
-    /// Track a phase failure for analytics
-    private func trackPhaseFailure(
-        phase: String,
-        runtime: String,
-        error: Swift.Error,
-        additionalProperties: [String: String] = [:]
-    ) async {
-        guard let analytics = AnalyticsService.current else { return }
-        let sanitizedError = ErrorSanitizer.sanitize(error)
-        var properties: [String: String] = [
-            "phase": phase,
-            "runtime": runtime,
-            "command_name": "wendy run",
-            "error_type": sanitizedError.type,
-            "error_name": sanitizedError.name,
-            "error_domain": sanitizedError.domain,
-        ]
-        for (key, value) in additionalProperties {
-            properties[key] = value
-        }
-        await analytics.trackEvent(
-            name: "run_phase_failed",
-            properties: properties
-        )
-    }
-
-    /// Execute a phase with failure tracking
-    private func executePhase<T: Sendable>(
-        phase: String,
-        runtime: String,
-        additionalProperties: [String: String] = [:],
-        operation: @Sendable () async throws -> T
-    ) async throws -> T {
-        do {
-            return try await operation()
-        } catch {
-            await trackPhaseFailure(
-                phase: phase,
-                runtime: runtime,
-                error: error,
-                additionalProperties: additionalProperties
-            )
-            throw error
-        }
-    }
 }
