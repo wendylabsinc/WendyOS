@@ -45,8 +45,8 @@ struct ContainerdDeleteTaskTests {
         #expect(deletedIDs == ["test-task"], "Should delete the correct task")
     }
 
-    @Test("Already exited task - skips SIGKILL, deletes immediately")
-    func exitedTask_skipsKillDeletesImmediately() async throws {
+    @Test("Already exited task - skips SIGKILL, still calls Wait(), deletes")
+    func exitedTask_skipsKillStillWaitsDeletes() async throws {
         // Arrange
         let tasksClient = MockTasksClient()
 
@@ -65,9 +65,11 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let killCount = await tasksClient.killCallCount
+        let waitCount = await tasksClient.waitCallCount
         let deleteCount = await tasksClient.deleteCallCount
 
         #expect(killCount == 0, "Should NOT send SIGKILL for already exited task")
+        #expect(waitCount == 1, "Should still call Wait() even for exited task")
         #expect(deleteCount == 1, "Should delete the task")
     }
 
@@ -304,8 +306,11 @@ struct ContainerdDeleteTaskTests {
         let deletedIDs = await tasksClient.deletedContainerIDs
         let killCount = await tasksClient.killCallCount
 
+        let waitCount = await tasksClient.waitCallCount
+
         #expect(deletedIDs == ["task-2"], "Should only delete matching task")
         #expect(killCount == 0, "Should not kill already-exited tasks")
+        #expect(waitCount == 1, "Should call Wait() even for exited task")
     }
 
     @Test("Matches by task ID when containerID doesn't match")
@@ -329,7 +334,10 @@ struct ContainerdDeleteTaskTests {
 
         // Assert
         let deletedIDs = await tasksClient.deletedContainerIDs
+        let waitCount = await tasksClient.waitCallCount
+
         #expect(deletedIDs == ["my-app"], "Should match by task ID")
+        #expect(waitCount == 1, "Should call Wait() even for exited task")
     }
 
     // MARK: - Helper Methods
