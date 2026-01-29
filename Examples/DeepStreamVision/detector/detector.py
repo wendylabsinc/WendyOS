@@ -606,6 +606,13 @@ class MetricsServer:
         self.port = port
         self.vlm_integration = vlm_integration
 
+        @self.app.after_request
+        def add_cors_headers(response):
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            return response
+
         @self.app.route('/metrics')
         def metrics():
             return Response(generate_latest(REGISTRY), mimetype='text/plain')

@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
+
+
 # Prometheus metrics
 gpu_utilization = Gauge('jetson_gpu_utilization_percent', 'GPU utilization percentage')
 gpu_frequency = Gauge('jetson_gpu_frequency_mhz', 'GPU frequency in MHz')
