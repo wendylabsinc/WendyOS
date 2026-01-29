@@ -13,14 +13,15 @@ jobs:
       - name: Post to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_BODY: ${{ github.event.release.body }}
         run: |
           TAG="${{ github.event.release.tag_name }}"
           NAME="${{ github.event.release.name }}"
           URL="${{ github.event.release.html_url }}"
           REPO="${{ github.repository }}"
 
-          # Get release body and truncate to 800 chars
-          BODY='${{ github.event.release.body }}'
+          # Get release body, strip CRLF line endings, and truncate to 800 chars
+          BODY=$(echo "$RELEASE_BODY" | tr -d '\r')
           SHORT_BODY=$(echo "$BODY" | head -c 800)
 
           # Installation instructions (using heredoc with <<- to strip leading tabs)
