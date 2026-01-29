@@ -106,10 +106,10 @@ struct TelemetryLogHandler: LogHandler {
         serviceNameAttr.value = .with { $0.stringValue = "wendy-agent" }
         resourceLogs.resource.attributes.append(serviceNameAttr)
 
-        // Add logger label as wendy.app.name for filtering
+        // Add wendy.app.name for filtering (same as service.name for agent logs)
         var appNameAttr = Opentelemetry_Proto_Common_V1_KeyValue()
         appNameAttr.key = "wendy.app.name"
-        appNameAttr.value = .with { $0.stringValue = label }
+        appNameAttr.value = .with { $0.stringValue = "wendy-agent" }
         resourceLogs.resource.attributes.append(appNameAttr)
 
         return Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest.with {
