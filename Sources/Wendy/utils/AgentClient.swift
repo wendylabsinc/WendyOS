@@ -4,6 +4,7 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import Noora
+import Synchronization
 import WendyAgentGRPC
 import WendyShared
 
@@ -35,12 +36,18 @@ func withAgentClient<R: Sendable>(
             port: port,
             defaultDevice: defaultDevice
         )
+        let connectionSucceeded = Mutex(false)
         do {
             return try await withAgentGRPCClient(endpoint, title: title) { client in
-                try await body(.grpc(client))
+                connectionSucceeded.withLock { $0 = true }
+                return try await body(.grpc(client))
             }
-        } catch  where defaultDevice {
-            // If default device failed, try again without default
+        } catch {
+            // Only retry with device selection if we never successfully connected
+            guard defaultDevice && !connectionSucceeded.withLock({ $0 }) else {
+                throw error
+            }
+            // If default device failed to connect, try again without default
             let newDevice = try await connectionOptions.read(
                 title: title,
                 readDefault: false,
