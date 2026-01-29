@@ -135,16 +135,14 @@ COPY model_b2_gpu0_fp16.engine /app/
 # Copy application files
 COPY detector.py /app/
 COPY vlm_client.py /app/
-COPY vlm_integration_example.py /app/
 COPY nvinfer_config.txt /app/
 COPY tracker_config.yml /app/
 COPY streams.json /app/
 COPY labels.txt /app/
-COPY test_egl.py /app/
 COPY entrypoint.sh /app/
 
 # Make scripts executable
-RUN chmod +x /app/detector.py /app/test_egl.py /app/entrypoint.sh
+RUN chmod +x /app/detector.py /app/entrypoint.sh
 
 # Set environment variables
 # Force rebuild: 2026-01-16-v2
