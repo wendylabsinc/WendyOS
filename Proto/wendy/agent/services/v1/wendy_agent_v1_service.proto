@@ -12,25 +12,21 @@ service WendyAgentService {
     rpc UpdateAgent(stream UpdateAgentRequest) returns (stream UpdateAgentResponse);
 
     rpc GetAgentVersion(GetAgentVersionRequest) returns (GetAgentVersionResponse);
-
+    
     // List available WiFi networks
     rpc ListWiFiNetworks(ListWiFiNetworksRequest) returns (ListWiFiNetworksResponse);
-
+    
     // Connect to a specific WiFi network
     rpc ConnectToWiFi(ConnectToWiFiRequest) returns (ConnectToWiFiResponse);
-
+    
     // Get the current WiFi connection status
     rpc GetWiFiStatus(GetWiFiStatusRequest) returns (GetWiFiStatusResponse);
-
+    
     // Disconnect from the current WiFi network
     rpc DisconnectWiFi(DisconnectWiFiRequest) returns (DisconnectWiFiResponse);
-
+    
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
-
-    // Measure bandwidth between CLI and agent
-    // Used to determine optimal compression mode for container uploads
-    rpc MeasureBandwidth(MeasureBandwidthRequest) returns (MeasureBandwidthResponse);
 }
 
 message RunContainerRequest {
@@ -224,32 +220,19 @@ message ListHardwareCapabilitiesRequest {
 message ListHardwareCapabilitiesResponse {
     // List of available hardware capabilities
     repeated HardwareCapability capabilities = 1;
-
+    
     // Information about a hardware capability
     message HardwareCapability {
         // Category of hardware (e.g., "gpu", "usb", "i2c", "gpio", "camera")
         string category = 1;
-
+        
         // Device path (e.g., "/dev/video0", "/dev/i2c-1")
         string device_path = 2;
-
+        
         // Human-readable description
         string description = 3;
-
+        
         // Additional properties as key-value pairs
         map<string, string> properties = 4;
     }
-}
-
-// Request message for measuring bandwidth
-// CLI sends a payload, agent echoes it back, CLI measures round-trip time
-message MeasureBandwidthRequest {
-    // Payload data for bandwidth measurement (sent to agent and echoed back)
-    bytes payload = 1;
-}
-
-// Response message for bandwidth measurement
-message MeasureBandwidthResponse {
-    // Echoed payload data (same as request payload)
-    bytes payload = 1;
 }

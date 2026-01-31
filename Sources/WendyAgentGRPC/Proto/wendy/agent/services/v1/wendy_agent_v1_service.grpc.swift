@@ -116,18 +116,6 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
                 method: "ListHardwareCapabilities"
             )
         }
-        /// Namespace for "MeasureBandwidth" metadata.
-        public enum MeasureBandwidth {
-            /// Request type for "MeasureBandwidth".
-            public typealias Input = Wendy_Agent_Services_V1_MeasureBandwidthRequest
-            /// Response type for "MeasureBandwidth".
-            public typealias Output = Wendy_Agent_Services_V1_MeasureBandwidthResponse
-            /// Descriptor for "MeasureBandwidth".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "MeasureBandwidth"
-            )
-        }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyAgentService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             RunContainer.descriptor,
@@ -137,8 +125,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             ConnectToWiFi.descriptor,
             GetWiFiStatus.descriptor,
             DisconnectWiFi.descriptor,
-            ListHardwareCapabilities.descriptor,
-            MeasureBandwidth.descriptor
+            ListHardwareCapabilities.descriptor
         ]
     }
 }
@@ -300,25 +287,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>
-
-        /// Handle the "MeasureBandwidth" method.
-        ///
-        /// > Source IDL Documentation:
-        /// >
-        /// > Measure bandwidth between CLI and agent
-        /// > Used to determine optimal compression mode for container uploads
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendy_Agent_Services_V1_MeasureBandwidthRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_MeasureBandwidthResponse` messages.
-        func measureBandwidth(
-            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>
     }
 
     /// Service protocol for the "wendy.agent.services.v1.WendyAgentService" service.
@@ -465,25 +433,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>
-
-        /// Handle the "MeasureBandwidth" method.
-        ///
-        /// > Source IDL Documentation:
-        /// >
-        /// > Measure bandwidth between CLI and agent
-        /// > Used to determine optimal compression mode for container uploads
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendy_Agent_Services_V1_MeasureBandwidthRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_MeasureBandwidthResponse` message.
-        func measureBandwidth(
-            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v1.WendyAgentService" service.
@@ -630,25 +579,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse
-
-        /// Handle the "MeasureBandwidth" method.
-        ///
-        /// > Source IDL Documentation:
-        /// >
-        /// > Measure bandwidth between CLI and agent
-        /// > Used to determine optimal compression mode for container uploads
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendy_Agent_Services_V1_MeasureBandwidthRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendy_Agent_Services_V1_MeasureBandwidthResponse` to respond with.
-        func measureBandwidth(
-            request: Wendy_Agent_Services_V1_MeasureBandwidthRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendy_Agent_Services_V1_MeasureBandwidthResponse
     }
 }
 
@@ -744,17 +674,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService.StreamingServiceProtocol {
                 )
             }
         )
-        router.registerHandler(
-            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.MeasureBandwidth.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_MeasureBandwidthRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_MeasureBandwidthResponse>(),
-            handler: { request, context in
-                try await self.measureBandwidth(
-                    request: request,
-                    context: context
-                )
-            }
-        )
     }
 }
 
@@ -821,17 +740,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse> {
         let response = try await self.listHardwareCapabilities(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func measureBandwidth(
-        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse> {
-        let response = try await self.measureBandwidth(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -947,19 +855,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>(
             message: try await self.listHardwareCapabilities(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func measureBandwidth(
-        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse> {
-        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>(
-            message: try await self.measureBandwidth(
                 request: request.message,
                 context: context
             ),
@@ -1152,30 +1047,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "MeasureBandwidth" method.
-        ///
-        /// > Source IDL Documentation:
-        /// >
-        /// > Measure bandwidth between CLI and agent
-        /// > Used to determine optimal compression mode for container uploads
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendy_Agent_Services_V1_MeasureBandwidthRequest` message.
-        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_MeasureBandwidthRequest` messages.
-        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_MeasureBandwidthResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func measureBandwidth<Result>(
-            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_MeasureBandwidthResponse>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -1455,41 +1326,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
                 onResponse: handleResponse
             )
         }
-
-        /// Call the "MeasureBandwidth" method.
-        ///
-        /// > Source IDL Documentation:
-        /// >
-        /// > Measure bandwidth between CLI and agent
-        /// > Used to determine optimal compression mode for container uploads
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendy_Agent_Services_V1_MeasureBandwidthRequest` message.
-        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_MeasureBandwidthRequest` messages.
-        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_MeasureBandwidthResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func measureBandwidth<Result>(
-            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_MeasureBandwidthResponse>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.MeasureBandwidth.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
     }
 }
 
@@ -1712,36 +1548,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "MeasureBandwidth" method.
-    ///
-    /// > Source IDL Documentation:
-    /// >
-    /// > Measure bandwidth between CLI and agent
-    /// > Used to determine optimal compression mode for container uploads
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendy_Agent_Services_V1_MeasureBandwidthRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func measureBandwidth<Result>(
-        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.measureBandwidth(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_MeasureBandwidthRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_MeasureBandwidthResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -2000,40 +1806,6 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             metadata: metadata
         )
         return try await self.listHardwareCapabilities(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "MeasureBandwidth" method.
-    ///
-    /// > Source IDL Documentation:
-    /// >
-    /// > Measure bandwidth between CLI and agent
-    /// > Used to determine optimal compression mode for container uploads
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func measureBandwidth<Result>(
-        _ message: Wendy_Agent_Services_V1_MeasureBandwidthRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_MeasureBandwidthResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_MeasureBandwidthRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.measureBandwidth(
             request: request,
             options: options,
             onResponse: handleResponse
