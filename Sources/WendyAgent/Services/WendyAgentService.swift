@@ -254,8 +254,10 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             // Temp file has been moved, no longer need to clean up temp directory
             shouldCleanupTemp = false
 
-            // Now atomically replace the current binary with the new one
-            // This operation is atomic - old file disappears and new file appears simultaneously
+            // Remove the current binary and move the new one in place
+            // We already have a backup, so this is safe. NIOFileSystem's moveItem
+            // doesn't support overwriting, so we must remove first.
+            try await filesystem.removeItem(at: currentBinary)
             try await filesystem.moveItem(at: tempNewBinary, to: currentBinary)
 
             // Ensure the new binary has executable permissions
