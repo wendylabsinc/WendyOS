@@ -19,6 +19,22 @@ public struct SwiftPM: Sendable {
         path.split(separator: " ").first.map(String.init) ?? path
     }
 
+    /// Check if swiftly is available on the system.
+    /// Returns true if swiftly is installed and accessible.
+    public static func isSwiftlyAvailable() async -> Bool {
+        do {
+            let result = try await Subprocess.run(
+                .name("swiftly"),
+                arguments: ["--version"],
+                output: .discarded,
+                error: .discarded
+            )
+            return result.terminationStatus.isSuccess
+        } catch {
+            return false
+        }
+    }
+
     func arguments(_ arguments: [String]) -> Subprocess.Arguments {
         // Use the executable path instead of just the command name
         let runArgs = path.split(separator: " ").dropFirst().map(String.init)

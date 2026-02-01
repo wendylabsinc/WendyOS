@@ -231,6 +231,36 @@ enum AppBuildHelpers {
         sdkChecksum: String,
         shouldAutoAccept: Bool
     ) async throws {
+        // First, check if swiftly is available
+        let swiftlyAvailable = await SwiftPM.isSwiftlyAvailable()
+        guard swiftlyAvailable else {
+            if JSONMode.isEnabled {
+                JSONErrorResponse(
+                    error: "swiftly_not_installed",
+                    reason: "Swiftly is not installed on your system",
+                    suggestion:
+                        "Install swiftly by running: curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash"
+                ).print()
+            } else {
+                Noora().error(
+                    """
+                    Swiftly is not installed on your system.
+
+                    Swiftly is required to manage Swift toolchains for WendyOS development.
+
+                    To install Swiftly, run:
+                        curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash
+
+                    After installation, restart your terminal or run:
+                        source ~/.local/share/swiftly/env.sh
+
+                    For more information, visit: https://github.com/swiftlang/swiftly
+                    """
+                )
+            }
+            throw ExitCode.failure
+        }
+
         let swiftPM = SwiftPM()
 
         // Check with spinner
