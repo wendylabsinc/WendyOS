@@ -284,6 +284,19 @@ extension OCI {
                     )
                 }
             case .audio:
+                logger.info("Audio entitlement detected - adding audio group")
+                // Add audio group (gid 29) for access to ALSA devices
+                // Audio devices on Linux are owned by group 'audio' (gid 29)
+                if !self.process.user.additionalGids.contains(29) {
+                    self.process.user.additionalGids.append(29)
+                    logger.debug(
+                        "Added audio group to additionalGids",
+                        metadata: [
+                            "additionalGids": .stringConvertible(self.process.user.additionalGids)
+                        ]
+                    )
+                }
+
                 // Bind mount the entire /dev/snd directory
                 self.mounts.append(
                     .init(
