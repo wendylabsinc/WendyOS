@@ -498,7 +498,7 @@ struct OSCommand: AsyncParsableCommand {
                             fromByteCount: Int64(imageSize),
                             countStyle: .file
                         ),
-                        timestampFormatter.string(from: releaseDate),
+                        releaseDate.map { timestampFormatter.string(from: $0) } ?? "—",
                         downloadedAt.map { timestampFormatter.string(from: $0) } ?? "—",
                     ]
                 ]

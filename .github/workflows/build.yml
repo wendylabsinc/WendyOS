@@ -16,9 +16,22 @@ permissions:
   contents: write
 
 jobs:
+  check-bugfix:
+    name: Check for BUGFIX tag
+    runs-on: ubuntu-latest
+    outputs:
+      spot: ${{ steps.check.outputs.spot }}
+    steps:
+      - name: Check PR for BUGFIX tag or bug label
+        id: check
+        run: |
+          # Always use spot instances (on-demand not available in runs-on.com setup)
+          echo "spot=true" >> $GITHUB_OUTPUT
+
   determine-version:
     name: Determine Version
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+    needs: check-bugfix
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
     outputs:
       version: ${{ steps.set-version.outputs.version }}
     steps:
@@ -38,7 +51,8 @@ jobs:
 
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+    needs: check-bugfix
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
     container: swift:6.2.3
     steps:
       - uses: actions/checkout@v4
@@ -77,45 +91,45 @@ jobs:
           retention-days: 1
 
   build:
-    needs: [determine-version, generate-protos]
+    needs: [check-bugfix, determine-version, generate-protos]
     strategy:
       matrix:
         include:
           - artifact-name: wendy-agent-linux-static-musl-aarch64
-            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            runner: 8cpu-linux-arm64
             container: swift:6.2.3
             swift-sdk: aarch64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy-agent
           - artifact-name: wendy-agent-linux-static-musl-x86_64
-            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+            runner: 8cpu-linux-x64
             container: swift:6.2.3
             swift-sdk: x86_64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy-agent
           - artifact-name: wendy-cli-linux-static-musl-aarch64
-            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+            runner: 8cpu-linux-arm64
             container: swift:6.2.3
             swift-sdk: aarch64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy
           - artifact-name: wendy-cli-linux-static-musl-x86_64
-            os: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+            runner: 8cpu-linux-x64
             container: swift:6.2.3
             swift-sdk: x86_64-swift-linux-musl
             swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
             swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
             product: wendy
           - artifact-name: wendy-cli-macos-arm64
-            os: macos-26
+            runner: macos-26
             xcode-select: /Applications/Xcode_26.0.app
             product: wendy
 
     name: ${{ matrix.artifact-name }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner == 'macos-26' && 'macos-26' || format('runs-on={0}/runner={1}/spot={2}', github.run_id, matrix.runner, needs.check-bugfix.outputs.spot) }}
     container: ${{ matrix.container }}
 
     steps:
@@ -244,8 +258,8 @@ jobs:
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
-    needs: [determine-version, build]
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
+    needs: [check-bugfix, determine-version, build]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
@@ -362,8 +376,8 @@ jobs:
 
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
-    needs: [determine-version, package-linux]
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
+    needs: [check-bugfix, determine-version, package-linux]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
@@ -416,8 +430,8 @@ jobs:
 
   release:
     name: Release
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64
-    needs: [determine-version, build, package-linux]
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
+    needs: [check-bugfix, determine-version, build, package-linux]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download artifact

@@ -19,10 +19,14 @@ public enum DeviceStability: String, Codable {
 /// Represents device manifest information
 public struct DeviceManifest: Codable {
     public struct VersionInfo: Codable {
-        public let release_date: Date
+        public let release_date: String
         public let path: String
         public let size_bytes: Int
         public let is_latest: Bool
+
+        public var date: Date? {
+            ISO8601DateFormatter().date(from: release_date)
+        }
     }
 
     public let device_id: String
@@ -81,11 +85,11 @@ public protocol ManifestManaging: Sendable {
     /// - Parameters:
     ///   - deviceName: The name of the device
     ///   - nightly: If true, fetches the latest nightly build; otherwise fetches the latest stable release
-    /// - Returns: The image URL, size, version string, and release date
+    /// - Returns: The image URL, size, version string, and release date (nil if date couldn't be parsed)
     func getLatestImageInfo(
         for deviceName: String,
         nightly: Bool
-    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date)
+    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date?)
 
     /// Fetches all available devices from the manifest
     /// - Returns: Array of available device information
@@ -157,13 +161,11 @@ public final class ManifestManager: ManifestManaging {
     public func getLatestImageInfo(
         for deviceName: String,
         nightly: Bool = false
-    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date) {
+    ) async throws -> (url: URL, size: Int, version: String, releaseDate: Date?) {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let mainManifest = try decoder.decode(MainManifest.self, from: mainManifestData)
+        let mainManifest = try JSONDecoder().decode(MainManifest.self, from: mainManifestData)
 
         // Find the device in the main manifest
         guard let deviceInfo = mainManifest.devices[deviceName] else {
@@ -178,7 +180,7 @@ public final class ManifestManager: ManifestManaging {
         // Fetch the device-specific manifest
         let deviceManifestUrl = URL(string: "\(baseUrl)/\(deviceInfo.manifest_path)")!
         let deviceManifestData = try await fetchData(from: deviceManifestUrl)
-        let deviceManifest = try decoder.decode(DeviceManifest.self, from: deviceManifestData)
+        let deviceManifest = try JSONDecoder().decode(DeviceManifest.self, from: deviceManifestData)
 
         let versionInfo: DeviceManifest.VersionInfo
         let versionString: String
@@ -193,11 +195,11 @@ public final class ManifestManager: ManifestManaging {
 
             // Sort by release date first, then by semantic version as a tiebreaker
             let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
-                if lhs.value.release_date != rhs.value.release_date {
-                    return lhs.value.release_date > rhs.value.release_date
+                if let lhsDate = lhs.value.date, let rhsDate = rhs.value.date, lhsDate != rhsDate {
+                    return lhsDate > rhsDate
                 }
 
-                // Dates are equal, use semantic version as tiebreaker
+                // Dates are equal or unparseable, use semantic version as tiebreaker
                 return self.compareSemanticVersions(lhs.key, rhs.key)
             }
 
@@ -218,16 +220,14 @@ public final class ManifestManager: ManifestManaging {
         // Get the image URL
         let imageUrl = URL(string: "\(baseUrl)/\(versionInfo.path)")!
 
-        return (imageUrl, versionInfo.size_bytes, versionString, versionInfo.release_date)
+        return (imageUrl, versionInfo.size_bytes, versionString, versionInfo.date)
     }
 
     public func getAvailableDevices() async throws -> [DeviceInfo] {
         // Fetch the main manifest
         let mainManifestUrl = URL(string: "\(baseUrl)/manifests/master.json")!
         let mainManifestData = try await fetchData(from: mainManifestUrl)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let mainManifest = try decoder.decode(MainManifest.self, from: mainManifestData)
+        let mainManifest = try JSONDecoder().decode(MainManifest.self, from: mainManifestData)
 
         // Fetch device manifests to get nightly versions
         var deviceInfos: [DeviceInfo] = []
@@ -243,7 +243,7 @@ public final class ManifestManager: ManifestManaging {
                 do {
                     let deviceManifestUrl = URL(string: "\(baseUrl)/\(info.manifest_path)")!
                     let deviceManifestData = try await fetchData(from: deviceManifestUrl)
-                    let deviceManifest = try decoder.decode(
+                    let deviceManifest = try JSONDecoder().decode(
                         DeviceManifest.self,
                         from: deviceManifestData
                     )
@@ -252,7 +252,7 @@ public final class ManifestManager: ManifestManaging {
                     if !info.latest.isEmpty,
                         let stableVersion = deviceManifest.versions[info.latest]
                     {
-                        latestVersionReleaseDate = stableVersion.release_date
+                        latestVersionReleaseDate = stableVersion.date
                         latestVersionPath = stableVersion.path
                     }
 
@@ -262,16 +262,18 @@ public final class ManifestManager: ManifestManaging {
                     }
                     if !nightlyVersions.isEmpty {
                         let sortedNightlyVersions = nightlyVersions.sorted { lhs, rhs in
-                            if lhs.value.release_date != rhs.value.release_date {
-                                return lhs.value.release_date > rhs.value.release_date
+                            if let lhsDate = lhs.value.date, let rhsDate = rhs.value.date,
+                                lhsDate != rhsDate
+                            {
+                                return lhsDate > rhsDate
                             }
 
-                            // Dates are equal, use semantic version as tiebreaker
+                            // Dates are equal or unparseable, use semantic version as tiebreaker
                             return self.compareSemanticVersions(lhs.key, rhs.key)
                         }
                         if let latestNightly = sortedNightlyVersions.first {
                             latestNightlyVersion = latestNightly.key
-                            latestNightlyReleaseDate = latestNightly.value.release_date
+                            latestNightlyReleaseDate = latestNightly.value.date
                             latestNightlyPath = latestNightly.value.path
                         }
                     }
