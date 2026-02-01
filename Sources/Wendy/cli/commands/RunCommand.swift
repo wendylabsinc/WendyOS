@@ -197,17 +197,17 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     func generatePythonDockerfileAndRun() async throws {
         let generator = PythonDockerfileGenerator()
 
-        Noora().info("Detected Python project")
+        cliOutput.info("Detected Python project")
 
         // Detect or prompt for entry point
         let entryPoint: String
         if let detected = generator.detectEntryPoint() {
-            Noora().info("Detected entry point: \(detected)")
+            cliOutput.info("Detected entry point: \(detected)")
             entryPoint = detected
         } else if let selected = generator.promptForEntryPoint(autoAccept: shouldAutoAccept) {
             entryPoint = selected
         } else {
-            Noora().error(
+            cliOutput.error(
                 "No Python files found in the project. Please create a Python file or add a Dockerfile manually."
             )
             return
@@ -218,12 +218,15 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let framework = generator.detectFramework()
         let systemDeps = generator.detectSystemDependencies()
 
-        Noora().info("Python version: \(pythonVersion)")
+        cliOutput.info("Python version: \(pythonVersion)")
         if framework != .none {
-            Noora().info("Detected framework: \(framework.displayName)")
+            cliOutput.info("Detected framework: \(framework.displayName)")
         }
         if !systemDeps.isEmpty {
-            Noora().info("System dependencies: \(systemDeps.joined(separator: ", "))")
+            cliOutput.info("System dependencies: \(systemDeps.joined(separator: ", "))")
+        }
+        if generator.usesPyTorch() {
+            cliOutput.info("PyTorch detected - using Jetson-optimized Dockerfile")
         }
 
         // Confirm generation
@@ -239,7 +242,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         // Generate and write Dockerfile
         try generator.writeDockerfile(entryPoint: entryPoint)
-        Noora().success("Generated Dockerfile")
+        cliOutput.success("Generated Dockerfile")
 
         // Now run as a Dockerfile app
         try await runDockerfileApp()

@@ -42,6 +42,49 @@ struct PythonDockerfileGenerator {
         "opencv-python-headless": ["libgl1", "libglib2.0-0"],
     ]
 
+    /// Packages that require specialized installation (e.g., GPU-optimized builds, platform-specific wheels)
+    /// These may not work correctly with a generic pip install in a standard Docker image
+    struct SpecializedPackage {
+        let name: String
+        let importNames: [String]
+        let warning: String
+    }
+
+    private static let specializedPackages: [SpecializedPackage] = [
+        SpecializedPackage(
+            name: "PyTorch",
+            importNames: ["torch", "torchvision", "torchaudio"],
+            warning:
+                "PyTorch requires platform-specific installation. For NVIDIA Jetson, use wheels from pypi.jetson-ai-lab.io"
+        ),
+        SpecializedPackage(
+            name: "TensorFlow",
+            importNames: ["tensorflow", "tf"],
+            warning:
+                "TensorFlow requires platform-specific installation. For NVIDIA Jetson, use NVIDIA's optimized builds"
+        ),
+        SpecializedPackage(
+            name: "JAX",
+            importNames: ["jax", "jaxlib"],
+            warning: "JAX requires platform-specific installation for GPU support"
+        ),
+        SpecializedPackage(
+            name: "ONNX Runtime",
+            importNames: ["onnxruntime"],
+            warning: "ONNX Runtime requires platform-specific builds for GPU acceleration"
+        ),
+        SpecializedPackage(
+            name: "CuPy",
+            importNames: ["cupy"],
+            warning: "CuPy requires CUDA-specific installation"
+        ),
+        SpecializedPackage(
+            name: "PyCUDA",
+            importNames: ["pycuda"],
+            warning: "PyCUDA requires CUDA toolkit and platform-specific installation"
+        ),
+    ]
+
     /// Common entry point filenames in priority order
     private static let commonEntryPoints = [
         "main.py",
@@ -55,9 +98,14 @@ struct PythonDockerfileGenerator {
     ]
 
     let projectPath: String
+    let isJetsonDevice: Bool
 
-    init(projectPath: String = FileManager.default.currentDirectoryPath) {
+    init(
+        projectPath: String = FileManager.default.currentDirectoryPath,
+        isJetsonDevice: Bool = true  // TODO: Detect actual device type
+    ) {
         self.projectPath = projectPath
+        self.isJetsonDevice = isJetsonDevice
     }
 
     // MARK: - Python Version Detection
@@ -158,6 +206,72 @@ struct PythonDockerfileGenerator {
             return "\(parts[0]).\(parts[1])"
         }
         return version
+    }
+
+    // MARK: - Specialized Package Detection
+
+    /// Detects packages that require specialized installation by scanning Python files for imports
+    func detectSpecializedPackages() -> [SpecializedPackage] {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: projectPath) else {
+            return []
+        }
+
+        // Collect all imports from Python files
+        var allImports = Set<String>()
+
+        for file in contents where file.hasSuffix(".py") {
+            let filePath = "\(projectPath)/\(file)"
+            guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+                continue
+            }
+
+            // Parse imports from the file
+            for line in content.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+                // Match "import X" or "from X import ..."
+                if trimmed.hasPrefix("import ") {
+                    let rest = trimmed.dropFirst("import ".count)
+                    // Handle "import X, Y, Z" and "import X as Y"
+                    let modules = rest.components(separatedBy: ",")
+                    for module in modules {
+                        let moduleName =
+                            module
+                            .trimmingCharacters(in: .whitespaces)
+                            .components(separatedBy: " ")[0]  // Remove "as ..." suffix
+                            .components(separatedBy: ".")[0]  // Get top-level module
+                        allImports.insert(moduleName.lowercased())
+                    }
+                } else if trimmed.hasPrefix("from ") {
+                    // "from X import ..." or "from X.Y import ..."
+                    let rest = trimmed.dropFirst("from ".count)
+                    if let importIndex = rest.range(of: " import ") {
+                        let modulePath = String(rest[..<importIndex.lowerBound])
+                        let topModule = modulePath.components(separatedBy: ".")[0]
+                        allImports.insert(topModule.lowercased())
+                    }
+                }
+            }
+        }
+
+        // Also check requirements.txt if it exists
+        for package in parseRequirements() {
+            allImports.insert(package.lowercased())
+        }
+
+        // Find which specialized packages are used
+        var detectedPackages: [SpecializedPackage] = []
+        for specializedPkg in Self.specializedPackages {
+            for importName in specializedPkg.importNames {
+                if allImports.contains(importName.lowercased()) {
+                    detectedPackages.append(specializedPkg)
+                    break
+                }
+            }
+        }
+
+        return detectedPackages
     }
 
     // MARK: - Entry Point Detection
@@ -334,13 +448,199 @@ struct PythonDockerfileGenerator {
         }
     }
 
+    /// Checks if PyTorch is used in the project
+    func usesPyTorch() -> Bool {
+        let specializedPackages = detectSpecializedPackages()
+        return specializedPackages.contains { $0.name == "PyTorch" }
+    }
+
+    /// Checks if TensorFlow is used in the project
+    func usesTensorFlow() -> Bool {
+        let specializedPackages = detectSpecializedPackages()
+        return specializedPackages.contains { $0.name == "TensorFlow" }
+    }
+
+    /// Gets additional Python packages from requirements.txt, excluding PyTorch-related packages
+    private func getAdditionalPackages(excluding: Set<String>) -> [String] {
+        let packages = parseRequirements()
+        return packages.filter { pkg in
+            !excluding.contains(pkg.lowercased())
+        }
+    }
+
     /// Generates a complete Dockerfile for the Python project
     func generateDockerfile(entryPoint: String) -> String {
+        let specializedPackages = detectSpecializedPackages()
+        let needsGPUOptimization = specializedPackages.contains {
+            $0.name == "PyTorch" || $0.name == "TensorFlow"
+        }
+
+        // Use Jetson-optimized Dockerfile if targeting Jetson and using GPU packages
+        if isJetsonDevice && needsGPUOptimization {
+            return generateJetsonDockerfile(entryPoint: entryPoint)
+        } else {
+            return generateStandardDockerfile(entryPoint: entryPoint)
+        }
+    }
+
+    /// Generates a Jetson-optimized Dockerfile for GPU/ML workloads
+    private func generateJetsonDockerfile(entryPoint: String) -> String {
+        let framework = detectFramework()
+        let cmd = generateCmd(framework: framework, entryPoint: entryPoint)
+
+        // Packages that should be installed from Jetson's PyPI, not standard PyPI
+        let jetsonPackages: Set<String> = [
+            "torch", "torchvision", "torchaudio", "tensorflow",
+            "numpy",  // We pin numpy separately
+        ]
+
+        // Get additional packages excluding Jetson-specific ones
+        let additionalPackages = getAdditionalPackages(excluding: jetsonPackages)
+
+        // Detect common ML packages from imports
+        let mlPackages = detectCommonMLPackages()
+
+        var dockerfile = """
+            # Generated by wendy CLI - Optimized for NVIDIA Jetson
+            FROM ubuntu:22.04
+
+            # Workaround for containerd overlayfs snapshot issues
+            RUN mkdir -p /usr/local/bin
+
+            # Install system dependencies including OpenBLAS (required by PyTorch)
+            RUN apt-get update && apt-get install -y --no-install-recommends \\
+                python3-pip \\
+                python3-dev \\
+                build-essential \\
+                git \\
+                libopenblas-dev \\
+                libblas-dev \\
+                liblapack-dev \\
+                libgomp1 \\
+                && rm -rf /var/lib/apt/lists/*
+
+            # Install PyTorch from NVIDIA's Jetson-optimized wheels
+            # Pre-compiled for ARM64 and optimized for Jetson with CUDA 12.6
+            # This leverages CDI-mapped CUDA/cuDNN from the host system
+            RUN pip3 install --no-cache-dir \\
+                torch==2.8.0 \\
+                --index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
+
+            # Pin NumPy to 1.x (Jetson PyTorch was compiled against NumPy 1.x)
+            RUN pip3 install --no-cache-dir numpy==1.26.4
+
+            """
+
+        // Combine ML packages and additional packages, removing duplicates
+        var allPackages = Set(mlPackages)
+        for pkg in additionalPackages {
+            allPackages.insert(pkg)
+        }
+
+        // Install additional packages
+        if !allPackages.isEmpty {
+            dockerfile += """
+                # Install additional Python dependencies
+                RUN pip3 install --no-cache-dir \\
+                    \(allPackages.sorted().joined(separator: " \\\n    "))
+
+                """
+        }
+
+        // Verify PyTorch version
+        dockerfile += """
+            # Verify we got the correct PyTorch version (will fail build if wrong)
+            # Use pip show instead of import to avoid CUDA library loading during build
+            RUN pip3 show torch | grep "Version: 2.8.0" && echo "Correct PyTorch version installed"
+
+            # Set working directory and copy application code
+            WORKDIR /app
+            COPY . .
+
+            # Set environment variables
+            ENV PYTHONUNBUFFERED=1
+            ENV HF_HOME=/app/.cache/huggingface
+            ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
+
+            # Run the application
+            \(cmd.replacingOccurrences(of: "python", with: "python3"))
+            """
+
+        return dockerfile
+    }
+
+    /// Detects common ML packages that should be installed for PyTorch projects
+    private func detectCommonMLPackages() -> [String] {
+        var packages: [String] = []
+        let allImports = getAllImports()
+
+        // Check for transformers (HuggingFace)
+        if allImports.contains("transformers") {
+            packages.append("transformers")
+            packages.append("accelerate")
+            packages.append("sentencepiece")
+        }
+
+        // Check for Flask (common for ML APIs)
+        if allImports.contains("flask") {
+            packages.append("flask")
+        }
+
+        return packages
+    }
+
+    /// Gets all imports from Python files in the project
+    private func getAllImports() -> Set<String> {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: projectPath) else {
+            return []
+        }
+
+        var allImports = Set<String>()
+
+        for file in contents where file.hasSuffix(".py") {
+            let filePath = "\(projectPath)/\(file)"
+            guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+                continue
+            }
+
+            for line in content.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+                if trimmed.hasPrefix("import ") {
+                    let rest = trimmed.dropFirst("import ".count)
+                    let modules = rest.components(separatedBy: ",")
+                    for module in modules {
+                        let moduleName =
+                            module
+                            .trimmingCharacters(in: .whitespaces)
+                            .components(separatedBy: " ")[0]
+                            .components(separatedBy: ".")[0]
+                        allImports.insert(moduleName.lowercased())
+                    }
+                } else if trimmed.hasPrefix("from ") {
+                    let rest = trimmed.dropFirst("from ".count)
+                    if let importIndex = rest.range(of: " import ") {
+                        let modulePath = String(rest[..<importIndex.lowerBound])
+                        let topModule = modulePath.components(separatedBy: ".")[0]
+                        allImports.insert(topModule.lowercased())
+                    }
+                }
+            }
+        }
+
+        return allImports
+    }
+
+    /// Generates a standard Dockerfile for simple Python projects
+    private func generateStandardDockerfile(entryPoint: String) -> String {
         let pythonVersion = getPythonVersion()
         let framework = detectFramework()
         let systemDeps = detectSystemDependencies()
         let cmd = generateCmd(framework: framework, entryPoint: entryPoint)
-        let hasRequirements = FileManager.default.fileExists(atPath: "\(projectPath)/requirements.txt")
+        let hasRequirements = FileManager.default.fileExists(
+            atPath: "\(projectPath)/requirements.txt"
+        )
         let hasPyproject = FileManager.default.fileExists(atPath: "\(projectPath)/pyproject.toml")
 
         var dockerfile = """
