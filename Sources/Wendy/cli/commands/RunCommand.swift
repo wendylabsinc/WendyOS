@@ -235,7 +235,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         progress: updateProgress
                     )
                 }
-                cliOutput.success("App ready to start")
+                cliOutput.success("App \(name) on \(endpoint.host) ready to start")
             }
 
             try await AppBuildHelpers.executePhase(
@@ -572,7 +572,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         progress: updateProgress
                     )
                 }
-                cliOutput.success("Container created")
+                cliOutput.success("App \(appName) on \(endpoint.host) ready to start")
             }
 
             cliOutput.info("Starting container")
