@@ -369,6 +369,11 @@ struct InitCommand: AsyncParsableCommand {
         if language == .python {
             defaultConfig.python = .init(sourceRoot: "/app")
             defaultConfig.entitlements.append(.network(.init(mode: .host)))
+            // Shared cache for Hugging Face models (transformers, datasets, etc.)
+            // Using a well-known name allows multiple apps to share downloaded models
+            defaultConfig.entitlements.append(
+                .persist(.init(name: "huggingface-cache", path: "/app/.cache/huggingface"))
+            )
         }
 
         do {

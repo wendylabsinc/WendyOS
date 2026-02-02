@@ -143,24 +143,113 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             let logger = Logger(label: "sh.wendy.cli.run")
             _ = try await AppBuildHelpers.readAppConfigData(logger: logger)
 
+            let currentPath = FileManager.default.currentDirectoryPath
             let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
-            let directory = try FileManager.default.contentsOfDirectory(
-                atPath: FileManager.default.currentDirectoryPath
-            )
+            let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
 
-            for item in directory where item.lowercased().contains("dockerfile") {
+            for item in directory where isDockerfile(item) {
                 try await runDockerfileApp()
                 return
             }
 
             if isSwiftPackage {
                 try await runSwiftApp()
+            } else if isPythonProject(directory: directory) {
+                // Python project without Dockerfile - offer to generate one
+                try await generatePythonDockerfileAndRun()
             } else {
                 Noora().error(
                     "Directory is not a Swift Package, nor can it be built as a docker container"
                 )
             }
         }
+    }
+
+    /// Checks if a filename is a valid Dockerfile name
+    /// Valid names: Dockerfile, dockerfile, Dockerfile.dev, Dockerfile.prod, app.Dockerfile, etc.
+    private func isDockerfile(_ filename: String) -> Bool {
+        let lowercased = filename.lowercased()
+        // Exact match: "dockerfile"
+        if lowercased == "dockerfile" {
+            return true
+        }
+        // Pattern: "dockerfile.*" (e.g., dockerfile.dev, Dockerfile.prod)
+        if lowercased.hasPrefix("dockerfile.") {
+            return true
+        }
+        // Pattern: "*.dockerfile" (e.g., app.dockerfile)
+        if lowercased.hasSuffix(".dockerfile") {
+            return true
+        }
+        return false
+    }
+
+    /// Checks if the directory contains a Python project
+    private func isPythonProject(directory: [String]) -> Bool {
+        // Check for requirements.txt
+        if FileManager.default.fileExists(atPath: "requirements.txt") {
+            return true
+        }
+        // Check for pyproject.toml
+        if FileManager.default.fileExists(atPath: "pyproject.toml") {
+            return true
+        }
+        // Check for any .py files in the root directory
+        return directory.contains { $0.hasSuffix(".py") }
+    }
+
+    func generatePythonDockerfileAndRun() async throws {
+        let generator = PythonDockerfileGenerator()
+
+        cliOutput.info("Detected Python project")
+
+        // Detect or prompt for entry point
+        let entryPoint: String
+        if let detected = generator.detectEntryPoint() {
+            cliOutput.info("Detected entry point: \(detected)")
+            entryPoint = detected
+        } else if let selected = generator.promptForEntryPoint(autoAccept: shouldAutoAccept) {
+            entryPoint = selected
+        } else {
+            cliOutput.error(
+                "No Python files found in the project. Please create a Python file or add a Dockerfile manually."
+            )
+            return
+        }
+
+        // Show what we detected
+        let pythonVersion = generator.getPythonVersion()
+        let framework = generator.detectFramework()
+        let systemDeps = generator.detectSystemDependencies()
+
+        cliOutput.info("Python version: \(pythonVersion)")
+        if framework != .none {
+            cliOutput.info("Detected framework: \(framework.displayName)")
+        }
+        if !systemDeps.isEmpty {
+            cliOutput.info("System dependencies: \(systemDeps.joined(separator: ", "))")
+        }
+        if generator.usesPyTorch() {
+            cliOutput.info("PyTorch detected - using Jetson-optimized Dockerfile")
+        }
+
+        // Confirm generation
+        if !shouldAutoAccept {
+            guard
+                Noora().yesOrNoChoicePrompt(
+                    question: "Generate Dockerfile and continue?"
+                )
+            else {
+                return
+            }
+        }
+
+        // Generate and write Dockerfile
+        try generator.writeDockerfile(entryPoint: entryPoint)
+        cliOutput.success("Generated Dockerfile")
+
+        // Now run as a Dockerfile app
+        try await runDockerfileApp()
     }
 
     func runDockerfileApp() async throws {
