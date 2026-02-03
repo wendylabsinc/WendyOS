@@ -1,6 +1,6 @@
 import Foundation
-import Noora
 import NIOCore
+import Noora
 
 // Helper to flush stdout in Swift 6
 @inline(__always)
@@ -213,7 +213,8 @@ public struct NooraRenderer: CLIOutput, Sendable {
     public func withStreamingOutput<T: Sendable>(
         title: String,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         return try await operation { chunk in
@@ -225,7 +226,8 @@ public struct NooraRenderer: CLIOutput, Sendable {
         title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         // Create temp file for full output

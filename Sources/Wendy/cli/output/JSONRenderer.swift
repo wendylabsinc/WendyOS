@@ -1,5 +1,5 @@
-import NIOCore
 import Foundation
+import NIOCore
 import Synchronization
 
 /// JSON output renderer that collects events and outputs a single JSON response.
@@ -67,7 +67,8 @@ public final class JSONRenderer: CLIOutput, Sendable {
     public func withStreamingOutput<T: Sendable>(
         title: String,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         // Create temp file for full output
@@ -77,7 +78,7 @@ public final class JSONRenderer: CLIOutput, Sendable {
         )
         FileManager.default.createFile(atPath: logFile.path, contents: nil)
         let fileHandle = try FileHandle(forWritingTo: logFile)
-        
+
         let result = try await operation { chunk in
             try fileHandle.write(contentsOf: chunk.readableBytesView)
         }
@@ -90,7 +91,8 @@ public final class JSONRenderer: CLIOutput, Sendable {
         title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         return try await withStreamingOutput(title: title, operation: operation)

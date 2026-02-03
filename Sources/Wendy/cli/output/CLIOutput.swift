@@ -84,14 +84,16 @@ public protocol CLIOutput: Sendable {
         title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T
 
     func withStreamingOutput<T: Sendable>(
         title: String,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T
 }
@@ -296,7 +298,8 @@ internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
         title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         // Default: just print each line as it comes
@@ -308,7 +311,8 @@ internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
     func withStreamingOutput<T: Sendable>(
         title: String,
         operation:
-            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            ->
             T
     ) async throws -> T {
         // Default: just print each line as it comes
