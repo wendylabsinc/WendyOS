@@ -323,16 +323,51 @@ struct OSCommand: AsyncParsableCommand {
 
                 let devices = familyOptions[familyIndex].1
 
+                let timestampFormatter = DateFormatter()
+                timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
+                timestampFormatter.timeZone = TimeZone.current
+                timestampFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+
                 let deviceRows = devices.map { device -> [String] in
                     let version: String
+                    let uploadedAt: String
+                    let downloadedAt: String
+                    let path: String
                     if nightly {
                         version = device.latestNightlyVersion ?? "—"
+                        uploadedAt =
+                            device.latestNightlyReleaseDate.map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        downloadedAt =
+                            cachedImageDownloadDate(
+                                deviceName: device.name,
+                                nightly: true
+                            ).map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        path = device.latestNightlyPath ?? "—"
                     } else {
                         version = device.latestVersion.isEmpty ? "—" : device.latestVersion
+                        uploadedAt =
+                            device.latestVersionReleaseDate.map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        downloadedAt =
+                            cachedImageDownloadDate(
+                                deviceName: device.name,
+                                nightly: false
+                            ).map {
+                                timestampFormatter.string(from: $0)
+                            } ?? "—"
+                        path = device.latestVersionPath ?? "—"
                     }
                     return [
                         device.name,
                         version,
+                        uploadedAt,
+                        downloadedAt,
+                        path,
                     ]
                 }
 
@@ -340,6 +375,9 @@ struct OSCommand: AsyncParsableCommand {
                     headers: [
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
+                        "Uploaded At",
+                        "Downloaded At",
+                        "Path",
                     ],
                     rows: deviceRows,
                     pageSize: deviceRows.count
@@ -433,17 +471,43 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             // Get the latest image information for the device
-            let (imageUrl, imageSize, latestVersion) = try await manifestManager.getLatestImageInfo(
-                for: selectedDeviceName,
+            let (imageUrl, imageSize, latestVersion, releaseDate) =
+                try await manifestManager.getLatestImageInfo(
+                    for: selectedDeviceName,
+                    nightly: nightly
+                )
+
+            let timestampFormatter = DateFormatter()
+            timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
+            timestampFormatter.timeZone = TimeZone.current
+            timestampFormatter.dateFormat = "MMM d yyyy h:mma zzz"
+
+            let downloadedAt = cachedImageDownloadDate(
+                deviceName: selectedDeviceName,
                 nightly: nightly
             )
 
-            noora.info(
-                """
-                📥 Found image: \(imageUrl.lastPathComponent)
-                   Version: \(latestVersion)
-                   Size: \(ByteCountFormatter.string(fromByteCount: Int64(imageSize), countStyle: .file))
-                """
+            noora.info("📥 Found image for \(selectedDeviceName)")
+            noora.table(
+                headers: [
+                    "Image",
+                    "Version",
+                    "Size",
+                    "Uploaded At",
+                    "Downloaded At",
+                ],
+                rows: [
+                    [
+                        imageUrl.lastPathComponent,
+                        latestVersion,
+                        ByteCountFormatter.string(
+                            fromByteCount: Int64(imageSize),
+                            countStyle: .file
+                        ),
+                        releaseDate.map { timestampFormatter.string(from: $0) } ?? "—",
+                        downloadedAt.map { timestampFormatter.string(from: $0) } ?? "—",
+                    ]
+                ]
             )
 
             // Download and extract as separate progress bars when not using cache
@@ -564,161 +628,6 @@ struct OSCommand: AsyncParsableCommand {
             noora.success("🎉 Device \(selectedDeviceName) successfully imaged!")
         }
     }
-}
-
-// MARK: - Cache utilities
-
-private enum CachedImageStatus: String, Codable {
-    case ready
-    case incomplete
-    case empty
-
-    var displayValue: String {
-        switch self {
-        case .ready:
-            return "Ready"
-        case .incomplete:
-            return "Incomplete"
-        case .empty:
-            return "Empty"
-        }
-    }
-}
-
-private struct CachedImageEntry: Codable {
-    let device: String
-    let version: String?
-    let cachedAt: Date?
-    let imagePath: String?
-    let sizeBytes: Int64
-    let status: CachedImageStatus
-}
-
-private func cacheDirectory(fileManager: FileManager = .default) -> URL {
-    fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".wendy/cache/images")
-}
-
-private func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {
-    let root = cacheDirectory(fileManager: fileManager)
-    guard fileManager.fileExists(atPath: root.path) else { return [] }
-
-    let contents: [URL]
-    do {
-        contents = try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )
-    } catch {
-        throw ValidationError("Failed to read cache directory: \(error.localizedDescription)")
-    }
-
-    var entries: [CachedImageEntry] = []
-
-    for url in contents {
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-        guard values?.isDirectory == true else { continue }
-
-        let (version, timestamp) = readCacheMetadata(at: url)
-        let imageURL = findImageFile(in: url, fileManager: fileManager)
-        let size = directorySize(of: url, fileManager: fileManager)
-
-        let status: CachedImageStatus
-        if imageURL != nil {
-            status = .ready
-        } else if size > 0 {
-            status = .incomplete
-        } else {
-            status = .empty
-        }
-
-        entries.append(
-            CachedImageEntry(
-                device: url.lastPathComponent,
-                version: version,
-                cachedAt: timestamp,
-                imagePath: imageURL?.path,
-                sizeBytes: size,
-                status: status
-            )
-        )
-    }
-
-    return entries.sorted { $0.device < $1.device }
-}
-
-private func readCacheMetadata(at url: URL) -> (String?, Date?) {
-    let metadataURL = url.appendingPathComponent("version.json")
-
-    guard let data = try? Data(contentsOf: metadataURL) else {
-        return (nil, nil)
-    }
-
-    struct CacheVersionMetadata: Codable {
-        let version: String
-        let timestamp: Date
-    }
-
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    guard let metadata = try? decoder.decode(CacheVersionMetadata.self, from: data) else {
-        return (nil, nil)
-    }
-
-    return (metadata.version, metadata.timestamp)
-}
-
-private func directorySize(of url: URL, fileManager: FileManager = .default) -> Int64 {
-    guard
-        let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [
-                .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey,
-            ],
-            options: [.skipsHiddenFiles]
-        )
-    else { return 0 }
-
-    var total: Int64 = 0
-    for case let fileURL as URL in enumerator {
-        guard
-            let values = try? fileURL.resourceValues(
-                forKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey]
-            ),
-            values.isRegularFile == true
-        else { continue }
-
-        if let allocated = values.totalFileAllocatedSize {
-            total += Int64(allocated)
-        } else if let size = values.fileSize {
-            total += Int64(size)
-        }
-    }
-
-    return total
-}
-
-private func findImageFile(in url: URL, fileManager: FileManager = .default) -> URL? {
-    guard
-        let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        )
-    else { return nil }
-
-    for case let fileURL as URL in enumerator {
-        guard
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-            values.isRegularFile == true
-        else { continue }
-
-        if fileURL.pathExtension.lowercased() == "img" {
-            return fileURL
-        }
-    }
-
-    return nil
 }
 
 // MARK: - Helpers

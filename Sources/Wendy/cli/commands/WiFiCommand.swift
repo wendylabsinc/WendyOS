@@ -158,17 +158,14 @@ struct WiFiCommand: AsyncParsableCommand {
                         errorMessage: "Failed to connect to \(ssid)",
                         showSpinner: true
                     ) { _ in
-                        let result = try await client.connectToWiFi(
+                        let response = try await client.connectToWiFi(
                             ssid: ssid,
                             password: password
                         )
-                        guard result.success else {
-                            struct UnableToConnectToWiFiError: Error {
-                                let errorMessage: String
-                            }
-
-                            throw UnableToConnectToWiFiError(
-                                errorMessage: result.errorMessage ?? "Unknown error"
+                        guard response.success else {
+                            throw CLIError.connectionFailed(
+                                device: "WiFi",
+                                reason: response.errorMessage ?? "Unknown error"
                             )
                         }
                     }

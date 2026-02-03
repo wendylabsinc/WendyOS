@@ -118,6 +118,82 @@ jobs:
             echo "  https://github.com/${{ github.repository }}/releases/download/$VERSION/$file"
           done
 
+      - name: Notify Discord
+        if: inputs.promote_prerelease != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          VERSION="v${{ inputs.version }}"
+          PRERELEASE_TAG="${{ inputs.promote_prerelease }}"
+          REPO="${{ github.repository }}"
+          URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
+
+          # Get release body from the pre-release
+          BODY=$(gh release view "$PRERELEASE_TAG" --json body -q .body 2>/dev/null || echo "")
+
+          # Strip CRLF line endings and truncate to 800 chars
+          BODY=$(echo "$BODY" | tr -d '\r')
+          SHORT_BODY=$(echo "$BODY" | head -c 800)
+
+          # Installation instructions
+          read -r -d '' INSTALL_INSTRUCTIONS << 'INSTALL_EOF' || true
+          ## Install the Wendy CLI
+
+          **macOS (Homebrew)**
+          ```
+          brew install wendylabsinc/tap/wendy
+          ```
+
+          **Arch Linux (AUR)**
+          ```
+          yay -S wendy
+          ```
+
+          **Debian/Ubuntu (APT)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
+          ```
+
+          **Fedora/RHEL (DNF/YUM)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
+          ```
+          INSTALL_EOF
+
+          # Combine release notes with install instructions
+          FULL_DESCRIPTION="${SHORT_BODY}
+
+          ${INSTALL_INSTRUCTIONS}"
+
+          # Escape for JSON
+          ESCAPED_DESC=$(echo "$FULL_DESCRIPTION" | jq -Rs .)
+
+          # Build JSON payload
+          cat > /tmp/discord_payload.json << PAYLOAD_EOF
+          {
+            "content": "🚀 **New CLI release**: **${VERSION}**",
+            "embeds": [
+              {
+                "title": "Release ${VERSION}",
+                "url": "${URL}",
+                "description": ${ESCAPED_DESC},
+                "color": 5814783,
+                "footer": { "text": "${REPO} • ${VERSION}" }
+              }
+            ]
+          }
+          PAYLOAD_EOF
+
+          # Post to Discord (fail silently if webhook not configured)
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            curl -sS -X POST -H "Content-Type: application/json" \
+              -d @/tmp/discord_payload.json \
+              "$DISCORD_WEBHOOK_URL" && echo "✅ Discord notification sent" || echo "⚠️ Discord notification failed"
+          else
+            echo "⚠️ DISCORD_WEBHOOK_URL not configured, skipping notification"
+          fi
+
       - name: Trigger Build from Main
         if: inputs.promote_prerelease == ''
         env:

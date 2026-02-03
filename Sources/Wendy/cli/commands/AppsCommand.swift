@@ -32,16 +32,16 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentClient(
+            try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Removing application"
-            ) { client in
+            ) { client, hostname in
                 try await client.removeApp(name: appName, purgeImage: purgeImage)
 
                 if purgeImage {
-                    Noora().success("Removed application and its image.")
+                    Noora().success("Removed app \(appName) and its image on \(hostname)")
                 } else {
-                    Noora().success("Removed application.")
+                    Noora().success("Removed app \(appName) on \(hostname)")
                 }
             }
         }
@@ -59,12 +59,12 @@ struct AppsCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            try await withAgentClient(
+            try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Stopping application"
-            ) { client in
+            ) { client, hostname in
                 try await client.stopApp(name: appName)
-                Noora().info("Stop request sent")
+                Noora().success("Stopped app \(appName) on \(hostname)")
             }
         }
     }

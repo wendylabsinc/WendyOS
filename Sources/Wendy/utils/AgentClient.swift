@@ -4,6 +4,7 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import Noora
+import Synchronization
 import WendyAgentGRPC
 import WendyShared
 
@@ -22,6 +23,25 @@ func withAgentClient<R: Sendable>(
     includeBluetooth: Bool = true,
     _ body: @escaping @Sendable (AgentClient) async throws -> R
 ) async throws -> R {
+    try await withAgentClientAndHostname(
+        connectionOptions,
+        title: title,
+        preferBluetooth: preferBluetooth,
+        includeBluetooth: includeBluetooth
+    ) { client, _ in
+        try await body(client)
+    }
+}
+
+/// Execute a command with automatic connection type selection, also providing the hostname
+/// Prefers LAN when available, falls back to Bluetooth
+func withAgentClientAndHostname<R: Sendable>(
+    _ connectionOptions: AgentConnectionOptions,
+    title: TerminalText,
+    preferBluetooth: Bool = false,
+    includeBluetooth: Bool = true,
+    _ body: @escaping @Sendable (AgentClient, String) async throws -> R
+) async throws -> R {
     let selectedDevice = try await connectionOptions.read(
         title: title,
         preferBluetooth: preferBluetooth,
@@ -35,24 +55,30 @@ func withAgentClient<R: Sendable>(
             port: port,
             defaultDevice: defaultDevice
         )
+        let connectionSucceeded = Mutex(false)
         do {
             return try await withAgentGRPCClient(endpoint, title: title) { client in
-                try await body(.grpc(client))
+                connectionSucceeded.withLock { $0 = true }
+                return try await body(.grpc(client), host)
             }
-        } catch  where defaultDevice {
-            // If default device failed, try again without default
+        } catch {
+            // Only retry with device selection if we never successfully connected
+            guard defaultDevice && !connectionSucceeded.withLock({ $0 }) else {
+                throw error
+            }
+            // If default device failed to connect, try again without default
             let newDevice = try await connectionOptions.read(
                 title: title,
                 readDefault: false,
                 preferBluetooth: preferBluetooth,
                 includeBluetooth: includeBluetooth
             )
-            return try await executeWithDevice(newDevice, title: title, body)
+            return try await executeWithDeviceAndHostname(newDevice, title: title, body)
         }
 
-    case .bluetooth(let peripheral, _):
+    case .bluetooth(let peripheral, let address):
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
-            try await body(.bluetooth(client))
+            try await body(.bluetooth(client), address)
         }
     }
 }
@@ -62,6 +88,16 @@ private func executeWithDevice<R: Sendable>(
     title: TerminalText,
     _ body: @escaping @Sendable (AgentClient) async throws -> R
 ) async throws -> R {
+    try await executeWithDeviceAndHostname(device, title: title) { client, _ in
+        try await body(client)
+    }
+}
+
+private func executeWithDeviceAndHostname<R: Sendable>(
+    _ device: SelectedDevice,
+    title: TerminalText,
+    _ body: @escaping @Sendable (AgentClient, String) async throws -> R
+) async throws -> R {
     switch device {
     case .lan(let host, let port, _):
         let endpoint = AgentConnectionOptions.Endpoint(
@@ -70,12 +106,12 @@ private func executeWithDevice<R: Sendable>(
             defaultDevice: false
         )
         return try await withAgentGRPCClient(endpoint, title: title) { client in
-            try await body(.grpc(client))
+            try await body(.grpc(client), host)
         }
 
-    case .bluetooth(let peripheral, _):
+    case .bluetooth(let peripheral, let address):
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
-            try await body(.bluetooth(client))
+            try await body(.bluetooth(client), address)
         }
     }
 }

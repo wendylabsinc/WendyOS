@@ -22,3 +22,5 @@ WendyCLI.app/
 .agent-build
 *.exe
 *.msi
+.wendy
+*.resolved

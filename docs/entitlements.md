@@ -59,3 +59,38 @@ The mounts entitlement allows the container to access the device's filesystem.
 ## USB
 
 The USB entitlement allows the container to access USB devices.
+
+## Persist
+
+The persist entitlement allows the container to persist data across restarts. Data is stored on the host filesystem and mounted into the container at the specified path.
+
+```json
+{
+    "type": "persist",
+    "name": "my-volume",
+    "path": "/mnt/data"
+}
+```
+
+- **name**: A unique name for the volume. Volumes with the same name are shared across apps.
+- **path**: The path inside the container where the volume is mounted.
+
+### Shared Volumes
+
+Volumes are identified by name only (not by app ID), so multiple apps can share data by using the same volume name. This is useful for sharing caches or data between apps.
+
+### Recommended Shared Volume Names
+
+| Name | Path | Description |
+|------|------|-------------|
+| `huggingface-cache` | `/app/.cache/huggingface` | Shared cache for Hugging Face models (transformers, datasets, etc.). Avoids re-downloading large ML models for each app. |
+
+Example for a Python ML app:
+
+```json
+{
+    "type": "persist",
+    "name": "huggingface-cache",
+    "path": "/app/.cache/huggingface"
+}
+```

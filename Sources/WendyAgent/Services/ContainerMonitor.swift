@@ -1,9 +1,7 @@
 import ContainerdGRPC
 import Foundation
 import Logging
-import NIO
 import ServiceLifecycle
-import Subprocess
 
 /// Monitor service that watches containers and enforces restart policies for containerd apps
 actor ContainerMonitor: Service {
@@ -218,9 +216,7 @@ actor ContainerMonitor: Service {
             )
 
             do {
-                // Use nerdctl to restart the container
-                _ = try await runNerdctl(["start", appName])
-
+                try await ContainerLogManager.shared.restartContainer(appName: appName)
                 state.lastRestartTime = Date()
                 state.failureCount += 1
                 containerStates[appName] = state
@@ -275,38 +271,4 @@ actor ContainerMonitor: Service {
         }
     }
 
-    /// Run nerdctl command for container operations
-    private func runNerdctl(_ args: [String]) async throws -> String {
-        // Always use the default namespace to match containerd client
-        let fullArgs = ["--namespace", "default"] + args
-        logger.debug(
-            "Running nerdctl command",
-            metadata: ["args": "\(fullArgs.joined(separator: " "))"]
-        )
-
-        do {
-            let result = try await Subprocess.run(
-                .name("nerdctl"),
-                arguments: Subprocess.Arguments(fullArgs),
-                output: .string(limit: .max),
-                error: .string(limit: .max)
-            )
-
-            if let stderr = result.standardError, !stderr.isEmpty {
-                logger.warning("nerdctl stderr output", metadata: ["stderr": "\(stderr)"])
-            }
-
-            let stdout = result.standardOutput ?? ""
-            return stdout
-        } catch {
-            logger.error(
-                "Failed to run nerdctl",
-                metadata: [
-                    "command": "nerdctl \(fullArgs.joined(separator: " "))",
-                    "error": "\(error)",
-                ]
-            )
-            throw error
-        }
-    }
 }

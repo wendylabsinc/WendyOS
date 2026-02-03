@@ -4,6 +4,7 @@ import Logging
 import NIOCore
 import NIOSSL
 import Noora
+import Synchronization
 import WendyAgentGRPC
 import WendyCloudGRPC
 
@@ -126,6 +127,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
 
     switch try await connectionOptions.read(title: title) {
     case .lan(let host, let port, let defaultDevice):
+        let connectionSucceeded = Mutex(false)
         do {
             let endpoint = AgentConnectionOptions.Endpoint(
                 host: host,
@@ -133,9 +135,14 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
                 defaultDevice: defaultDevice
             )
             return try await withAgentGRPCClient(endpoint, title: title) { client in
+                connectionSucceeded.withLock { $0 = true }
                 return try await body(client, endpoint)
             }
-        } catch  where defaultDevice {
+        } catch {
+            // Only retry with device selection if we never successfully connected
+            guard defaultDevice && !connectionSucceeded.withLock({ $0 }) else {
+                throw error
+            }
             return try await fallback()
         }
     case .bluetooth:

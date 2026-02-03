@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 
 public struct AppConfig: Codable {
     public let appId: String
@@ -29,6 +30,41 @@ public struct AppConfig: Codable {
         self.version = version
         self.language = language
         self.entitlements = entitlements
+    }
+
+    /// Validates wendy.json data and returns warnings for unknown keys in entitlements.
+    /// Call this after decoding to check for potential typos or invalid configuration.
+    public static func validateJSON(_ data: Data) -> [String] {
+        var warnings: [String] = []
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let entitlements = json["entitlements"] as? [[String: Any]]
+        else {
+            return warnings
+        }
+
+        for (index, entitlement) in entitlements.enumerated() {
+            guard let typeString = entitlement["type"] as? String,
+                let type = EntitlementType(rawValue: typeString)
+            else {
+                continue
+            }
+
+            let presentKeys = Set(entitlement.keys)
+            let allowedKeys = Entitlement.allowedKeys(for: type)
+            let unknownKeys = presentKeys.subtracting(allowedKeys)
+
+            if !unknownKeys.isEmpty {
+                let sortedUnknown = unknownKeys.sorted()
+                let sortedAllowed = allowedKeys.sorted()
+                warnings.append(
+                    "Unknown key(s) in entitlement[\(index)] (\(type)): \(sortedUnknown.joined(separator: ", ")). "
+                        + "Allowed keys are: \(sortedAllowed.joined(separator: ", "))"
+                )
+            }
+        }
+
+        return warnings
     }
 }
 
@@ -86,6 +122,24 @@ public enum Entitlement: Codable, Sendable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case type
+    }
+
+    /// Returns the set of allowed keys for this entitlement type
+    public static func allowedKeys(for type: EntitlementType) -> Set<String> {
+        switch type {
+        case .network:
+            return ["type", "mode"]
+        case .video:
+            return ["type", "mode", "allowlist"]
+        case .bluetooth:
+            return ["type", "mode"]
+        case .gpu:
+            return ["type"]
+        case .audio:
+            return ["type"]
+        case .persist:
+            return ["type", "name", "path"]
+        }
     }
 }
 

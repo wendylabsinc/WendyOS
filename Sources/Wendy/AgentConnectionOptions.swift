@@ -87,22 +87,11 @@ struct AgentConnectionOptions: ParsableArguments {
     )
     var device: Endpoint?
 
-    @Option(
-        name: .shortAndLong,
-        help:
-            """
-            Alias for the `--device` option. (Deprecated)
-            If both `--device` and `--device` are provided, the `--device` option takes precedence.
-            """
-    )
-    var agent: Endpoint?
-
     init() {}
 
     init(
         endpoint: Endpoint?
     ) {
-        self.agent = nil
         self.device = endpoint
     }
 
@@ -118,10 +107,6 @@ struct AgentConnectionOptions: ParsableArguments {
         get throws {
             if let device {
                 return device
-            }
-
-            if let agent {
-                return agent
             }
 
             if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
@@ -170,17 +155,6 @@ struct AgentConnectionOptions: ParsableArguments {
     }
 }
 
-struct InvalidEndpoint: Error {}
-struct NoDevicesFound: Error, CustomStringConvertible, CustomDebugStringConvertible {
-    var description: String {
-        "No Wendy devices found"
-    }
-
-    var debugDescription: String {
-        "No Wendy devices found"
-    }
-}
-
 // MARK: - Device Selection with Bluetooth Support
 
 extension AgentConnectionOptions {
@@ -195,10 +169,6 @@ extension AgentConnectionOptions {
         // If explicit device specified via CLI, use it as LAN
         if let device {
             return .lan(host: device.host, port: device.port, defaultDevice: false)
-        }
-
-        if let agent {
-            return .lan(host: agent.host, port: agent.port, defaultDevice: false)
         }
 
         if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
@@ -283,6 +253,6 @@ extension AgentConnectionOptions {
             }
         }
 
-        throw InvalidEndpoint()
+        throw CLIError.invalidEndpoint("No valid endpoint found")
     }
 }

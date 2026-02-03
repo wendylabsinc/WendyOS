@@ -9,9 +9,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-bugfix:
+    name: Check for BUGFIX tag
+    runs-on: ubuntu-latest
+    outputs:
+      spot: ${{ steps.check.outputs.spot }}
+    steps:
+      - name: Check PR for BUGFIX tag or bug label
+        id: check
+        env:
+          HAS_BUG_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'bug') }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          SPOT="true"
+
+          if [[ "$PR_TITLE" == *"[BUGFIX]"* ]] || [[ "$PR_BODY" == *"[BUGFIX]"* ]]; then
+            echo "Found [BUGFIX] tag in PR, using on-demand instances"
+            SPOT="false"
+          elif [ "$HAS_BUG_LABEL" == "true" ]; then
+            echo "Found 'bug' label on PR, using on-demand instances"
+            SPOT="false"
+          fi
+
+          echo "spot=$SPOT" >> $GITHUB_OUTPUT
+
   generate-protos:
     name: Generate Protocol Buffers
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    needs: check-bugfix
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
     container: swift:6.2.3
     steps:
       - uses: actions/checkout@v4
@@ -50,17 +76,17 @@ jobs:
           retention-days: 1
 
   test:
-    needs: generate-protos
+    needs: [check-bugfix, generate-protos]
     name: Swift Tests
     strategy:
       matrix:
         include:
-          - os: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64
+          - runner: 8cpu-linux-arm64
             container: swift:6.2.3
-          - os: macos-26
+          - runner: macos-26
             xcode-select: /Applications/Xcode_26.0.app
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner == 'macos-26' && 'macos-26' || format('runs-on={0}/runner={1}/spot={2}', github.run_id, matrix.runner, needs.check-bugfix.outputs.spot) }}
     container: ${{ matrix.container }}
 
     steps:

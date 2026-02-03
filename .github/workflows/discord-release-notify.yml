@@ -1,0 +1,85 @@
+name: Notify Discord on Release
+
+# NOTE: This workflow only triggers when releases are created manually via the GitHub UI
+# or via the API with a Personal Access Token (PAT). Releases created by other workflows
+# using GITHUB_TOKEN do NOT trigger this workflow (GitHub security feature).
+#
+# For releases created by the release-semver.yml workflow, the Discord notification
+# is handled directly in that workflow.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Only notify for stable releases, not pre-releases
+    if: ${{ !github.event.release.prerelease }}
+    steps:
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          NAME="${{ github.event.release.name }}"
+          URL="${{ github.event.release.html_url }}"
+          REPO="${{ github.repository }}"
+
+          # Get release body, strip CRLF line endings, and truncate to 800 chars
+          BODY=$(echo "$RELEASE_BODY" | tr -d '\r')
+          SHORT_BODY=$(echo "$BODY" | head -c 800)
+
+          # Installation instructions (using heredoc with <<- to strip leading tabs)
+          read -r -d '' INSTALL_INSTRUCTIONS << 'INSTALL_EOF' || true
+          ## Install the Wendy CLI
+
+          **macOS (Homebrew)**
+          ```
+          brew install wendylabsinc/tap/wendy
+          ```
+
+          **Arch Linux (AUR)**
+          ```
+          yay -S wendy
+          ```
+
+          **Debian/Ubuntu (APT)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
+          ```
+
+          **Fedora/RHEL (DNF/YUM)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
+          ```
+          INSTALL_EOF
+
+          # Combine release notes with install instructions
+          FULL_DESCRIPTION="${SHORT_BODY}
+
+          ${INSTALL_INSTRUCTIONS}"
+
+          # Escape for JSON
+          ESCAPED_DESC=$(echo "$FULL_DESCRIPTION" | jq -Rs .)
+
+          # Build JSON payload
+          cat > /tmp/discord_payload.json << PAYLOAD_EOF
+          {
+            "content": "🚀 **New release** for **${REPO}**: **${NAME:-$TAG}**",
+            "embeds": [
+              {
+                "title": "${NAME:-$TAG}",
+                "url": "${URL}",
+                "description": ${ESCAPED_DESC},
+                "color": 5814783,
+                "footer": { "text": "${REPO} • ${TAG}" }
+              }
+            ]
+          }
+          PAYLOAD_EOF
+
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d @/tmp/discord_payload.json \
+            "$DISCORD_WEBHOOK_URL"

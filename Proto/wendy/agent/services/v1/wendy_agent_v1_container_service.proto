@@ -8,6 +8,7 @@ service WendyContainerService {
     rpc ListLayers(ListLayersRequest) returns (stream LayerHeader);
     rpc WriteLayer(stream WriteLayerRequest) returns (stream WriteLayerResponse);
     rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
+    rpc CreateContainerWithProgress(CreateContainerRequest) returns (stream CreateContainerProgressResponse);
     rpc RunContainer(RunContainerLayersRequest) returns (stream RunContainerLayersResponse);
     rpc StartContainer(StartContainerRequest) returns (stream RunContainerLayersResponse);
     rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
@@ -69,6 +70,29 @@ message CreateContainerRequest {
 }
 
 message CreateContainerResponse {}
+
+message CreateContainerProgress {
+    enum Phase {
+        PHASE_UNSPECIFIED = 0;
+        UNPACKING = 1;
+        APPLYING_LAYER = 2;
+        CREATING_CONTAINER = 3;
+        COMPLETE = 4;
+    }
+
+    Phase phase = 1;
+    int32 layer_index = 2;
+    int32 total_layers = 3;
+    int64 layer_size = 4;
+    bool reused_snapshot = 5;
+}
+
+message CreateContainerProgressResponse {
+    oneof response_type {
+        CreateContainerProgress progress = 1;
+        CreateContainerResponse completed = 2;
+    }
+}
 
 message StartContainerRequest {
     string app_name = 1;

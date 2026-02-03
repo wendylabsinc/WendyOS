@@ -47,6 +47,7 @@ struct WendyCommand: AsyncParsableCommand {
         version: Version.current,
         subcommands: [
             RunCommand.self,
+            BuildCommand.self,
             InitCommand.self,
             ProjectCommand.self,
         ],

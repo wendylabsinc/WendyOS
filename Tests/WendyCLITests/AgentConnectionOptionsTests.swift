@@ -121,46 +121,4 @@ struct AgentConnectionOptionsTests {
         #expect(command.agentConnectionOptions.device?.port == 9000)
     }
 
-    @Test("AgentConnectionOptions parsing with --agent (deprecated)")
-    func testAgentConnectionOptionsParsingWithAgent() throws {
-        struct TestCommand: ParsableCommand {
-            @OptionGroup var agentConnectionOptions: AgentConnectionOptions
-
-            mutating func run() {}
-        }
-
-        let command = try TestCommand.parse([
-            "--agent", "legacy.server.com:8000",
-        ])
-
-        #expect(command.agentConnectionOptions.agent?.host == "legacy.server.com")
-        #expect(command.agentConnectionOptions.agent?.port == 8000)
-    }
-
-    @Test("AgentConnectionOptions device takes precedence over agent")
-    func testDeviceTakesPrecedenceOverAgent() throws {
-        struct TestCommand: ParsableCommand {
-            @OptionGroup var agentConnectionOptions: AgentConnectionOptions
-
-            mutating func run() {}
-        }
-
-        let command = try TestCommand.parse([
-            "--device", "device.server.com:9000",
-            "--agent", "agent.server.com:8000",
-        ])
-
-        // Device should be populated
-        #expect(command.agentConnectionOptions.device?.host == "device.server.com")
-        #expect(command.agentConnectionOptions.device?.port == 9000)
-
-        // Agent should also be populated
-        #expect(command.agentConnectionOptions.agent?.host == "agent.server.com")
-        #expect(command.agentConnectionOptions.agent?.port == 8000)
-
-        // But endpoint should return device (takes precedence)
-        let endpoint = try command.agentConnectionOptions.endpoint
-        #expect(endpoint.host == "device.server.com")
-        #expect(endpoint.port == 9000)
-    }
 }

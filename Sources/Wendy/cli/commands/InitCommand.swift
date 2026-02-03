@@ -47,9 +47,9 @@ struct InitCommand: AsyncParsableCommand {
                 )
                 Noora().info("Creating project directory at \(projectPath)")
             } catch {
-                throw InitError.directoryCreationFailed(
+                throw CLIError.directoryCreationFailed(
                     path: projectPath,
-                    error: error.localizedDescription
+                    reason: error.localizedDescription
                 )
             }
         }
@@ -69,9 +69,9 @@ struct InitCommand: AsyncParsableCommand {
         do {
             try fileManager.createDirectory(atPath: wendyDirPath, withIntermediateDirectories: true)
         } catch {
-            throw InitError.directoryCreationFailed(
+            throw CLIError.directoryCreationFailed(
                 path: wendyDirPath,
-                error: error.localizedDescription
+                reason: error.localizedDescription
             )
         }
 
@@ -100,10 +100,10 @@ struct InitCommand: AsyncParsableCommand {
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw InitError.commandFailed(
+            throw CLIError.commandFailed(
                 command: "swift package init --type executable",
-                exitCode: exitCode,
-                error: result.standardError ?? ""
+                exitCode: Int32(exitCode),
+                output: result.standardError ?? ""
             )
         }
     }
@@ -229,7 +229,7 @@ struct InitCommand: AsyncParsableCommand {
                 encoding: .utf8
             )
         } catch {
-            throw InitError.fileCreationFailed(path: appPyPath, error: error.localizedDescription)
+            throw CLIError.fileCreationFailed(path: appPyPath, reason: error.localizedDescription)
         }
 
         // Create requirements.txt
@@ -244,9 +244,9 @@ struct InitCommand: AsyncParsableCommand {
                 encoding: .utf8
             )
         } catch {
-            throw InitError.fileCreationFailed(
+            throw CLIError.fileCreationFailed(
                 path: requirementsPath,
-                error: error.localizedDescription
+                reason: error.localizedDescription
             )
         }
 
@@ -297,9 +297,9 @@ struct InitCommand: AsyncParsableCommand {
                 encoding: .utf8
             )
         } catch {
-            throw InitError.fileCreationFailed(
+            throw CLIError.fileCreationFailed(
                 path: dockerfilePath,
-                error: error.localizedDescription
+                reason: error.localizedDescription
             )
         }
 
@@ -325,9 +325,9 @@ struct InitCommand: AsyncParsableCommand {
                 error: .discarded
             )
         } catch {
-            throw InitError.fileCreationFailed(
+            throw CLIError.fileCreationFailed(
                 path: entrypointPath,
-                error: error.localizedDescription
+                reason: error.localizedDescription
             )
         }
     }
@@ -369,6 +369,11 @@ struct InitCommand: AsyncParsableCommand {
         if language == .python {
             defaultConfig.python = .init(sourceRoot: "/app")
             defaultConfig.entitlements.append(.network(.init(mode: .host)))
+            // Shared cache for Hugging Face models (transformers, datasets, etc.)
+            // Using a well-known name allows multiple apps to share downloaded models
+            defaultConfig.entitlements.append(
+                .persist(.init(name: "huggingface-cache", path: "/app/.cache/huggingface"))
+            )
         }
 
         do {
@@ -384,9 +389,9 @@ struct InitCommand: AsyncParsableCommand {
                 ]
             )
         } catch {
-            throw InitError.wendyJsonCreationFailed(
+            throw CLIError.fileCreationFailed(
                 path: wendyJsonPath,
-                error: error.localizedDescription
+                reason: error.localizedDescription
             )
         }
     }
@@ -395,24 +400,4 @@ struct InitCommand: AsyncParsableCommand {
 enum ProjectLanguage: String, ExpressibleByArgument, CaseIterable {
     case swift
     case python
-}
-
-enum InitError: Error {
-    case commandFailed(command: String, exitCode: Int, error: String)
-    case directoryCreationFailed(path: String, error: String)
-    case wendyJsonCreationFailed(path: String, error: String)
-    case fileCreationFailed(path: String, error: String)
-
-    var localizedDescription: String {
-        switch self {
-        case .commandFailed(let command, let exitCode, let error):
-            return "Command '\(command)' failed with exit code \(exitCode): \(error)"
-        case .directoryCreationFailed(let path, let error):
-            return "Failed to create directory at '\(path)': \(error)"
-        case .wendyJsonCreationFailed(let path, let error):
-            return "Failed to create wendy.json at '\(path)': \(error)"
-        case .fileCreationFailed(let path, let error):
-            return "Failed to create file at '\(path)': \(error)"
-        }
-    }
 }

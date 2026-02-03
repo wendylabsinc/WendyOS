@@ -180,6 +180,106 @@ public struct Wendy_Agent_Services_V1_CreateContainerResponse: Sendable {
   public init() {}
 }
 
+public struct Wendy_Agent_Services_V1_CreateContainerProgress: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var phase: Wendy_Agent_Services_V1_CreateContainerProgress.Phase = .unspecified
+
+  public var layerIndex: Int32 = 0
+
+  public var totalLayers: Int32 = 0
+
+  public var layerSize: Int64 = 0
+
+  public var reusedSnapshot: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum Phase: SwiftProtobuf.Enum, Swift.CaseIterable {
+    public typealias RawValue = Int
+    case unspecified // = 0
+    case unpacking // = 1
+    case applyingLayer // = 2
+    case creatingContainer // = 3
+    case complete // = 4
+    case UNRECOGNIZED(Int)
+
+    public init() {
+      self = .unspecified
+    }
+
+    public init?(rawValue: Int) {
+      switch rawValue {
+      case 0: self = .unspecified
+      case 1: self = .unpacking
+      case 2: self = .applyingLayer
+      case 3: self = .creatingContainer
+      case 4: self = .complete
+      default: self = .UNRECOGNIZED(rawValue)
+      }
+    }
+
+    public var rawValue: Int {
+      switch self {
+      case .unspecified: return 0
+      case .unpacking: return 1
+      case .applyingLayer: return 2
+      case .creatingContainer: return 3
+      case .complete: return 4
+      case .UNRECOGNIZED(let i): return i
+      }
+    }
+
+    // The compiler won't synthesize support with the UNRECOGNIZED case.
+    public static let allCases: [Wendy_Agent_Services_V1_CreateContainerProgress.Phase] = [
+      .unspecified,
+      .unpacking,
+      .applyingLayer,
+      .creatingContainer,
+      .complete,
+    ]
+
+  }
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_CreateContainerProgressResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var responseType: Wendy_Agent_Services_V1_CreateContainerProgressResponse.OneOf_ResponseType? = nil
+
+  public var progress: Wendy_Agent_Services_V1_CreateContainerProgress {
+    get {
+      if case .progress(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_CreateContainerProgress()
+    }
+    set {responseType = .progress(newValue)}
+  }
+
+  public var completed: Wendy_Agent_Services_V1_CreateContainerResponse {
+    get {
+      if case .completed(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_CreateContainerResponse()
+    }
+    set {responseType = .completed(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_ResponseType: Equatable, Sendable {
+    case progress(Wendy_Agent_Services_V1_CreateContainerProgress)
+    case completed(Wendy_Agent_Services_V1_CreateContainerResponse)
+
+  }
+
+  public init() {}
+}
+
 public struct Wendy_Agent_Services_V1_StartContainerRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -626,6 +726,127 @@ extension Wendy_Agent_Services_V1_CreateContainerResponse: SwiftProtobuf.Message
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerResponse, rhs: Wendy_Agent_Services_V1_CreateContainerResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_CreateContainerProgress: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateContainerProgress"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}phase\0\u{3}layer_index\0\u{3}total_layers\0\u{3}layer_size\0\u{3}reused_snapshot\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.phase) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.layerIndex) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self.totalLayers) }()
+      case 4: try { try decoder.decodeSingularInt64Field(value: &self.layerSize) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.reusedSnapshot) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.phase != .unspecified {
+      try visitor.visitSingularEnumField(value: self.phase, fieldNumber: 1)
+    }
+    if self.layerIndex != 0 {
+      try visitor.visitSingularInt32Field(value: self.layerIndex, fieldNumber: 2)
+    }
+    if self.totalLayers != 0 {
+      try visitor.visitSingularInt32Field(value: self.totalLayers, fieldNumber: 3)
+    }
+    if self.layerSize != 0 {
+      try visitor.visitSingularInt64Field(value: self.layerSize, fieldNumber: 4)
+    }
+    if self.reusedSnapshot != false {
+      try visitor.visitSingularBoolField(value: self.reusedSnapshot, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerProgress, rhs: Wendy_Agent_Services_V1_CreateContainerProgress) -> Bool {
+    if lhs.phase != rhs.phase {return false}
+    if lhs.layerIndex != rhs.layerIndex {return false}
+    if lhs.totalLayers != rhs.totalLayers {return false}
+    if lhs.layerSize != rhs.layerSize {return false}
+    if lhs.reusedSnapshot != rhs.reusedSnapshot {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_CreateContainerProgress.Phase: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0PHASE_UNSPECIFIED\0\u{1}UNPACKING\0\u{1}APPLYING_LAYER\0\u{1}CREATING_CONTAINER\0\u{1}COMPLETE\0")
+}
+
+extension Wendy_Agent_Services_V1_CreateContainerProgressResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CreateContainerProgressResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}progress\0\u{1}completed\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try {
+        var v: Wendy_Agent_Services_V1_CreateContainerProgress?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .progress(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .progress(v)
+        }
+      }()
+      case 2: try {
+        var v: Wendy_Agent_Services_V1_CreateContainerResponse?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .completed(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .completed(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    switch self.responseType {
+    case .progress?: try {
+      guard case .progress(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    }()
+    case .completed?: try {
+      guard case .completed(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerProgressResponse, rhs: Wendy_Agent_Services_V1_CreateContainerProgressResponse) -> Bool {
+    if lhs.responseType != rhs.responseType {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

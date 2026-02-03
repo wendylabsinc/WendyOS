@@ -56,6 +56,18 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
                 method: "CreateContainer"
             )
         }
+        /// Namespace for "CreateContainerWithProgress" metadata.
+        public enum CreateContainerWithProgress {
+            /// Request type for "CreateContainerWithProgress".
+            public typealias Input = Wendy_Agent_Services_V1_CreateContainerRequest
+            /// Response type for "CreateContainerWithProgress".
+            public typealias Output = Wendy_Agent_Services_V1_CreateContainerProgressResponse
+            /// Descriptor for "CreateContainerWithProgress".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "CreateContainerWithProgress"
+            )
+        }
         /// Namespace for "RunContainer" metadata.
         public enum RunContainer {
             /// Request type for "RunContainer".
@@ -121,6 +133,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             ListLayers.descriptor,
             WriteLayer.descriptor,
             CreateContainer.descriptor,
+            CreateContainerWithProgress.descriptor,
             RunContainer.descriptor,
             StartContainer.descriptor,
             StopContainer.descriptor,
@@ -192,6 +205,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerResponse>
+
+        /// Handle the "CreateContainerWithProgress" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_CreateContainerProgressResponse` messages.
+        func createContainerWithProgress(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>
 
         /// Handle the "RunContainer" method.
         ///
@@ -314,6 +341,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_CreateContainerResponse>
 
+        /// Handle the "CreateContainerWithProgress" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_CreateContainerProgressResponse` messages.
+        func createContainerWithProgress(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>
+
         /// Handle the "RunContainer" method.
         ///
         /// - Parameters:
@@ -435,6 +476,21 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_CreateContainerResponse
 
+        /// Handle the "CreateContainerWithProgress" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - response: A response stream of `Wendy_Agent_Services_V1_CreateContainerProgressResponse` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        func createContainerWithProgress(
+            request: Wendy_Agent_Services_V1_CreateContainerRequest,
+            response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_CreateContainerProgressResponse>,
+            context: GRPCCore.ServerContext
+        ) async throws
+
         /// Handle the "RunContainer" method.
         ///
         /// - Parameters:
@@ -548,6 +604,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.CreateContainerWithProgress.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_CreateContainerRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_CreateContainerProgressResponse>(),
+            handler: { request, context in
+                try await self.createContainerWithProgress(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.RunContainer.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_RunContainerLayersRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_RunContainerLayersResponse>(),
@@ -628,6 +695,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
             context: context
         )
         return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func createContainerWithProgress(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse> {
+        let response = try await self.createContainerWithProgress(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return response
     }
 
     public func runContainer(
@@ -733,6 +811,23 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
                 context: context
             ),
             metadata: [:]
+        )
+    }
+
+    public func createContainerWithProgress(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse> {
+        return GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>(
+            metadata: [:],
+            producer: { writer in
+                try await self.createContainerWithProgress(
+                    request: request.message,
+                    response: writer,
+                    context: context
+                )
+                return [:]
+            }
         )
     }
 
@@ -878,6 +973,25 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_CreateContainerResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_CreateContainerResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CreateContainerWithProgress" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_CreateContainerProgressResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func createContainerWithProgress<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_CreateContainerProgressResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
         /// Call the "RunContainer" method.
@@ -1071,6 +1185,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             try await self.client.unary(
                 request: request,
                 descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.CreateContainer.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "CreateContainerWithProgress" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_CreateContainerProgressResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func createContainerWithProgress<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_CreateContainerProgressResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.serverStreaming(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.CreateContainerWithProgress.descriptor,
                 serializer: serializer,
                 deserializer: deserializer,
                 options: options,
@@ -1298,6 +1440,29 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
         )
     }
 
+    /// Call the "CreateContainerWithProgress" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func createContainerWithProgress<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        try await self.createContainerWithProgress(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_CreateContainerProgressResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "RunContainer" method.
     ///
     /// - Parameters:
@@ -1499,6 +1664,33 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             metadata: metadata
         )
         return try await self.createContainer(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CreateContainerWithProgress" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func createContainerWithProgress<Result>(
+        _ message: Wendy_Agent_Services_V1_CreateContainerRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_CreateContainerProgressResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.createContainerWithProgress(
             request: request,
             options: options,
             onResponse: handleResponse
