@@ -1,5 +1,12 @@
 name: Notify Discord on Release
 
+# NOTE: This workflow only triggers when releases are created manually via the GitHub UI
+# or via the API with a Personal Access Token (PAT). Releases created by other workflows
+# using GITHUB_TOKEN do NOT trigger this workflow (GitHub security feature).
+#
+# For releases created by the release-semver.yml workflow, the Discord notification
+# is handled directly in that workflow.
+
 on:
   release:
     types: [published]
