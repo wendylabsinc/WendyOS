@@ -119,35 +119,37 @@ enum UpdateChecker {
 
     private static func getUpdateCommand() -> String {
         #if os(macOS)
-        return "brew upgrade wendylabsinc/tap/wendy"
+            return "brew upgrade wendylabsinc/tap/wendy"
         #elseif os(Linux)
-        // Detect Linux distribution and return appropriate command
-        if let osRelease = try? String(contentsOfFile: "/etc/os-release", encoding: .utf8) {
-            let lowercased = osRelease.lowercased()
-            if lowercased.contains("debian") || lowercased.contains("ubuntu") {
+            // Detect Linux distribution and return appropriate command
+            if let osRelease = try? String(contentsOfFile: "/etc/os-release", encoding: .utf8) {
+                let lowercased = osRelease.lowercased()
+                if lowercased.contains("debian") || lowercased.contains("ubuntu") {
+                    return "sudo apt-get update && sudo apt-get upgrade wendy"
+                } else if lowercased.contains("fedora") {
+                    return "sudo dnf upgrade wendy"
+                } else if lowercased.contains("rhel") || lowercased.contains("centos")
+                    || lowercased.contains("rocky") || lowercased.contains("alma")
+                {
+                    return "sudo yum update wendy"
+                } else if lowercased.contains("arch") {
+                    return "yay -Syu wendy"
+                }
+            }
+            // Fallback: check for package manager binaries
+            if FileManager.default.fileExists(atPath: "/usr/bin/apt-get") {
                 return "sudo apt-get update && sudo apt-get upgrade wendy"
-            } else if lowercased.contains("fedora") {
+            } else if FileManager.default.fileExists(atPath: "/usr/bin/dnf") {
                 return "sudo dnf upgrade wendy"
-            } else if lowercased.contains("rhel") || lowercased.contains("centos") || lowercased.contains("rocky") || lowercased.contains("alma") {
+            } else if FileManager.default.fileExists(atPath: "/usr/bin/yum") {
                 return "sudo yum update wendy"
-            } else if lowercased.contains("arch") {
+            } else if FileManager.default.fileExists(atPath: "/usr/bin/pacman") {
                 return "yay -Syu wendy"
             }
-        }
-        // Fallback: check for package manager binaries
-        if FileManager.default.fileExists(atPath: "/usr/bin/apt-get") {
-            return "sudo apt-get update && sudo apt-get upgrade wendy"
-        } else if FileManager.default.fileExists(atPath: "/usr/bin/dnf") {
-            return "sudo dnf upgrade wendy"
-        } else if FileManager.default.fileExists(atPath: "/usr/bin/yum") {
-            return "sudo yum update wendy"
-        } else if FileManager.default.fileExists(atPath: "/usr/bin/pacman") {
-            return "yay -Syu wendy"
-        }
-        // Generic fallback
-        return "Update using your package manager"
+            // Generic fallback
+            return "Update using your package manager"
         #else
-        return "Update using your package manager"
+            return "Update using your package manager"
         #endif
     }
 }

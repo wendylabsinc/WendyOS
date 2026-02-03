@@ -293,16 +293,18 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                                 host: target.host,
                                 port: target.port
                             ) { collectorClient in
-                                let logsCollector = Opentelemetry_Proto_Collector_Logs_V1_LogsService.Client(
-                                    wrapping: collectorClient
-                                )
+                                let logsCollector =
+                                    Opentelemetry_Proto_Collector_Logs_V1_LogsService.Client(
+                                        wrapping: collectorClient
+                                    )
                                 let metricsCollector =
                                     Opentelemetry_Proto_Collector_Metrics_V1_MetricsService.Client(
                                         wrapping: collectorClient
                                     )
-                                let tracesCollector = Opentelemetry_Proto_Collector_Trace_V1_TraceService.Client(
-                                    wrapping: collectorClient
-                                )
+                                let tracesCollector =
+                                    Opentelemetry_Proto_Collector_Trace_V1_TraceService.Client(
+                                        wrapping: collectorClient
+                                    )
 
                                 try await self.streamTelemetry(
                                     streamLogs: streamLogs,
@@ -450,7 +452,11 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
     }
 
     /// Stream telemetry with forwarding to an OTLP collector
-    private func streamTelemetry<LogsClient: Opentelemetry_Proto_Collector_Logs_V1_LogsService.ClientProtocol, MetricsClient: Opentelemetry_Proto_Collector_Metrics_V1_MetricsService.ClientProtocol, TracesClient: Opentelemetry_Proto_Collector_Trace_V1_TraceService.ClientProtocol>(
+    private func streamTelemetry<
+        LogsClient: Opentelemetry_Proto_Collector_Logs_V1_LogsService.ClientProtocol,
+        MetricsClient: Opentelemetry_Proto_Collector_Metrics_V1_MetricsService.ClientProtocol,
+        TracesClient: Opentelemetry_Proto_Collector_Trace_V1_TraceService.ClientProtocol
+    >(
         streamLogs: Bool,
         streamMetrics: Bool,
         streamTraces: Bool,
@@ -689,7 +695,9 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
         }
     }
 
-    private func extractMetricValue(_ metric: Opentelemetry_Proto_Metrics_V1_Metric) -> (
+    private func extractMetricValue(
+        _ metric: Opentelemetry_Proto_Metrics_V1_Metric
+    ) -> (
         Double?, String
     ) {
         switch metric.data {
@@ -790,14 +798,16 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                         type: "span",
                         traceId: span.traceID.hexEncodedString(),
                         spanId: span.spanID.hexEncodedString(),
-                        parentSpanId: span.parentSpanID.isEmpty ? nil : span.parentSpanID.hexEncodedString(),
+                        parentSpanId: span.parentSpanID.isEmpty
+                            ? nil : span.parentSpanID.hexEncodedString(),
                         name: span.name,
                         kind: formatSpanKind(span.kind),
                         startTime: formatTimestamp(span.startTimeUnixNano),
                         endTime: formatTimestamp(span.endTimeUnixNano),
                         startTimeNano: span.startTimeUnixNano,
                         endTimeNano: span.endTimeUnixNano,
-                        durationMs: Double(span.endTimeUnixNano - span.startTimeUnixNano) / 1_000_000,
+                        durationMs: Double(span.endTimeUnixNano - span.startTimeUnixNano)
+                            / 1_000_000,
                         status: formatSpanStatus(span.status),
                         service: serviceName,
                         attributes: spanAttrs,

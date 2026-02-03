@@ -17,7 +17,6 @@ struct WendyCLI {
             return logger
         }
 
-
         // Check for global --json flag in arguments
         let jsonMode =
             ProcessInfo.processInfo.arguments.contains("--json")

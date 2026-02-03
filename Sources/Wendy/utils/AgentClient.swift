@@ -371,7 +371,9 @@ extension AgentClient {
             }
 
         case .bluetooth:
-            throw CLIError.unsupportedPlatform(reason: "Starting apps over Bluetooth is not yet supported")
+            throw CLIError.unsupportedPlatform(
+                reason: "Starting apps over Bluetooth is not yet supported"
+            )
         }
     }
 
