@@ -204,10 +204,13 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Include metrics in the stream")
     var metrics: Bool = false
 
-    @Option(name: .long, help: "Filter logs by app/container name")
+    @Flag(name: .long, help: "Include traces/spans in the stream")
+    var traces: Bool = false
+
+    @Option(name: .long, help: "Filter by app/container name")
     var app: String?
 
-    @Option(name: .long, help: "Filter logs by service name")
+    @Option(name: .long, help: "Filter by service name")
     var service: String?
 
     @Option(
@@ -219,9 +222,11 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
     @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
     func run() async throws {
-        // Default to both logs and metrics if neither specified
-        let streamLogs = logs || (!logs && !metrics)
-        let streamMetrics = metrics || (!logs && !metrics)
+        // Default to all telemetry types if none specified
+        let noneSpecified = !logs && !metrics && !traces
+        let streamLogs = logs || noneSpecified
+        let streamMetrics = metrics || noneSpecified
+        let streamTraces = traces || noneSpecified
 
         // Set up SIGINT handling for graceful shutdown
         signal(SIGINT, SIG_IGN)
@@ -298,6 +303,33 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                                                     try Task.checkCancellation()
                                                     if case .message(let message) = bodyPart {
                                                         outputMetricsAsJSONL(message.metrics)
+                                                    }
+                                                }
+                                            case .failure(let error):
+                                                throw error
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if streamTraces {
+                                    innerGroup.addTask {
+                                        let request = Wendy_Agent_Services_V1_StreamTracesRequest.with {
+                                            if let service = service {
+                                                $0.serviceName = service
+                                            }
+                                            if let app = app {
+                                                $0.appName = app
+                                            }
+                                        }
+
+                                        try await telemetry.streamTraces(request) { response in
+                                            switch response.accepted {
+                                            case .success(let contents):
+                                                for try await bodyPart in contents.bodyParts {
+                                                    try Task.checkCancellation()
+                                                    if case .message(let message) = bodyPart {
+                                                        outputTracesAsJSONL(message.traces)
                                                     }
                                                 }
                                             case .failure(let error):
@@ -509,6 +541,91 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
         default: return "UNSPECIFIED"
         }
     }
+
+    private func outputTracesAsJSONL(
+        _ traces: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest
+    ) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        for resourceSpans in traces.resourceSpans {
+            let serviceName =
+                resourceSpans.resource.attributes
+                .first { $0.key == "service.name" }?.value.stringValue ?? "unknown"
+
+            // Extract resource attributes
+            var resourceAttrs: [String: String] = [:]
+            for attr in resourceSpans.resource.attributes {
+                resourceAttrs[attr.key] = attr.value.stringValue
+            }
+
+            for scopeSpans in resourceSpans.scopeSpans {
+                for span in scopeSpans.spans {
+                    // Extract span attributes
+                    var spanAttrs: [String: String] = [:]
+                    for attr in span.attributes {
+                        spanAttrs[attr.key] = attr.value.stringValue
+                    }
+
+                    // Extract events
+                    let events = span.events.map { event in
+                        SpanEvent(
+                            name: event.name,
+                            timestamp: formatTimestamp(event.timeUnixNano),
+                            timestampNano: event.timeUnixNano
+                        )
+                    }
+
+                    let entry = SpanJSONLEntry(
+                        type: "span",
+                        traceId: span.traceID.hexEncodedString(),
+                        spanId: span.spanID.hexEncodedString(),
+                        parentSpanId: span.parentSpanID.isEmpty ? nil : span.parentSpanID.hexEncodedString(),
+                        name: span.name,
+                        kind: formatSpanKind(span.kind),
+                        startTime: formatTimestamp(span.startTimeUnixNano),
+                        endTime: formatTimestamp(span.endTimeUnixNano),
+                        startTimeNano: span.startTimeUnixNano,
+                        endTimeNano: span.endTimeUnixNano,
+                        durationMs: Double(span.endTimeUnixNano - span.startTimeUnixNano) / 1_000_000,
+                        status: formatSpanStatus(span.status),
+                        service: serviceName,
+                        attributes: spanAttrs,
+                        events: events,
+                        resource: resourceAttrs
+                    )
+
+                    if let data = try? encoder.encode(entry),
+                        let json = String(data: data, encoding: .utf8)
+                    {
+                        print(json)
+                        fflush(stdout)
+                    }
+                }
+            }
+        }
+    }
+
+    private func formatSpanKind(_ kind: Opentelemetry_Proto_Trace_V1_Span.SpanKind) -> String {
+        switch kind {
+        case .internal: return "INTERNAL"
+        case .server: return "SERVER"
+        case .client: return "CLIENT"
+        case .producer: return "PRODUCER"
+        case .consumer: return "CONSUMER"
+        default: return "UNSPECIFIED"
+        }
+    }
+
+    private func formatSpanStatus(_ status: Opentelemetry_Proto_Trace_V1_Status) -> SpanStatus {
+        let code: String
+        switch status.code {
+        case .ok: code = "OK"
+        case .error: code = "ERROR"
+        default: code = "UNSET"
+        }
+        return SpanStatus(code: code, message: status.message.isEmpty ? nil : status.message)
+    }
 }
 
 // MARK: - JSONL Entry Types
@@ -541,4 +658,40 @@ private struct ErrorJSONLEntry: Encodable {
     let type: String
     let timestamp: String
     let message: String
+}
+
+private struct SpanJSONLEntry: Encodable {
+    let type: String
+    let traceId: String
+    let spanId: String
+    let parentSpanId: String?
+    let name: String
+    let kind: String
+    let startTime: String
+    let endTime: String
+    let startTimeNano: UInt64
+    let endTimeNano: UInt64
+    let durationMs: Double
+    let status: SpanStatus
+    let service: String
+    let attributes: [String: String]
+    let events: [SpanEvent]
+    let resource: [String: String]
+}
+
+private struct SpanStatus: Encodable {
+    let code: String
+    let message: String?
+}
+
+private struct SpanEvent: Encodable {
+    let name: String
+    let timestamp: String
+    let timestampNano: UInt64
+}
+
+extension Data {
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
 }

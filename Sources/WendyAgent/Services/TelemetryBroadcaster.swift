@@ -3,13 +3,15 @@ import Logging
 import OpenTelemetryGRPC
 
 /// Actor that broadcasts telemetry data to multiple subscribers.
-/// Used to fan out logs and metrics from the OTel proxy to CLI clients.
+/// Used to fan out logs, metrics, and traces from the OTel proxy to CLI clients.
 actor TelemetryBroadcaster {
     typealias LogsRequest = Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest
     typealias MetricsRequest = Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest
+    typealias TracesRequest = Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest
 
     private var logSubscribers: [UUID: AsyncStream<LogsRequest>.Continuation] = [:]
     private var metricsSubscribers: [UUID: AsyncStream<MetricsRequest>.Continuation] = [:]
+    private var tracesSubscribers: [UUID: AsyncStream<TracesRequest>.Continuation] = [:]
     private let logger = Logger(label: "sh.wendy.agent.telemetry-broadcaster")
 
     /// Cache of the latest metrics by metric key (service:metricName)
@@ -184,5 +186,36 @@ actor TelemetryBroadcaster {
         }
 
         return request
+    }
+
+    // MARK: - Traces
+
+    /// Subscribe to traces broadcasts. Returns a stream that yields trace requests.
+    func subscribeTraces() -> (id: UUID, stream: AsyncStream<TracesRequest>) {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<TracesRequest>.makeStream(
+            bufferingPolicy: .bufferingNewest(100)
+        )
+        tracesSubscribers[id] = continuation
+        logger.debug("Traces subscriber added", metadata: ["id": "\(id)"])
+        return (id, stream)
+    }
+
+    /// Unsubscribe from traces broadcasts.
+    func unsubscribeTraces(id: UUID) {
+        if let continuation = tracesSubscribers.removeValue(forKey: id) {
+            continuation.finish()
+            logger.debug("Traces subscriber removed", metadata: ["id": "\(id)"])
+        }
+    }
+
+    /// Broadcast traces to all subscribers.
+    func broadcastTraces(_ request: TracesRequest) {
+        for (id, continuation) in tracesSubscribers {
+            let result = continuation.yield(request)
+            if case .terminated = result {
+                tracesSubscribers.removeValue(forKey: id)
+            }
+        }
     }
 }
