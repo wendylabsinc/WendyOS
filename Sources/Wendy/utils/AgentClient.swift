@@ -354,6 +354,27 @@ extension AgentClient {
         }
     }
 
+    /// Start an application
+    func startApp(name: String) async throws {
+        switch self {
+        case .grpc(let client):
+            let containers = Wendy_Agent_Services_V1_WendyContainerService.Client(wrapping: client)
+            _ = try await containers.startContainer(
+                request: .init(message: .with { $0.appName = name })
+            ) { response in
+                // Wait for the container to start, then return
+                for try await message in response.messages {
+                    if case .started = message.responseType {
+                        return
+                    }
+                }
+            }
+
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(reason: "Starting apps over Bluetooth is not yet supported")
+        }
+    }
+
     /// Stop a running application
     func stopApp(name: String) async throws {
         switch self {
@@ -445,8 +466,8 @@ struct WiFiDisconnectResult: Sendable {
     let errorMessage: String?
 }
 
-struct AppInfo: Sendable {
-    enum RunningState: String, Sendable {
+struct AppInfo: Sendable, Encodable {
+    enum RunningState: String, Sendable, Encodable {
         case running = "Running"
         case stopped = "Stopped"
         case unknown = "Unknown"
