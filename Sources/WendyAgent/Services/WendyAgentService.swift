@@ -329,9 +329,23 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetAgentVersionRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetAgentVersionResponse> {
+        // Read OS version from /etc/wendy/version.txt if it exists (WendyOS only)
+        let osVersion: String?
+        let versionFilePath = "/etc/wendy/version.txt"
+        if let versionData = FileManager.default.contents(atPath: versionFilePath),
+            let version = String(data: versionData, encoding: .utf8)
+        {
+            osVersion = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            osVersion = nil
+        }
+
         return ServerResponse(
             message: .with {
                 $0.version = Version.current
+                if let osVersion {
+                    $0.osVersion = osVersion
+                }
             }
         )
     }
