@@ -16,6 +16,15 @@ import WendyAgentGRPC
     @preconcurrency import Musl
 #endif
 
+@inline(__always)
+private func flushStdout() {
+    #if os(Linux)
+        fflush(nil)
+    #else
+        flushStdout()
+    #endif
+}
+
 struct LogsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "logs",
@@ -626,7 +635,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                         let json = String(data: data, encoding: .utf8)
                     {
                         print(json)
-                        fflush(stdout)
+                        flushStdout()
                     }
                 }
             }
@@ -670,7 +679,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                         let json = String(data: data, encoding: .utf8)
                     {
                         print(json)
-                        fflush(stdout)
+                        flushStdout()
                     }
                 }
             }
@@ -691,7 +700,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
             let json = String(data: data, encoding: .utf8)
         {
             print(json)
-            fflush(stdout)
+            flushStdout()
         }
     }
 
@@ -819,7 +828,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
                         let json = String(data: data, encoding: .utf8)
                     {
                         print(json)
-                        fflush(stdout)
+                        flushStdout()
                     }
                 }
             }
