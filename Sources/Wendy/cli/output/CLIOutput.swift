@@ -1,4 +1,5 @@
 import Foundation
+import NIOCore
 
 // Helper to flush stdout in Swift 6
 @inline(__always)
@@ -79,11 +80,18 @@ public protocol CLIOutput: Sendable {
     ///   - title: Title for the output section
     ///   - maxLines: Maximum lines to show in the scrolling view
     ///   - operation: The operation to run, receives a callback to emit each line
-    func withStreamingOutput<T: Sendable>(
+    func withStreamingOutputBox<T: Sendable>(
         title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (String) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T
+
+    func withStreamingOutput<T: Sendable>(
+        title: String,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
             T
     ) async throws -> T
 }
@@ -143,19 +151,6 @@ extension CLIOutput {
     ) async throws -> T {
         // Default: just run the operation with no-op progress callback
         try await operation({ _ in })
-    }
-
-    public func withStreamingOutput<T: Sendable>(
-        title: String,
-        maxLines: Int,
-        operation:
-            @escaping @Sendable (@escaping @Sendable (String) async throws -> Void) async throws ->
-            T
-    ) async throws -> T {
-        // Default: just print each line as it comes
-        try await operation { @Sendable line in
-            print(line)
-        }
     }
 
     public func streamingTable<T: Encodable & Sendable>(
@@ -294,6 +289,31 @@ internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
             print("[\(Int(percent * 100))%] \(message)")
         } else {
             print("... \(message)")
+        }
+    }
+
+    func withStreamingOutputBox<T: Sendable>(
+        title: String,
+        maxLines: Int,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T {
+        // Default: just print each line as it comes
+        try await operation { @Sendable chunk in
+            print(String(buffer: chunk))
+        }
+    }
+
+    func withStreamingOutput<T: Sendable>(
+        title: String,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T {
+        // Default: just print each line as it comes
+        try await operation { @Sendable chunk in
+            print(String(buffer: chunk))
         }
     }
 }

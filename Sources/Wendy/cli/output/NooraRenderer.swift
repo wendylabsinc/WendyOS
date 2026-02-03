@@ -1,5 +1,6 @@
 import Foundation
 import Noora
+import NIOCore
 
 // Helper to flush stdout in Swift 6
 @inline(__always)
@@ -211,9 +212,20 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
     public func withStreamingOutput<T: Sendable>(
         title: String,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T {
+        return try await operation { chunk in
+            try FileHandle.standardOutput.write(contentsOf: chunk.readableBytesView)
+        }
+    }
+
+    public func withStreamingOutputBox<T: Sendable>(
+        title: String,
         maxLines: Int,
         operation:
-            @escaping @Sendable (@escaping @Sendable (String) async throws -> Void) async throws ->
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
             T
     ) async throws -> T {
         // Create temp file for full output
@@ -225,38 +237,77 @@ public struct NooraRenderer: CLIOutput, Sendable {
         let fileHandle = try FileHandle(forWritingTo: logFile)
         defer { try? fileHandle.close() }
 
-        let box = BorderedBox(title: title, width: 80, height: maxLines)
-        await box.printTop()
+        let collector = StdoutCollector(title: title, width: 80, height: maxLines)
+        await collector.box.printTop()
 
         do {
-            let value = try await operation { line in
+            let value = try await operation { chunk in
                 // Write to temp file
-                if let data = (line + "\n").data(using: .utf8) {
-                    try fileHandle.write(contentsOf: data)
-                }
-
-                // Split on newlines in case multiple lines are passed at once
-                for part in line.split(separator: "\n", omittingEmptySubsequences: true) {
-                    let trimmed = part.trimmingCharacters(in: .whitespaces)
-                    if !trimmed.isEmpty {
-                        await box.addLine(trimmed)
-                    }
-                }
+                try fileHandle.write(contentsOf: chunk.readableBytesView)
+                await collector.append(chunk)
             }
-            await box.finish()
-            Noora().info(InfoAlert(stringLiteral: "Full output: \(logFile.path)"))
+            await collector.finish()
+            Noora().success("Full output: \(logFile.path)")
             return value
         } catch {
-            await box.finish()
-            Noora().info(InfoAlert(stringLiteral: "Full output: \(logFile.path)"))
+            await collector.finish()
+            var output = ByteBuffer()
+            for line in await collector.lastLines {
+                output.writeImmutableBuffer(line)
+                output.writeString("\n")
+            }
+            try FileHandle.standardError.write(contentsOf: output.readableBytesView)
+            Noora().error("Full output: \(logFile.path)")
             throw error
+        }
+    }
+}
+
+fileprivate actor StdoutCollector {
+    var output = ByteBuffer()
+    var lastLines = [ByteBuffer]()
+    nonisolated let box: BorderedBox
+
+    init(title: String, width: Int, height: Int) {
+        self.box = BorderedBox(title: title, width: width, height: height)
+    }
+
+    func finish() async {
+        await box.finish()
+    }
+
+    func append(_ chunk: ByteBuffer) async {
+        output.writeImmutableBuffer(chunk)
+        while let newlineIndex = output.readableBytesView.firstIndex(
+            of: UInt8(ascii: "\n")
+        ) {
+            let lineLength = output.readableBytesView.distance(
+                from: output.readableBytesView.startIndex,
+                to: newlineIndex
+            )
+            let lineBuffer = output.readSlice(length: lineLength)!
+            output.moveReaderIndex(forwardBy: 1)  // Skip the newline
+            lastLines.append(lineBuffer)
+            var line = String(buffer: lineBuffer)
+            // Strip ANSI escape sequences (and orphaned sequences split across chunks)
+            line.replace(
+                /\u{1B}\[[0-9;]*[A-Za-z~]|\[[0-9;]*[A-Za-z~]|\u{1B}/,
+                with: ""
+            )
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            await box.addLine(line)
+        }
+        output.discardReadBytes()
+        if lastLines.count > 200 {
+            lastLines.removeFirst(lastLines.count - 200)
         }
     }
 }
 
 /// A fixed-size bordered box that redraws in place for streaming terminal output.
 /// Uses an actor to ensure thread-safe access from concurrent stdout/stderr streams.
-private actor BorderedBox {
+fileprivate actor BorderedBox {
     let title: String
     let width: Int
     let height: Int

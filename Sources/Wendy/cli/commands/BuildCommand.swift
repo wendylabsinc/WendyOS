@@ -207,17 +207,11 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 commandName: "wendy build",
                 additionalProperties: buildPhaseProperties
             ) {
-                try await cliOutput.withStreamingOutput(
-                    title: "Building and uploading container",
-                    maxLines: 20
-                ) { emit in
-                    try await docker.buildxAndPush(
-                        name: name,
-                        registryHostname: endpoint.host,
-                        registryPort: 5000,
-                        onOutput: emit
-                    )
-                }
+                try await docker.buildxAndPush(
+                    name: name,
+                    registryHostname: endpoint.host,
+                    registryPort: 5000
+                )
                 cliOutput.success("Container built and uploaded successfully!")
             }
 
@@ -387,7 +381,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 let finalArguments = arguments
                 let finalResources = resources
 
-                try await cliOutput.withStreamingOutput(
+                try await cliOutput.withStreamingOutputBox(
                     title: "Building Swift app",
                     maxLines: 20
                 ) { emit in

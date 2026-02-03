@@ -1,3 +1,4 @@
+import NIOCore
 import Foundation
 import Synchronization
 
@@ -63,6 +64,38 @@ public final class JSONRenderer: CLIOutput, Sendable {
         }
     }
 
+    public func withStreamingOutput<T: Sendable>(
+        title: String,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T {
+        // Create temp file for full output
+        let tempDir = FileManager.default.temporaryDirectory
+        let logFile = tempDir.appendingPathComponent(
+            "wendy-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))-\(String(UUID().uuidString.prefix(8))).log"
+        )
+        FileManager.default.createFile(atPath: logFile.path, contents: nil)
+        let fileHandle = try FileHandle(forWritingTo: logFile)
+        
+        let result = try await operation { chunk in
+            try fileHandle.write(contentsOf: chunk.readableBytesView)
+        }
+        try fileHandle.close()
+        state.withLock { $0.events.append(.output(path: logFile.path)) }
+        return result
+    }
+
+    public func withStreamingOutputBox<T: Sendable>(
+        title: String,
+        maxLines: Int,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws ->
+            T
+    ) async throws -> T {
+        return try await withStreamingOutput(title: title, operation: operation)
+    }
+
     private func encodeResponse(events: [JSONEvent], encoder: JSONEncoder) -> Data {
         let response = JSONResponse(events: events)
         if let data = try? encoder.encode(response) {
@@ -83,11 +116,12 @@ private enum JSONEvent: Sendable {
     case warning(String)
     case table(headers: [String], rows: [[String]])
     case progress(message: String, percent: Double?)
+    case output(path: String)
 }
 
 extension JSONEvent: Encodable {
     private enum CodingKeys: String, CodingKey {
-        case type, message, suggestion, headers, rows, percent
+        case type, message, suggestion, headers, rows, percent, path
     }
 
     func encode(to encoder: Encoder) throws {
@@ -114,6 +148,9 @@ extension JSONEvent: Encodable {
             try container.encode("progress", forKey: .type)
             try container.encode(message, forKey: .message)
             try container.encodeIfPresent(percent, forKey: .percent)
+        case .output(let path):
+            try container.encode("output", forKey: .type)
+            try container.encode(path, forKey: .path)
         }
     }
 }

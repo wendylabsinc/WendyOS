@@ -283,7 +283,7 @@ public struct SwiftPM: Sendable {
         entrypoint: String?,
         arguments entrypointArguments: [String],
         resources: [(source: String, destination: String)],
-        onOutput: @escaping @Sendable (String) async throws -> Void
+        onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
     ) async throws {
         var flags = [
             "package",
