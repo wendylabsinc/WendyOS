@@ -190,10 +190,11 @@ struct DeviceCommand: AsyncParsableCommand {
                         case "linux-x86_64", "x86_64", "amd64":
                             targetPlatform = .linuxX86_64
                         default:
-                            Noora().error(
-                                "Invalid platform '\(platformStr)'. Use 'linux-aarch64' or 'linux-x86_64'"
+                            throw CLIError.invalidArgument(
+                                name: "platform",
+                                value: platformStr,
+                                reason: "Use 'linux-aarch64' or 'linux-x86_64'"
                             )
-                            Self.exit(withError: nil)
                         }
                     } else {
                         // Default to aarch64 (most common for devices)

@@ -203,7 +203,6 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     // Unknown, ignore.
                     ()
                 }
-                try await bufferedWriter.flush()
             }
         }
 
@@ -254,11 +253,17 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             // Temp file has been moved, no longer need to clean up temp directory
             shouldCleanupTemp = false
 
-            // Remove the current binary and move the new one in place
-            // We already have a backup, so this is safe. NIOFileSystem's moveItem
-            // doesn't support overwriting, so we must remove first.
-            try await filesystem.removeItem(at: currentBinary)
-            try await filesystem.moveItem(at: tempNewBinary, to: currentBinary)
+            // Use POSIX rename() for atomic replacement. Unlike the two-step
+            // remove+move approach, rename() atomically replaces the destination,
+            // so there is no window where the binary is missing (e.g. during
+            // a power loss or if systemd tries to restart the agent).
+            guard rename(tempNewBinary.string, currentBinary.string) == 0 else {
+                let err = String(cString: strerror(errno))
+                throw RPCError(
+                    code: .internalError,
+                    message: "Failed to atomically replace binary: \(err)"
+                )
+            }
 
             // Ensure the new binary has executable permissions
             try setExecutablePermissions(
@@ -268,13 +273,24 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
 
             logger.info("Update applied successfully, backup kept at \(backupFile)")
+
+            // Send the .updated response BEFORE triggering restart, because
+            // shouldRestart() initiates graceful shutdown which tears down gRPC
+            // streams. If we send after, the client will get a connection reset
+            // error instead of the confirmation.
+            try await writer.write(
+                .with {
+                    $0.updated = .init()
+                }
+            )
+
             logger.info("Restarting agent")
 
             // Attempt restart - if this throws, we'll restore from backup
             try await shouldRestart()
 
-            // Note: If restart succeeds, this code won't execute as the process will exit
-            // The backup file will remain and should be cleaned up on next successful start
+            // Note: If restart succeeds via graceful shutdown, the process will exit soon.
+            // The backup file will remain and should be cleaned up on next successful start.
         } catch {
             // If move failed or restart failed, restore from backup
             logger.error("Update failed: \(error), attempting to restore from backup")
@@ -318,11 +334,6 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
         }
 
-        try await writer.write(
-            .with {
-                $0.updated = .init()
-            }
-        )
     }
 
     func getAgentVersion(

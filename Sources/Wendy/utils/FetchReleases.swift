@@ -126,7 +126,7 @@ enum Platform: String {
             throw ReleasesError.noAsset
         }
 
-        let downloadedFileURL = try await downloadAsset(asset)
+        let downloadedFileURL = try await downloadAsset(asset, httpClient: httpClient)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString
         )
@@ -204,7 +204,10 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
 }
 
 #if !os(Windows)
-    func downloadAsset(_ asset: Release.Asset) async throws -> URL {
+    func downloadAsset(
+        _ asset: Release.Asset,
+        httpClient: HTTPExecutor = DefaultHTTPExecutor()
+    ) async throws -> URL {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -221,7 +224,7 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
         // Make HEAD request to get Content-Length
         var headRequest = HTTPClientRequest(url: downloadURL.absoluteString)
         headRequest.method = .HEAD
-        let headResponse = try await HTTPClient.shared.execute(
+        let headResponse = try await httpClient.execute(
             headRequest,
             deadline: NIODeadline.now() + .seconds(30)
         )
