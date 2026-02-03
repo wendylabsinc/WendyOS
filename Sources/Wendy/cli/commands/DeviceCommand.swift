@@ -35,6 +35,7 @@ struct DeviceCommand: AsyncParsableCommand {
                 subcommands: [
                     LogsCommand.self,
                     DashboardCommand.self,
+                    TelemetryStreamCommand.self,
                 ]
             ),
             CommandGroup(
