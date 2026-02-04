@@ -80,26 +80,33 @@ func promptDeviceUpdateIfUnimplemented(
         return false
     }
 
-    do {
-        // Download and apply the update
-        let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
-
-        try await withAgentGRPCClient(endpoint, title: "Updating device") { client in
-            let agent = Agent(client: client)
-            _ = try await Noora().progressBarStep(message: "Updating Device") { updateProgress in
-                try await agent.update(fromBinary: binary, onProgress: updateProgress)
-            }
-        }
-
-        // Wait for the device to restart
-        try await waitForDeviceRestart(endpoint: endpoint)
-
-        Noora().success("Device updated successfully. Please try your command again.")
-        return true
-    } catch {
-        Noora().error("Failed to update device: \(error.localizedDescription)")
+    #if os(Windows)
+        Noora().warning("Automatic device updates are not supported on Windows.")
+        Noora().info("Please update your device manually using: wendy device update")
         return false
-    }
+    #else
+        do {
+            // Download and apply the update
+            let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
+
+            try await withAgentGRPCClient(endpoint, title: "Updating device") { client in
+                let agent = Agent(client: client)
+                _ = try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
+                    try await agent.update(fromBinary: binary, onProgress: updateProgress)
+                }
+            }
+
+            // Wait for the device to restart
+            try await waitForDeviceRestart(endpoint: endpoint)
+
+            Noora().success("Device updated successfully. Please try your command again.")
+            return true
+        } catch {
+            Noora().error("Failed to update device: \(error.localizedDescription)")
+            return false
+        }
+    #endif
 }
 
 private func deviceUnreachable() async throws {

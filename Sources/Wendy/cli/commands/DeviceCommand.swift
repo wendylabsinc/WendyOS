@@ -332,7 +332,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     }
                 }
 
-#if !os(Windows)
+                #if !os(Windows)
                     let shouldUpdate = Noora().yesOrNoChoicePrompt(
                         question: "Do you want to update the agent?",
                         collapseOnSelection: false

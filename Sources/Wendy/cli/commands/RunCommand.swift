@@ -419,7 +419,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     case .stdoutOutput(let stdoutOutput):
                         stdoutOutput.data.withUnsafeBytes { data in
                             #if os(Windows)
-                                _ = write(STDOUT_FILENO, data.baseAddress!, UInt32(data.count))
+                                _ = _write(STDOUT_FILENO, data.baseAddress!, UInt32(data.count))
                             #else
                                 _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
                             #endif
@@ -427,7 +427,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     case .stderrOutput(let stderrOutput):
                         stderrOutput.data.withUnsafeBytes { data in
                             #if os(Windows)
-                                _ = write(STDERR_FILENO, data.baseAddress!, UInt32(data.count))
+                                _ = _write(STDERR_FILENO, data.baseAddress!, UInt32(data.count))
                             #else
                                 _ = write(STDERR_FILENO, data.baseAddress!, data.count)
                             #endif
