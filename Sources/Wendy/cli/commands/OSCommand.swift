@@ -619,7 +619,7 @@ struct OSCommand: AsyncParsableCommand {
             abstract: "Update WendyOS on a device using a Mender artifact."
         )
 
-        @Argument(help: "Path to the Mender artifact file (.mender)")
+        @Argument(help: "Path to a Mender artifact file (.mender) or directory containing one")
         var artifactPath: String
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
@@ -628,16 +628,31 @@ struct OSCommand: AsyncParsableCommand {
             let noora = Noora()
             let logger = Logger(label: "wendy.os.update")
 
-            // Verify the artifact file exists
+            // Resolve the artifact file path
             let fileManager = FileManager.default
-            let absolutePath =
+            var absolutePath =
                 artifactPath.hasPrefix("/")
                 ? artifactPath
                 : FileManager.default.currentDirectoryPath + "/" + artifactPath
 
             guard fileManager.fileExists(atPath: absolutePath) else {
-                noora.error("Mender artifact file not found: \(absolutePath)")
+                noora.error("Mender artifact not found: \(absolutePath)")
                 throw ExitCode.failure
+            }
+
+            // Check if the path is a directory - if so, find the .mender file inside
+            var isDirectory: ObjCBool = false
+            fileManager.fileExists(atPath: absolutePath, isDirectory: &isDirectory)
+
+            if isDirectory.boolValue {
+                // Look for a .mender file in the directory
+                let contents = try fileManager.contentsOfDirectory(atPath: absolutePath)
+                guard let menderFile = contents.first(where: { $0.hasSuffix(".mender") }) else {
+                    noora.error("No .mender file found in directory: \(absolutePath)")
+                    throw ExitCode.failure
+                }
+                absolutePath = absolutePath + "/" + menderFile
+                noora.info("Found Mender artifact: \(menderFile)")
             }
 
             let artifactURL = URL(fileURLWithPath: absolutePath)
