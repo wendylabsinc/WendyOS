@@ -2,6 +2,7 @@ import Bluetooth
 import Foundation
 import Logging
 import NIOCore
+import NIOFoundationCompat
 import WendyAgentGRPC
 import WendyShared
 

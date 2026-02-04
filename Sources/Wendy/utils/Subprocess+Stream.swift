@@ -10,24 +10,11 @@ import Subprocess
     import Musl
 #endif
 
-/// Thread-safe buffer for collecting subprocess output
-private actor OutputCollector {
-    var output: String = ""
-
-    func append(_ line: String) {
-        output += line + "\n"
-    }
-
-    func getOutput() -> String {
-        output
-    }
-}
-
 /// Runs a subprocess and streams the output to the given callback.
 public func run(
     executable: Executable,
     arguments: Arguments,
-    onOutput: @escaping @Sendable (String) async throws -> Void
+    onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
 ) async throws {
     #if os(Windows)
         // Windows doesn't support PTY, fall back to regular pipes (block buffered)
@@ -39,12 +26,12 @@ public func run(
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     for try await line in stdout.lines() {
-                        try await onOutput(line)
+                        try await onOutput(ByteBuffer(string: line))
                     }
                 }
                 group.addTask {
                     for try await line in stderr.lines() {
-                        try await onOutput(line)
+                        try await onOutput(ByteBuffer(string: line))
                     }
                 }
                 try await group.waitForAll()
@@ -57,8 +44,8 @@ public func run(
             case .exited(let code), .unhandledException(let code):
                 exitCode = Int(code)
             }
-            throw SubprocessError.nonZeroExit(
-                command: executableName + " " + arguments(flags).description,
+            throw SubprocessError(
+                command: executable.description + " " + arguments.description,
                 exitCode: exitCode,
                 output: "",
                 error: ""
@@ -86,28 +73,8 @@ public func run(
                 .get()
 
             try await channel.executeThenClose { inbound, _ in
-                var buffer = ByteBuffer()
                 for try await chunk in inbound {
-                    buffer.writeImmutableBuffer(chunk)
-                    while let newlineIndex = buffer.readableBytesView.firstIndex(
-                        of: UInt8(ascii: "\n")
-                    ) {
-                        let lineLength = buffer.readableBytesView.distance(
-                            from: buffer.readableBytesView.startIndex,
-                            to: newlineIndex
-                        )
-                        var line = buffer.readString(length: lineLength) ?? ""
-                        buffer.moveReaderIndex(forwardBy: 1)  // Skip the newline
-                        // Strip ANSI escape sequences (and orphaned sequences split across chunks)
-                        line.replace(
-                            /\u{1B}\[[0-9;]*[A-Za-z~]|\[[0-9;]*[A-Za-z~]|\u{1B}/,
-                            with: ""
-                        )
-                        line = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if line.isEmpty { continue }
-                        try await onOutput(line)
-                    }
-                    buffer.discardReadBytes()
+                    try await onOutput(chunk)
                 }
             }
         }

@@ -22,6 +22,9 @@ struct WendyCLI {
             ProcessInfo.processInfo.arguments.contains("--json")
             || ProcessInfo.processInfo.arguments.contains("-j")
 
+        // Check for CLI updates (runs once per day, non-blocking)
+        await UpdateChecker.checkForUpdatesIfNeeded()
+
         // Track command execution with analytics
         if let analytics = try? AnalyticsService(config: getConfig().analytics) {
             await analytics.trackCommandExecution {

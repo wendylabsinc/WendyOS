@@ -131,12 +131,15 @@ struct OTLPHTTPReceiver {
         let data = Data(buffer: body)
 
         do {
-            // Parse but don't forward traces yet (no cloud support)
-            _ = try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(
-                serializedBytes: data
-            )
+            let tracesRequest =
+                try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(
+                    serializedBytes: data
+                )
 
-            // TODO: Add trace broadcasting when needed
+            // Broadcast to CLI subscribers
+            await broadcaster.broadcastTraces(tracesRequest)
+
+            // TODO: Forward to cloud when trace support is added
 
             let response = Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceResponse()
             return Response(

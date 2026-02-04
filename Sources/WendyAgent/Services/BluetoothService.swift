@@ -394,7 +394,7 @@ actor BluetoothService: Service {
                     // Parse protobuf command and process
                     do {
                         let command = try Wendy_Agent_Services_V1_BluetoothCommand(
-                            serializedBytes: messageSlice.readableBytesView
+                            serializedBytes: Array(messageSlice.readableBytesView)
                         )
                         let response = await processCommand(command)
                         let responseData = try response.serializedData()

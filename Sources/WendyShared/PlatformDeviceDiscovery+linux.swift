@@ -1,4 +1,4 @@
-#if os(Linux) || os(Windows)
+#if os(Linux)
     import DNSClient
     import NIOCore
     import Foundation

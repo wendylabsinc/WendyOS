@@ -20,5 +20,7 @@ WendyCLI.app/
 # Proto generation sentinel
 .proto-generated
 .agent-build
+*.exe
+*.msi
 .wendy
 *.resolved

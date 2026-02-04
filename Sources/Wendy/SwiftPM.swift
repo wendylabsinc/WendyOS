@@ -42,13 +42,23 @@ public struct SwiftPM: Sendable {
         return Subprocess.Arguments(runArgs + arguments)
     }
 
-    public init(
-        path: String = "swiftly run swift",
-        swiftVersion: String? = SwiftPM.defaultSwiftVersion
-    ) {
-        self.path = path
-        self.swiftVersion = swiftVersion
-    }
+    #if os(Windows)
+        public init(
+            path: String = "swift",
+            swiftVersion: String? = SwiftPM.defaultSwiftVersion
+        ) {
+            self.path = path
+            self.swiftVersion = swiftVersion
+        }
+    #else
+        public init(
+            path: String = "swiftly run swift",
+            swiftVersion: String? = SwiftPM.defaultSwiftVersion
+        ) {
+            self.path = path
+            self.swiftVersion = swiftVersion
+        }
+    #endif
 
     public enum BuildOption: Sendable {
         /// Filter for selecting a specific Swift SDK to build with.
@@ -126,31 +136,35 @@ public struct SwiftPM: Sendable {
     }
 
     public func listSwiftVersions() async throws -> [InstalledToolchain] {
-        let args = Arguments(["list", "--format", "json"])
-        let result = try await Subprocess.run(
-            .name("swiftly"),
-            arguments: args,
-            output: .string(limit: 10_000),
-            error: .discarded
-        )
-
-        guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
-            let exitCode =
-                switch result.terminationStatus {
-                case .exited(let code), .unhandledException(let code):
-                    Int(code)
-                }
-
-            throw SubprocessError(
-                command: args.description,
-                exitCode: exitCode,
-                output: result.standardOutput ?? "",
-                error: ""
+        #if os(Windows)
+            return []
+        #else
+            let args = Arguments(["list", "--format", "json"])
+            let result = try await Subprocess.run(
+                .name("swiftly"),
+                arguments: args,
+                output: .string(limit: 10_000),
+                error: .discarded
             )
-        }
 
-        return try JSONDecoder().decode(InstalledToolchains.self, from: Data(output.utf8))
-            .toolchains
+            guard result.terminationStatus.isSuccess, let output = result.standardOutput else {
+                let exitCode =
+                    switch result.terminationStatus {
+                    case .exited(let code), .unhandledException(let code):
+                        Int(code)
+                    }
+
+                throw SubprocessError(
+                    command: args.description,
+                    exitCode: exitCode,
+                    output: result.standardOutput ?? "",
+                    error: ""
+                )
+            }
+
+            return try JSONDecoder().decode(InstalledToolchains.self, from: Data(output.utf8))
+                .toolchains
+        #endif
     }
 
     public func installSDK(
@@ -283,7 +297,7 @@ public struct SwiftPM: Sendable {
         entrypoint: String?,
         arguments entrypointArguments: [String],
         resources: [(source: String, destination: String)],
-        onOutput: @escaping @Sendable (String) async throws -> Void
+        onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
     ) async throws {
         var flags = [
             "package",

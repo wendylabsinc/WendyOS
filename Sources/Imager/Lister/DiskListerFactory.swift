@@ -10,6 +10,8 @@ public enum DiskListerFactory {
             return MacOSDiskLister()
         #elseif os(Linux)
             return LinuxDiskLister()
+        #elseif os(Windows)
+            return WindowsDiskLister()
         #else
             fatalError("DiskLister is not implemented for this platform")
         #endif

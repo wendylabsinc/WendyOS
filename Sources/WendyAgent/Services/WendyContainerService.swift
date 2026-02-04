@@ -3,6 +3,7 @@ import ContainerRegistry
 import ContainerdGRPC
 import Foundation
 import Logging
+import Tracing
 import WendyAgentGRPC
 import WendyShared
 import _NIOFileSystem
@@ -111,120 +112,157 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
         return StreamingServerResponse { writer in
-            try await Containerd.withClient { client in
-                do {
-                    let request = request.message
+            return try await withSpan("runContainer") { span in
+                span.attributes["container.app_name"] = request.message.appName
+                span.attributes["container.image_name"] = request.message.imageName
+                span.attributes["container.layers_count"] = request.message.layers.count
 
-                    async let killed: () = {
-                        _ = try await stopContainer(
-                            request: .init(
-                                metadata: Metadata(),
-                                message: .with {
-                                    $0.appName = request.appName
-                                }
-                            ),
-                            context: context
-                        ).accepted.get()
-                    }()
-
-                    logger.info("Creating container config.json")
-                    let config = ImageConfiguration(
-                        architecture: "arm64",
-                        os: "linux",
-                        config: ImageConfigurationConfig(
-                            Cmd: request.cmd.split(separator: " ").map(String.init),
-                            StopSignal: "SIGTERM"
-                        ),
-                        rootfs: ImageConfigurationRootFS(diff_ids: request.layers.map(\.diffID))
-                    )
-                    let (configHash, configSize) = try await client.uploadJSON(config)
-
-                    logger.debug("Creating container manifest")
-                    let manifest = ImageManifest(
-                        mediaType: "application/vnd.oci.image.manifest.v1+json",
-                        config: ContentDescriptor(
-                            mediaType: "application/vnd.oci.image.config.v1+json",
-                            digest: "sha256:\(configHash)",
-                            size: configSize
-                        ),
-                        layers: request.layers.map { layer in
-                            return ContentDescriptor(
-                                mediaType: layer.gzip
-                                    ? "application/vnd.oci.image.layer.v1.tar+gzip"
-                                    : "application/vnd.oci.image.layer.v1.tar",
-                                digest: layer.digest,
-                                size: layer.size
-                            )
-                        }
-                    )
-                    let (manifestHash, manifestSize) = try await client.uploadJSON(manifest)
-
+                return try await Containerd.withClient { client in
                     do {
-                        logger.info("Creating image \(request.imageName)")
-                        try await client.createImage(
-                            named: request.imageName,
-                            manifestHash: manifestHash,
-                            manifestSize: manifestSize
+                        let request = request.message
+
+                        async let killed: () = {
+                            try await withSpan("stopExistingContainer") { _ in
+                                _ = try await stopContainer(
+                                    request: .init(
+                                        metadata: Metadata(),
+                                        message: .with {
+                                            $0.appName = request.appName
+                                        }
+                                    ),
+                                    context: context
+                                ).accepted.get()
+                            }
+                        }()
+
+                        let (configHash, configSize) = try await withSpan("uploadImageConfig") {
+                            innerSpan in
+                            logger.info("Creating container config.json")
+                            let config = ImageConfiguration(
+                                architecture: "arm64",
+                                os: "linux",
+                                config: ImageConfigurationConfig(
+                                    Cmd: request.cmd.split(separator: " ").map(String.init),
+                                    StopSignal: "SIGTERM"
+                                ),
+                                rootfs: ImageConfigurationRootFS(
+                                    diff_ids: request.layers.map(\.diffID)
+                                )
+                            )
+                            let result = try await client.uploadJSON(config)
+                            innerSpan.attributes["config.hash"] = result.0
+                            innerSpan.attributes["config.size"] = Int(result.1)
+                            return result
+                        }
+
+                        let (manifestHash, manifestSize) = try await withSpan("uploadManifest") {
+                            innerSpan in
+                            logger.debug("Creating container manifest")
+                            let manifest = ImageManifest(
+                                mediaType: "application/vnd.oci.image.manifest.v1+json",
+                                config: ContentDescriptor(
+                                    mediaType: "application/vnd.oci.image.config.v1+json",
+                                    digest: "sha256:\(configHash)",
+                                    size: configSize
+                                ),
+                                layers: request.layers.map { layer in
+                                    return ContentDescriptor(
+                                        mediaType: layer.gzip
+                                            ? "application/vnd.oci.image.layer.v1.tar+gzip"
+                                            : "application/vnd.oci.image.layer.v1.tar",
+                                        digest: layer.digest,
+                                        size: layer.size
+                                    )
+                                }
+                            )
+                            let result = try await client.uploadJSON(manifest)
+                            innerSpan.attributes["manifest.hash"] = result.0
+                            innerSpan.attributes["manifest.size"] = Int(result.1)
+                            return result
+                        }
+
+                        try await withSpan("createOrUpdateImage") { innerSpan in
+                            innerSpan.attributes["image.name"] = request.imageName
+                            do {
+                                logger.info("Creating image \(request.imageName)")
+                                try await client.createImage(
+                                    named: request.imageName,
+                                    manifestHash: manifestHash,
+                                    manifestSize: manifestSize
+                                )
+                                innerSpan.attributes["image.action"] = "created"
+                            } catch {
+                                try await client.updateImage(
+                                    named: request.imageName,
+                                    manifestHash: manifestHash,
+                                    manifestSize: manifestSize
+                                )
+                                innerSpan.attributes["image.action"] = "updated"
+                            }
+                        }
+
+                        try await killed
+                        logger.info(
+                            "Killed running container",
+                            metadata: [
+                                "container-id": .stringConvertible(request.appName)
+                            ]
                         )
+
+                        try await withSpan("deleteOldTask") { _ in
+                            try await client.deleteTask(containerID: request.appName)
+                        }
+
+                        try await withSpan("createContainer") { _ in
+                            _ = try await self.createContainer(
+                                request: .init(
+                                    metadata: Metadata(),
+                                    message: .with {
+                                        $0.imageName = request.imageName
+                                        $0.appName = request.appName
+                                        $0.cmd = request.cmd
+                                        $0.appConfig = request.appConfig
+                                        $0.workingDir = request.workingDir
+                                        $0.restartPolicy = request.restartPolicy
+                                    }
+                                ),
+                                context: context
+                            ).accepted.get()
+                        }
+
+                        let response = try await withSpan("startContainer") { _ in
+                            try await self.startContainer(
+                                request: .init(
+                                    metadata: Metadata(),
+                                    message: .with {
+                                        $0.appName = request.appName
+                                    }
+                                ),
+                                context: context
+                            ).accepted.get()
+                        }
+
+                        span.setStatus(.init(code: .ok))
+                        return try await response.producer(writer)
+                    } catch let error as RPCError {
+                        span.setStatus(.init(code: .error, message: error.description))
+                        logger.error(
+                            "Failed to run container",
+                            metadata: [
+                                "error": .stringConvertible(error.description)
+                            ]
+                        )
+                        throw error
                     } catch {
-                        try await client.updateImage(
-                            named: request.imageName,
-                            manifestHash: manifestHash,
-                            manifestSize: manifestSize
+                        span.setStatus(.init(code: .error, message: error.localizedDescription))
+                        logger.error(
+                            "Failed to run container",
+                            metadata: [
+                                "error": .stringConvertible(error.localizedDescription)
+                            ]
                         )
+                        throw RPCError(code: .aborted, message: "\(error)")
                     }
-
-                    try await killed
-                    logger.info(
-                        "Killed running container",
-                        metadata: [
-                            "container-id": .stringConvertible(request.appName)
-                        ]
-                    )
-                    try await client.deleteTask(containerID: request.appName)
-
-                    _ = try await self.createContainer(
-                        request: .init(
-                            metadata: Metadata(),
-                            message: .with {
-                                $0.imageName = request.imageName
-                                $0.appName = request.appName
-                                $0.cmd = request.cmd
-                                $0.appConfig = request.appConfig
-                                $0.workingDir = request.workingDir
-                                $0.restartPolicy = request.restartPolicy
-                            }
-                        ),
-                        context: context
-                    ).accepted.get()
-
-                    let response = try await self.startContainer(
-                        request: .init(
-                            metadata: Metadata(),
-                            message: .with {
-                                $0.appName = request.appName
-                            }
-                        ),
-                        context: context
-                    ).accepted.get()
-
-                    return try await response.producer(writer)
-                } catch let error as RPCError {
-                    logger.error(
-                        "Failed to run container",
-                        metadata: [
-                            "error": .stringConvertible(error.description)
-                        ]
-                    )
-                    throw error
-                } catch {
-                    logger.error(
-                        "Failed to run container",
-                        metadata: [
-                            "error": .stringConvertible(error.localizedDescription)
-                        ]
-                    )
-                    throw RPCError(code: .aborted, message: "\(error)")
                 }
             }
         }
@@ -266,259 +304,282 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             @Sendable (Wendy_Agent_Services_V1_CreateContainerProgress) async throws -> Void
         )?
     ) async throws {
-        try await Containerd.withClient { client in
-            var labels = [String: String]()
+        try await withSpan("createContainerInternal") { span in
+            span.attributes["container.app_name"] = request.appName
+            span.attributes["container.image_name"] = request.imageName
 
-            let images = Containerd_Services_Images_V1_Images.Client(wrapping: client.client)
+            try await Containerd.withClient { client in
+                var labels = [String: String]()
 
-            let image = try await images.get(
-                .with {
-                    $0.name = request.imageName
+                let images = Containerd_Services_Images_V1_Images.Client(wrapping: client.client)
+
+                let image = try await withSpan("getImage") { innerSpan in
+                    innerSpan.attributes["image.name"] = request.imageName
+                    return try await images.get(
+                        .with {
+                            $0.name = request.imageName
+                        }
+                    ).image
                 }
-            ).image
-
-            do {
-                let restartPolicy = request.restartPolicy
-                let restartPolicyLabel = "containerd.io/restart.policy"
-
-                switch restartPolicy.mode {
-                case .default, .unlessStopped, .UNRECOGNIZED:
-                    labels[restartPolicyLabel] = "unless-stopped"
-                case .no:
-                    labels[restartPolicyLabel] = "no"
-                case .onFailure:
-                    labels[restartPolicyLabel] =
-                        "on-failure:\(restartPolicy.onFailureMaxRetries)"
-                }
-            }
-
-            let appConfig: AppConfig
-
-            if request.appConfig.isEmpty {
-                appConfig = AppConfig(
-                    appId: request.appName,
-                    version: "0.0.0",
-                    entitlements: []
-                )
-            } else {
-                appConfig = try JSONDecoder().decode(
-                    AppConfig.self,
-                    from: request.appConfig
-                )
-            }
-
-            let wantsGPU = appConfig.entitlements.contains(where: {
-                if case .gpu = $0 {
-                    return true
-                } else {
-                    return false
-                }
-            })
-
-            labels["sh.wendy/app.version"] = appConfig.version
-
-            let hostname = try await String(
-                contentsOf: FilePath("/etc/hostname"),
-                maximumSizeAllowed: .bytes(256)
-            )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Build base environment variables
-            // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
-            // handled by CDI and added during applyCDIDevice()
-            let env = [
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "WENDY_HOSTNAME=\(hostname).local",
-            ]
-
-            // Infer command and workingDir from the image config, if not provided in the request.
-
-            // Assume manifest.config.digest is the reference to the image config blob
-            let manifest = try await client.readImageManifest(image: image)
-            let configDescriptor = manifest.config
-            let configData = try await client.fetchBlob(digest: configDescriptor.digest)
-            let imageConfig = try JSONDecoder().decode(
-                ContainerRegistry.ImageConfiguration.self,
-                from: configData
-            )
-
-            // Set up command
-            let requestCmdIsEmpty = request.cmd.trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-            let args: [String]
-            if requestCmdIsEmpty {
-                // Compose from config.entrypoint + config.cmd if they exist
-                // (following Docker convention)
-                if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
-                    if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
-                        args = entrypoint + extraCmd
-                    } else {
-                        args = entrypoint
-                    }
-                } else if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
-                    args = extraCmd
-                } else {
-                    // Fallback: try suggest something reasonable (e.g., "/bin/sh"?)
-                    args = []
-                }
-            } else {
-                args = request.cmd.split(separator: " ").map(String.init)
-            }
-
-            // Set up workingDir
-            let workingDir: String
-            if request.workingDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if let wd = imageConfig.config?.WorkingDir, !wd.isEmpty {
-                    workingDir = wd
-                } else {
-                    workingDir = "/"
-                }
-            } else {
-                workingDir = request.workingDir
-            }
-
-            var spec = OCI(
-                args: args,
-                env: env,
-                workingDir: workingDir,
-                appName: request.appName
-            )
-
-            let dependencies = spec.applyEntitlements(
-                entitlements: appConfig.entitlements,
-                appName: request.appName,
-                availableDevices: try OCI.AvailableDevices.detect(),
-                persistenceBasePath: persistenceBasePath
-            )
-
-            for directory in dependencies.directoriesToCreate {
-                try FileManager.default.createDirectory(
-                    at: directory,
-                    withIntermediateDirectories: true
-                )
-            }
-
-            // Apply CDI for GPU if requested
-
-            // Use default runc runtime - GPU devices are injected via CDI
-            let runtime = "io.containerd.runc.v2"
-            let options: Containerd_Runc_V1_Options? = nil
-
-            if wantsGPU {
-                logger.debug(
-                    "Applying NVIDIA CDI spec",
-                    metadata: [
-                        "app-name": .stringConvertible(request.appName),
-                        "image-name": .stringConvertible(request.imageName),
-                    ]
-                )
 
                 do {
-                    let cdiManager = CDIManager(
-                        specGenerator: CDISpecGenerator(
-                            hardwareDiscoverer: SystemHardwareDiscoverer()
-                        )
-                    )
+                    let restartPolicy = request.restartPolicy
+                    let restartPolicyLabel = "containerd.io/restart.policy"
 
-                    let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(
-                        deviceName: "all"
-                    )
-                    try spec.applyCDIDevice(nvidiaSpec, deviceName: "all")
+                    switch restartPolicy.mode {
+                    case .default, .unlessStopped, .UNRECOGNIZED:
+                        labels[restartPolicyLabel] = "unless-stopped"
+                    case .no:
+                        labels[restartPolicyLabel] = "no"
+                    case .onFailure:
+                        labels[restartPolicyLabel] =
+                            "on-failure:\(restartPolicy.onFailureMaxRetries)"
+                    }
+                }
 
-                    logger.info("Successfully applied NVIDIA CDI spec to container")
-                } catch {
-                    logger.error(
-                        "Failed to apply NVIDIA CDI spec",
+                let appConfig: AppConfig
+
+                if request.appConfig.isEmpty {
+                    appConfig = AppConfig(
+                        appId: request.appName,
+                        version: "0.0.0",
+                        entitlements: []
+                    )
+                } else {
+                    appConfig = try JSONDecoder().decode(
+                        AppConfig.self,
+                        from: request.appConfig
+                    )
+                }
+
+                let wantsGPU = appConfig.entitlements.contains(where: {
+                    if case .gpu = $0 {
+                        return true
+                    } else {
+                        return false
+                    }
+                })
+
+                labels["sh.wendy/app.version"] = appConfig.version
+
+                let hostname = try await String(
+                    contentsOf: FilePath("/etc/hostname"),
+                    maximumSizeAllowed: .bytes(256)
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Build base environment variables
+                // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
+                // handled by CDI and added during applyCDIDevice()
+                let env = [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "WENDY_HOSTNAME=\(hostname).local",
+                ]
+
+                // Infer command and workingDir from the image config, if not provided in the request.
+
+                // Assume manifest.config.digest is the reference to the image config blob
+                let manifest = try await client.readImageManifest(image: image)
+                let configDescriptor = manifest.config
+                let configData = try await client.fetchBlob(digest: configDescriptor.digest)
+                let imageConfig = try JSONDecoder().decode(
+                    ContainerRegistry.ImageConfiguration.self,
+                    from: configData
+                )
+
+                // Set up command
+                let requestCmdIsEmpty = request.cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+                let args: [String]
+                if requestCmdIsEmpty {
+                    // Compose from config.entrypoint + config.cmd if they exist
+                    // (following Docker convention)
+                    if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
+                        if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
+                            args = entrypoint + extraCmd
+                        } else {
+                            args = entrypoint
+                        }
+                    } else if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
+                        args = extraCmd
+                    } else {
+                        // Fallback: try suggest something reasonable (e.g., "/bin/sh"?)
+                        args = []
+                    }
+                } else {
+                    args = request.cmd.split(separator: " ").map(String.init)
+                }
+
+                // Set up workingDir
+                let workingDir: String
+                if request.workingDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if let wd = imageConfig.config?.WorkingDir, !wd.isEmpty {
+                        workingDir = wd
+                    } else {
+                        workingDir = "/"
+                    }
+                } else {
+                    workingDir = request.workingDir
+                }
+
+                var spec = OCI(
+                    args: args,
+                    env: env,
+                    workingDir: workingDir,
+                    appName: request.appName
+                )
+
+                let dependencies = spec.applyEntitlements(
+                    entitlements: appConfig.entitlements,
+                    appName: request.appName,
+                    availableDevices: try OCI.AvailableDevices.detect(),
+                    persistenceBasePath: persistenceBasePath
+                )
+
+                for directory in dependencies.directoriesToCreate {
+                    try FileManager.default.createDirectory(
+                        at: directory,
+                        withIntermediateDirectories: true
+                    )
+                }
+
+                // Apply CDI for GPU if requested
+
+                // Use default runc runtime - GPU devices are injected via CDI
+                let runtime = "io.containerd.runc.v2"
+                let options: Containerd_Runc_V1_Options? = nil
+
+                if wantsGPU {
+                    logger.debug(
+                        "Applying NVIDIA CDI spec",
                         metadata: [
-                            "error": .string(error.localizedDescription)
+                            "app-name": .stringConvertible(request.appName),
+                            "image-name": .stringConvertible(request.imageName),
                         ]
                     )
-                    throw error
-                }
-            }
 
-            // Unpack the image from the content store into snapshots
-            // This is required when images are pushed via registry but not yet unpacked
-            let progressHandler = progress
-            let (snapshotKey, _) = try await client.unpackImage(
-                named: request.imageName
-            ) { unpackProgress in
-                guard let progressHandler else { return }
+                    do {
+                        let cdiManager = CDIManager(
+                            specGenerator: CDISpecGenerator(
+                                hardwareDiscoverer: SystemHardwareDiscoverer()
+                            )
+                        )
 
-                let progressMessage = Wendy_Agent_Services_V1_CreateContainerProgress.with {
-                    switch unpackProgress.phase {
-                    case .start(let totalLayers, let totalBytes):
-                        $0.phase = .unpacking
-                        $0.totalLayers = Int32(totalLayers)
-                        $0.layerSize = totalBytes
-                    case .layer(let index, let total, let size, let reused):
-                        $0.phase = .applyingLayer
-                        $0.layerIndex = Int32(index)
-                        $0.totalLayers = Int32(total)
-                        $0.layerSize = size
-                        $0.reusedSnapshot = reused
-                    case .complete(let totalLayers, _, _):
-                        $0.phase = .complete
-                        $0.totalLayers = Int32(totalLayers)
+                        let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(
+                            deviceName: "all"
+                        )
+                        try spec.applyCDIDevice(nvidiaSpec, deviceName: "all")
+
+                        logger.info("Successfully applied NVIDIA CDI spec to container")
+                    } catch {
+                        logger.error(
+                            "Failed to apply NVIDIA CDI spec",
+                            metadata: [
+                                "error": .string(error.localizedDescription)
+                            ]
+                        )
+                        throw error
                     }
                 }
 
-                try await progressHandler(progressMessage)
-            }
+                // Unpack the image from the content store into snapshots
+                // This is required when images are pushed via registry but not yet unpacked
+                let progressHandler = progress
+                let (snapshotKey, _) = try await withSpan("unpackImage") { unpackSpan in
+                    unpackSpan.attributes["image.name"] = request.imageName
+                    return try await client.unpackImage(
+                        named: request.imageName
+                    ) { unpackProgress in
+                        guard let progressHandler else { return }
 
-            if let progressHandler {
-                try await progressHandler(
-                    .with {
-                        $0.phase = .creatingContainer
+                        let progressMessage = Wendy_Agent_Services_V1_CreateContainerProgress.with {
+                            switch unpackProgress.phase {
+                            case .start(let totalLayers, let totalBytes):
+                                $0.phase = .unpacking
+                                $0.totalLayers = Int32(totalLayers)
+                                $0.layerSize = totalBytes
+                                unpackSpan.attributes["unpack.total_layers"] = totalLayers
+                                unpackSpan.attributes["unpack.total_bytes"] = Int(totalBytes)
+                            case .layer(let index, let total, let size, let reused):
+                                $0.phase = .applyingLayer
+                                $0.layerIndex = Int32(index)
+                                $0.totalLayers = Int32(total)
+                                $0.layerSize = size
+                                $0.reusedSnapshot = reused
+                            case .complete(let totalLayers, _, _):
+                                $0.phase = .complete
+                                $0.totalLayers = Int32(totalLayers)
+                            }
+                        }
+
+                        try await progressHandler(progressMessage)
                     }
-                )
-            }
+                }
 
-            do {
-                logger.info(
-                    "Creating container",
-                    metadata: [
-                        "app-name": .stringConvertible(request.appName),
-                        "image-name": .stringConvertible(request.imageName),
-                    ]
-                )
-                try await client.createContainer(
-                    imageName: request.imageName,
-                    appName: request.appName,
-                    snapshotKey: snapshotKey ?? "",
-                    ociSpec: try JSONEncoder().encode(spec),
-                    labels: labels,
-                    runtime: runtime,
-                    options: options
-                )
-            } catch let error as RPCError where error.code == .alreadyExists {
-                logger.debug("Container already exists, attempting to update")
-                do {
-                    try await client.updateContainer(
-                        imageName: request.imageName,
-                        appName: request.appName,
-                        snapshotKey: snapshotKey ?? "",
-                        ociSpec: try JSONEncoder().encode(spec),
-                        labels: labels,
-                        runtime: runtime,
-                        options: options
-                    )
-                } catch let updateError as RPCError
-                    where updateError.code == .invalidArgument
-                    && updateError.message.contains("Runtime.Name field is immutable")
-                {
-                    logger.info("Runtime changed, deleting and recreating container")
-                    try await client.deleteContainer(named: request.appName)
-                    try await client.createContainer(
-                        imageName: request.imageName,
-                        appName: request.appName,
-                        snapshotKey: snapshotKey ?? "",
-                        ociSpec: try JSONEncoder().encode(spec),
-                        labels: labels,
-                        runtime: runtime
+                if let progressHandler {
+                    try await progressHandler(
+                        .with {
+                            $0.phase = .creatingContainer
+                        }
                     )
                 }
+
+                try await withSpan("createOrUpdateContainer") { createSpan in
+                    createSpan.attributes["container.app_name"] = request.appName
+                    createSpan.attributes["container.runtime"] = runtime
+
+                    do {
+                        logger.info(
+                            "Creating container",
+                            metadata: [
+                                "app-name": .stringConvertible(request.appName),
+                                "image-name": .stringConvertible(request.imageName),
+                            ]
+                        )
+                        try await client.createContainer(
+                            imageName: request.imageName,
+                            appName: request.appName,
+                            snapshotKey: snapshotKey ?? "",
+                            ociSpec: try JSONEncoder().encode(spec),
+                            labels: labels,
+                            runtime: runtime,
+                            options: options
+                        )
+                        createSpan.attributes["container.action"] = "created"
+                    } catch let error as RPCError where error.code == .alreadyExists {
+                        logger.debug("Container already exists, attempting to update")
+                        do {
+                            try await client.updateContainer(
+                                imageName: request.imageName,
+                                appName: request.appName,
+                                snapshotKey: snapshotKey ?? "",
+                                ociSpec: try JSONEncoder().encode(spec),
+                                labels: labels,
+                                runtime: runtime,
+                                options: options
+                            )
+                            createSpan.attributes["container.action"] = "updated"
+                        } catch let updateError as RPCError
+                            where updateError.code == .invalidArgument
+                            && updateError.message.contains("Runtime.Name field is immutable")
+                        {
+                            logger.info("Runtime changed, deleting and recreating container")
+                            try await client.deleteContainer(named: request.appName)
+                            try await client.createContainer(
+                                imageName: request.imageName,
+                                appName: request.appName,
+                                snapshotKey: snapshotKey ?? "",
+                                ociSpec: try JSONEncoder().encode(spec),
+                                labels: labels,
+                                runtime: runtime
+                            )
+                            createSpan.attributes["container.action"] = "recreated"
+                        }
+                    }
+                }
             }
+
+            span.setStatus(.init(code: .ok))
         }
     }
 
@@ -568,36 +629,44 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
         request: ServerRequest<Wendy_Agent_Services_V1_StopContainerRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_StopContainerResponse> {
-        try await Containerd.withClient { client in
+        try await withSpan("stopContainer") { span in
             let appName = request.message.appName
-            logger.info(
-                "Stopping container",
-                metadata: ["container-id": .stringConvertible(appName)]
-            )
-            do {
-                try await client.stopTask(containerID: appName)
-                // Mark the container as explicitly stopped in the monitor
-                await ContainerMonitor.shared.markContainerStopped(appName)
+            span.attributes["container.app_name"] = appName
+
+            try await Containerd.withClient { client in
                 logger.info(
-                    "Stopped container",
+                    "Stopping container",
                     metadata: ["container-id": .stringConvertible(appName)]
                 )
-            } catch let error as RPCError where error.code == .notFound {
-                logger.info(
-                    "Container wasn't running",
-                    metadata: ["container-id": .stringConvertible(appName)]
-                )
-            } catch let error as RPCError {
-                logger.error(
-                    "Failed to stop container",
-                    metadata: [
-                        "container-id": .stringConvertible(appName),
-                        "error": .stringConvertible(error.description),
-                    ]
-                )
-                throw error
+                do {
+                    try await client.stopTask(containerID: appName)
+                    // Mark the container as explicitly stopped in the monitor
+                    await ContainerMonitor.shared.markContainerStopped(appName)
+                    logger.info(
+                        "Stopped container",
+                        metadata: ["container-id": .stringConvertible(appName)]
+                    )
+                    span.attributes["container.was_running"] = true
+                } catch let error as RPCError where error.code == .notFound {
+                    logger.info(
+                        "Container wasn't running",
+                        metadata: ["container-id": .stringConvertible(appName)]
+                    )
+                    span.attributes["container.was_running"] = false
+                } catch let error as RPCError {
+                    span.setStatus(.init(code: .error, message: error.description))
+                    logger.error(
+                        "Failed to stop container",
+                        metadata: [
+                            "container-id": .stringConvertible(appName),
+                            "error": .stringConvertible(error.description),
+                        ]
+                    )
+                    throw error
+                }
             }
 
+            span.setStatus(.init(code: .ok))
             return ServerResponse(message: .init())
         }
     }
@@ -610,62 +679,76 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
         let appName = request.appName
         let deleteImage = request.deleteImage
 
-        return try await Containerd.withClient { client in
-            logger.info(
-                "Deleting container",
-                metadata: [
-                    "container-id": .stringConvertible(appName),
-                    "delete-image": .stringConvertible(deleteImage),
-                ]
-            )
+        return try await withSpan("deleteContainer") { span in
+            span.attributes["container.app_name"] = appName
+            span.attributes["container.delete_image"] = deleteImage
 
-            // Capture image name before deletion so we can optionally remove it
-            var imageName: String? = nil
-            do {
-                let container = try await client.getContainer(named: appName)
-                imageName = container.image
-            } catch let error as RPCError where error.code == .notFound {
+            try await Containerd.withClient { client in
                 logger.info(
-                    "Container not found prior to delete, continuing",
-                    metadata: ["container-id": .stringConvertible(appName)]
+                    "Deleting container",
+                    metadata: [
+                        "container-id": .stringConvertible(appName),
+                        "delete-image": .stringConvertible(deleteImage),
+                    ]
                 )
-            }
 
-            // Stop and delete the container and its ephemeral snapshot
-            do {
-                try await client.deleteContainer(named: appName)
-            } catch let error as RPCError where error.code == .notFound {
-                logger.info(
-                    "Container already deleted",
-                    metadata: ["container-id": .stringConvertible(appName)]
-                )
-            }
-
-            // Ensure monitor won't auto-restart it
-            await ContainerMonitor.shared.markContainerStopped(appName)
-
-            // Optionally remove the image to free disk space
-            if deleteImage, let imageName {
+                // Capture image name before deletion so we can optionally remove it
+                var imageName: String? = nil
                 do {
-                    try await client.deleteImage(named: imageName)
-                    logger.info(
-                        "Deleted container image",
-                        metadata: [
-                            "container-id": .stringConvertible(appName),
-                            "image": .stringConvertible(imageName),
-                        ]
-                    )
+                    let container = try await client.getContainer(named: appName)
+                    imageName = container.image
+                    span.attributes["container.image_name"] = imageName
                 } catch let error as RPCError where error.code == .notFound {
                     logger.info(
-                        "Image already deleted",
-                        metadata: [
-                            "container-id": .stringConvertible(appName),
-                            "image": .stringConvertible(imageName),
-                        ]
+                        "Container not found prior to delete, continuing",
+                        metadata: ["container-id": .stringConvertible(appName)]
                     )
+                }
+
+                // Stop and delete the container and its ephemeral snapshot
+                try await withSpan("deleteContainerAndSnapshot") { _ in
+                    do {
+                        try await client.deleteContainer(named: appName)
+                    } catch let error as RPCError where error.code == .notFound {
+                        logger.info(
+                            "Container already deleted",
+                            metadata: ["container-id": .stringConvertible(appName)]
+                        )
+                    }
+                }
+
+                // Ensure monitor won't auto-restart it
+                await ContainerMonitor.shared.markContainerStopped(appName)
+
+                // Optionally remove the image to free disk space
+                if deleteImage, let imageName {
+                    try await withSpan("deleteImage") { imageSpan in
+                        imageSpan.attributes["image.name"] = imageName
+                        do {
+                            try await client.deleteImage(named: imageName)
+                            logger.info(
+                                "Deleted container image",
+                                metadata: [
+                                    "container-id": .stringConvertible(appName),
+                                    "image": .stringConvertible(imageName),
+                                ]
+                            )
+                            imageSpan.attributes["image.deleted"] = true
+                        } catch let error as RPCError where error.code == .notFound {
+                            logger.info(
+                                "Image already deleted",
+                                metadata: [
+                                    "container-id": .stringConvertible(appName),
+                                    "image": .stringConvertible(imageName),
+                                ]
+                            )
+                            imageSpan.attributes["image.deleted"] = false
+                        }
+                    }
                 }
             }
 
+            span.setStatus(.init(code: .ok))
             return ServerResponse(message: .init())
         }
     }

@@ -8,7 +8,6 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIO
-import NIOFileSystem
 import Noora
 import Subprocess
 import WendyAgentGRPC
@@ -299,17 +298,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 commandName: "wendy run",
                 additionalProperties: buildPhaseProperties
             ) {
-                try await cliOutput.withStreamingOutput(
-                    title: "Building and uploading container",
-                    maxLines: 20
-                ) { emit in
-                    try await docker.buildxAndPush(
-                        name: name,
-                        registryHostname: endpoint.host,
-                        registryPort: 5000,
-                        onOutput: emit
-                    )
-                }
+                try await docker.buildxAndPush(
+                    name: name,
+                    registryHostname: endpoint.host,
+                    registryPort: 5000
+                )
                 cliOutput.success("Container built and uploaded successfully!")
             }
 
@@ -425,11 +418,19 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                         }
                     case .stdoutOutput(let stdoutOutput):
                         stdoutOutput.data.withUnsafeBytes { data in
-                            _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                            #if os(Windows)
+                                _ = _write(STDOUT_FILENO, data.baseAddress!, UInt32(data.count))
+                            #else
+                                _ = write(STDOUT_FILENO, data.baseAddress!, data.count)
+                            #endif
                         }
                     case .stderrOutput(let stderrOutput):
                         stderrOutput.data.withUnsafeBytes { data in
-                            _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                            #if os(Windows)
+                                _ = _write(STDERR_FILENO, data.baseAddress!, UInt32(data.count))
+                            #else
+                                _ = write(STDERR_FILENO, data.baseAddress!, data.count)
+                            #endif
                         }
                     default:
                         logger.warning("Unknown message received from agent")
@@ -633,7 +634,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 let finalArguments = arguments
                 let finalResources = resources
 
-                try await cliOutput.withStreamingOutput(
+                try await cliOutput.withStreamingOutputBox(
                     title: "Building Swift app",
                     maxLines: 20
                 ) { emit in

@@ -89,51 +89,55 @@ enum Platform: String {
     }
 }
 
-func downloadLatestRelease(
-    httpClient: HTTPExecutor = DefaultHTTPExecutor(),
-    platform: Platform = .linuxAarch64,
-    includePrerelease: Bool = false
-) async throws -> URL {
-    // Fetch all releases
-    let releases = try await fetchReleases(httpClient: httpClient)
+#if !os(Windows)
+    func downloadLatestRelease(
+        httpClient: HTTPExecutor = DefaultHTTPExecutor(),
+        platform: Platform = .linuxAarch64,
+        includePrerelease: Bool = false
+    ) async throws -> URL {
+        // Fetch all releases
+        let releases = try await fetchReleases(httpClient: httpClient)
 
-    // Filter releases based on prerelease preference
-    let filteredReleases: [Release]
-    if includePrerelease {
-        // Include all releases (both stable and pre-releases)
-        filteredReleases = releases
-    } else {
-        // Only include stable releases (non-prerelease)
-        filteredReleases = releases.filter { !$0.prerelease }
+        // Filter releases based on prerelease preference
+        let filteredReleases: [Release]
+        if includePrerelease {
+            // Include all releases (both stable and pre-releases)
+            filteredReleases = releases
+        } else {
+            // Only include stable releases (non-prerelease)
+            filteredReleases = releases.filter { !$0.prerelease }
+        }
+
+        guard let latestRelease = filteredReleases.first else {
+            throw ReleasesError.noReleases
+        }
+
+        // Build the expected asset name pattern
+        // Format: wendy-agent-{platform}-{version}.tar.gz
+        // Example: wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
+        let assetPrefix = "wendy-agent-\(platform.rawValue)-"
+        let assetSuffix = ".tar.gz"
+
+        guard
+            let asset = latestRelease.assets.first(where: { asset in
+                asset.name.hasPrefix(assetPrefix) && asset.name.hasSuffix(assetSuffix)
+            })
+        else {
+            throw ReleasesError.noAsset
+        }
+
+        let downloadedFileURL = try await downloadAsset(asset)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString
+        )
+
+        let fileURL = try await extract(at: downloadedFileURL, to: directory) { file in
+            file.lastPathComponent == "wendy-agent"
+        }
+        try? FileManager.default.removeItem(at: downloadedFileURL)
+        return fileURL
     }
-
-    guard let latestRelease = filteredReleases.first else {
-        throw ReleasesError.noReleases
-    }
-
-    // Build the expected asset name pattern
-    // Format: wendy-agent-{platform}-{version}.tar.gz
-    // Example: wendy-agent-linux-static-musl-aarch64-v0.2.0.tar.gz
-    let assetPrefix = "wendy-agent-\(platform.rawValue)-"
-    let assetSuffix = ".tar.gz"
-
-    guard
-        let asset = latestRelease.assets.first(where: { asset in
-            asset.name.hasPrefix(assetPrefix) && asset.name.hasSuffix(assetSuffix)
-        })
-    else {
-        throw ReleasesError.noAsset
-    }
-
-    let downloadedFileURL = try await downloadAsset(asset)
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-
-    let fileURL = try await extract(at: downloadedFileURL, to: directory) { file in
-        file.lastPathComponent == "wendy-agent"
-    }
-    try? FileManager.default.removeItem(at: downloadedFileURL)
-    return fileURL
-}
+#endif
 
 func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
     let githubReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-agent/releases"
@@ -199,63 +203,65 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
     return try JSONDecoder().decode([Release].self, from: data)
 }
 
-func downloadAsset(_ asset: Release.Asset) async throws -> URL {
-    let fileManager = FileManager.default
-    let tempDir = fileManager.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString)
-    try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+#if !os(Windows)
+    func downloadAsset(_ asset: Release.Asset) async throws -> URL {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
-    guard let downloadURL = URL(string: asset.browser_download_url) else {
-        throw ReleasesError.invalidDownloadURL(asset.browser_download_url)
-    }
+        guard let downloadURL = URL(string: asset.browser_download_url) else {
+            throw ReleasesError.invalidDownloadURL(asset.browser_download_url)
+        }
 
-    // Check file size before downloading (500MB limit)
-    let maxFileSize: Int64 = 500 * 1024 * 1024  // 500MB in bytes
-    let logger = Logger(label: "sh.wendy.utils.fetchReleases")
+        // Check file size before downloading (500MB limit)
+        let maxFileSize: Int64 = 500 * 1024 * 1024  // 500MB in bytes
+        let logger = Logger(label: "sh.wendy.utils.fetchReleases")
 
-    // Make HEAD request to get Content-Length
-    var headRequest = HTTPClientRequest(url: downloadURL.absoluteString)
-    headRequest.method = .HEAD
-    let headResponse = try await HTTPClient.shared.execute(
-        headRequest,
-        deadline: NIODeadline.now() + .seconds(30)
-    )
+        // Make HEAD request to get Content-Length
+        var headRequest = HTTPClientRequest(url: downloadURL.absoluteString)
+        headRequest.method = .HEAD
+        let headResponse = try await HTTPClient.shared.execute(
+            headRequest,
+            deadline: NIODeadline.now() + .seconds(30)
+        )
 
-    if let contentLength = headResponse.headers.first(name: "Content-Length"),
-        let fileSize = Int64(contentLength)
-    {
-        if fileSize > maxFileSize {
-            logger.error(
-                "Asset file too large",
+        if let contentLength = headResponse.headers.first(name: "Content-Length"),
+            let fileSize = Int64(contentLength)
+        {
+            if fileSize > maxFileSize {
+                logger.error(
+                    "Asset file too large",
+                    metadata: [
+                        "asset": "\(asset.name)",
+                        "size_mb": "\(fileSize / 1024 / 1024)",
+                        "max_mb": "\(maxFileSize / 1024 / 1024)",
+                    ]
+                )
+                throw ReleasesError.fileTooLarge(actual: fileSize, maximum: maxFileSize)
+            }
+            logger.debug(
+                "Downloading asset",
                 metadata: [
                     "asset": "\(asset.name)",
                     "size_mb": "\(fileSize / 1024 / 1024)",
-                    "max_mb": "\(maxFileSize / 1024 / 1024)",
                 ]
             )
-            throw ReleasesError.fileTooLarge(actual: fileSize, maximum: maxFileSize)
+        } else {
+            logger.warning(
+                "Could not determine file size before download",
+                metadata: [
+                    "asset": "\(asset.name)"
+                ]
+            )
         }
-        logger.debug(
-            "Downloading asset",
-            metadata: [
-                "asset": "\(asset.name)",
-                "size_mb": "\(fileSize / 1024 / 1024)",
-            ]
-        )
-    } else {
-        logger.warning(
-            "Could not determine file size before download",
-            metadata: [
-                "asset": "\(asset.name)"
-            ]
-        )
-    }
 
-    let downloadedFileURL = tempDir.appendingPathComponent(asset.name)
-    try await downloadFile(from: downloadURL, to: downloadedFileURL.path) { _ in }
-    logger.debug("Downloaded asset", metadata: ["path": "\(downloadedFileURL.path)"])
-    return downloadedFileURL
-}
+        let downloadedFileURL = tempDir.appendingPathComponent(asset.name)
+        try await downloadFile(from: downloadURL, to: downloadedFileURL.path) { _ in }
+        logger.debug("Downloaded asset", metadata: ["path": "\(downloadedFileURL.path)"])
+        return downloadedFileURL
+    }
+#endif
 
 enum ExtractError: Error {
     case failedToExtract

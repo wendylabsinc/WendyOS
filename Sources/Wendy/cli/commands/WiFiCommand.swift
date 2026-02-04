@@ -221,9 +221,6 @@ struct WiFiCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let logger = Logger(label: "sh.wendy.cli.wifi.status")
-            logger.info("Checking WiFi connection status")
-
             try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to check the wifi status?"

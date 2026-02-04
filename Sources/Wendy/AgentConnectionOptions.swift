@@ -181,6 +181,13 @@ extension AgentConnectionOptions {
             return .lan(host: defaultDevice.host, port: defaultDevice.port, defaultDevice: true)
         }
 
+        // In JSON mode, we cannot use interactive device selection
+        if JSONMode.isEnabled {
+            throw CLIError.invalidEndpoint(
+                "No device specified. Use --device <host> or set the WENDY_AGENT environment variable."
+            )
+        }
+
         let (stream, continuation) = AsyncStream<DevicesCollection>.makeStream()
         let device = try await withThrowingTaskGroup(of: Void.self) {
             group -> DevicesCollection.GroupedDevice in

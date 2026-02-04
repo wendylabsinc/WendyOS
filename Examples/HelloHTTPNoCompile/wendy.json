@@ -1,17 +1,11 @@
 {
-    "appId": "engineer.edge.examples.helloworld",
+    "appId": "sh.wendy.examples.hellohttp",
     "version": "1.0.0",
     "language": "swift",
     "entitlements": [
         {
             "type": "network",
             "mode": "host"
-        },
-        {
-            "type": "gpu"
-        },
-        {
-            "type": "video"
         }
     ]
 }

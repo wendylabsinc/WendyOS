@@ -11,7 +11,6 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.10.0"),
         .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0-beta.1"),
-        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-container-plugin", from: "1.0.0"),
     ],
     targets: [
@@ -22,7 +21,6 @@ let package = Package(
             dependencies: [
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "OTel", package: "swift-otel"),
-                .product(name: "Tracing", package: "swift-distributed-tracing"),
             ]
         )
     ]

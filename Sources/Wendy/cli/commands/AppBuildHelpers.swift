@@ -321,7 +321,7 @@ enum AppBuildHelpers {
             }
 
             if installSwift {
-                try await cliOutput.withStreamingOutput(
+                try await cliOutput.withStreamingOutputBox(
                     title: "Installing Swift \(swiftVersion)",
                     maxLines: 15
                 ) { emit in

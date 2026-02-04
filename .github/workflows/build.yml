@@ -88,6 +88,252 @@ jobs:
             Sources/OpenTelemetryGRPCTypes/Proto/
           retention-days: 1
 
+  build-windows:
+    name: wendy-cli-windows-amd64
+    needs: [check-bugfix, determine-version]
+    runs-on: runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16/spot=false
+
+    steps:
+      - name: Setup Swift
+        uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: swift-6.3-branch
+          swift-build: 6.3-DEVELOPMENT-SNAPSHOT-2026-01-03-a
+          update-sdk-modules: true
+
+      - name: Checkout Wendy-Agent Repository
+        uses: actions/checkout@v4
+        with:
+          path: wendy-agent
+
+      - name: Checkout Custom AsyncHTTPClient
+        uses: actions/checkout@v4
+        with:
+          repository: swift-server/async-http-client
+          ref: jo/windows-support
+          path: async-http-client
+
+      - name: Checkout Custom Hummingbird
+        uses: actions/checkout@v4
+        with:
+          repository: hummingbird-project/hummingbird
+          ref: jo/windows-support
+          path: hummingbird
+
+      - name: Checkout Custom Rainbow
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/Rainbow
+          ref: jo/windows
+          path: Rainbow
+
+      - name: Checkout Custom SwiftNIO
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio
+          ref: jo/winsock-fixes
+          path: swift-nio
+
+      - name: Checkout Custom SwiftNIO-SSL
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio-ssl
+          ref: jo/windows-support
+          path: swift-nio-ssl
+
+      - name: Checkout Custom SwiftNIO-Extras
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/swift-nio-extras
+          ref: jo/windows-ucrt
+          path: swift-nio-extras
+
+      - name: Checkout Custom DNSClient
+        uses: actions/checkout@v4
+        with:
+          repository: orlandos-nl/DNSClient
+          ref: jo/windows-support
+          path: DNSClient
+
+      - name: Checkout Custom GRPC SwiftNIO Transport
+        uses: actions/checkout@v4
+        with:
+          repository: joannis/grpc-swift-nio-transport
+          ref: jo/windows-support
+          path: grpc-swift-nio-transport
+
+      - name: Install Visual Studio Build Tools (C++ workload)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          $installer = "$env:TEMP\vs_BuildTools.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $installer
+
+          $args = @(
+            "--quiet", "--wait", "--norestart", "--nocache",
+            "--installPath", "C:\BuildTools",
+            "--installChannelUri", "https://aka.ms/vs/17/release/channel",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--includeRecommended"
+          )
+
+          $p = Start-Process -FilePath $installer -ArgumentList $args -PassThru -Wait
+          "VS installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "VS Build Tools install failed (exit code $($p.ExitCode))" }
+
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Provision Dependencies
+        shell: pwsh
+        run: |
+          $VcpkgRoot = "C:\vcpkg"
+          $ZlibDll = "$VcpkgRoot\installed\x64-windows\bin\zlib1.dll"
+
+          if (-not (Test-Path $ZlibDll)) {
+            Write-Host "Zlib not found. Installing via vcpkg..."
+            & "$VcpkgRoot\vcpkg.exe" install zlib:x64-windows
+          } else {
+            Write-Host "Zlib found at $ZlibDll"
+          }
+
+      - name: Copy zlib.lib to z.lib
+        shell: pwsh
+        run: |
+          Copy-Item "C:\vcpkg\installed\x64-windows\lib\zlib.lib" "C:\vcpkg\installed\x64-windows\lib\z.lib"
+
+      - name: Inject Version
+        shell: pwsh
+        run: |
+          cd ${{ github.workspace }}/wendy-agent
+          $version = "${{ needs.determine-version.outputs.version }}"
+          Write-Host "Using version: $version"
+          & bash ./Scripts/inject-version.sh "$version"
+
+      - name: Build wendy CLI (release)
+        shell: pwsh
+        run: |
+          cd ${{ github.workspace }}/wendy-agent
+          swift build -c release --arch x86_64 --product wendy --static-swift-stdlib -Xcc -I"C:\vcpkg\installed\x64-windows\include" -Xlinker -L"C:\vcpkg\installed\x64-windows\lib"
+
+      - name: Create Distribution Bundle
+        shell: pwsh
+        run: |
+          cd ${{ github.workspace }}/wendy-agent
+          $BuildDir = (swift build --show-bin-path -c release --arch x86_64 --static-swift-stdlib | Select-Object -Last 1).Trim()
+          Write-Host "Build directory: $BuildDir"
+          cd ${{ github.workspace }}
+          $StagingDir = "wendy-cli-windows-amd64"
+          $ZlibSource = "C:\vcpkg\installed\x64-windows\bin\zlib1.dll"
+
+          $SwiftBin = (Get-Command swift).Source | Split-Path
+          $SwiftRuntime = Join-Path (Split-Path $SwiftBin) "bin"
+          Write-Host "Swift runtime directory: $SwiftRuntime"
+
+          if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
+          New-Item -ItemType Directory -Path $StagingDir
+
+          Copy-Item "$BuildDir\wendy.exe" -Destination "$StagingDir\"
+          Copy-Item $ZlibSource -Destination "$StagingDir\"
+
+          $SwiftDlls = @(
+            "swift_Concurrency.dll",
+            "swiftCore.dll",
+            "Foundation.dll",
+            "FoundationNetworking.dll",
+            "FoundationXML.dll",
+            "dispatch.dll",
+            "BlocksRuntime.dll",
+            "swiftWinSDK.dll",
+            "swiftCRT.dll",
+            "swiftDispatch.dll",
+            "swiftDistributed.dll",
+            "swiftObservation.dll",
+            "swiftRegex.dll",
+            "swiftSwiftOnoneSupport.dll",
+            "swift_RegexParser.dll",
+            "swift_StringProcessing.dll",
+            "swiftSynchronization.dll"
+          )
+
+          foreach ($dll in $SwiftDlls) {
+            $dllPath = Join-Path $SwiftRuntime $dll
+            if (Test-Path $dllPath) {
+              Write-Host "Copying $dll"
+              Copy-Item $dllPath -Destination "$StagingDir\"
+            } else {
+              Write-Host "Warning: $dll not found at $dllPath"
+            }
+          }
+
+          Write-Host "`nStaging directory contents:"
+          Get-ChildItem $StagingDir
+
+      - name: Create tarball
+        shell: pwsh
+        run: |
+          $version = "${{ needs.determine-version.outputs.version }}"
+          $tarballName = "wendy-cli-windows-amd64-$version.tar.gz"
+
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Directory listing:"
+          Get-ChildItem
+
+          if (-not (Test-Path "wendy-cli-windows-amd64")) {
+            Write-Error "Staging directory wendy-cli-windows-amd64 does not exist!"
+            exit 1
+          }
+
+          Write-Host "Contents of wendy-cli-windows-amd64:"
+          Get-ChildItem wendy-cli-windows-amd64
+
+          Write-Host "Creating tarball: $tarballName"
+          tar.exe -czvf $tarballName "wendy-cli-windows-amd64"
+          "tarball_name=$tarballName" >> $env:GITHUB_OUTPUT
+        id: create-tarball
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.create-tarball.outputs.tarball_name }}
+          path: ${{ steps.create-tarball.outputs.tarball_name }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Build MSI Installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.determine-version.outputs.version }}"
+
+          # Convert version to MSI-compatible format (X.Y.Z)
+          # Input format: YYYY.MM.DD-HHMMSS -> Output: YYYY.M.D (removing leading zeros)
+          $parts = $version -split '-'
+          $dateParts = $parts[0] -split '\.'
+          $msiVersion = "$($dateParts[0]).$([int]$dateParts[1]).$([int]$dateParts[2])"
+          Write-Host "Full version: $version"
+          Write-Host "MSI version: $msiVersion"
+
+          # Install WiX v5
+          dotnet tool install --global wix --version 5.0.2
+
+          # Build MSI
+          wix build `
+            -d Version="$msiVersion" `
+            -d SourceDir="wendy-cli-windows-amd64" `
+            -arch x64 `
+            -o "wendy-cli-windows-amd64-$version.msi" `
+            wendy-agent/Scripts/windows/wendy.wxs
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
+          path: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
+          retention-days: 14
+          if-no-files-found: error
+
   build:
     needs: [check-bugfix, determine-version, generate-protos]
     strategy:
@@ -429,7 +675,7 @@ jobs:
   release:
     name: Release
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
-    needs: [check-bugfix, determine-version, build, package-linux]
+    needs: [check-bugfix, determine-version, build, build-windows, package-linux]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download artifact
@@ -439,10 +685,10 @@ jobs:
       - name: List files
         run: |
           ls -la
-          # Create a newline-delimited list of release files (tar.gz, deb, rpm)
+          # Create a newline-delimited list of release files (tar.gz, deb, rpm, msi)
           {
             echo 'FILES<<EOF'
-            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" | sort
+            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
       - name: Create Release

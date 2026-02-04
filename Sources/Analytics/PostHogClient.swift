@@ -1,7 +1,12 @@
-import AsyncHTTPClient
 import Foundation
 import Logging
 import NIOFoundationCompat
+
+#if os(Windows)
+    import FoundationNetworking
+#else
+    import AsyncHTTPClient
+#endif
 
 /// Represents an analytics event to be tracked
 public struct AnalyticsEvent: Sendable, Encodable {
@@ -53,7 +58,6 @@ public struct AnalyticsBatch: Sendable, Encodable {
 public actor PostHogClient {
     private let apiKey: String
     private let host: String
-    private let httpClient: HTTPClient
     private let logger = Logger(label: "sh.wendy.analytics.posthog")
 
     /// Queue of events to be sent
@@ -71,12 +75,10 @@ public actor PostHogClient {
     /// Initialize the PostHog client
     public init(
         apiKey: String,
-        host: String = "https://app.posthog.com",
-        httpClient: HTTPClient? = nil
+        host: String = "https://app.posthog.com"
     ) {
         self.apiKey = apiKey
         self.host = host
-        self.httpClient = httpClient ?? HTTPClient.shared
     }
 
     deinit {
@@ -101,19 +103,29 @@ public actor PostHogClient {
     public func captureImmediate(event: AnalyticsEvent) async {
         do {
             let url = "\(host)/capture/"
-            var request = HTTPClientRequest(url: url)
-            request.method = .POST
-            request.headers.add(name: "Content-Type", value: "application/json")
+            #if os(macOS) || os(Windows)
+                var request = URLRequest(url: URL(string: url)!)
+                request.httpMethod = "POST"
+                request.allHTTPHeaderFields = [
+                    "Content-Type": "application/json"
+                ]
+                request.httpBody = try JSONEncoder().encode(event)
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let response = response as? HTTPURLResponse, response.statusCode >= 400 {
+                    logger.debug("PostHog capture failed with status: \(response.statusCode)")
+                }
+            #else
+                var request = HTTPClientRequest(url: url)
+                request.method = .POST
+                request.headers.add(name: "Content-Type", value: "application/json")
+                request.body = .bytes(try JSONEncoder().encode(event))
 
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(event)
-            request.body = .bytes(data)
+                let response = try await HTTPClient.shared.execute(request, timeout: .seconds(10))
 
-            let response = try await httpClient.execute(request, timeout: .seconds(10))
-
-            if response.status.code >= 400 {
-                logger.debug("PostHog capture failed with status: \(response.status)")
-            }
+                if response.status.code >= 400 {
+                    logger.debug("PostHog capture failed with status: \(response.status)")
+                }
+            #endif
         } catch {
             // Fail silently - we don't want analytics errors to break the CLI
             logger.debug("Failed to send analytics event: \(error)")
@@ -134,22 +146,35 @@ public actor PostHogClient {
 
         do {
             let url = "\(host)/batch/"
-            var request = HTTPClientRequest(url: url)
-            request.method = .POST
-            request.headers.add(name: "Content-Type", value: "application/json")
-
             let batch = AnalyticsBatch(apiKey: apiKey, batch: events)
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(batch)
-            request.body = .bytes(data)
 
-            let response = try await httpClient.execute(request, timeout: .seconds(10))
+            #if os(macOS) || os(Windows)
+                var request = URLRequest(url: URL(string: url)!)
+                request.httpMethod = "POST"
+                request.allHTTPHeaderFields = [
+                    "Content-Type": "application/json"
+                ]
+                request.httpBody = try JSONEncoder().encode(batch)
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let response = response as? HTTPURLResponse, response.statusCode >= 400 {
+                    logger.debug("PostHog batch send failed with status: \(response.statusCode)")
+                } else {
+                    logger.debug("Successfully sent \(events.count) events to PostHog")
+                }
+            #else
+                var request = HTTPClientRequest(url: url)
+                request.method = .POST
+                request.headers.add(name: "Content-Type", value: "application/json")
+                request.body = .bytes(try JSONEncoder().encode(batch))
 
-            if response.status.code >= 400 {
-                logger.debug("PostHog batch send failed with status: \(response.status)")
-            } else {
-                logger.debug("Successfully sent \(events.count) events to PostHog")
-            }
+                let response = try await HTTPClient.shared.execute(request, timeout: .seconds(10))
+
+                if response.status.code >= 400 {
+                    logger.debug("PostHog batch send failed with status: \(response.status)")
+                } else {
+                    logger.debug("Successfully sent \(events.count) events to PostHog")
+                }
+            #endif
         } catch {
             // Fail silently - we don't want analytics errors to break the CLI
             logger.debug("Failed to send analytics batch: \(error)")

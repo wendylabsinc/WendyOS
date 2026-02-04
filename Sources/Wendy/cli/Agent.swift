@@ -5,7 +5,10 @@ import Logging
 import Noora
 import WendyAgentGRPC
 import WendySDK
-import _NIOFileSystem
+
+#if !os(Windows)
+    import _NIOFileSystem
+#endif
 
 struct Agent {
     let client: GRPCClient<GRPCTransport>
@@ -40,91 +43,93 @@ struct Agent {
         )
     }
 
-    func update(
-        fromBinary path: String,
-        onProgress: (Double) -> Void = { _ in }
-    ) async throws -> Bool {
-        let logger = Logger(label: "sh.wendyengineer.agent.update")
-        let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
-        let (progress, continuation) = AsyncStream<Double>.makeStream()
+    #if !os(Windows)
+        func update(
+            fromBinary path: String,
+            onProgress: (Double) -> Void = { _ in }
+        ) async throws -> Bool {
+            let logger = Logger(label: "sh.wendyengineer.agent.update")
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            let (progress, continuation) = AsyncStream<Double>.makeStream()
 
-        return try await withThrowingTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                defer { continuation.finish() }
-                return try await agent.updateAgent { writer in
-                    logger.debug("Opening file...")
-                    do {
-                        try await FileSystem.shared.withFileHandle(
-                            forReadingAt: FilePath(path)
-                        ) { handle in
-                            var hash = SHA256()
-                            let fileSize = try await handle.info().size
-                            var writtenBytes: Int64 = 0
-                            logger.debug("Uploading binary...")
-                            for try await chunk in handle.readChunks() {
-                                hash.update(data: chunk.readableBytesView)
+            return try await withThrowingTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    defer { continuation.finish() }
+                    return try await agent.updateAgent { writer in
+                        logger.debug("Opening file...")
+                        do {
+                            try await FileSystem.shared.withFileHandle(
+                                forReadingAt: FilePath(path)
+                            ) { handle in
+                                var hash = SHA256()
+                                let fileSize = try await handle.info().size
+                                var writtenBytes: Int64 = 0
+                                logger.debug("Uploading binary...")
+                                for try await chunk in handle.readChunks() {
+                                    hash.update(data: chunk.readableBytesView)
+                                    try await writer.write(
+                                        .with {
+                                            $0.chunk = .with {
+                                                $0.data = Data(buffer: chunk)
+                                            }
+                                        }
+                                    )
+                                    writtenBytes += Int64(chunk.readableBytes)
+                                    continuation.yield(Double(writtenBytes) / Double(fileSize))
+                                }
+
+                                logger.debug("Finalizing update")
+                                let finalHash = hash.finalize().map { String(format: "%02x", $0) }
+                                    .joined()
                                 try await writer.write(
                                     .with {
-                                        $0.chunk = .with {
-                                            $0.data = Data(buffer: chunk)
+                                        $0.control = .with {
+                                            $0.command = .update(
+                                                .with {
+                                                    $0.sha256 = finalHash
+                                                }
+                                            )
                                         }
                                     }
                                 )
-                                writtenBytes += Int64(chunk.readableBytes)
-                                continuation.yield(Double(writtenBytes) / Double(fileSize))
                             }
-
-                            logger.debug("Finalizing update")
-                            let finalHash = hash.finalize().map { String(format: "%02x", $0) }
-                                .joined()
-                            try await writer.write(
-                                .with {
-                                    $0.control = .with {
-                                        $0.command = .update(
-                                            .with {
-                                                $0.sha256 = finalHash
-                                            }
-                                        )
-                                    }
+                        } catch {
+                            logger.error("Failed to upload binary: \(error)")
+                            throw error
+                        }
+                    } onResponse: { response in
+                        do {
+                            for try await event in response.messages {
+                                switch event.responseType {
+                                case .updated:
+                                    return true
+                                case .none:
+                                    ()
                                 }
-                            )
-                        }
-                    } catch {
-                        logger.error("Failed to upload binary: \(error)")
-                        throw error
-                    }
-                } onResponse: { response in
-                    do {
-                        for try await event in response.messages {
-                            switch event.responseType {
-                            case .updated:
-                                return true
-                            case .none:
-                                ()
                             }
+                            return false
+                        } catch {
+                            logger.error(
+                                "Failed to update agent",
+                                metadata: [
+                                    "error": "\(error)"
+                                ]
+                            )
+                            throw error
                         }
-                        return false
-                    } catch {
-                        logger.error(
-                            "Failed to update agent",
-                            metadata: [
-                                "error": "\(error)"
-                            ]
-                        )
-                        throw error
                     }
                 }
-            }
 
-            for await value in progress {
-                onProgress(value)
-            }
+                for await value in progress {
+                    onProgress(value)
+                }
 
-            guard let result = try await group.next() else {
-                throw CancellationError()
-            }
+                guard let result = try await group.next() else {
+                    throw CancellationError()
+                }
 
-            return result
+                return result
+            }
         }
-    }
+    #endif
 }

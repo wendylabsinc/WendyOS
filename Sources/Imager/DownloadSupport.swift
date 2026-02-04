@@ -3,7 +3,7 @@ import DownloadSupport
 import Foundation
 import Logging
 import NIOCore
-import _NIOFileSystem
+import Noora
 
 #if os(macOS)
     import Darwin
@@ -88,7 +88,7 @@ public final class ImageDownloader: ImageDownloading {
         do {
             // Create lock file if it doesn't exist
             if !fileManager.fileExists(atPath: lockFileURL.path) {
-                fileManager.createFile(atPath: lockFileURL.path, contents: nil, attributes: nil)
+                _ = fileManager.createFile(atPath: lockFileURL.path, contents: nil, attributes: nil)
             }
             lockFile = try Foundation.FileHandle(forUpdating: lockFileURL)
         } catch {
@@ -206,134 +206,145 @@ public final class ImageDownloader: ImageDownloading {
         to directory: String,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
-        // Prefer streaming a single .img for accurate progress. Fallback to unzip -o when needed.
-        let unzipPath = try findExecutable(name: "unzip", standardPath: "/usr/bin/unzip")
-        guard fileManager.fileExists(atPath: unzipPath) else {
-            throw DownloadError.extractionFailed("Could not find 'unzip' utility on the system")
-        }
+        #if os(Windows)
+            throw DownloadError.extractionFailed("Windows extraction not implemented yet")
+        #else
+            // Prefer streaming a single .img for accurate progress. Fallback to unzip -o when needed.
+            let unzipPath = try findExecutable(name: "unzip", standardPath: "/usr/bin/unzip")
+            guard FileManager.default.fileExists(atPath: unzipPath) else {
+                throw DownloadError.extractionFailed("Could not find 'unzip' utility on the system")
+            }
 
-        // Discover .img entry and its uncompressed size via `unzip -l`
-        let listProc = Process()
-        listProc.executableURL = URL(fileURLWithPath: unzipPath)
-        listProc.arguments = ["-l", path]
-        let listOut = Pipe()
-        listProc.standardOutput = listOut
-        listProc.standardError = Pipe()
-        try listProc.run()
-        listProc.waitUntilExit()
+            // Discover .img entry and its uncompressed size via `unzip -l`
+            let listProc = Process()
+            listProc.executableURL = URL(fileURLWithPath: unzipPath)
+            listProc.arguments = ["-l", path]
+            let listOut = Pipe()
+            listProc.standardOutput = listOut
+            listProc.standardError = Pipe()
+            try listProc.run()
+            listProc.waitUntilExit()
 
-        func parseImgEntry(_ text: String) -> (entry: String, size: Int64)? {
-            var candidate: (String, Int64)?
-            for lineSub in text.split(separator: "\n") {
-                let line = String(lineSub)
-                guard line.lowercased().contains(".img") else { continue }
-                // Expect lines like: "  123456  mm-dd-yy  hh:mm   path/to/file.img"
-                let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-                guard parts.count >= 4 else { continue }
-                if let size = Int64(parts[0]),
-                    let nameStart = line.range(of: " ", options: .backwards)?.upperBound
-                {
-                    let name = String(line[nameStart...]).trimmingCharacters(in: .whitespaces)
-                    if name.lowercased().hasSuffix(".img") {
-                        candidate = (name, size)
+            func parseImgEntry(_ text: String) -> (entry: String, size: Int64)? {
+                var candidate: (String, Int64)?
+                for lineSub in text.split(separator: "\n") {
+                    let line = String(lineSub)
+                    guard line.lowercased().contains(".img") else { continue }
+                    // Expect lines like: "  123456  mm-dd-yy  hh:mm   path/to/file.img"
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                    guard parts.count >= 4 else { continue }
+                    if let size = Int64(parts[0]),
+                        let nameStart = line.range(of: " ", options: .backwards)?.upperBound
+                    {
+                        let name = String(line[nameStart...]).trimmingCharacters(in: .whitespaces)
+                        if name.lowercased().hasSuffix(".img") {
+                            candidate = (name, size)
+                        }
                     }
                 }
+                return candidate
             }
-            return candidate
-        }
 
-        let listText =
-            String(data: listOut.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        if let (entryName, totalBytes) = parseImgEntry(listText) {
-            // Stream unzip of that entry to a file while reporting precise byte progress.
-            let destURL = URL(fileURLWithPath: directory).appendingPathComponent(
-                (entryName as NSString).lastPathComponent
-            )
-            // Ensure destination directory exists
-            try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            if fileManager.fileExists(atPath: destURL.path) {
-                try? fileManager.removeItem(at: destURL)
+            let listText =
+                String(data: listOut.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+                ?? ""
+            if let (entryName, totalBytes) = parseImgEntry(listText) {
+                // Stream unzip of that entry to a file while reporting precise byte progress.
+                let destURL = URL(fileURLWithPath: directory).appendingPathComponent(
+                    (entryName as NSString).lastPathComponent
+                )
+                // Ensure destination directory exists
+                try FileManager.default.createDirectory(
+                    atPath: directory,
+                    withIntermediateDirectories: true
+                )
+                if FileManager.default.fileExists(atPath: destURL.path) {
+                    try? FileManager.default.removeItem(at: destURL)
+                }
+                // Create an empty destination file so FileHandle can open it
+                let created = FileManager.default.createFile(
+                    atPath: destURL.path,
+                    contents: nil,
+                    attributes: nil
+                )
+                if !created {
+                    throw DownloadError.extractionFailed(
+                        "Failed to create destination file at \(destURL.path)"
+                    )
+                }
+
+                // Progress init
+                let p = Progress(totalUnitCount: totalBytes)
+                p.completedUnitCount = 0
+                progressHandler(p)
+
+                // Run `unzip -p path entryName` and stream stdout to file
+                let unzipProc = Process()
+                unzipProc.executableURL = URL(fileURLWithPath: unzipPath)
+                unzipProc.arguments = ["-p", path, entryName]
+                let outPipe = Pipe()
+                unzipProc.standardOutput = outPipe
+                unzipProc.standardError = Pipe()
+                try unzipProc.run()
+
+                let destHandle = try FileHandle(forWritingTo: destURL)
+                try? destHandle.truncate(atOffset: 0)
+                defer { try? destHandle.close() }
+
+                while true {
+                    let data = outPipe.fileHandleForReading.readData(ofLength: 1 << 16)  // 64 KiB
+                    if data.isEmpty {
+                        break
+                    }
+                    try destHandle.write(contentsOf: data)
+                    p.completedUnitCount += Int64(data.count)
+                    progressHandler(p)
+                }
+
+                unzipProc.waitUntilExit()
+                if unzipProc.terminationStatus != 0 {
+                    throw DownloadError.extractionFailed("unzip failed while streaming .img entry")
+                }
+
+                // Finalize
+                p.completedUnitCount = totalBytes
+                progressHandler(p)
+                // Best-effort cleanup: remove the zip to save space
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+                return destURL.path
             }
-            // Create an empty destination file so FileHandle can open it
-            let created = fileManager.createFile(
-                atPath: destURL.path,
-                contents: nil,
-                attributes: nil
-            )
-            if !created {
+
+            // Fallback: unzip whole archive (no granular progress available); caller may overlay estimator.
+            let unzipProcess = Process()
+            unzipProcess.executableURL = URL(fileURLWithPath: unzipPath)
+            unzipProcess.arguments = ["-o", path, "-d", directory]
+            unzipProcess.standardOutput = Pipe()
+            let errorPipe = Pipe()
+            unzipProcess.standardError = errorPipe
+            try unzipProcess.run()
+            unzipProcess.waitUntilExit()
+            if unzipProcess.terminationStatus != 0 {
+                let errorMessage =
+                    String(
+                        data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8
+                    )
+                    ?? "Unknown error"
                 throw DownloadError.extractionFailed(
-                    "Failed to create destination file at \(destURL.path)"
+                    "Failed to extract ZIP file: \(errorMessage.trimmingCharacters(in: .whitespacesAndNewlines))"
                 )
             }
 
-            // Progress init
-            let p = Progress(totalUnitCount: totalBytes)
-            p.completedUnitCount = 0
-            progressHandler(p)
-
-            // Run `unzip -p path entryName` and stream stdout to file
-            let unzipProc = Process()
-            unzipProc.executableURL = URL(fileURLWithPath: unzipPath)
-            unzipProc.arguments = ["-p", path, entryName]
-            let outPipe = Pipe()
-            unzipProc.standardOutput = outPipe
-            unzipProc.standardError = Pipe()
-            try unzipProc.run()
-
-            let destHandle = try FileHandle(forWritingTo: destURL)
-            try? destHandle.truncate(atOffset: 0)
-            defer { try? destHandle.close() }
-
-            while true {
-                let data = outPipe.fileHandleForReading.readData(ofLength: 1 << 18)  // 256 KiB
-                if data.isEmpty {
-                    break
-                }
-                try destHandle.write(contentsOf: data)
-                p.completedUnitCount += Int64(data.count)
-                progressHandler(p)
-            }
-
-            unzipProc.waitUntilExit()
-            if unzipProc.terminationStatus != 0 {
-                throw DownloadError.extractionFailed("unzip failed while streaming .img entry")
-            }
-
-            // Finalize
-            p.completedUnitCount = totalBytes
-            progressHandler(p)
+            let imgPath = try await validateImage(at: directory)
             // Best-effort cleanup: remove the zip to save space
-            try? fileManager.removeItem(at: URL(fileURLWithPath: path))
-            return destURL.path
-        }
-
-        // Fallback: unzip whole archive (no granular progress available); caller may overlay estimator.
-        let unzipProcess = Process()
-        unzipProcess.executableURL = URL(fileURLWithPath: unzipPath)
-        unzipProcess.arguments = ["-o", path, "-d", directory]
-        unzipProcess.standardOutput = Pipe()
-        let errorPipe = Pipe()
-        unzipProcess.standardError = errorPipe
-        try unzipProcess.run()
-        unzipProcess.waitUntilExit()
-        if unzipProcess.terminationStatus != 0 {
-            let errorMessage =
-                String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-                ?? "Unknown error"
-            throw DownloadError.extractionFailed(
-                "Failed to extract ZIP file: \(errorMessage.trimmingCharacters(in: .whitespacesAndNewlines))"
-            )
-        }
-
-        let imgPath = try await validateImage(at: directory)
-        // Best-effort cleanup: remove the zip to save space
-        try? fileManager.removeItem(at: URL(fileURLWithPath: path))
-        return imgPath
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+            return imgPath
+        #endif
     }
 
     private func validateImage(at directory: String) async throws -> String {
         // Find the .img file in the extracted directory
-        let enumerator = fileManager.enumerator(
+        let enumerator = FileManager.default.enumerator(
             at: URL(fileURLWithPath: directory),
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
@@ -364,7 +375,7 @@ public final class ImageDownloader: ImageDownloading {
         let cacheDir = try FileManager.default
             .cacheDirectory(.images)
         let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
-        let temporaryDirectory = fileManager.temporaryDirectory
+        let temporaryDirectory = FileManager.default.temporaryDirectory
         let tempFilename = UUID().uuidString
         let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
 
@@ -373,8 +384,7 @@ public final class ImageDownloader: ImageDownloading {
             let downloadWeight: Double = 0.98
             let extractWeight: Double = 1.0 - downloadWeight
 
-            @inline(__always)
-            func reportFraction(_ f: Double) {
+            @Sendable func reportFraction(_ f: Double) {
                 let clamped = max(0.0, min(f, 1.0))
                 let p = Progress(totalUnitCount: 10_000)
                 p.completedUnitCount = Int64((clamped * 10_000.0).rounded())
@@ -394,11 +404,11 @@ public final class ImageDownloader: ImageDownloading {
 
             // Ensure we created the extraction directory. If we're re-downloading,
             // clear any previous extraction to avoid unzip interactive prompts.
-            if fileManager.fileExists(atPath: extractionDirectoryURL.path) {
+            if FileManager.default.fileExists(atPath: extractionDirectoryURL.path) {
                 // Best-effort cleanup; ignore errors so we can recreate below
-                try? fileManager.removeItem(at: extractionDirectoryURL)
+                try? FileManager.default.removeItem(at: extractionDirectoryURL)
             }
-            try fileManager.createDirectory(
+            try FileManager.default.createDirectory(
                 at: extractionDirectoryURL,
                 withIntermediateDirectories: true,
                 attributes: nil
@@ -437,18 +447,20 @@ public final class ImageDownloader: ImageDownloading {
 
         let isValidCache =
             try
-            (!fileManager.fileExists(atPath: extractionDirectoryURL.path)
+            (!FileManager.default.fileExists(atPath: extractionDirectoryURL.path)
             || FileManager.default.contentsOfDirectory(atPath: extractionDirectoryURL.path).isEmpty)
 
         if redownload || isValidCache {
-            return (try await redownloadImage(), cached: false)
+            let extractionPath = try await redownloadImage()
+            Noora().info("Downloaded new image for \(deviceName)")
+            return (extractionPath, cached: false)
         } else {
-            logger.info("Using cached image for \(deviceName)")
+            Noora().info("Using cached image for \(deviceName)")
 
             do {
                 return (try await validateImage(at: extractionDirectoryURL.path), cached: true)
             } catch {
-                logger.warning("Invalid image found in cache, redownloading...")
+                Noora().warning("Invalid image found in cache, redownloading...")
 
                 return (try await redownloadImage(), cached: false)
             }
@@ -495,6 +507,7 @@ public final class ImageDownloader: ImageDownloading {
     }
 
     /// Returns a valid cached .img path if available, else nil.
+    /// Deprecated: Use `cachedZipIfValid` instead for streaming decompression.
     public func cachedImageIfValid(
         deviceName: String,
         nightly: Bool
@@ -536,6 +549,44 @@ public final class ImageDownloader: ImageDownloading {
         return nil
     }
 
+    /// Returns a valid cached .zip archive path if available, else nil.
+    /// This is preferred over cachedImageIfValid for streaming decompression to save disk space.
+    public func cachedZipIfValid(
+        deviceName: String,
+        nightly: Bool
+    ) throws -> String? {
+        let deviceCacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+
+        // Check if device cache directory exists
+        guard fileManager.fileExists(atPath: deviceCacheDir.path) else {
+            return nil
+        }
+
+        // Search for .zip file in the device cache directory
+        guard
+            let enumerator = fileManager.enumerator(
+                at: deviceCacheDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+        else {
+            return nil
+        }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+
+            if fileURL.pathExtension.lowercased() == "zip" {
+                return fileURL.path
+            }
+        }
+
+        return nil
+    }
+
     /// Checks if cached image version matches the latest version
     public nonisolated func isCachedImageLatest(
         deviceName: String,
@@ -549,7 +600,8 @@ public final class ImageDownloader: ImageDownloading {
         return cachedVersion == latestVersion
     }
 
-    /// Download the archive only, reporting progress. Returns the zip path and the extraction directory path.
+    /// Download the archive only, reporting progress. Returns the zip path.
+    /// The zip is cached in the device cache directory for future use.
     public func downloadArchiveOnly(
         from url: URL,
         deviceName: String,
@@ -558,20 +610,53 @@ public final class ImageDownloader: ImageDownloading {
         version: String? = nil,
         nightly: Bool = false,
         progressHandler: @escaping @Sendable (Progress) -> Void
-    ) async throws -> (zipPath: String, extractionDir: String) {
-        let extractionDirectoryURL = try cacheDirectoryForDevice(deviceName, nightly: nightly)
-        let temporaryDirectory = fileManager.temporaryDirectory
-        let tempFilename = UUID().uuidString
-        let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
+    ) async throws -> String {
+        let cacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+
+        // Ensure cache directory exists
+        if !fileManager.fileExists(atPath: cacheDir.path) {
+            try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        }
+
+        // Use the original filename from the URL for the cached zip
+        let zipFilename = url.lastPathComponent
+        let cachedZipURL = cacheDir.appendingPathComponent(zipFilename)
+
+        // Remove old zip files if redownloading or if there's a different version
+        if redownload || fileManager.fileExists(atPath: cachedZipURL.path) {
+            // Clean up any existing zip files in the cache directory
+            if let contents = try? fileManager.contentsOfDirectory(atPath: cacheDir.path) {
+                for file in contents where file.hasSuffix(".zip") {
+                    try? fileManager.removeItem(at: cacheDir.appendingPathComponent(file))
+                }
+            }
+            // Also clean up any extracted .img files (legacy)
+            if let contents = try? fileManager.contentsOfDirectory(atPath: cacheDir.path) {
+                for file in contents where file.hasSuffix(".img") {
+                    try? fileManager.removeItem(at: cacheDir.appendingPathComponent(file))
+                }
+            }
+        }
 
         try await downloadFile(
             from: url,
-            to: localZipURL.path,
+            to: cachedZipURL.path,
             expectedSize: Int64(expectedSize),
             progressHandler: progressHandler
         )
 
-        return (zipPath: localZipURL.path, extractionDir: extractionDirectoryURL.path)
+        // Store version metadata after successful download
+        if let version = version {
+            do {
+                try storeVersionMetadata(deviceName: deviceName, version: version, nightly: nightly)
+            } catch {
+                logger.warning(
+                    "Failed to store version metadata for \(deviceName): \(error.localizedDescription)"
+                )
+            }
+        }
+
+        return cachedZipURL.path
     }
 
     /// Extract a previously downloaded archive into the cache directory for the device.
@@ -582,58 +667,14 @@ public final class ImageDownloader: ImageDownloading {
         nightly: Bool = false,
         progressHandler: @escaping (Progress) -> Void
     ) async throws -> String {
-        let extractionDirectoryURL = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+        let cacheDir = try FileManager.default.cacheDirectory(.images)
+        let extractionDirectoryURL = cacheDir.appendingPathComponent(deviceName)
 
-        // Create parent directory if needed for lock file
-        let parentDir = extractionDirectoryURL.deletingLastPathComponent()
-        if !fileManager.fileExists(atPath: parentDir.path) {
-            try fileManager.createDirectory(
-                at: parentDir,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-        }
-
-        // Use a lock file to prevent concurrent extraction to the same directory
-        let lockSuffix = nightly ? "-nightly" : ""
-        let lockFileURL = parentDir.appendingPathComponent(
-            ".extraction-\(deviceName)\(lockSuffix).lock"
-        )
-        let lockFile: Foundation.FileHandle
-
-        // Create lock file if it doesn't exist
-        if !fileManager.fileExists(atPath: lockFileURL.path) {
-            fileManager.createFile(atPath: lockFileURL.path, contents: nil, attributes: nil)
-        }
-
-        do {
-            lockFile = try Foundation.FileHandle(forUpdating: lockFileURL)
-        } catch {
-            throw DownloadError.extractionFailed(
-                "Failed to create lock file: \(error.localizedDescription)"
-            )
-        }
-
-        defer {
-            try? lockFile.close()
-        }
-
-        // Acquire exclusive lock (blocks if another process holds the lock)
-        #if os(macOS) || os(Linux)
-            let fd = lockFile.fileDescriptor
-            if flock(fd, LOCK_EX) != 0 {
-                throw DownloadError.extractionFailed("Failed to acquire extraction lock")
-            }
-            defer {
-                flock(fd, LOCK_UN)
-            }
-        #endif
-
-        // Now that we have the lock, prepare extraction dir: clear if exists, then recreate
+        // Prepare extraction dir: clear if exists, then recreate
         if fileManager.fileExists(atPath: extractionDirectoryURL.path) {
             try? fileManager.removeItem(at: extractionDirectoryURL)
         }
-        try fileManager.createDirectory(
+        try FileManager.default.createDirectory(
             at: extractionDirectoryURL,
             withIntermediateDirectories: true,
             attributes: nil

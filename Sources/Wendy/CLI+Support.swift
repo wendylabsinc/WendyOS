@@ -2,6 +2,8 @@ import Foundation
 import GRPCCore
 import NIOCore
 import Noora
+import WendyAgentGRPC
+import WendyShared
 
 public func withErrorTracking(
     _ body: @Sendable () async throws -> Void
@@ -37,6 +39,74 @@ public func withErrorTracking(
         }
         throw error
     }
+}
+
+/// Checks if an error indicates an unimplemented API and prompts the user to update their device.
+/// Returns true if the user chose to update and the update was initiated.
+func promptDeviceUpdateIfUnimplemented(
+    error: any Error,
+    endpoint: AgentConnectionOptions.Endpoint
+) async -> Bool {
+    guard let rpcError = error as? RPCError,
+        rpcError.code == .unimplemented
+    else {
+        return false
+    }
+
+    // Don't prompt in JSON mode
+    guard !JSONMode.isEnabled else {
+        JSONErrorResponse(
+            error: "api_not_implemented",
+            reason: "The device does not support this feature",
+            suggestion: "Update your device with: wendy device update"
+        ).print()
+        return false
+    }
+
+    Noora().warning(
+        """
+        This feature is not available on your device.
+        Your device may be running an older version of the Wendy agent.
+        """
+    )
+
+    let shouldUpdate = Noora().yesOrNoChoicePrompt(
+        question: "Would you like to update your device now?",
+        defaultAnswer: true,
+        collapseOnSelection: false
+    )
+
+    guard shouldUpdate else {
+        return false
+    }
+
+    #if os(Windows)
+        Noora().warning("Automatic device updates are not supported on Windows.")
+        Noora().info("Please update your device manually using: wendy device update")
+        return false
+    #else
+        do {
+            // Download and apply the update
+            let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
+
+            try await withAgentGRPCClient(endpoint, title: "Updating device") { client in
+                let agent = Agent(client: client)
+                _ = try await Noora().progressBarStep(message: "Updating Device") {
+                    updateProgress in
+                    try await agent.update(fromBinary: binary, onProgress: updateProgress)
+                }
+            }
+
+            // Wait for the device to restart
+            try await waitForDeviceRestart(endpoint: endpoint)
+
+            Noora().success("Device updated successfully. Please try your command again.")
+            return true
+        } catch {
+            Noora().error("Failed to update device: \(error.localizedDescription)")
+            return false
+        }
+    #endif
 }
 
 private func deviceUnreachable() async throws {

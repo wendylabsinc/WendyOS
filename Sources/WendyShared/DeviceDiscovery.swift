@@ -1,6 +1,7 @@
 import Bluetooth
 import Logging
 import NIOCore
+import NIOFoundationCompat
 import WendyAgentGRPC
 
 #if canImport(FoundationEssentials)
@@ -267,7 +268,7 @@ extension DeviceDiscovery {
                 }
 
                 let bluetoothRespone = try Wendy_Agent_Services_V1_BluetoothResponse(
-                    serializedBytes: response.readableBytesView
+                    serializedBytes: Array(response.readableBytesView)
                 )
 
                 if case .agentVersion(let agentVersion) = bluetoothRespone.response {
