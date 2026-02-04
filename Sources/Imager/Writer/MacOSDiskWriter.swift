@@ -4,7 +4,7 @@
     import NIOFileSystem
 
     /// A disk writer implementation for macOS that uses the `dd` command.
-    public class MacOSDiskWriter: DiskWriter {
+    public final class MacOSDiskWriter: DiskWriter {
         public init() {}
 
         /// Information about an image entry in a zip archive

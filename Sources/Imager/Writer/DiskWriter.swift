@@ -56,7 +56,7 @@ public enum DiskWriterError: Error {
     }
 }
 
-public protocol DiskWriter {
+public protocol DiskWriter: Sendable {
     /// Write an image file to a drive with progress reporting
     /// - Parameters:
     ///   - imagePath: Path to the image file to write
