@@ -273,26 +273,8 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
 
             logger.info("Update applied successfully, backup kept at \(backupFile)")
-
-            // Send the .updated response BEFORE triggering restart, because
-            // shouldRestart() initiates graceful shutdown which tears down gRPC
-            // streams. If we send after, the client will get a connection reset
-            // error instead of the confirmation.
-            try await writer.write(
-                .with {
-                    $0.updated = .init()
-                }
-            )
-
-            logger.info("Restarting agent")
-
-            // Attempt restart - if this throws, we'll restore from backup
-            try await shouldRestart()
-
-            // Note: If restart succeeds via graceful shutdown, the process will exit soon.
-            // The backup file will remain and should be cleaned up on next successful start.
         } catch {
-            // If move failed or restart failed, restore from backup
+            // File operations failed (move, rename, or chmod) — roll back.
             logger.error("Update failed: \(error), attempting to restore from backup")
 
             // Clean up temp files
@@ -332,6 +314,31 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 code: .internalError,
                 message: "Update failed: \(error.localizedDescription). Restored from backup."
             )
+        }
+
+        // Past the point of no return: the new binary is on disk and executable.
+        // Errors after this point should NOT trigger rollback — the update is good,
+        // only the restart mechanism failed.
+
+        // Send the .updated response BEFORE triggering restart, because
+        // shouldRestart() initiates graceful shutdown which tears down gRPC
+        // streams. If we send after, the client will get a connection reset
+        // error instead of the confirmation.
+        try await writer.write(
+            .with {
+                $0.updated = .init()
+            }
+        )
+
+        logger.info("Restarting agent")
+
+        do {
+            try await shouldRestart()
+        } catch {
+            // Restart failed, but the new binary is already in place.
+            // Don't roll back — systemd or a manual restart will pick it up.
+            logger.error("Failed to trigger restart after successful update: \(error)")
+            logger.info("New binary is in place; service will use it on next restart")
         }
 
     }
