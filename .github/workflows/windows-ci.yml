@@ -14,7 +14,7 @@ jobs:
   build-windows:
     name: Build (Windows Debug)
     runs-on:
-      - runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=8
+      - runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16
       - spot=false
 
     steps:

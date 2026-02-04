@@ -142,7 +142,7 @@ public func downloadFile(
 
         // Fire GET request via delegate-driven streaming session
         var delegate: WindowsDownloadDelegate?
-        FileManager.default.createFile(atPath: path, contents: nil)
+        _ = FileManager.default.createFile(atPath: path, contents: nil)
         let fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         let request = URLRequest(url: url)
 

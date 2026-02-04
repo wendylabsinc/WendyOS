@@ -235,5 +235,17 @@
                 throw DiskWriterError.writeFailed(reason: error.localizedDescription)
             }
         }
+
+        public func writeFromZip(
+            zipPath: String,
+            drive: Drive,
+            progressHandler: @escaping (DiskWriteProgress) -> Void
+        ) async throws {
+            // Windows does not currently support streaming from zip
+            // The image must be extracted first, then written using write()
+            throw DiskWriterError.writeFailed(
+                reason: "Writing directly from zip is not supported on Windows. Please extract the image first."
+            )
+        }
     }
 #endif

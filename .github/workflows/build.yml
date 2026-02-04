@@ -130,7 +130,7 @@ jobs:
     name: wendy-cli-windows-amd64
     needs: [check-bugfix, determine-version]
     runs-on:
-      - runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=8
+      - runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16
       - spot=false
 
     steps:
