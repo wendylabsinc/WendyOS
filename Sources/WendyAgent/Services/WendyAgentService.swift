@@ -177,33 +177,33 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 permissions: [.ownerReadWriteExecute, .groupReadExecute, .otherReadExecute]
             )
         ) { writer in
-            var bufferedWriter = writer.bufferedWriter()
-            var hash = SHA256()
-            for try await event in request.messages {
-                switch event.requestType {
-                case .chunk(let chunk):
-                    hash.update(data: chunk.data)
-                    try await bufferedWriter.write(contentsOf: ByteBuffer(data: chunk.data))
-                case .control(let update):
-                    let finalHash = hash.finalize().map { String(format: "%02x", $0) }.joined()
-                    guard
-                        update.update.sha256.isEmpty  // If the hash is empty, we don't check it
-                            || finalHash.caseInsensitiveCompare(update.update.sha256)
-                                == .orderedSame
-                    else {
-                        throw RPCError(
-                            code: .invalidArgument,
-                            message: "Invalid request: SHA256 hash mismatch"
-                        )
+            try await writer.withBufferedWriter { bufferedWriter in
+                var hash = SHA256()
+                for try await event in request.messages {
+                    switch event.requestType {
+                    case .chunk(let chunk):
+                        hash.update(data: chunk.data)
+                        try await bufferedWriter.write(contentsOf: ByteBuffer(data: chunk.data))
+                    case .control(let update):
+                        let finalHash = hash.finalize().map { String(format: "%02x", $0) }
+                            .joined()
+                        guard
+                            update.update.sha256.isEmpty
+                                || finalHash.caseInsensitiveCompare(update.update.sha256)
+                                    == .orderedSame
+                        else {
+                            throw RPCError(
+                                code: .invalidArgument,
+                                message: "Invalid request: SHA256 hash mismatch"
+                            )
+                        }
+                        logger.info("Received control command, binary is written")
+                        return
+                    case .none:
+                        // Unknown, ignore.
+                        ()
                     }
-                    try await bufferedWriter.flush()
-                    logger.info("Received control command, binary is written")
-                    return
-                case .none:
-                    // Unknown, ignore.
-                    ()
                 }
-                try await bufferedWriter.flush()
             }
         }
 
@@ -254,11 +254,17 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             // Temp file has been moved, no longer need to clean up temp directory
             shouldCleanupTemp = false
 
-            // Remove the current binary and move the new one in place
-            // We already have a backup, so this is safe. NIOFileSystem's moveItem
-            // doesn't support overwriting, so we must remove first.
-            try await filesystem.removeItem(at: currentBinary)
-            try await filesystem.moveItem(at: tempNewBinary, to: currentBinary)
+            // Use POSIX rename() for atomic replacement. Unlike the two-step
+            // remove+move approach, rename() atomically replaces the destination,
+            // so there is no window where the binary is missing (e.g. during
+            // a power loss or if systemd tries to restart the agent).
+            guard rename(tempNewBinary.string, currentBinary.string) == 0 else {
+                let err = String(cString: strerror(errno))
+                throw RPCError(
+                    code: .internalError,
+                    message: "Failed to atomically replace binary: \(err)"
+                )
+            }
 
             // Ensure the new binary has executable permissions
             try setExecutablePermissions(
@@ -268,15 +274,8 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
 
             logger.info("Update applied successfully, backup kept at \(backupFile)")
-            logger.info("Restarting agent")
-
-            // Attempt restart - if this throws, we'll restore from backup
-            try await shouldRestart()
-
-            // Note: If restart succeeds, this code won't execute as the process will exit
-            // The backup file will remain and should be cleaned up on next successful start
         } catch {
-            // If move failed or restart failed, restore from backup
+            // File operations failed (move, rename, or chmod) — roll back.
             logger.error("Update failed: \(error), attempting to restore from backup")
 
             // Clean up temp files
@@ -318,11 +317,40 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             )
         }
 
-        try await writer.write(
-            .with {
-                $0.updated = .init()
-            }
-        )
+        // Past the point of no return: the new binary is on disk and executable.
+        // Errors after this point should NOT trigger rollback — the update is good,
+        // only the restart mechanism failed.
+
+        // Send the .updated response BEFORE triggering restart, because
+        // shouldRestart() initiates graceful shutdown which tears down gRPC
+        // streams. If we send after, the client will get a connection reset
+        // error instead of the confirmation.
+        do {
+            try await writer.write(
+                .with {
+                    $0.updated = .init()
+                }
+            )
+        } catch {
+            // Client disconnected before we could confirm. The new binary is
+            // already on disk — exit so systemd restarts with it.
+            logger.warning("Failed to send .updated response: \(error)")
+            logger.info("New binary is in place; exiting so systemd restarts with it")
+            exit(0)
+        }
+
+        logger.info("Restarting agent")
+
+        do {
+            try await shouldRestart()
+        } catch {
+            // Restart failed, but the new binary is already in place.
+            // Force exit so systemd (Restart=always) picks up the new binary.
+            logger.error("Failed to trigger restart after successful update: \(error)")
+            logger.info("New binary is in place; exiting so systemd restarts with it")
+            exit(0)
+        }
+
     }
 
     func getAgentVersion(
