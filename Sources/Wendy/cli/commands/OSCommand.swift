@@ -625,7 +625,6 @@ struct OSCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let noora = Noora()
             let logger = Logger(label: "wendy.os.update")
 
             // Resolve the artifact file path
@@ -636,7 +635,7 @@ struct OSCommand: AsyncParsableCommand {
                 : FileManager.default.currentDirectoryPath + "/" + artifactPath
 
             guard fileManager.fileExists(atPath: absolutePath) else {
-                noora.error("Mender artifact not found: \(absolutePath)")
+                cliOutput.error("Mender artifact not found: \(absolutePath)")
                 throw ExitCode.failure
             }
 
@@ -648,24 +647,24 @@ struct OSCommand: AsyncParsableCommand {
                 // Look for a .mender.xz file in the directory
                 let contents = try fileManager.contentsOfDirectory(atPath: absolutePath)
                 guard let menderFile = contents.first(where: { $0.hasSuffix(".mender.xz") }) else {
-                    noora.error("No .mender.xz file found in directory: \(absolutePath)")
+                    cliOutput.error("No .mender.xz file found in directory: \(absolutePath)")
                     throw ExitCode.failure
                 }
                 absolutePath = absolutePath + "/" + menderFile
-                noora.info("Found Mender artifact: \(menderFile)")
+                cliOutput.info("Found Mender artifact: \(menderFile)")
             }
 
             let artifactURL = URL(fileURLWithPath: absolutePath)
             let fileName = artifactURL.lastPathComponent
 
-            noora.info("Preparing to serve Mender artifact: \(fileName)")
+            cliOutput.info("Preparing to serve Mender artifact: \(fileName)")
 
             // Compute file hash for the URL path
             let fileHash = try await computeFileHash(path: absolutePath)
 
             // Get the local IP address
             guard let localIP = getLocalIPAddress() else {
-                noora.error("Could not determine local IP address")
+                cliOutput.error("Could not determine local IP address")
                 throw ExitCode.failure
             }
 
@@ -679,7 +678,7 @@ struct OSCommand: AsyncParsableCommand {
             let artifactFilePath = FilePath(absolutePath)
             let fileInfo = try await FileSystem.shared.info(forFileAt: artifactFilePath)
             guard let fileSize = fileInfo?.size else {
-                noora.error("Could not get file size")
+                cliOutput.error("Could not get file size")
                 throw ExitCode.failure
             }
 
@@ -734,7 +733,7 @@ struct OSCommand: AsyncParsableCommand {
             )
             server.logger.logLevel = .warning
 
-            try await withThrowingTaskGroup(of: Void.self) { group in
+            await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask { [server] in
                     try await server.runService()
                 }
@@ -746,13 +745,13 @@ struct OSCommand: AsyncParsableCommand {
                 }
 
                 guard let artifactDownloadUrl else {
-                    noora.error("Failed to start file server")
+                    cliOutput.error("Failed to start file server")
                     group.cancelAll()
                     return
                 }
 
-                noora.info("Serving artifact at: \(artifactDownloadUrl)")
-                noora.info("Sending update command to device...")
+                cliOutput.info("Serving artifact at: \(artifactDownloadUrl)")
+                cliOutput.info("Sending update command to device...")
 
                 // Send the gRPC command to the device (don't throw - let download complete)
                 group.addTask {
@@ -773,18 +772,18 @@ struct OSCommand: AsyncParsableCommand {
                                 for try await update in response.messages {
                                     switch update.responseType {
                                     case .progress(let progress):
-                                        noora.info(
+                                        cliOutput.info(
                                             "[\(progress.phase)] \(progress.percent)%"
                                         )
                                     case .completed(let completed):
-                                        noora.success("OS update completed!")
+                                        cliOutput.success("OS update completed!")
                                         if completed.rebootRequired {
-                                            noora.warning(
+                                            cliOutput.warning(
                                                 "A reboot is required to complete the update."
                                             )
                                         }
                                     case .failed(let failed):
-                                        noora.error("OS update failed: \(failed.errorMessage)")
+                                        cliOutput.error("OS update failed: \(failed.errorMessage)")
                                     case .none:
                                         break
                                     }
@@ -794,7 +793,7 @@ struct OSCommand: AsyncParsableCommand {
                     } catch is CancellationError {
                         // Ignore cancellation - download may still be in progress
                     } catch {
-                        noora.error("Failed to send update command: \(error)")
+                        cliOutput.error("Failed to send update command: \(error)")
                     }
                 }
 

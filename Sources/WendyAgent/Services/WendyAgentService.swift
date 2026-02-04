@@ -610,50 +610,108 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     }
                 )
 
-                // Run mender-update in a detached task to prevent cancellation from
-                // killing the update process if the gRPC stream is cancelled
-                let menderTask = Task.detached {
-                    try await Subprocess.run(
-                        .name("mender-update"),
-                        arguments: ["install", artifactUrl],
-                        environment: .inherit.updating([
-                            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"
-                        ]),
-                        output: .string(limit: .max),
-                        error: .string(limit: .max)
+                // Run mender-update using setsid --fork to fully detach it from wendy-agent.
+                // This double-forks so mender-update is adopted by init and immune to any
+                // signals sent when the gRPC stream is cancelled.
+                // We use a wrapper script to capture the exit status since setsid --fork
+                // returns immediately.
+                let statusFile = "/tmp/mender-update-status-\(UUID().uuidString)"
+                let wrapperScript = """
+                    #!/bin/sh
+                    mender-update install '\(artifactUrl.replacingOccurrences(of: "'", with: "'\\''"))'
+                    echo $? > '\(statusFile)'
+                    """
+
+                // Write wrapper script
+                let scriptFile = "/tmp/mender-wrapper-\(UUID().uuidString).sh"
+                try wrapperScript.write(toFile: scriptFile, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: NSNumber(value: 0o755)],
+                    ofItemAtPath: scriptFile
+                )
+
+                // Launch mender-update in a fully detached process
+                // Note: setsid --fork double-forks, so the mender-update process inherits
+                // our stdout/stderr and will continue writing to them
+                let launchResult = try await Subprocess.run(
+                    .name("setsid"),
+                    arguments: ["--fork", scriptFile],
+                    environment: .inherit.updating([
+                        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"
+                    ]),
+                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+                )
+
+                guard launchResult.terminationStatus.isSuccess else {
+                    logger.error("Failed to launch mender-update")
+                    try await writer.write(
+                        .with {
+                            $0.failed = .with {
+                                $0.errorMessage = "Failed to launch mender-update"
+                            }
+                        }
                     )
+                    return Metadata()
                 }
 
-                let result = try await menderTask.value
+                logger.info("mender-update launched in background, waiting for completion...")
 
-                logger.info("mender-update exited with status: \(result.terminationStatus)")
+                // Poll for completion by checking if the status file exists
+                var menderExitCode: Int32?
+                let startTime = ContinuousClock.now
+                let timeout: Duration = .seconds(1800) // 30 minute timeout
+
+                while ContinuousClock.now - startTime < timeout {
+                    if FileManager.default.fileExists(atPath: statusFile) {
+                        if let statusString = try? String(contentsOfFile: statusFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                           let exitCode = Int32(statusString) {
+                            menderExitCode = exitCode
+                            // Clean up status and script files
+                            try? FileManager.default.removeItem(atPath: statusFile)
+                            try? FileManager.default.removeItem(atPath: scriptFile)
+                            break
+                        }
+                    }
+                    try await Task.sleep(for: .seconds(2))
+                }
 
                 // Try to send response, but don't crash if stream is closed
                 do {
-                    if result.terminationStatus.isSuccess {
-                        logger.info("Mender update installed successfully")
-                        try await writer.write(
-                            .with {
-                                $0.progress = .with {
-                                    $0.phase = "installed"
-                                    $0.percent = 100
+                    if let exitCode = menderExitCode {
+                        if exitCode == 0 {
+                            logger.info("Mender update installed successfully")
+                            try await writer.write(
+                                .with {
+                                    $0.progress = .with {
+                                        $0.phase = "installed"
+                                        $0.percent = 100
+                                    }
                                 }
-                            }
-                        )
-                        try await writer.write(
-                            .with {
-                                $0.completed = .with {
-                                    $0.rebootRequired = true
+                            )
+                            try await writer.write(
+                                .with {
+                                    $0.completed = .with {
+                                        $0.rebootRequired = true
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        } else {
+                            logger.error("Mender update failed with exit code: \(exitCode)")
+                            try await writer.write(
+                                .with {
+                                    $0.failed = .with {
+                                        $0.errorMessage = "Mender update failed with exit code: \(exitCode). Check logs for details."
+                                    }
+                                }
+                            )
+                        }
                     } else {
-                        let errorOutput = result.standardError ?? "Unknown error"
-                        logger.error("Mender update failed: \(errorOutput)")
+                        logger.error("Mender update timed out or status file not found")
                         try await writer.write(
                             .with {
                                 $0.failed = .with {
-                                    $0.errorMessage = "Mender update failed: \(errorOutput)"
+                                    $0.errorMessage = "Mender update timed out after 30 minutes"
                                 }
                             }
                         )
