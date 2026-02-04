@@ -257,10 +257,6 @@ public struct VideoEntitlements: Codable, Sendable, Hashable {
     }
 }
 
-public struct AudioEntitlements: Codable, Sendable, Hashable {
-    public init() {}
-}
-
 public struct NetworkEntitlements: Codable, Sendable, Hashable {
     public let mode: NetworkMode
 
