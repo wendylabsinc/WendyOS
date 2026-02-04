@@ -48,6 +48,27 @@ A "network" type entitlement can have the following values:
 }
 ```
 
+## Audio
+
+The audio entitlement allows the container to access audio input/output devices via ALSA.
+
+```json
+{
+    "type": "audio"
+}
+```
+
+### Audio Options
+
+```json
+{
+    "type": "audio",
+    "allowCdiDevSnd": false
+}
+```
+
+- **allowCdiDevSnd** (default `false`): On Jetson, NVIDIA CDI specs can mount `/dev/snd` with `nodev`, which blocks ALSA. When `false`, Wendy filters that CDI mount if audio is requested so playback/recording works. Set `true` only if you want the NVIDIA CDI `/dev/snd` mount to take precedence.
+
 ## Device
 
 The device entitlement allows the container to access the device's hardware.

@@ -357,7 +357,7 @@ struct InitCommand: AsyncParsableCommand {
             version: "0.0.1",
             language: language.rawValue,
             entitlements: [
-                .audio,
+                .audio(.init()),
                 .bluetooth(.init(mode: .bluez)),
                 .network(.init(mode: .host)),
                 .video(.init(mode: .all)),

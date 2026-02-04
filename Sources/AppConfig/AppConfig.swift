@@ -74,7 +74,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
     case video(VideoEntitlements)
     case gpu(GPUEntitlements)
     case persist(PersistenceEntitlements)
-    case audio
+    case audio(AudioEntitlements)
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -86,8 +86,9 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .video(let entitlement):
             try container.encode(EntitlementType.video, forKey: .type)
             try entitlement.encode(to: encoder)
-        case .audio:
+        case .audio(let entitlement):
             try container.encode(EntitlementType.audio, forKey: .type)
+            try entitlement.encode(to: encoder)
         case .bluetooth(let entitlement):
             try container.encode(EntitlementType.bluetooth, forKey: .type)
             try entitlement.encode(to: encoder)
@@ -114,7 +115,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .gpu:
             self = .gpu(try GPUEntitlements(from: decoder))
         case .audio:
-            self = .audio
+            self = .audio(try AudioEntitlements(from: decoder))
         case .persist:
             self = .persist(try PersistenceEntitlements(from: decoder))
         }
@@ -136,7 +137,7 @@ public enum Entitlement: Codable, Sendable, Hashable {
         case .gpu:
             return ["type"]
         case .audio:
-            return ["type"]
+            return ["type", "allowCdiDevSnd"]
         case .persist:
             return ["type", "name", "path"]
         }
@@ -179,6 +180,32 @@ public struct BluetoothEntitlements: Codable, Sendable, Hashable {
 
 public struct GPUEntitlements: Codable, Sendable, Hashable {
     public init() {}
+}
+
+public struct AudioEntitlements: Codable, Sendable, Hashable {
+    /// Allow the NVIDIA CDI /dev/snd mount to remain (can override audio entitlement mount).
+    public var allowCdiDevSnd: Bool
+
+    public init(allowCdiDevSnd: Bool = false) {
+        self.allowCdiDevSnd = allowCdiDevSnd
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case allowCdiDevSnd
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.allowCdiDevSnd =
+            try container.decodeIfPresent(Bool.self, forKey: .allowCdiDevSnd) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if allowCdiDevSnd {
+            try container.encode(allowCdiDevSnd, forKey: .allowCdiDevSnd)
+        }
+    }
 }
 
 public struct VideoEntitlements: Codable, Sendable, Hashable {

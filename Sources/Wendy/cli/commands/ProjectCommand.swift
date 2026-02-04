@@ -169,8 +169,8 @@ struct ListCommand: ModifyProjectCommand {
                     print("      - \(allowlist)")
                 }
             }
-        case .audio:
-            print("   No additional configuration")
+        case .audio(let audioEntitlement):
+            print("   allowCdiDevSnd: \(audioEntitlement.allowCdiDevSnd)")
         case .gpu:
             print("   No additional configuration")
         case .persist(let persistenceEntitlement):
@@ -326,7 +326,7 @@ struct AddCommand: ModifyProjectCommand {
                     }
                 }
             case .audio:
-                newEntitlement = .audio
+                newEntitlement = .audio(.init())
             case .gpu:
                 newEntitlement = .gpu(GPUEntitlements())
             case .persist:
@@ -397,7 +397,7 @@ struct AddCommand: ModifyProjectCommand {
             return .video(VideoEntitlements())
 
         case .audio:
-            return .audio
+            return .audio(.init())
 
         case .gpu:
             return .gpu(GPUEntitlements())
@@ -500,7 +500,7 @@ extension Entitlement {
             return .bluetooth
         case .video:
             return .video
-        case .audio:
+        case .audio(_):
             return .audio
         case .gpu:
             return .gpu

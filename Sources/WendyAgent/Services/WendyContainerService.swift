@@ -314,6 +314,15 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     return false
                 }
             })
+            let audioEntitlement = appConfig.entitlements.compactMap {
+                entitlement -> AudioEntitlements? in
+                if case .audio(let audio) = entitlement {
+                    return audio
+                }
+                return nil
+            }.first
+            let wantsAudio = audioEntitlement != nil
+            let allowCdiDevSnd = audioEntitlement?.allowCdiDevSnd ?? false
 
             labels["sh.wendy/app.version"] = appConfig.version
 
@@ -423,7 +432,22 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     let nvidiaSpec = try await cdiManager.loadNVIDIACDISpec(
                         deviceName: "all"
                     )
-                    try spec.applyCDIDevice(nvidiaSpec, deviceName: "all")
+
+                    // Avoid NVIDIA OCI hooks (which can clobber cgroup device rules) when we are
+                    // already applying CDI edits ourselves.
+                    let finalSpec: CDISpecification
+                    if wantsAudio && !allowCdiDevSnd {
+                        logger.debug(
+                            "Filtering /dev/snd mount from NVIDIA CDI spec due to audio entitlement"
+                        )
+                        finalSpec = nvidiaSpec.removingMounts { mount in
+                            mount.containerPath == "/dev/snd"
+                        }
+                    } else {
+                        finalSpec = nvidiaSpec
+                    }
+
+                    try spec.applyCDIDevice(finalSpec, deviceName: "all")
 
                     logger.info("Successfully applied NVIDIA CDI spec to container")
                 } catch {

@@ -283,7 +283,7 @@ extension OCI {
                         ]
                     )
                 }
-            case .audio:
+            case .audio(let _):
                 logger.info("Audio entitlement detected - adding audio group")
                 // Add audio group (gid 29) for access to ALSA devices
                 // Audio devices on Linux are owned by group 'audio' (gid 29)
