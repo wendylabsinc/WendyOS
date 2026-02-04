@@ -672,25 +672,39 @@ struct OSCommand: AsyncParsableCommand {
             // Use a continuation to pass the artifact URL from the server callback
             let artifactUrlStream = AsyncStream<String>.makeStream()
 
+            // Get file size for Content-Length header
+            let fileInfo = try await FileSystem.shared.info(forFileAt: FilePath(absolutePath))
+            guard let fileSize = fileInfo?.size else {
+                noora.error("Could not get file size")
+                throw ExitCode.failure
+            }
+
             // Start the Hummingbird webserver that serves the file
             let router = Router().get("\(fileHash)/:filename") { request, context in
-                do {
-                    let data = try Data(contentsOf: artifactURL)
-                    return Response(
-                        status: .ok,
-                        headers: [
-                            .contentType: "application/octet-stream",
-                            .contentDisposition: "attachment; filename=\"\(fileName)\"",
-                        ],
-                        body: ResponseBody(byteBuffer: ByteBuffer(data: data))
+                let body = ResponseBody(contentLength: Int(fileSize)) { writer in
+                    let handle = try await FileSystem.shared.openFile(
+                        forReadingAt: FilePath(absolutePath),
+                        options: .init()
                     )
-                } catch {
-                    logger.error("Failed to serve file: \(error)")
-                    return Response(
-                        status: .internalServerError,
-                        body: ResponseBody(byteBuffer: ByteBuffer(string: "Failed to read file"))
-                    )
+
+                    for try await chunk in handle.readChunks(
+                        in: 0...,
+                        chunkLength: .mebibytes(1)
+                    ) {
+                        try await writer.write(chunk)
+                    }
+
+                    try await handle.close()
                 }
+
+                return Response(
+                    status: .ok,
+                    headers: [
+                        .contentType: "application/octet-stream",
+                        .contentDisposition: "attachment; filename=\"\(fileName)\"",
+                    ],
+                    body: body
+                )
             }
 
             var server = Application(
