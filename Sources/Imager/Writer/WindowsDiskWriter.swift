@@ -244,7 +244,8 @@
             // Windows does not currently support streaming from zip
             // The image must be extracted first, then written using write()
             throw DiskWriterError.writeFailed(
-                reason: "Writing directly from zip is not supported on Windows. Please extract the image first."
+                reason:
+                    "Writing directly from zip is not supported on Windows. Please extract the image first."
             )
         }
     }
