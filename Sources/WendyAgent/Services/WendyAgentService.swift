@@ -177,31 +177,32 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 permissions: [.ownerReadWriteExecute, .groupReadExecute, .otherReadExecute]
             )
         ) { writer in
-            var bufferedWriter = writer.bufferedWriter()
-            var hash = SHA256()
-            for try await event in request.messages {
-                switch event.requestType {
-                case .chunk(let chunk):
-                    hash.update(data: chunk.data)
-                    try await bufferedWriter.write(contentsOf: ByteBuffer(data: chunk.data))
-                case .control(let update):
-                    let finalHash = hash.finalize().map { String(format: "%02x", $0) }.joined()
-                    guard
-                        update.update.sha256.isEmpty  // If the hash is empty, we don't check it
-                            || finalHash.caseInsensitiveCompare(update.update.sha256)
-                                == .orderedSame
-                    else {
-                        throw RPCError(
-                            code: .invalidArgument,
-                            message: "Invalid request: SHA256 hash mismatch"
-                        )
+            try await writer.withBufferedWriter { bufferedWriter in
+                var hash = SHA256()
+                for try await event in request.messages {
+                    switch event.requestType {
+                    case .chunk(let chunk):
+                        hash.update(data: chunk.data)
+                        try await bufferedWriter.write(contentsOf: ByteBuffer(data: chunk.data))
+                    case .control(let update):
+                        let finalHash = hash.finalize().map { String(format: "%02x", $0) }
+                            .joined()
+                        guard
+                            update.update.sha256.isEmpty
+                                || finalHash.caseInsensitiveCompare(update.update.sha256)
+                                    == .orderedSame
+                        else {
+                            throw RPCError(
+                                code: .invalidArgument,
+                                message: "Invalid request: SHA256 hash mismatch"
+                            )
+                        }
+                        logger.info("Received control command, binary is written")
+                        return
+                    case .none:
+                        // Unknown, ignore.
+                        ()
                     }
-                    try await bufferedWriter.flush()
-                    logger.info("Received control command, binary is written")
-                    return
-                case .none:
-                    // Unknown, ignore.
-                    ()
                 }
             }
         }
@@ -336,9 +337,10 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             try await shouldRestart()
         } catch {
             // Restart failed, but the new binary is already in place.
-            // Don't roll back — systemd or a manual restart will pick it up.
+            // Force exit so systemd (Restart=always) picks up the new binary.
             logger.error("Failed to trigger restart after successful update: \(error)")
-            logger.info("New binary is in place; service will use it on next restart")
+            logger.info("New binary is in place; exiting so systemd restarts with it")
+            exit(0)
         }
 
     }
