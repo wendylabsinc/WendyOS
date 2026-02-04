@@ -293,8 +293,7 @@ public struct DockerCLI: Sendable {
         directory: String = ".",
         registryHostname: String = "host.docker.internal",
         registryPort: Int = 5000,
-        compression: ImageCompressionMode = .zstd,
-        onOutput: @escaping @Sendable (String) async throws -> Void
+        compression: ImageCompressionMode = .zstd
     ) async throws {
         // Acquire shared build lock, allows parallel builds but prevents builder restarts
         try await BuildLock.shared.withLock {
@@ -321,12 +320,12 @@ public struct DockerCLI: Sendable {
                 directory,
             ]
 
-            try await run(
-                executable: .name(self.command),
-                arguments: Subprocess.Arguments(arguments)
-            ) { string in
-                try await onOutput(string)
-            }
+            _ = try await Subprocess.run(
+                .name(self.command),
+                arguments: Subprocess.Arguments(arguments),
+                output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+            )
         }
     }
 
