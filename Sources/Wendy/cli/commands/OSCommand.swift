@@ -753,7 +753,7 @@ struct OSCommand: AsyncParsableCommand {
                 noora.info("Serving artifact at: \(artifactDownloadUrl)")
                 noora.info("Sending update command to device...")
 
-                // Send the gRPC command to the device
+                // Send the gRPC command to the device (don't throw - let download complete)
                 group.addTask {
                     do {
                         try await withAgentGRPCClient(
@@ -790,11 +790,11 @@ struct OSCommand: AsyncParsableCommand {
                                 }
                             }
                         }
+                    } catch is CancellationError {
+                        // Ignore cancellation - download may still be in progress
                     } catch {
                         noora.error("Failed to send update command: \(error)")
-                        throw error
                     }
-
                 }
 
                 // Wait for download to complete before shutting down server
