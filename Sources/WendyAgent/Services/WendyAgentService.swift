@@ -325,11 +325,19 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
         // shouldRestart() initiates graceful shutdown which tears down gRPC
         // streams. If we send after, the client will get a connection reset
         // error instead of the confirmation.
-        try await writer.write(
-            .with {
-                $0.updated = .init()
-            }
-        )
+        do {
+            try await writer.write(
+                .with {
+                    $0.updated = .init()
+                }
+            )
+        } catch {
+            // Client disconnected before we could confirm. The new binary is
+            // already on disk — exit so systemd restarts with it.
+            logger.warning("Failed to send .updated response: \(error)")
+            logger.info("New binary is in place; exiting so systemd restarts with it")
+            exit(0)
+        }
 
         logger.info("Restarting agent")
 
