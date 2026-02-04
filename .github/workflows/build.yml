@@ -91,9 +91,7 @@ jobs:
   build-windows:
     name: wendy-cli-windows-amd64
     needs: [check-bugfix, determine-version]
-    runs-on:
-      - runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16
-      - spot=false
+    runs-on: runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16/spot=false
 
     steps:
       - name: Setup Swift
@@ -224,7 +222,8 @@ jobs:
         shell: pwsh
         run: |
           cd ${{ github.workspace }}/wendy-agent
-          $BuildDir = swift build --show-bin-path -c release --arch x86_64 --static-swift-stdlib
+          $BuildDir = (swift build --show-bin-path -c release --arch x86_64 --static-swift-stdlib | Select-Object -Last 1).Trim()
+          Write-Host "Build directory: $BuildDir"
           cd ${{ github.workspace }}
           $StagingDir = "wendy-cli-windows-amd64"
           $ZlibSource = "C:\vcpkg\installed\x64-windows\bin\zlib1.dll"
@@ -277,8 +276,22 @@ jobs:
         run: |
           $version = "${{ needs.determine-version.outputs.version }}"
           $tarballName = "wendy-cli-windows-amd64-$version.tar.gz"
-          tar -czvf $tarballName wendy-cli-windows-amd64/
-          Write-Host "tarball_name=$tarballName" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Directory listing:"
+          Get-ChildItem
+
+          if (-not (Test-Path "wendy-cli-windows-amd64")) {
+            Write-Error "Staging directory wendy-cli-windows-amd64 does not exist!"
+            exit 1
+          }
+
+          Write-Host "Contents of wendy-cli-windows-amd64:"
+          Get-ChildItem wendy-cli-windows-amd64
+
+          Write-Host "Creating tarball: $tarballName"
+          tar.exe -czvf $tarballName "wendy-cli-windows-amd64"
+          "tarball_name=$tarballName" >> $env:GITHUB_OUTPUT
         id: create-tarball
 
       - name: Upload binary artifact
@@ -286,6 +299,38 @@ jobs:
         with:
           name: ${{ steps.create-tarball.outputs.tarball_name }}
           path: ${{ steps.create-tarball.outputs.tarball_name }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Build MSI Installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.determine-version.outputs.version }}"
+
+          # Convert version to MSI-compatible format (X.Y.Z)
+          # Input format: YYYY.MM.DD-HHMMSS -> Output: YYYY.M.D (removing leading zeros)
+          $parts = $version -split '-'
+          $dateParts = $parts[0] -split '\.'
+          $msiVersion = "$($dateParts[0]).$([int]$dateParts[1]).$([int]$dateParts[2])"
+          Write-Host "Full version: $version"
+          Write-Host "MSI version: $msiVersion"
+
+          # Install WiX v5
+          dotnet tool install --global wix --version 5.0.2
+
+          # Build MSI
+          wix build `
+            -d Version="$msiVersion" `
+            -d SourceDir="wendy-cli-windows-amd64" `
+            -arch x64 `
+            -o "wendy-cli-windows-amd64-$version.msi" `
+            wendy-agent/Scripts/windows/wendy.wxs
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
+          path: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
           retention-days: 14
           if-no-files-found: error
 
@@ -640,10 +685,10 @@ jobs:
       - name: List files
         run: |
           ls -la
-          # Create a newline-delimited list of release files (tar.gz, deb, rpm)
+          # Create a newline-delimited list of release files (tar.gz, deb, rpm, msi)
           {
             echo 'FILES<<EOF'
-            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" | sort
+            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
       - name: Create Release
