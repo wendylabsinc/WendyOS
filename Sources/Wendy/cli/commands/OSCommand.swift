@@ -510,13 +510,13 @@ struct OSCommand: AsyncParsableCommand {
                 ]
             )
 
-            // Download and extract as separate progress bars when not using cache
+            // Download archive and stream directly to disk (no extraction step)
             let imageDownloader = ImageDownloaderFactory.createImageDownloader()
 
-            var localImagePath: String
+            var zipPath: String
 
-            // Check if cached image exists and matches the latest version
-            let cachedImagePath = try await imageDownloader.cachedImageIfValid(
+            // Check if cached zip exists and matches the latest version
+            let cachedZipPath = try imageDownloader.cachedZipIfValid(
                 deviceName: selectedDeviceName,
                 nightly: nightly
             )
@@ -525,19 +525,19 @@ struct OSCommand: AsyncParsableCommand {
                 latestVersion: latestVersion,
                 nightly: nightly
             )
-            let shouldUseCache = !redownload && cachedImagePath != nil && isCachedLatest
+            let shouldUseCache = !redownload && cachedZipPath != nil && isCachedLatest
 
-            if shouldUseCache, let cachedPath = cachedImagePath {
-                localImagePath = cachedPath
+            if shouldUseCache, let cachedPath = cachedZipPath {
+                zipPath = cachedPath
                 noora.info(
                     "Using cached image for \(selectedDeviceName) (version: \(latestVersion))"
                 )
             } else {
-                if !redownload && cachedImagePath != nil && !isCachedLatest {
+                if !redownload && cachedZipPath != nil && !isCachedLatest {
                     noora.info("Newer version available, downloading updated image...")
                 }
-                // 1) Download archive
-                let (zipPath, _): (String, String) = try await noora.progressBarStep(
+                // Download archive to cache
+                zipPath = try await noora.progressBarStep(
                     message: "Downloading image for \(selectedDeviceName)",
                     successMessage: "Download complete",
                     errorMessage: "Failed to download image"
@@ -564,37 +564,13 @@ struct OSCommand: AsyncParsableCommand {
                     progressUpdater.update(1.0)
                     return result
                 }
-
-                // 2) Extract archive
-                localImagePath = try await noora.progressBarStep(
-                    message: "Extracting image",
-                    successMessage: "Image ready",
-                    errorMessage: "Failed to extract image"
-                ) { updateProgress in
-                    let progressUpdater = SendableProgressUpdater(updateProgress)
-                    let monotonic = Monotonic()
-                    let result = try await imageDownloader.extractArchiveOnly(
-                        deviceName: selectedDeviceName,
-                        zipPath: zipPath,
-                        version: latestVersion,
-                        nightly: nightly
-                    ) { p in
-                        let total = max(1, p.totalUnitCount)
-                        let fraction = clampProgress(Double(p.completedUnitCount) / Double(total))
-                        Task {
-                            let m = await monotonic.next(fraction)
-                            progressUpdater.update(m)
-                        }
-                    }
-                    progressUpdater.update(1.0)
-                    return result
-                }
             }
 
-            logger.debug("✅ Image ready at: \(localImagePath)")
+            logger.debug("✅ Archive ready at: \(zipPath)")
             noora.info(
                 """
                 💾 Writing image to \(selectedDrive.name) (\(selectedDrive.id))...
+                   Streaming decompression directly to disk (no extraction step)
                    Press Ctrl+C to cancel
                 """
             )
@@ -602,7 +578,7 @@ struct OSCommand: AsyncParsableCommand {
             // Ensure we have admin privileges cached up-front so downstream sudo calls don't fail silently
             try await ensureAdminPrivileges()
 
-            // Use DiskWriter to write the image with Noora progress bar
+            // Use DiskWriter to stream the zip directly to disk
             let diskWriter = DiskWriterFactory.createDiskWriter()
 
             try await noora.progressBarStep(
@@ -612,7 +588,7 @@ struct OSCommand: AsyncParsableCommand {
             ) { updateProgress in
                 let progressUpdater = SendableProgressUpdater(updateProgress)
                 let monotonic = Monotonic()
-                try await diskWriter.write(imagePath: localImagePath, drive: selectedDrive) { p in
+                try await diskWriter.writeFromZip(zipPath: zipPath, drive: selectedDrive) { p in
                     if let percent = p.percentComplete {
                         let fraction = clampProgress(percent / 100.0)
                         Task {
@@ -620,7 +596,6 @@ struct OSCommand: AsyncParsableCommand {
                             progressUpdater.update(m)
                         }
                     }
-                    // Avoid extra prints to keep the progress bar on a single line.
                 }
                 progressUpdater.update(1.0)
             }

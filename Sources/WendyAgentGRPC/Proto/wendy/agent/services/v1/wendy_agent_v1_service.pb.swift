@@ -399,9 +399,21 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
 
   public var version: String = String()
 
+  /// OS version read from /etc/wendy/version.txt (only present on WendyOS)
+  public var osVersion: String {
+    get {return _osVersion ?? String()}
+    set {_osVersion = newValue}
+  }
+  /// Returns true if `osVersion` has been explicitly set.
+  public var hasOsVersion: Bool {return self._osVersion != nil}
+  /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
+  public mutating func clearOsVersion() {self._osVersion = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _osVersion: String? = nil
 }
 
 /// Request message for listing WiFi networks
@@ -1365,7 +1377,7 @@ extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProtobuf.Message,
 
 extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1374,20 +1386,29 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.version) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._osVersion) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.version.isEmpty {
       try visitor.visitSingularStringField(value: self.version, fieldNumber: 1)
     }
+    try { if let v = self._osVersion {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_GetAgentVersionResponse, rhs: Wendy_Agent_Services_V1_GetAgentVersionResponse) -> Bool {
     if lhs.version != rhs.version {return false}
+    if lhs._osVersion != rhs._osVersion {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

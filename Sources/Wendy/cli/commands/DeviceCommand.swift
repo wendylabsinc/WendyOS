@@ -60,6 +60,7 @@ struct DeviceCommand: AsyncParsableCommand {
 
         struct JSONOutput: Codable {
             let currentVersion: String
+            let osVersion: String?
             let latestVersion: String?
         }
 
@@ -87,12 +88,16 @@ struct DeviceCommand: AsyncParsableCommand {
             if JSONMode.isEnabled {
                 let output = JSONOutput(
                     currentVersion: version.version,
+                    osVersion: version.hasOsVersion ? version.osVersion : nil,
                     latestVersion: latestVersion
                 )
                 let data = try JSONEncoder().encode(output)
                 print(String(data: data, encoding: .utf8)!)
             } else {
-                print("Current version: \(version.version)")
+                print("Agent version: \(version.version)")
+                if version.hasOsVersion {
+                    print("OS version: \(version.osVersion)")
+                }
                 if let latestVersion, version.version != latestVersion {
                     print("Update available: \(latestVersion)")
                 } else if checkUpdates {

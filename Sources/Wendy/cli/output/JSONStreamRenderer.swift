@@ -1,4 +1,5 @@
 import Foundation
+import NIOCore
 
 /// Streaming JSON output renderer that emits line-delimited JSON (NDJSON).
 /// Each event is output immediately as a separate JSON line.
@@ -32,6 +33,27 @@ public struct JSONStreamRenderer: CLIOutput, Sendable {
 
     public func progress(message: String, percent: Double?) {
         emit(ProgressEvent(message: message, percent: percent))
+    }
+
+    public func withStreamingOutput<T>(
+        title: String,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            -> T
+    ) async throws -> T {
+        return try await operation { string in
+            emit(StreamEvent(type: "output", message: String(buffer: string)))
+        }
+    }
+
+    public func withStreamingOutputBox<T>(
+        title: String,
+        maxLines: Int,
+        operation:
+            @escaping @Sendable (@escaping @Sendable (ByteBuffer) async throws -> Void) async throws
+            -> T
+    ) async throws -> T {
+        return try await withStreamingOutput(title: title, operation: operation)
     }
 
     private func emit<T: Encodable>(_ event: T) {
