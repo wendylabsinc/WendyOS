@@ -31,23 +31,31 @@ struct CachedImageEntry: Codable {
 }
 
 func primaryCacheDirectory(fileManager: FileManager = .default) -> URL {
-    let legacy =
+    let fallback =
         fileManager.homeDirectoryForCurrentUser
-        .appendingPathComponent(".wendy/cache/images")
-    return (try? fileManager.cacheDirectory(.images)) ?? legacy
+        .appendingPathComponent("sh.wendy/cache/images")
+    return (try? fileManager.cacheDirectory(.images)) ?? fallback
 }
 
 func cacheDirectories(fileManager: FileManager = .default) -> [URL] {
-    let legacy =
+    let fallback =
         fileManager.homeDirectoryForCurrentUser
-        .appendingPathComponent(".wendy/cache/images")
-    let systemCache = (try? fileManager.cacheDirectory(.images)) ?? legacy
+        .appendingPathComponent("sh.wendy/cache/images")
+    let systemCache = (try? fileManager.cacheDirectory(.images)) ?? fallback
 
-    if systemCache.path == legacy.path {
-        return [systemCache]
+    // Also check legacy locations for migration
+    let legacyLocations = [
+        fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".wendy/cache/images")
+    ]
+
+    var dirs = [systemCache]
+    for legacy in legacyLocations {
+        if legacy.path != systemCache.path && fileManager.fileExists(atPath: legacy.path) {
+            dirs.append(legacy)
+        }
     }
 
-    return [systemCache, legacy]
+    return dirs
 }
 
 func listCachedImages(fileManager: FileManager = .default) throws -> [CachedImageEntry] {

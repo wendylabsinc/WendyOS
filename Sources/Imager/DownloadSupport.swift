@@ -495,6 +495,7 @@ public final class ImageDownloader: ImageDownloading {
     }
 
     /// Returns a valid cached .img path if available, else nil.
+    /// Deprecated: Use `cachedZipIfValid` instead for streaming decompression.
     public func cachedImageIfValid(
         deviceName: String,
         nightly: Bool
@@ -536,6 +537,44 @@ public final class ImageDownloader: ImageDownloading {
         return nil
     }
 
+    /// Returns a valid cached .zip archive path if available, else nil.
+    /// This is preferred over cachedImageIfValid for streaming decompression to save disk space.
+    public func cachedZipIfValid(
+        deviceName: String,
+        nightly: Bool
+    ) throws -> String? {
+        let deviceCacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+
+        // Check if device cache directory exists
+        guard fileManager.fileExists(atPath: deviceCacheDir.path) else {
+            return nil
+        }
+
+        // Search for .zip file in the device cache directory
+        guard
+            let enumerator = fileManager.enumerator(
+                at: deviceCacheDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+        else {
+            return nil
+        }
+
+        while let fileURL = enumerator.nextObject() as? URL {
+            guard
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+
+            if fileURL.pathExtension.lowercased() == "zip" {
+                return fileURL.path
+            }
+        }
+
+        return nil
+    }
+
     /// Checks if cached image version matches the latest version
     public nonisolated func isCachedImageLatest(
         deviceName: String,
@@ -549,7 +588,8 @@ public final class ImageDownloader: ImageDownloading {
         return cachedVersion == latestVersion
     }
 
-    /// Download the archive only, reporting progress. Returns the zip path and the extraction directory path.
+    /// Download the archive only, reporting progress. Returns the zip path.
+    /// The zip is cached in the device cache directory for future use.
     public func downloadArchiveOnly(
         from url: URL,
         deviceName: String,
@@ -558,20 +598,53 @@ public final class ImageDownloader: ImageDownloading {
         version: String? = nil,
         nightly: Bool = false,
         progressHandler: @escaping @Sendable (Progress) -> Void
-    ) async throws -> (zipPath: String, extractionDir: String) {
-        let extractionDirectoryURL = try cacheDirectoryForDevice(deviceName, nightly: nightly)
-        let temporaryDirectory = fileManager.temporaryDirectory
-        let tempFilename = UUID().uuidString
-        let localZipURL = temporaryDirectory.appendingPathComponent("\(tempFilename).zip")
+    ) async throws -> String {
+        let cacheDir = try cacheDirectoryForDevice(deviceName, nightly: nightly)
+
+        // Ensure cache directory exists
+        if !fileManager.fileExists(atPath: cacheDir.path) {
+            try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        }
+
+        // Use the original filename from the URL for the cached zip
+        let zipFilename = url.lastPathComponent
+        let cachedZipURL = cacheDir.appendingPathComponent(zipFilename)
+
+        // Remove old zip files if redownloading or if there's a different version
+        if redownload || fileManager.fileExists(atPath: cachedZipURL.path) {
+            // Clean up any existing zip files in the cache directory
+            if let contents = try? fileManager.contentsOfDirectory(atPath: cacheDir.path) {
+                for file in contents where file.hasSuffix(".zip") {
+                    try? fileManager.removeItem(at: cacheDir.appendingPathComponent(file))
+                }
+            }
+            // Also clean up any extracted .img files (legacy)
+            if let contents = try? fileManager.contentsOfDirectory(atPath: cacheDir.path) {
+                for file in contents where file.hasSuffix(".img") {
+                    try? fileManager.removeItem(at: cacheDir.appendingPathComponent(file))
+                }
+            }
+        }
 
         try await downloadFile(
             from: url,
-            to: localZipURL.path,
+            to: cachedZipURL.path,
             expectedSize: Int64(expectedSize),
             progressHandler: progressHandler
         )
 
-        return (zipPath: localZipURL.path, extractionDir: extractionDirectoryURL.path)
+        // Store version metadata after successful download
+        if let version = version {
+            do {
+                try storeVersionMetadata(deviceName: deviceName, version: version, nightly: nightly)
+            } catch {
+                logger.warning(
+                    "Failed to store version metadata for \(deviceName): \(error.localizedDescription)"
+                )
+            }
+        }
+
+        return cachedZipURL.path
     }
 
     /// Extract a previously downloaded archive into the cache directory for the device.
