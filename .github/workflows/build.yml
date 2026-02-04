@@ -88,44 +88,6 @@ jobs:
             Sources/OpenTelemetryGRPCTypes/Proto/
           retention-days: 1
 
-  build:
-    needs: [check-bugfix, determine-version, generate-protos]
-    strategy:
-      matrix:
-        include:
-          - artifact-name: wendy-agent-linux-static-musl-aarch64
-            runner: 8cpu-linux-arm64
-            container: swift:6.2.3
-            swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
-            product: wendy-agent
-          - artifact-name: wendy-agent-linux-static-musl-x86_64
-            runner: 8cpu-linux-x64
-            container: swift:6.2.3
-            swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
-            product: wendy-agent
-          - artifact-name: wendy-cli-linux-static-musl-aarch64
-            runner: 8cpu-linux-arm64
-            container: swift:6.2.3
-            swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
-            product: wendy
-          - artifact-name: wendy-cli-linux-static-musl-x86_64
-            runner: 8cpu-linux-x64
-            container: swift:6.2.3
-            swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
-            product: wendy
-          - artifact-name: wendy-cli-macos-arm64
-            runner: macos-26
-            xcode-select: /Applications/Xcode_26.0.app
-            product: wendy
-
   build-windows:
     name: wendy-cli-windows-amd64
     needs: [check-bugfix, determine-version]
