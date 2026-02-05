@@ -22,7 +22,13 @@ struct AppsCommand: AsyncParsableCommand {
         )
 
         @Argument(help: "Application name used when the app was created")
-        var appName: String
+        var appName: String?
+
+        @Flag(
+            name: .customLong("all"),
+            help: "Remove all applications from the device"
+        )
+        var all: Bool = false
 
         @Flag(
             name: .customLong("purge-image"),
@@ -32,17 +38,39 @@ struct AppsCommand: AsyncParsableCommand {
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
+        func validate() throws {
+            if !all && appName == nil {
+                throw ValidationError("Please provide an app name or use --all")
+            }
+            if all && appName != nil {
+                throw ValidationError("Cannot specify both app name and --all")
+            }
+        }
+
         func run() async throws {
             try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Removing application"
             ) { client, hostname in
-                try await client.removeApp(name: appName, purgeImage: purgeImage)
-
-                if purgeImage {
-                    cliOutput.success("Removed app \(appName) and its image on \(hostname)")
+                let appsToRemove: [String]
+                if all {
+                    let apps = try await client.listApps()
+                    appsToRemove = apps.map(\.name)
+                    guard !appsToRemove.isEmpty else {
+                        cliOutput.info("No applications to remove on \(hostname)")
+                        return
+                    }
                 } else {
-                    cliOutput.success("Removed app \(appName) on \(hostname)")
+                    appsToRemove = [appName!]
+                }
+
+                for name in appsToRemove {
+                    try await client.removeApp(name: name, purgeImage: purgeImage)
+                    if purgeImage {
+                        cliOutput.success("Removed app \(name) and its image on \(hostname)")
+                    } else {
+                        cliOutput.success("Removed app \(name) on \(hostname)")
+                    }
                 }
             }
         }
@@ -55,17 +83,46 @@ struct AppsCommand: AsyncParsableCommand {
         )
 
         @Argument(help: "Application name used when the app was created")
-        var appName: String
+        var appName: String?
+
+        @Flag(
+            name: .customLong("all"),
+            help: "Start all applications on the device"
+        )
+        var all: Bool = false
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func validate() throws {
+            if !all && appName == nil {
+                throw ValidationError("Please provide an app name or use --all")
+            }
+            if all && appName != nil {
+                throw ValidationError("Cannot specify both app name and --all")
+            }
+        }
 
         func run() async throws {
             try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Starting application"
             ) { client, hostname in
-                try await client.startApp(name: appName)
-                cliOutput.success("Started app \(appName) on \(hostname)")
+                let appsToStart: [String]
+                if all {
+                    let apps = try await client.listApps()
+                    appsToStart = apps.map(\.name)
+                    guard !appsToStart.isEmpty else {
+                        cliOutput.info("No applications to start on \(hostname)")
+                        return
+                    }
+                } else {
+                    appsToStart = [appName!]
+                }
+
+                for name in appsToStart {
+                    try await client.startApp(name: name)
+                    cliOutput.success("Started app \(name) on \(hostname)")
+                }
             }
         }
     }
@@ -77,17 +134,46 @@ struct AppsCommand: AsyncParsableCommand {
         )
 
         @Argument(help: "Application name used when the app was created")
-        var appName: String
+        var appName: String?
+
+        @Flag(
+            name: .customLong("all"),
+            help: "Stop all running applications on the device"
+        )
+        var all: Bool = false
 
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func validate() throws {
+            if !all && appName == nil {
+                throw ValidationError("Please provide an app name or use --all")
+            }
+            if all && appName != nil {
+                throw ValidationError("Cannot specify both app name and --all")
+            }
+        }
 
         func run() async throws {
             try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Stopping application"
             ) { client, hostname in
-                try await client.stopApp(name: appName)
-                cliOutput.success("Stopped app \(appName) on \(hostname)")
+                let appsToStop: [String]
+                if all {
+                    let apps = try await client.listApps()
+                    appsToStop = apps.map(\.name)
+                    guard !appsToStop.isEmpty else {
+                        cliOutput.info("No applications to stop on \(hostname)")
+                        return
+                    }
+                } else {
+                    appsToStop = [appName!]
+                }
+
+                for name in appsToStop {
+                    try await client.stopApp(name: name)
+                    cliOutput.success("Stopped app \(name) on \(hostname)")
+                }
             }
         }
     }
