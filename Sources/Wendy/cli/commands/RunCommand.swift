@@ -10,6 +10,7 @@ import Logging
 import NIO
 import Noora
 import Subprocess
+import Synchronization
 import WendyAgentGRPC
 
 #if os(macOS)
@@ -394,6 +395,29 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             wrapping: client
         )
 
+        // Set up SIGINT handler for graceful shutdown (Ctrl+C)
+        // This ensures the container is stopped when the user interrupts
+        #if !os(Windows)
+            // Ignore default SIGINT behavior so we can handle it ourselves
+            signal(SIGINT, SIG_IGN)
+        #endif
+
+        let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        let interruptReceived = Atomic<Bool>(false)
+
+        signalSource.setEventHandler {
+            interruptReceived.store(true, ordering: .relaxed)
+        }
+        signalSource.resume()
+
+        defer {
+            signalSource.cancel()
+            #if !os(Windows)
+                // Restore default SIGINT behavior
+                signal(SIGINT, SIG_DFL)
+            #endif
+        }
+
         do {
             _ = try await agentContainers.startContainer(
                 request: .init(
@@ -403,6 +427,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 )
             ) { response in
                 for try await message in response.messages {
+                    // Check for interrupt signal
+                    if interruptReceived.load(ordering: .relaxed) {
+                        throw CancellationError()
+                    }
+
                     switch message.responseType {
                     case .started:
                         if debug {
@@ -415,6 +444,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
                         if isDetached {
                             return
+                        } else {
+                            cliOutput.info("Press Ctrl+C to stop the app")
                         }
                     case .stdoutOutput(let stdoutOutput):
                         stdoutOutput.data.withUnsafeBytes { data in
@@ -440,9 +471,13 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         } catch {
             // Handle any error (cancellation, network issues, etc.): stop the container when in development mode
             if !isDetached {
-                let isCancellation = error is CancellationError
+                let isCancellation =
+                    error is CancellationError || interruptReceived.load(ordering: .relaxed)
+                if isCancellation {
+                    cliOutput.info("Stopping app \(imageName)...")
+                }
                 logger.info(
-                    "Container execution \(isCancellation ? "cancelled" : "failed"), stopping container",
+                    "Container execution \(isCancellation ? "interrupted" : "failed"), stopping container",
                     metadata: ["container": "\(imageName)", "error": "\(error)"]
                 )
                 await stopContainerWithTimeout(
@@ -450,6 +485,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     client: client,
                     timeout: 5.0
                 )
+                if isCancellation {
+                    cliOutput.success("Stopped app \(imageName) on \(hostname)")
+                    return  // Don't rethrow for clean Ctrl+C exit
+                }
             }
             throw error
         }
