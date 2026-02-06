@@ -1,7 +1,7 @@
-import Noora
+internal import Noora
 
 extension Theme {
-    public static func emerald() -> Theme {
+    static func emerald() -> Theme {
         Theme(
             primary: "10B981",  // Emerald 500
             secondary: "6EE7B7",  // Emerald 300

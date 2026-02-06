@@ -1,7 +1,6 @@
 import Foundation
 import GRPCCore
 import Logging
-import Noora
 import WendyCloudGRPC
 import WendySDK
 

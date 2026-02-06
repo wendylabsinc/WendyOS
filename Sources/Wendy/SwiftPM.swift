@@ -1,7 +1,7 @@
+import CLIOutput
 import Foundation
 import NIOCore
 import NIOPosix
-import Noora
 import Subprocess
 @preconcurrency import SystemPackage
 
@@ -259,12 +259,11 @@ public struct SwiftPM: Sendable {
             ["build"] + version + options.flatMap(\.arguments)
         )
 
-        let result = try await Noora(theme: .emerald()).progressStep(
+        let result = try await cliOutput.withProgress(
             message: "Building Swift package",
             successMessage: "Swift package built successfully",
-            errorMessage: "Failed to build Swift package",
-            showSpinner: true
-        ) { _ in
+            errorMessage: "Failed to build Swift package"
+        ) {
             try await Subprocess.run(
                 Subprocess.Executable.name(executableName),
                 arguments: allArgs,

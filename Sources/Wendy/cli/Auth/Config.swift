@@ -1,8 +1,8 @@
 import Analytics
+import CLIOutput
 import Crypto
 import Foundation
 import Hummingbird
-import Noora
 import SwiftASN1
 import Synchronization
 import WendyCloudGRPC
@@ -165,20 +165,18 @@ func getConfig() -> Config {
 }
 
 func authenticate<R: Sendable>(
-    title: TerminalText,
+    title: String,
     forOrganizationId orgId: Int32? = nil,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
-    var cloudDashboard = Noora(theme: .emerald()).textPrompt(
+    var cloudDashboard = try await cliOutput.textPrompt(
         title: title,
-        prompt: "Enter the cloud dashboard URL",
-        collapseOnAnswer: false
+        prompt: "Enter the cloud dashboard URL"
     )
 
-    var cloudGRPC = Noora(theme: .emerald()).textPrompt(
+    var cloudGRPC = try await cliOutput.textPrompt(
         title: title,
-        prompt: "Enter the cloud gRPC URL",
-        collapseOnAnswer: false
+        prompt: "Enter the cloud gRPC URL"
     )
 
     // TODO: Add organisation ID preference to dashboard
@@ -200,7 +198,7 @@ func authenticate<R: Sendable>(
 }
 
 func withCertificates<R: Sendable>(
-    title: TerminalText,
+    title: String,
     forOrganizationId orgId: Int32,
     perform: @Sendable @escaping (Config.Auth.Certificates) async throws -> R
 ) async throws -> R {
@@ -227,7 +225,7 @@ func withCertificates<R: Sendable>(
 }
 
 func withAuth<R: Sendable>(
-    title: TerminalText,
+    title: String,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
     let config = getConfig()
@@ -237,11 +235,15 @@ func withAuth<R: Sendable>(
     } else if config.auth.count == 1 {
         return try await perform(config.auth[0])
     } else {
-        let account = Noora(theme: .emerald()).singleChoicePrompt(
+        let options = config.auth.map(\.description)
+        let selected = try await cliOutput.singleChoicePrompt(
             title: title,
             question: "Which account do you want to use?",
-            options: config.auth
+            options: options
         )
+        guard let account = config.auth.first(where: { $0.description == selected }) else {
+            throw RPCError(code: .aborted, message: "No matching account found")
+        }
         return try await perform(account)
     }
 }
@@ -403,7 +405,7 @@ func loginFlow<R: Sendable>(
                 "\(cloudDashboard)/cli-auth?redirect_uri=http://localhost:\(port)/cli-callback"
             #if os(macOS)
                 if NSWorkspace.shared.open(URL(string: url)!) {
-                    Noora(theme: .emerald()).info(
+                    cliOutput.info(
                         """
                         Open the following link in your browser:
                         > \(cloudDashboard)/cli-auth?redirect_uri=http://localhost:\(port)/cli-callback

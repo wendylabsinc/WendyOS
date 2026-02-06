@@ -1,7 +1,7 @@
 import ArgumentParser
+import CLIOutput
 import Foundation
 import Logging
-import Noora
 
 struct AppsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

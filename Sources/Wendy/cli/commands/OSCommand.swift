@@ -1,8 +1,8 @@
 import ArgumentParser
+import CLIOutput
 import Foundation
 import Imager
 import Logging
-import Noora
 import Subprocess
 
 #if os(macOS)
@@ -39,7 +39,7 @@ private struct SendableProgressUpdater: @unchecked Sendable {
     }
 }
 
-// Removed unused text/progress formatting helpers; Noora handles rendering.
+// Removed unused text/progress formatting helpers; CLIOutput handles rendering.
 
 private enum DeviceFamily: String, CaseIterable {
     // Prefer showing NVIDIA Jetson first in interactive lists
@@ -232,7 +232,7 @@ struct OSCommand: AsyncParsableCommand {
             let diskLister = DiskListerFactory.createDiskLister()
             let drive = try await diskLister.findDrive(byId: driveId)
 
-            // Use DiskWriter to write the image with Noora progress bar
+            // Use DiskWriter to write the image with progress bar
             let diskWriter = DiskWriterFactory.createDiskWriter()
 
             print("Press Ctrl+C to cancel\n")
@@ -250,7 +250,7 @@ struct OSCommand: AsyncParsableCommand {
                             progressUpdater.update(m)
                         }
                     }
-                    // Avoid printing extra lines to keep Noora progress single-line.
+                    // Avoid printing extra lines to keep progress single-line.
                 }
                 progressUpdater.update(1.0)
             }
@@ -307,7 +307,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let familyIndex = try await Noora().selectableTable(
+                let familyIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Device Family",
                         "Available Images",
@@ -366,7 +367,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let deviceIndex = try await Noora().selectableTable(
+                let deviceIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
@@ -406,7 +408,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let driveIndex = try await Noora().selectableTable(
+                let driveIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Disk",
                         "Identifier",
@@ -427,7 +430,7 @@ struct OSCommand: AsyncParsableCommand {
                     cliOutput.warning("Proceeding due to --force flag.")
                     selectedDrive = driveChoice
                 } else {
-                    let confirmed = Noora().yesOrNoChoicePrompt(
+                    let confirmed = try await cliOutput.yesOrNoPrompt(
                         question: "Do you want to continue?",
                         defaultAnswer: false
                     )

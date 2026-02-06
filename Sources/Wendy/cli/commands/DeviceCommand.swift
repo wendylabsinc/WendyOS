@@ -1,11 +1,11 @@
 import ArgumentParser
+import CLIOutput
 import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIOFoundationCompat
-import Noora
 import WendyAgentGRPC
 import WendyCloudGRPC
 import WendySDK
@@ -131,7 +131,7 @@ struct DeviceCommand: AsyncParsableCommand {
             }
             try config.save()
 
-            Noora(theme: .emerald()).success(
+            cliOutput.success(
                 "Default device set to \(config.defaultDevice ?? "none")"
             )
         }
@@ -150,7 +150,7 @@ struct DeviceCommand: AsyncParsableCommand {
             config.defaultDevice = nil
             try config.save()
 
-            Noora(theme: .emerald()).success("Default device unset")
+            cliOutput.success("Default device unset")
         }
     }
 
@@ -214,7 +214,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     title: "Which device do you want to update?"
                 ) { client, endpoint in
                     let agent = Agent(client: client)
-                    _ = try await Noora(theme: .emerald()).progressBarStep(
+                    _ = try await cliOutput.withProgressBar(
                         message: "Updating Device"
                     ) {
                         updateProgress in
@@ -244,20 +244,20 @@ struct DeviceCommand: AsyncParsableCommand {
                 let orgs = try await cloudClient.listOrganizations()
 
                 if orgs.isEmpty {
-                    Noora(theme: .emerald()).error("No organizations found")
+                    cliOutput.error("No organizations found")
                     Self.exit(withError: nil)
                 }
 
-                let org = Noora(theme: .emerald()).singleChoicePrompt(
+                let orgName = try await cliOutput.singleChoicePrompt(
                     title: "Enroll device",
                     question: "Which organization do you want to enroll into?",
-                    options: orgs
+                    options: orgs.map(\.description)
                 )
+                let org = orgs.first(where: { $0.description == orgName })!
 
-                let name = Noora(theme: .emerald()).textPrompt(
+                let name = try await cliOutput.textPrompt(
                     title: "Name your device",
-                    prompt: "Name",
-                    collapseOnAnswer: false
+                    prompt: "Name"
                 )
 
                 let certsAPI = Wendycloud_V1_CertificateService.Client(wrapping: cloudClient.grpc)
@@ -307,16 +307,16 @@ struct DeviceCommand: AsyncParsableCommand {
                 agentConnectionOptions,
                 title: "Listing available WiFi networks"
             ) { agent, hostname -> Bool in
-                let setupWifi = Noora(theme: .emerald()).yesOrNoChoicePrompt(
+                let setupWifi = try await cliOutput.yesOrNoPrompt(
                     question: "Do you want to setup WiFi?",
-                    collapseOnSelection: false
+                    defaultAnswer: true
                 )
 
                 if setupWifi {
                     while !Task.isCancelled {
                         let ssid = try await agent.discoverSSID()
 
-                        let password = try secureTextPrompt(
+                        let password = try cliOutput.secureTextPrompt(
                             title: "Enter the password for '\(ssid)'",
                             prompt: "Password"
                         )
@@ -338,9 +338,9 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 #if !os(Windows)
-                    let shouldUpdate = Noora(theme: .emerald()).yesOrNoChoicePrompt(
+                    let shouldUpdate = try await cliOutput.yesOrNoPrompt(
                         question: "Do you want to update the agent?",
-                        collapseOnSelection: false
+                        defaultAnswer: true
                     )
 
                     guard shouldUpdate, case .grpc(let client) = agent else {
@@ -350,7 +350,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     // TODO: Detect platform of remote device
                     // Default to Linux aarch64 for device updates during setup
                     let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
-                    _ = try await Noora(theme: .emerald()).progressBarStep(
+                    _ = try await cliOutput.withProgressBar(
                         message: "Updating Device"
                     ) {
                         updateProgress in

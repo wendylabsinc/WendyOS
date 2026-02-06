@@ -1,9 +1,9 @@
+import CLIOutput
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIOCore
 import NIOSSL
-import Noora
 import Synchronization
 import WendyAgentGRPC
 import WendyCloudGRPC
@@ -63,7 +63,7 @@ func withCloudGRPCClient<R: Sendable>(
 }
 
 func withCloudGRPCClient<R: Sendable>(
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (CloudGRPCClient) async throws -> R
 ) async throws -> R {
     return try await withAuth(title: title) { auth -> R in
@@ -80,7 +80,7 @@ private enum ProvisioningResult<R: Sendable>: Sendable {
 
 func withAgentGRPCClient<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     return try await withAgentGRPCClientAndEndpoint(connectionOptions, title: title) { client, _ in
@@ -90,7 +90,7 @@ func withAgentGRPCClient<R: Sendable>(
 
 func withAgentGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     return try await _withAgentGRPCClient(endpoint, title: title) { client, _ in
@@ -100,7 +100,7 @@ func withAgentGRPCClient<R: Sendable>(
 
 func withAgentGRPCClientAndEndpoint<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     _ body:
         @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
         async throws -> R
@@ -152,7 +152,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
 
 func _withAgentGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
-    title: TerminalText,
+    title: String,
     _ body:
         @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
         async throws -> R
@@ -252,7 +252,7 @@ func _withAgentGRPCClient<R: Sendable>(
 /// If the device returns an unimplemented error, prompts the user to update their device.
 func withAgentGRPCClientHandlingUpdates<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     do {
@@ -291,22 +291,20 @@ func withAgentGRPCClientHandlingUpdates<R: Sendable>(
 
 /// Wait for the gRPC socket to come back up after a device restart
 func waitForDeviceRestart(endpoint: AgentConnectionOptions.Endpoint) async throws {
-    try await Noora().progressStep(
+    try await cliOutput.withProgress(
         message: "Waiting for device to restart...",
         successMessage: "Device restarted successfully",
-        errorMessage: "Device failed to restart",
-        showSpinner: true
-    ) { updateStatus in
+        errorMessage: "Device failed to restart"
+    ) {
         let maxRetries = 90  // Wait up to 90 seconds
         let retryDelay: UInt64 = 1_000_000_000  // 1 second in nanoseconds
 
         // Initial wait for the device to go down
-        updateStatus("Waiting for agent to shut down...")
         try await Task.sleep(nanoseconds: 3 * retryDelay)
 
         // Now try to reconnect
         for attempt in 1...maxRetries {
-            updateStatus("Reconnecting to device (attempt \(attempt)/\(maxRetries))...")
+            _ = attempt  // Used for retry counting
             do {
                 // Try to connect and verify the agent is responsive
                 try await withAgentGRPCClient(endpoint, title: "") { client in
@@ -316,7 +314,6 @@ func waitForDeviceRestart(endpoint: AgentConnectionOptions.Endpoint) async throw
                     _ = try await agent.getAgentVersion(request: .init(message: .init()))
                 }
                 // Connection succeeded, device is back up
-                updateStatus("Device is back online")
                 return
             } catch {
                 // Connection failed, wait and retry

@@ -1,7 +1,7 @@
 import ArgumentParser
+import CLIOutput
 import Foundation
 import Logging
-import Noora
 
 struct CacheCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -46,7 +46,7 @@ struct CacheCommand: AsyncParsableCommand {
             dateFormatter.dateStyle = .medium
             dateFormatter.timeStyle = .short
 
-            Noora(theme: .emerald()).table(
+            cliOutput.table(
                 headers: [
                     "Device",
                     "Version",
@@ -108,7 +108,6 @@ struct CacheCommand: AsyncParsableCommand {
                 throw ValidationError("Specify a device name or --all.")
             }
 
-            let noora = Noora(theme: .emerald())
             let fileManager = FileManager.default
             let cachedImages = try listCachedImages(fileManager: fileManager)
 
@@ -125,7 +124,7 @@ struct CacheCommand: AsyncParsableCommand {
                     let data = try JSONEncoder().encode(result)
                     print(String(data: data, encoding: .utf8)!)
                 } else {
-                    noora.info("No cached WendyOS images to clear.")
+                    cliOutput.info("No cached WendyOS images to clear.")
                 }
                 return
             }
@@ -159,7 +158,8 @@ struct CacheCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let selectedIndex = try await noora.selectableTable(
+                let selectedIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Device",
                         "Version",
@@ -167,7 +167,7 @@ struct CacheCommand: AsyncParsableCommand {
                         "Size",
                     ],
                     rows: rows,
-                    pageSize: rows.count
+                    pageSize: 20
                 )
 
                 targets = [cachedImages[selectedIndex]]
@@ -188,12 +188,12 @@ struct CacheCommand: AsyncParsableCommand {
                     fromByteCount: totalBytes,
                     countStyle: .file
                 )
-                let confirmed = noora.yesOrNoChoicePrompt(
+                let confirmed = try await cliOutput.yesOrNoPrompt(
                     question: "Remove \(description)? (~\(sizeText))",
                     defaultAnswer: false
                 )
                 guard confirmed else {
-                    noora.info("Aborted.")
+                    cliOutput.info("Aborted.")
                     return
                 }
             }
@@ -244,14 +244,14 @@ struct CacheCommand: AsyncParsableCommand {
                     countStyle: .file
                 )
                 if all {
-                    noora.success("Cleared all cached images (\(sizeText)).")
+                    cliOutput.success("Cleared all cached images (\(sizeText)).")
                 } else {
                     let names = targets.map(\.device).joined(separator: ", ")
-                    noora.success("Cleared cache for \(names) (\(sizeText)).")
+                    cliOutput.success("Cleared cache for \(names) (\(sizeText)).")
                 }
             } else {
                 for failure in failures {
-                    noora.error("Failed to clear cache for \(failure.0): \(failure.1)")
+                    cliOutput.error("Failed to clear cache for \(failure.0): \(failure.1)")
                 }
             }
         }

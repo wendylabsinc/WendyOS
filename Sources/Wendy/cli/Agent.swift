@@ -2,7 +2,6 @@ import Crypto
 import Foundation
 import GRPCCore
 import Logging
-import Noora
 import WendyAgentGRPC
 import WendySDK
 

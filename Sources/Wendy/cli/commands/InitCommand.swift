@@ -1,7 +1,7 @@
 import AppConfig
 import ArgumentParser
+import CLIOutput
 import Logging
-import Noora
 import Subprocess
 import SystemPackage
 
@@ -35,7 +35,7 @@ struct InitCommand: AsyncParsableCommand {
 
     func run() async throws {
         logger.debug("Initializing new Wendy project", metadata: ["path": .string(projectPath)])
-        Noora(theme: .emerald()).info("Creating new WendyOS project")
+        cliOutput.info("Creating new WendyOS project")
 
         // Create the directory if it doesn't exist
         let fileManager = FileManager.default
@@ -45,7 +45,7 @@ struct InitCommand: AsyncParsableCommand {
                     atPath: projectPath,
                     withIntermediateDirectories: true
                 )
-                Noora(theme: .emerald()).info("Creating project directory at \(projectPath)")
+                cliOutput.info("Creating project directory at \(projectPath)")
             } catch {
                 throw CLIError.directoryCreationFailed(
                     path: projectPath,
