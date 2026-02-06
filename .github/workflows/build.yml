@@ -408,9 +408,23 @@ jobs:
       - name: Install Static Linux SDK
         if: ${{ matrix.swift-sdk-url != '' }}
         run: |
+          sdk_url="${{ matrix.swift-sdk-url }}"
+          sdk_checksum="${{ matrix.swift-sdk-checksum }}"
+          sdk_archive="${sdk_url##*/}"
+          sdk_bundle="${sdk_archive%.tar.gz}"
+          sdk_path="$HOME/.swiftpm/swift-sdks/$sdk_bundle"
+          sdk_tmp="${RUNNER_TEMP:-/tmp}/$sdk_archive"
+
+          if [ -d "$sdk_path" ]; then
+            echo "Swift SDK already installed at $sdk_path"
+            exit 0
+          fi
+
           for attempt in 1 2 3; do
             echo "Attempt $attempt of 3..."
-            if swift sdk install ${{ matrix.swift-sdk-url }} --checksum ${{ matrix.swift-sdk-checksum }}; then
+            rm -rf "$sdk_path"
+            curl -L --fail --retry 5 --retry-delay 2 -o "$sdk_tmp" "$sdk_url"
+            if swift sdk install "$sdk_tmp" --checksum "$sdk_checksum"; then
               echo "SDK installed successfully"
               exit 0
             fi

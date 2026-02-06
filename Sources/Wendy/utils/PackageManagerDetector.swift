@@ -83,51 +83,57 @@ enum PackageManagerDetector {
 
     /// Detect package manager based on the binary path
     private static func detectFromPath(_ path: String) async -> PackageManagerType {
-        // Homebrew on macOS (Apple Silicon)
-        if path.hasPrefix("/opt/homebrew/") {
-            logger.debug("Detected package manager: brew (macOS ARM)")
-            return .brew
-        }
-
-        // Homebrew on macOS (Intel) or legacy Linuxbrew
-        if path.hasPrefix("/usr/local/Cellar/") || path.hasPrefix("/usr/local/bin/") {
-            // On macOS, /usr/local is typically Homebrew
-            // On Linux, could be manual install - check if Homebrew owns it
-            #if os(macOS)
-                logger.debug("Detected package manager: brew (macOS Intel)")
-                return .brew
-            #else
-                // On Linux, verify it's actually Homebrew
-                if await shellCommandSucceeds("brew", args: ["list", "wendy"]) {
-                    logger.debug("Detected package manager: brew (Linuxbrew)")
-                    return .brew
-                }
-            #endif
-        }
-
-        // Linuxbrew (common paths)
-        if path.contains("linuxbrew") || path.contains(".linuxbrew") {
-            logger.debug("Detected package manager: brew (Linuxbrew)")
-            return .brew
-        }
-
-        // System paths - need secondary detection
-        if path.hasPrefix("/usr/bin/") || path.hasPrefix("/bin/") {
-            return await detectSystemPackageManager()
-        }
-
-        // Windows paths
         #if os(Windows)
-            if path.contains("Program Files") || path.contains("AppData") {
-                if await shellCommandSucceeds("winget", args: ["list", "--name", "wendy"]) {
-                    logger.debug("Detected package manager: winget")
-                    return .winget
-                }
+            if await shellCommandSucceeds("winget", args: ["list", "--name", "wendy"]) {
+                logger.debug("Detected package manager: winget")
+                return .winget
             }
-        #endif
 
-        logger.debug("Could not detect package manager from path", metadata: ["path": "\(path)"])
-        return .unknown
+            logger.debug(
+                "Could not detect package manager from Windows path",
+                metadata: ["path": "\(path)"]
+            )
+            return .unknown
+        #else
+            // Homebrew on macOS (Apple Silicon)
+            if path.hasPrefix("/opt/homebrew/") {
+                logger.debug("Detected package manager: brew (macOS ARM)")
+                return .brew
+            }
+
+            // Homebrew on macOS (Intel) or legacy Linuxbrew
+            if path.hasPrefix("/usr/local/Cellar/") || path.hasPrefix("/usr/local/bin/") {
+                // On macOS, /usr/local is typically Homebrew
+                // On Linux, could be manual install - check if Homebrew owns it
+                #if os(macOS)
+                    logger.debug("Detected package manager: brew (macOS Intel)")
+                    return .brew
+                #else
+                    // On Linux, verify it's actually Homebrew
+                    if await shellCommandSucceeds("brew", args: ["list", "wendy"]) {
+                        logger.debug("Detected package manager: brew (Linuxbrew)")
+                        return .brew
+                    }
+                #endif
+            }
+
+            // Linuxbrew (common paths)
+            if path.contains("linuxbrew") || path.contains(".linuxbrew") {
+                logger.debug("Detected package manager: brew (Linuxbrew)")
+                return .brew
+            }
+
+            // System paths - need secondary detection
+            if path.hasPrefix("/usr/bin/") || path.hasPrefix("/bin/") {
+                return await detectSystemPackageManager()
+            }
+
+            logger.debug(
+                "Could not detect package manager from path",
+                metadata: ["path": "\(path)"]
+            )
+            return .unknown
+        #endif
     }
 
     /// Detect which system package manager installed wendy (for /usr/bin paths)
