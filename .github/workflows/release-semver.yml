@@ -50,8 +50,22 @@ jobs:
             exit 1
           fi
 
-          # Get release body from pre-release
-          BODY=$(gh release view "$PRERELEASE_TAG" --json body -q .body)
+          # Find the latest proper semver release (not a prerelease) for changelog generation
+          PREVIOUS_SEMVER=$(gh release list --limit 50 --json tagName,isPrerelease \
+            -q '[.[] | select(.isPrerelease == false)] | .[0].tagName // empty')
+
+          # Generate release notes from the last proper release to this prerelease's commit
+          if [ -n "$PREVIOUS_SEMVER" ]; then
+            echo "📝 Generating changelog from $PREVIOUS_SEMVER to $PRERELEASE_TAG"
+            BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+              -f tag_name="$VERSION" \
+              -f target_commitish="$(git rev-list -n 1 "$PRERELEASE_TAG")" \
+              -f previous_tag_name="$PREVIOUS_SEMVER" \
+              -q .body)
+          else
+            echo "📝 No previous semver release found, using prerelease notes"
+            BODY=$(gh release view "$PRERELEASE_TAG" --json body -q .body)
+          fi
 
           # Download all assets from the pre-release
           echo "📦 Downloading assets from $PRERELEASE_TAG..."
@@ -129,8 +143,8 @@ jobs:
           REPO="${{ github.repository }}"
           URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
 
-          # Get release body from the pre-release
-          BODY=$(gh release view "$PRERELEASE_TAG" --json body -q .body 2>/dev/null || echo "")
+          # Get release body from the newly created semver release
+          BODY=$(gh release view "$VERSION" --json body -q .body 2>/dev/null || echo "")
 
           # Strip CRLF line endings and truncate to 800 chars
           BODY=$(echo "$BODY" | tr -d '\r')
