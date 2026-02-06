@@ -37,6 +37,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -e
+          set -o pipefail
+          
           VERSION="v${{ inputs.version }}"
           PRERELEASE_TAG="${{ inputs.promote_prerelease }}"
 
@@ -55,16 +58,47 @@ jobs:
             -q '[.[] | select(.isPrerelease == false)] | .[0].tagName // empty')
 
           # Generate release notes from the last proper release to this prerelease's commit
+          BODY=""
           if [ -n "$PREVIOUS_SEMVER" ]; then
             echo "📝 Generating changelog from $PREVIOUS_SEMVER to $PRERELEASE_TAG"
-            BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
-              -f tag_name="$VERSION" \
-              -f target_commitish="$(git rev-list -n 1 "$PRERELEASE_TAG")" \
-              -f previous_tag_name="$PREVIOUS_SEMVER" \
-              -q .body)
-          else
-            echo "📝 No previous semver release found, using prerelease notes"
+            # Attempt to generate release notes, but don't fail if it doesn't work
+            set +e  # Temporarily disable exit-on-error for this section
+            PRERELEASE_COMMIT=$(git rev-list -n 1 "$PRERELEASE_TAG")
+            GIT_EXIT_CODE=$?
+            set -e  # Re-enable exit-on-error
+            
+            if [ $GIT_EXIT_CODE -eq 0 ]; then
+              set +e  # Temporarily disable exit-on-error for API call
+              BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+                -f tag_name="$VERSION" \
+                -f target_commitish="$PRERELEASE_COMMIT" \
+                -f previous_tag_name="$PREVIOUS_SEMVER" \
+                -q .body)
+              API_EXIT_CODE=$?
+              set -e  # Re-enable exit-on-error
+              
+              if [ $API_EXIT_CODE -eq 0 ]; then
+                echo "✅ Successfully generated release notes"
+              else
+                echo "⚠️  Warning: API call to generate release notes failed, using fallback"
+                BODY=""
+              fi
+            else
+              echo "⚠️  Warning: Could not resolve commit for $PRERELEASE_TAG"
+              BODY=""
+            fi
+          fi
+
+          # Fallback to prerelease body if generation failed or no previous semver found
+          if [ -z "$BODY" ]; then
+            echo "📝 Using prerelease notes as fallback"
             BODY=$(gh release view "$PRERELEASE_TAG" --json body -q .body)
+          fi
+
+          # Validate that we have release notes
+          if [ -z "$BODY" ]; then
+            echo "❌ Error: Could not generate or retrieve release notes"
+            exit 1
           fi
 
           # Download all assets from the pre-release
