@@ -63,7 +63,7 @@ jobs:
             echo "📝 Generating changelog from $PREVIOUS_SEMVER to $PRERELEASE_TAG"
             # Attempt to generate release notes, but don't fail if it doesn't work
             set +e  # Temporarily disable exit-on-error for this section
-            PRERELEASE_COMMIT=$(git rev-list -n 1 "$PRERELEASE_TAG" 2>&1)
+            PRERELEASE_COMMIT=$(git rev-list -n 1 "$PRERELEASE_TAG")
             GIT_EXIT_CODE=$?
             set -e  # Re-enable exit-on-error
             
@@ -73,7 +73,7 @@ jobs:
                 -f tag_name="$VERSION" \
                 -f target_commitish="$PRERELEASE_COMMIT" \
                 -f previous_tag_name="$PREVIOUS_SEMVER" \
-                -q .body 2>&1)
+                -q .body)
               API_EXIT_CODE=$?
               set -e  # Re-enable exit-on-error
               
