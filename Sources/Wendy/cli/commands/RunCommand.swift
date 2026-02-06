@@ -34,6 +34,13 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Run locally in Docker on this machine")
     var local: Bool = false
 
+    @Option(
+        name: .customLong("publish"),
+        help:
+            "Publish ports for local Docker runs (repeatable). Example: --publish 3002:3002 or --publish 8080:80/tcp"
+    )
+    var publish: [String] = []
+
     @Flag(name: .customShort("y"), help: "Auto-accept prompts (required for --json mode)")
     var autoAccept: Bool = false
 
@@ -165,7 +172,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     private func runLocalDockerImage(
         docker: DockerCLI,
-        imageName: String
+        imageName: String,
+        portMappings: [String]
     ) async throws {
         var arguments = ["run"]
         let restartFlag = dockerRestartPolicyFlag()
@@ -179,6 +187,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         if let restartFlag {
             arguments.append(contentsOf: ["--restart", restartFlag])
+        }
+
+        for mapping in portMappings {
+            arguments.append(contentsOf: ["-p", mapping])
         }
 
         arguments.append(imageName)
@@ -207,6 +219,60 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         if isDetached {
             cliOutput.success("Started app \(imageName) locally in Docker")
         }
+    }
+
+    private func dockerfilePortMappings() -> [String] {
+        let dockerfilePath = findDockerfilePath() ?? "Dockerfile"
+        guard let contents = try? String(contentsOfFile: dockerfilePath, encoding: .utf8) else {
+            return []
+        }
+        return parseExposedPorts(contents)
+    }
+
+    private func findDockerfilePath() -> String? {
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: ".") else {
+            return nil
+        }
+        let dockerfiles = files.filter { isDockerfile($0) }
+        if dockerfiles.isEmpty {
+            return nil
+        }
+        if dockerfiles.contains("Dockerfile") {
+            return "Dockerfile"
+        }
+        if dockerfiles.contains("dockerfile") {
+            return "dockerfile"
+        }
+        return dockerfiles.sorted().first
+    }
+
+    private func parseExposedPorts(_ contents: String) -> [String] {
+        var mappings: [String] = []
+        for rawLine in contents.split(whereSeparator: \.isNewline) {
+            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+                .first?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            guard !line.isEmpty else { continue }
+
+            if line.lowercased().hasPrefix("expose ") {
+                let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                for token in parts.dropFirst() {
+                    let entry = token.trimmingCharacters(in: .whitespaces)
+                    guard !entry.isEmpty else { continue }
+
+                    let portParts = entry.split(separator: "/", maxSplits: 1)
+                    let port = portParts[0]
+                    guard port.allSatisfy({ $0.isNumber }) else { continue }
+
+                    var mapping = "\(port):\(port)"
+                    if portParts.count > 1 {
+                        mapping += "/\(portParts[1])"
+                    }
+                    mappings.append(mapping)
+                }
+            }
+        }
+        return mappings
     }
 
     private func withRunTarget<R: Sendable>(
@@ -393,6 +459,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         try await withRunTarget(
             title: title,
             localHandler: { [name] in
+                let portMappings = publish.isEmpty ? dockerfilePortMappings() : publish
+                if portMappings.isEmpty {
+                    cliOutput.warning(
+                        "No ports published for local run. If your app listens on a port, add EXPOSE to your Dockerfile or use --publish HOST:CONTAINER."
+                    )
+                } else {
+                    cliOutput.info("Publishing ports: \(portMappings.joined(separator: ", "))")
+                }
                 try await AppBuildHelpers.executePhase(
                     phase: "build_local",
                     runtime: "dockerfile",
@@ -406,7 +480,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     runtime: "dockerfile",
                     commandName: "wendy run"
                 ) {
-                    try await runLocalDockerImage(docker: docker, imageName: name)
+                    try await runLocalDockerImage(
+                        docker: docker,
+                        imageName: name,
+                        portMappings: portMappings
+                    )
                 }
             },
             remoteHandler: { [name, dockerContext] client, endpoint in
@@ -781,6 +859,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             title: "Which device do you want to run this app on?",
             localHandler: { [appName] in
                 try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
+                let portMappings = publish
+                if portMappings.isEmpty {
+                    cliOutput.warning(
+                        "No ports published for local run. Use --publish HOST:CONTAINER if your app listens on a port."
+                    )
+                } else {
+                    cliOutput.info("Publishing ports: \(portMappings.joined(separator: ", "))")
+                }
                 try await AppBuildHelpers.executePhase(
                     phase: "build_local",
                     runtime: "swift",
@@ -809,7 +895,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     runtime: "swift",
                     commandName: "wendy run"
                 ) {
-                    try await runLocalDockerImage(docker: DockerCLI(), imageName: appName)
+                    try await runLocalDockerImage(
+                        docker: DockerCLI(),
+                        imageName: appName,
+                        portMappings: portMappings
+                    )
                 }
             },
             remoteHandler: { client, endpoint in
