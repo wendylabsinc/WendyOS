@@ -1,12 +1,11 @@
 import Foundation
 import Logging
-import Noora
 import WendyShared
 
-/// Checks for CLI updates and prompts the user if a new version is available.
+/// Checks for CLI updates and notifies the user if a new version is available.
 /// - Checks once per 24 hours to avoid excessive API calls
-/// - Prompts user with a dialog to update
-/// - Respects user choice and doesn't re-prompt for 24 hours
+/// - Notifies user with the update command when a new version is available
+/// - Doesn't re-notify for 24 hours
 /// - Detects package manager used to install the CLI
 enum UpdateChecker {
     private static let checkIntervalHours: Double = 24
@@ -51,7 +50,7 @@ enum UpdateChecker {
     static func forceCheck() async {
         // Skip update check in dev mode
         guard Version.current != "dev" else {
-            Noora().info("Running in development mode - skipping update check")
+            cliOutput.info("Running in development mode - skipping update check")
             return
         }
 
@@ -126,7 +125,7 @@ enum UpdateChecker {
                     ]
                 )
                 if forcePrompt {
-                    Noora().success("You're up to date! (v\(Version.current))")
+                    cliOutput.success("You're up to date! (v\(Version.current))")
                 }
                 try? config.save()
             }
@@ -137,7 +136,7 @@ enum UpdateChecker {
                 metadata: ["error": "\(error)"]
             )
             if forcePrompt {
-                Noora().warning("Could not check for updates: \(error.localizedDescription)")
+                cliOutput.warning("Could not check for updates: \(error.localizedDescription)")
             }
         }
     }
@@ -151,7 +150,7 @@ enum UpdateChecker {
 
     private static func promptForUpdate(latestVersion: String, config: inout Config) async {
         // Display the update notification
-        Noora().info(
+        cliOutput.info(
             """
 
             A new version of wendy is available!
@@ -160,38 +159,30 @@ enum UpdateChecker {
             """
         )
 
-        // Ask if the user wants to update
-        let shouldUpdate = Noora().yesOrNoChoicePrompt(
-            title: "",
-            question: "Would you like to see the update command?"
-        )
-
-        // Update the state with user's response
+        // Update the state with notification time
         var state = config.updateCheck ?? UpdateCheckState()
         state.lastPromptTime = Date()
-        state.lastPromptResponse = shouldUpdate
+        state.lastPromptResponse = nil
         config.updateCheck = state
 
-        if shouldUpdate {
-            // Detect package manager (use cached value if available)
-            let packageManager: PackageManagerType
-            if let cached = state.detectedPackageManager {
-                packageManager = cached
-            } else {
-                packageManager = await PackageManagerDetector.detect()
-                state.detectedPackageManager = packageManager
-                config.updateCheck = state
-            }
-
-            let command = PackageManagerDetector.updateCommand(for: packageManager)
-
-            Noora().success(
-                """
-                Run this command to update:
-                  \(command)
-                """
-            )
+        // Detect package manager (use cached value if available)
+        let packageManager: PackageManagerType
+        if let cached = state.detectedPackageManager {
+            packageManager = cached
+        } else {
+            packageManager = await PackageManagerDetector.detect()
+            state.detectedPackageManager = packageManager
+            config.updateCheck = state
         }
+
+        let command = PackageManagerDetector.updateCommand(for: packageManager)
+
+        cliOutput.success(
+            """
+            Run this command to update:
+              \(command)
+            """
+        )
 
         try? config.save()
     }
