@@ -241,13 +241,14 @@ extension AgentConnectionOptions {
                 interfaces: []
             )
             let localDevice = includeLocal ? Self.localGroupedDevice() : nil
-            let withLocal: @Sendable ([DevicesCollection.GroupedDevice]) -> [DevicesCollection.GroupedDevice] =
-                { devices in
-                    if let localDevice {
-                        return [localDevice] + devices
+            let withLocal:
+                @Sendable ([DevicesCollection.GroupedDevice]) -> [DevicesCollection.GroupedDevice] =
+                    { devices in
+                        if let localDevice {
+                            return [localDevice] + devices
+                        }
+                        return devices
                     }
-                    return devices
-                }
             return try await NooraRenderer().selectFromStreamingTable(
                 initial: withLocal([emptyDevice]),
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in

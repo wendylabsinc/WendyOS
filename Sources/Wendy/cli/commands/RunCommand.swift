@@ -41,6 +41,12 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     )
     var publish: [String] = []
 
+    @Flag(
+        name: .customLong("no-auto-publish"),
+        help: "Disable auto-publishing EXPOSE ports for local Docker runs"
+    )
+    var noAutoPublish: Bool = false
+
     @Flag(name: .customShort("y"), help: "Auto-accept prompts (required for --json mode)")
     var autoAccept: Bool = false
 
@@ -249,7 +255,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     private func parseExposedPorts(_ contents: String) -> [String] {
         var mappings: [String] = []
         for rawLine in contents.split(whereSeparator: \.isNewline) {
-            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            let line =
+                rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
                 .first?
                 .trimmingCharacters(in: .whitespaces) ?? ""
             guard !line.isEmpty else { continue }
@@ -288,7 +295,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             return try await localHandler()
         }
 
-        func selectDevice(readDefault: Bool, includeBluetooth: Bool) async throws -> SelectedDevice {
+        func selectDevice(readDefault: Bool, includeBluetooth: Bool) async throws -> SelectedDevice
+        {
             return try await agentConnectionOptions.read(
                 title: title,
                 readDefault: readDefault,
@@ -318,7 +326,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     guard defaultDevice else {
                         throw error
                     }
-                    let fallback = try await selectDevice(readDefault: false, includeBluetooth: false)
+                    let fallback = try await selectDevice(
+                        readDefault: false,
+                        includeBluetooth: false
+                    )
                     return try await handleSelection(fallback)
                 }
             }
@@ -459,7 +470,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         try await withRunTarget(
             title: title,
             localHandler: { [name] in
-                let portMappings = publish.isEmpty ? dockerfilePortMappings() : publish
+                let portMappings =
+                    publish.isEmpty && !noAutoPublish ? dockerfilePortMappings() : publish
                 if portMappings.isEmpty {
                     cliOutput.warning(
                         "No ports published for local run. If your app listens on a port, add EXPOSE to your Dockerfile or use --publish HOST:CONTAINER."
