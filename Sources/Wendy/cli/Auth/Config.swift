@@ -14,6 +14,49 @@ import X509
     import Darwin
 #endif
 
+/// Represents the package manager used to install the CLI
+public enum PackageManagerType: String, Sendable, Codable {
+    case brew
+    case apt
+    case pacman
+    case yum
+    case dnf
+    case winget
+    case unknown
+}
+
+/// Tracks the state of update checks and user prompts
+public struct UpdateCheckState: Sendable, Codable {
+    /// Last time we checked for updates
+    public var lastCheckTime: Date?
+
+    /// Last time user was prompted about an update
+    public var lastPromptTime: Date?
+
+    /// User's response to the prompt (true = yes, false = no, nil = not asked)
+    public var lastPromptResponse: Bool?
+
+    /// The latest known version from last check
+    public var latestKnownVersion: String?
+
+    /// Detected package manager (cached)
+    public var detectedPackageManager: PackageManagerType?
+
+    public init(
+        lastCheckTime: Date? = nil,
+        lastPromptTime: Date? = nil,
+        lastPromptResponse: Bool? = nil,
+        latestKnownVersion: String? = nil,
+        detectedPackageManager: PackageManagerType? = nil
+    ) {
+        self.lastCheckTime = lastCheckTime
+        self.lastPromptTime = lastPromptTime
+        self.lastPromptResponse = lastPromptResponse
+        self.latestKnownVersion = latestKnownVersion
+        self.detectedPackageManager = detectedPackageManager
+    }
+}
+
 public struct Config: Sendable, Codable {
     public struct Auth: Sendable, Codable, Hashable, CustomStringConvertible {
         public let cloudDashboard: String
@@ -35,13 +78,55 @@ public struct Config: Sendable, Codable {
     public var auth: [Auth]
     public var analytics: WendyAnalyticsConfig
     public var defaultDevice: String?
-    public var lastUpdateCheck: Date?
+    public var updateCheck: UpdateCheckState?
+
+    private enum CodingKeys: String, CodingKey {
+        case auth
+        case analytics
+        case defaultDevice
+        case updateCheck
+        case lastUpdateCheck  // Legacy field for migration
+    }
 
     public init() {
         self.auth = []
         self.defaultDevice = nil
         self.analytics = WendyAnalyticsConfig()
-        self.lastUpdateCheck = nil
+        self.updateCheck = nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.auth = try container.decodeIfPresent([Auth].self, forKey: .auth) ?? []
+        self.analytics =
+            try container.decodeIfPresent(WendyAnalyticsConfig.self, forKey: .analytics)
+            ?? WendyAnalyticsConfig()
+        self.defaultDevice = try container.decodeIfPresent(String.self, forKey: .defaultDevice)
+
+        // Handle migration from old lastUpdateCheck to new updateCheck
+        if let updateCheck = try container.decodeIfPresent(
+            UpdateCheckState.self,
+            forKey: .updateCheck
+        ) {
+            self.updateCheck = updateCheck
+        } else if let lastUpdateCheck = try container.decodeIfPresent(
+            Date.self,
+            forKey: .lastUpdateCheck
+        ) {
+            // Migrate old config format
+            self.updateCheck = UpdateCheckState(lastCheckTime: lastUpdateCheck)
+        } else {
+            self.updateCheck = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(auth, forKey: .auth)
+        try container.encode(analytics, forKey: .analytics)
+        try container.encodeIfPresent(defaultDevice, forKey: .defaultDevice)
+        try container.encodeIfPresent(updateCheck, forKey: .updateCheck)
+        // Note: We intentionally don't encode lastUpdateCheck anymore
     }
 
     public mutating func addAuth(_ newAuth: Auth) {

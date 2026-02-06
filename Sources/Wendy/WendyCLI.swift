@@ -75,6 +75,7 @@ struct WendyCommand: AsyncParsableCommand {
                     HelperCommand.self,
                     AnalyticsCommand.self,
                     CacheCommand.self,
+                    UpdateCommand.self,
                     InfoCommand.self,
                 ]
             ),

@@ -4,9 +4,13 @@ import Noora
 import WendyShared
 
 /// Checks for CLI updates and prompts the user if a new version is available.
-/// Only checks once per day to avoid excessive API calls.
+/// - Checks once per 24 hours to avoid excessive API calls
+/// - Prompts user with a dialog to update
+/// - Respects user choice and doesn't re-prompt for 24 hours
+/// - Detects package manager used to install the CLI
 enum UpdateChecker {
-    private static let checkInterval: TimeInterval = 24 * 60 * 60  // 24 hours in seconds
+    private static let checkIntervalHours: Double = 24
+    private static let promptCooldownHours: Double = 24
     private static let logger = Logger(label: "sh.wendy.utils.updateChecker")
 
     /// Check for updates if enough time has passed since the last check.
@@ -22,25 +26,58 @@ enum UpdateChecker {
             return
         }
 
-        let config = getConfig()
+        var config = getConfig()
+        let state = config.updateCheck
 
-        // Check if enough time has passed since last check
-        if let lastCheck = config.lastUpdateCheck {
-            let timeSinceLastCheck = Date().timeIntervalSince(lastCheck)
-            guard timeSinceLastCheck >= checkInterval else {
-                logger.debug(
-                    "Skipping update check, last check was recent",
-                    metadata: ["hours_ago": "\(Int(timeSinceLastCheck / 3600))"]
-                )
-                return
+        // Check if enough time has passed since last network check
+        if !shouldCheckForUpdates(state: state) {
+            // Even if we don't need to check the network, we might still need to prompt
+            // if there's a known newer version
+            if let latestVersion = state?.latestKnownVersion,
+                isNewerVersion(latestVersion, than: Version.current),
+                shouldPromptUser(state: state)
+            {
+                await promptForUpdate(latestVersion: latestVersion, config: &config)
             }
+            return
         }
 
         // Perform the update check
-        await performUpdateCheck()
+        await performUpdateCheck(config: &config)
     }
 
-    private static func performUpdateCheck() async {
+    /// Force an update check, ignoring cooldowns.
+    /// Used by the `wendy update` command.
+    static func forceCheck() async {
+        // Skip update check in dev mode
+        guard Version.current != "dev" else {
+            Noora().info("Running in development mode - skipping update check")
+            return
+        }
+
+        var config = getConfig()
+        await performUpdateCheck(config: &config, forcePrompt: true)
+    }
+
+    /// Check if we should perform a network check for updates
+    private static func shouldCheckForUpdates(state: UpdateCheckState?) -> Bool {
+        guard let state = state, let lastCheck = state.lastCheckTime else {
+            return true  // Never checked before
+        }
+        let hoursSinceCheck = Date().timeIntervalSince(lastCheck) / 3600
+        return hoursSinceCheck >= checkIntervalHours
+    }
+
+    /// Check if we should prompt the user
+    private static func shouldPromptUser(state: UpdateCheckState?) -> Bool {
+        guard let state = state, let lastPrompt = state.lastPromptTime else {
+            return true  // Never prompted
+        }
+        let hoursSincePrompt = Date().timeIntervalSince(lastPrompt) / 3600
+        return hoursSincePrompt >= promptCooldownHours
+    }
+
+    private static func performUpdateCheck(config: inout Config, forcePrompt: Bool = false) async {
         do {
             logger.debug("Checking for updates...")
 
@@ -49,7 +86,7 @@ enum UpdateChecker {
             // Find the latest stable release
             guard let latestRelease = releases.first(where: { !$0.prerelease }) else {
                 logger.debug("No stable releases found")
-                updateLastCheckTime()
+                updateCheckTime(config: &config)
                 return
             }
 
@@ -59,9 +96,27 @@ enum UpdateChecker {
                 ? String(latestRelease.name.dropFirst())
                 : latestRelease.name
 
+            // Update the state with latest known version
+            var state = config.updateCheck ?? UpdateCheckState()
+            state.lastCheckTime = Date()
+            state.latestKnownVersion = latestVersion
+            config.updateCheck = state
+
             // Compare versions
             if isNewerVersion(latestVersion, than: Version.current) {
-                displayUpdatePrompt(newVersion: latestVersion)
+                // Should we prompt the user?
+                if forcePrompt || shouldPromptUser(state: config.updateCheck) {
+                    await promptForUpdate(latestVersion: latestVersion, config: &config)
+                } else {
+                    logger.debug(
+                        "Skipping prompt - user was recently prompted",
+                        metadata: [
+                            "current": "\(Version.current)",
+                            "latest": "\(latestVersion)",
+                        ]
+                    )
+                    try? config.save()
+                }
             } else {
                 logger.debug(
                     "CLI is up to date",
@@ -70,26 +125,79 @@ enum UpdateChecker {
                         "latest": "\(latestVersion)",
                     ]
                 )
+                if forcePrompt {
+                    Noora().success("You're up to date! (v\(Version.current))")
+                }
+                try? config.save()
             }
-
-            updateLastCheckTime()
         } catch {
             // Fail silently - update checks should never block the user
             logger.debug(
                 "Update check failed",
                 metadata: ["error": "\(error)"]
             )
+            if forcePrompt {
+                Noora().warning("Could not check for updates: \(error.localizedDescription)")
+            }
         }
     }
 
-    private static func updateLastCheckTime() {
-        var config = getConfig()
-        config.lastUpdateCheck = Date()
+    private static func updateCheckTime(config: inout Config) {
+        var state = config.updateCheck ?? UpdateCheckState()
+        state.lastCheckTime = Date()
+        config.updateCheck = state
+        try? config.save()
+    }
+
+    private static func promptForUpdate(latestVersion: String, config: inout Config) async {
+        // Display the update notification
+        Noora().info(
+            """
+
+            A new version of wendy is available!
+            Current: v\(Version.current)
+            Latest:  v\(latestVersion)
+            """
+        )
+
+        // Ask if the user wants to update
+        let shouldUpdate = Noora().yesOrNoChoicePrompt(
+            title: "",
+            question: "Would you like to see the update command?"
+        )
+
+        // Update the state with user's response
+        var state = config.updateCheck ?? UpdateCheckState()
+        state.lastPromptTime = Date()
+        state.lastPromptResponse = shouldUpdate
+        config.updateCheck = state
+
+        if shouldUpdate {
+            // Detect package manager (use cached value if available)
+            let packageManager: PackageManagerType
+            if let cached = state.detectedPackageManager {
+                packageManager = cached
+            } else {
+                packageManager = await PackageManagerDetector.detect()
+                state.detectedPackageManager = packageManager
+                config.updateCheck = state
+            }
+
+            let command = PackageManagerDetector.updateCommand(for: packageManager)
+
+            Noora().success(
+                """
+                Run this command to update:
+                  \(command)
+                """
+            )
+        }
+
         try? config.save()
     }
 
     /// Compare semantic versions. Returns true if `new` is greater than `current`.
-    private static func isNewerVersion(_ new: String, than current: String) -> Bool {
+    static func isNewerVersion(_ new: String, than current: String) -> Bool {
         let newComponents = new.split(separator: ".").compactMap { Int($0) }
         let currentComponents = current.split(separator: ".").compactMap { Int($0) }
 
@@ -105,51 +213,5 @@ enum UpdateChecker {
         }
 
         return false  // Versions are equal
-    }
-
-    private static func displayUpdatePrompt(newVersion: String) {
-        Noora().info(
-            """
-
-            A new version of wendy is available: \(newVersion) (current: \(Version.current))
-            Run: \(getUpdateCommand())
-            """
-        )
-    }
-
-    private static func getUpdateCommand() -> String {
-        #if os(macOS)
-            return "brew upgrade wendylabsinc/tap/wendy"
-        #elseif os(Linux)
-            // Detect Linux distribution and return appropriate command
-            if let osRelease = try? String(contentsOfFile: "/etc/os-release", encoding: .utf8) {
-                let lowercased = osRelease.lowercased()
-                if lowercased.contains("debian") || lowercased.contains("ubuntu") {
-                    return "sudo apt-get update && sudo apt-get upgrade wendy"
-                } else if lowercased.contains("fedora") {
-                    return "sudo dnf upgrade wendy"
-                } else if lowercased.contains("rhel") || lowercased.contains("centos")
-                    || lowercased.contains("rocky") || lowercased.contains("alma")
-                {
-                    return "sudo yum update wendy"
-                } else if lowercased.contains("arch") {
-                    return "yay -Syu wendy"
-                }
-            }
-            // Fallback: check for package manager binaries
-            if FileManager.default.fileExists(atPath: "/usr/bin/apt-get") {
-                return "sudo apt-get update && sudo apt-get upgrade wendy"
-            } else if FileManager.default.fileExists(atPath: "/usr/bin/dnf") {
-                return "sudo dnf upgrade wendy"
-            } else if FileManager.default.fileExists(atPath: "/usr/bin/yum") {
-                return "sudo yum update wendy"
-            } else if FileManager.default.fileExists(atPath: "/usr/bin/pacman") {
-                return "yay -Syu wendy"
-            }
-            // Generic fallback
-            return "Update using your package manager"
-        #else
-            return "Update using your package manager"
-        #endif
     }
 }
