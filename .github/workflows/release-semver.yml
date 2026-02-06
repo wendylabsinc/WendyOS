@@ -62,19 +62,29 @@ jobs:
           if [ -n "$PREVIOUS_SEMVER" ]; then
             echo "📝 Generating changelog from $PREVIOUS_SEMVER to $PRERELEASE_TAG"
             # Attempt to generate release notes, but don't fail if it doesn't work
-            if PRERELEASE_COMMIT=$(git rev-list -n 1 "$PRERELEASE_TAG" 2>&1); then
-              if BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+            set +e  # Temporarily disable exit-on-error for this section
+            PRERELEASE_COMMIT=$(git rev-list -n 1 "$PRERELEASE_TAG" 2>&1)
+            GIT_EXIT_CODE=$?
+            set -e  # Re-enable exit-on-error
+            
+            if [ $GIT_EXIT_CODE -eq 0 ]; then
+              set +e  # Temporarily disable exit-on-error for API call
+              BODY=$(gh api repos/${{ github.repository }}/releases/generate-notes \
                 -f tag_name="$VERSION" \
                 -f target_commitish="$PRERELEASE_COMMIT" \
                 -f previous_tag_name="$PREVIOUS_SEMVER" \
-                -q .body 2>&1); then
+                -q .body 2>&1)
+              API_EXIT_CODE=$?
+              set -e  # Re-enable exit-on-error
+              
+              if [ $API_EXIT_CODE -eq 0 ]; then
                 echo "✅ Successfully generated release notes"
               else
                 echo "⚠️  Warning: API call to generate release notes failed, using fallback"
                 BODY=""
               fi
             else
-              echo "⚠️  Warning: Could not resolve commit for $PRERELEASE_TAG: $PRERELEASE_COMMIT"
+              echo "⚠️  Warning: Could not resolve commit for $PRERELEASE_TAG"
               BODY=""
             fi
           fi
