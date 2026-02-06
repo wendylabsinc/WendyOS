@@ -80,6 +80,8 @@ func withAgentClientAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
+    case .localDocker:
+        throw CancellationError()
     }
 }
 
@@ -113,6 +115,8 @@ private func executeWithDeviceAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
+    case .localDocker:
+        throw CancellationError()
     }
 }
 

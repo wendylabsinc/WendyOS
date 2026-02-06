@@ -31,6 +31,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @Flag(name: .long, help: "Deploy mode with automatic restarts (up to 5 retries on failure)")
     var deploy: Bool = false
 
+    @Flag(name: .long, help: "Run locally in Docker on this machine")
+    var local: Bool = false
+
     @Flag(name: .customShort("y"), help: "Auto-accept prompts (required for --json mode)")
     var autoAccept: Bool = false
 
@@ -131,6 +134,132 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             // Default for development: no restarts
             return .with { $0.mode = .no }
         }
+    }
+
+    /// Map restart policy flags to docker run --restart values (or nil for default)
+    private func dockerRestartPolicyFlag() -> String? {
+        if noRestart {
+            return nil
+        }
+        if let retries = restartOnFailureRetries {
+            return "on-failure:\(retries)"
+        }
+        if restartUnlessStoppedFlag {
+            return "unless-stopped"
+        }
+        if deploy {
+            return "on-failure:5"
+        }
+        return nil
+    }
+
+    private var localContainerArchitecture: String? {
+        #if arch(arm64)
+            return "arm64"
+        #elseif arch(x86_64)
+            return "x86_64"
+        #else
+            return nil
+        #endif
+    }
+
+    private func runLocalDockerImage(
+        docker: DockerCLI,
+        imageName: String
+    ) async throws {
+        var arguments = ["run"]
+        let restartFlag = dockerRestartPolicyFlag()
+
+        if isDetached {
+            arguments.append("-d")
+        } else if restartFlag == nil {
+            // Only auto-remove in attached mode when no restart policy is requested
+            arguments.append("--rm")
+        }
+
+        if let restartFlag {
+            arguments.append(contentsOf: ["--restart", restartFlag])
+        }
+
+        arguments.append(imageName)
+
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(docker.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+
+        guard result.terminationStatus.isSuccess else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+            throw SubprocessError(
+                command: ([docker.command] + arguments).joined(separator: " "),
+                exitCode: exitCode,
+                output: "",
+                error: ""
+            )
+        }
+
+        if isDetached {
+            cliOutput.success("Started app \(imageName) locally in Docker")
+        }
+    }
+
+    private func withRunTarget<R: Sendable>(
+        title: TerminalText,
+        localHandler: @escaping @Sendable () async throws -> R,
+        remoteHandler:
+            @escaping @Sendable (
+                GRPCClient<HTTP2ClientTransport.Posix>,
+                AgentConnectionOptions.Endpoint
+            ) async throws -> R
+    ) async throws -> R {
+        if local {
+            return try await localHandler()
+        }
+
+        func selectDevice(readDefault: Bool, includeBluetooth: Bool) async throws -> SelectedDevice {
+            return try await agentConnectionOptions.read(
+                title: title,
+                readDefault: readDefault,
+                includeBluetooth: includeBluetooth,
+                includeLocal: true
+            )
+        }
+
+        func handleSelection(_ selection: SelectedDevice) async throws -> R {
+            switch selection {
+            case .localDocker:
+                return try await localHandler()
+            case .bluetooth:
+                let fallback = try await selectDevice(readDefault: false, includeBluetooth: false)
+                return try await handleSelection(fallback)
+            case .lan(let host, let port, let defaultDevice):
+                let endpoint = AgentConnectionOptions.Endpoint(
+                    host: host,
+                    port: port,
+                    defaultDevice: defaultDevice
+                )
+                do {
+                    return try await withAgentGRPCClient(endpoint, title: title) { client in
+                        return try await remoteHandler(client, endpoint)
+                    }
+                } catch {
+                    guard defaultDevice else {
+                        throw error
+                    }
+                    let fallback = try await selectDevice(readDefault: false, includeBluetooth: false)
+                    return try await handleSelection(fallback)
+                }
+            }
+        }
+
+        let selection = try await selectDevice(readDefault: true, includeBluetooth: true)
+        return try await handleSelection(selection)
     }
 
     func run() async throws {
@@ -261,81 +390,98 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let dockerContext = await docker.currentContext()
 
         let title = TerminalText(stringLiteral: "Which device do you want to run this app on?")
-        try await withAgentGRPCClientAndEndpoint(
-            agentConnectionOptions,
-            title: title
-        ) { [name, dockerContext] client, endpoint in
-            // Build additional properties for analytics
-            var buildPhaseProperties: [String: String] = [:]
-            if let dockerContext {
-                buildPhaseProperties["docker_context"] = dockerContext
-            }
+        try await withRunTarget(
+            title: title,
+            localHandler: { [name] in
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_local",
+                    runtime: "dockerfile",
+                    commandName: "wendy run"
+                ) {
+                    try await docker.build(name: name)
+                }
 
-            // Create buildx builder with insecure registry support
-            try await AppBuildHelpers.executePhase(
-                phase: "builder_setup",
-                runtime: "dockerfile",
-                commandName: "wendy run",
-                additionalProperties: buildPhaseProperties
-            ) {
-                try await Noora(theme: .emerald()).progressStep(
-                    message: "Preparing builder",
-                    successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder",
-                    showSpinner: true
-                ) { _ in
-                    try await docker.prepareBuildxBuilder(
+                try await AppBuildHelpers.executePhase(
+                    phase: "run_local",
+                    runtime: "dockerfile",
+                    commandName: "wendy run"
+                ) {
+                    try await runLocalDockerImage(docker: docker, imageName: name)
+                }
+            },
+            remoteHandler: { [name, dockerContext] client, endpoint in
+                // Build additional properties for analytics
+                var buildPhaseProperties: [String: String] = [:]
+                if let dockerContext {
+                    buildPhaseProperties["docker_context"] = dockerContext
+                }
+
+                // Create buildx builder with insecure registry support
+                try await AppBuildHelpers.executePhase(
+                    phase: "builder_setup",
+                    runtime: "dockerfile",
+                    commandName: "wendy run",
+                    additionalProperties: buildPhaseProperties
+                ) {
+                    try await Noora(theme: .emerald()).progressStep(
+                        message: "Preparing builder",
+                        successMessage: "Builder ready",
+                        errorMessage: "Failed to create builder",
+                        showSpinner: true
+                    ) { _ in
+                        try await docker.prepareBuildxBuilder(
+                            registryHostname: endpoint.host,
+                            registryPort: 5000
+                        )
+                    }
+                }
+
+                // Build and push in a single operation for better performance
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_upload",
+                    runtime: "dockerfile",
+                    commandName: "wendy run",
+                    additionalProperties: buildPhaseProperties
+                ) {
+                    try await docker.buildxAndPush(
+                        name: name,
                         registryHostname: endpoint.host,
                         registryPort: 5000
                     )
+                    cliOutput.success("Container built and uploaded successfully!")
                 }
-            }
 
-            // Build and push in a single operation for better performance
-            try await AppBuildHelpers.executePhase(
-                phase: "build_upload",
-                runtime: "dockerfile",
-                commandName: "wendy run",
-                additionalProperties: buildPhaseProperties
-            ) {
-                try await docker.buildxAndPush(
-                    name: name,
-                    registryHostname: endpoint.host,
-                    registryPort: 5000
-                )
-                cliOutput.success("Container built and uploaded successfully!")
-            }
+                try await AppBuildHelpers.executePhase(
+                    phase: "prepare_container",
+                    runtime: "dockerfile",
+                    commandName: "wendy run"
+                ) {
+                    try await cliOutput.withLabeledProgressBar(
+                        message: "Unpacking image on device"
+                    ) { updateProgress in
+                        try await AppBuildHelpers.createContainerdContainer(
+                            appName: name,
+                            client: client,
+                            restartPolicy: buildRestartPolicy(),
+                            progress: updateProgress
+                        )
+                    }
+                    cliOutput.success("App \(name) on \(endpoint.host) ready to start")
+                }
 
-            try await AppBuildHelpers.executePhase(
-                phase: "prepare_container",
-                runtime: "dockerfile",
-                commandName: "wendy run"
-            ) {
-                try await cliOutput.withLabeledProgressBar(
-                    message: "Unpacking image on device"
-                ) { updateProgress in
-                    try await AppBuildHelpers.createContainerdContainer(
-                        appName: name,
+                try await AppBuildHelpers.executePhase(
+                    phase: "start_container",
+                    runtime: "dockerfile",
+                    commandName: "wendy run"
+                ) {
+                    try await startContainerdContainer(
+                        imageName: name,
                         client: client,
-                        restartPolicy: buildRestartPolicy(),
-                        progress: updateProgress
+                        hostname: endpoint.host
                     )
                 }
-                cliOutput.success("App \(name) on \(endpoint.host) ready to start")
             }
-
-            try await AppBuildHelpers.executePhase(
-                phase: "start_container",
-                runtime: "dockerfile",
-                commandName: "wendy run"
-            ) {
-                try await startContainerdContainer(
-                    imageName: name,
-                    client: client,
-                    hostname: endpoint.host
-                )
-            }
-        }
+        )
     }
 
     /// Gracefully stop a container with timeout
@@ -586,108 +732,141 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let appName = executableTarget.name.lowercased()
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 
-        try await withAgentGRPCClientAndEndpoint(
-            agentConnectionOptions,
-            title: "Which device do you want to run this app on?"
-        ) { client, endpoint in
-            try await AppBuildHelpers.executePhase(
-                phase: "build_swift_app",
-                runtime: "swift",
-                commandName: "wendy run"
+        var resources: [(source: String, destination: String)] = []
+        var entrypoint: String?
+        let debugArguments = [
+            "gdbserver",
+            "0.0.0.0:4242",
+            "/\(url.lastPathComponent)",
+        ]
+        var arguments: [String] = []
+
+        if debug {
+            let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
+            // Include the ds2 executable in the container image.
+            if let url = Bundle.module.url(
+                forResource: ds2BinaryName,
+                withExtension: nil
             ) {
-                var resources: [(source: String, destination: String)] = []
-                var entrypoint: String?
-                let debugArguments = [
-                    "gdbserver",
-                    "0.0.0.0:4242",
-                    "/\(url.lastPathComponent)",
-                ]
-                var arguments: [String] = []
+                resources.append((source: url.path(), destination: "/bin/ds2"))
+                entrypoint = "/bin/ds2"
+                arguments = debugArguments
+            } else {
+                let url = URL(fileURLWithPath: CommandLine.arguments[0])
+                    .deletingLastPathComponent()
+                    .appending(path: "wendy-agent_wendy.bundle")
+                    .appending(path: "Contents")
+                    .appending(path: "Resources")
+                    .appending(path: "Resources")
+                    .appending(component: ds2BinaryName)
 
-                if debug {
-                    let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
-                    // Include the ds2 executable in the container image.
-                    if let url = Bundle.module.url(
-                        forResource: ds2BinaryName,
-                        withExtension: nil
-                    ) {
-                        resources.append((source: url.path(), destination: "/bin/ds2"))
-                        entrypoint = "/bin/ds2"
-                        arguments = debugArguments
-                    } else {
-                        let url = URL(fileURLWithPath: CommandLine.arguments[0])
-                            .deletingLastPathComponent()
-                            .appending(path: "wendy-agent_wendy.bundle")
-                            .appending(path: "Contents")
-                            .appending(path: "Resources")
-                            .appending(path: "Resources")
-                            .appending(component: ds2BinaryName)
+                if FileManager.default.fileExists(atPath: url.path()) {
+                    resources.append((source: url.path(), destination: "/bin/ds2"))
+                    entrypoint = "/bin/ds2"
+                    arguments = debugArguments
+                } else {
+                    cliOutput.warning(
+                        "ds2 binary not found. Debugging will not be available."
+                    )
+                }
+            }
+        }
 
-                        if FileManager.default.fileExists(atPath: url.path()) {
-                            resources.append((source: url.path(), destination: "/bin/ds2"))
-                            entrypoint = "/bin/ds2"
-                            arguments = debugArguments
-                        } else {
-                            cliOutput.warning(
-                                "ds2 binary not found. Debugging will not be available."
-                            )
-                        }
+        // Copy to let for Sendable closure capture
+        let finalEntrypoint = entrypoint
+        let finalArguments = arguments
+        let finalResources = resources
+
+        try await withRunTarget(
+            title: "Which device do you want to run this app on?",
+            localHandler: { [appName] in
+                try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_local",
+                    runtime: "swift",
+                    commandName: "wendy run"
+                ) {
+                    try await cliOutput.withStreamingOutputBox(
+                        title: "Building Swift app (local Docker)",
+                        maxLines: 20
+                    ) { emit in
+                        try await swiftPM.buildContainerImage(
+                            swiftSDK: swiftSDK,
+                            product: executableTarget,
+                            repository: appName,
+                            architecture: localContainerArchitecture,
+                            entrypoint: finalEntrypoint,
+                            arguments: finalArguments,
+                            resources: finalResources,
+                            allowInsecureHTTP: false,
+                            onOutput: emit
+                        )
                     }
                 }
 
-                // Copy to let for Sendable closure capture
-                let finalEntrypoint = entrypoint
-                let finalArguments = arguments
-                let finalResources = resources
-
-                try await cliOutput.withStreamingOutputBox(
-                    title: "Building Swift app",
-                    maxLines: 20
-                ) { emit in
-                    try await swiftPM.buildAndPushContainer(
-                        swiftSDK: swiftSDK,
-                        product: executableTarget,
-                        device: endpoint.host,
-                        entrypoint: finalEntrypoint,
-                        arguments: finalArguments,
-                        resources: finalResources,
-                        onOutput: emit
-                    )
+                try await AppBuildHelpers.executePhase(
+                    phase: "run_local",
+                    runtime: "swift",
+                    commandName: "wendy run"
+                ) {
+                    try await runLocalDockerImage(docker: DockerCLI(), imageName: appName)
                 }
-                cliOutput.success("Swift app built successfully!")
-            }
+            },
+            remoteHandler: { client, endpoint in
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_swift_app",
+                    runtime: "swift",
+                    commandName: "wendy run"
+                ) {
+                    try await cliOutput.withStreamingOutputBox(
+                        title: "Building Swift app",
+                        maxLines: 20
+                    ) { emit in
+                        try await swiftPM.buildAndPushContainer(
+                            swiftSDK: swiftSDK,
+                            product: executableTarget,
+                            device: endpoint.host,
+                            entrypoint: finalEntrypoint,
+                            arguments: finalArguments,
+                            resources: finalResources,
+                            onOutput: emit
+                        )
+                    }
+                    cliOutput.success("Swift app built successfully!")
+                }
 
-            try await AppBuildHelpers.executePhase(
-                phase: "create_container",
-                runtime: "swift",
-                commandName: "wendy run"
-            ) {
-                try await cliOutput.withLabeledProgressBar(
-                    message: "Unpacking image on device"
-                ) { updateProgress in
-                    try await AppBuildHelpers.createContainerdContainer(
-                        appName: appName,
+                try await AppBuildHelpers.executePhase(
+                    phase: "create_container",
+                    runtime: "swift",
+                    commandName: "wendy run"
+                ) {
+                    try await cliOutput.withLabeledProgressBar(
+                        message: "Unpacking image on device"
+                    ) { updateProgress in
+                        try await AppBuildHelpers.createContainerdContainer(
+                            appName: appName,
+                            client: client,
+                            restartPolicy: buildRestartPolicy(),
+                            progress: updateProgress
+                        )
+                    }
+                    cliOutput.success("App \(appName) on \(endpoint.host) ready to start")
+                }
+
+                cliOutput.info("Starting container")
+                try await AppBuildHelpers.executePhase(
+                    phase: "start_container",
+                    runtime: "swift",
+                    commandName: "wendy run"
+                ) {
+                    try await startContainerdContainer(
+                        imageName: appName,
                         client: client,
-                        restartPolicy: buildRestartPolicy(),
-                        progress: updateProgress
+                        hostname: endpoint.host
                     )
                 }
-                cliOutput.success("App \(appName) on \(endpoint.host) ready to start")
             }
-
-            cliOutput.info("Starting container")
-            try await AppBuildHelpers.executePhase(
-                phase: "start_container",
-                runtime: "swift",
-                commandName: "wendy run"
-            ) {
-                try await startContainerdContainer(
-                    imageName: appName,
-                    client: client,
-                    hostname: endpoint.host
-                )
-            }
-        }
+        )
     }
 
 }

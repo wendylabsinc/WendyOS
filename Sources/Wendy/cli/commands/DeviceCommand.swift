@@ -128,6 +128,8 @@ struct DeviceCommand: AsyncParsableCommand {
                 config.defaultDevice = host
             case .bluetooth:
                 ()
+            case .localDocker:
+                ()
             }
             try config.save()
 

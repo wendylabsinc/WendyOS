@@ -9,6 +9,7 @@ import WendyShared
 enum SelectedDevice: Sendable {
     case lan(host: String, port: Int, defaultDevice: Bool)
     case bluetooth(peripheral: Peripheral, address: String)
+    case localDocker
 
     var isLAN: Bool {
         if case .lan = self { return true }
@@ -24,6 +25,11 @@ enum SelectedDevice: Sendable {
 
     var isBluetooth: Bool {
         if case .bluetooth = self { return true }
+        return false
+    }
+
+    var isLocalDocker: Bool {
+        if case .localDocker = self { return true }
         return false
     }
 }
@@ -158,13 +164,42 @@ struct AgentConnectionOptions: ParsableArguments {
 // MARK: - Device Selection with Bluetooth Support
 
 extension AgentConnectionOptions {
+    private static let localInterfaceType = "local-docker"
+    private static let localDeviceID = "local-docker"
+    private static let localDeviceName = "Local machine (Docker)"
+
+    private static func localGroupedDevice() -> DevicesCollection.GroupedDevice {
+        let localLAN = LANDevice(
+            id: localDeviceID,
+            displayName: localDeviceName,
+            hostname: "localhost",
+            port: 50051,
+            interfaceType: localInterfaceType,
+            isWendyDevice: false
+        )
+        return DevicesCollection.GroupedDevice(
+            name: localDeviceName,
+            interfaces: [.lan(localLAN)]
+        )
+    }
+
+    private static func isLocalDevice(_ device: DevicesCollection.GroupedDevice) -> Bool {
+        return device.interfaces.contains { interface in
+            if case .lan(let lan) = interface {
+                return lan.interfaceType == localInterfaceType
+            }
+            return false
+        }
+    }
+
     /// Read device selection, including Bluetooth devices when no LAN devices are available
     /// or when explicitly requested
     func read(
         title: TerminalText?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
-        includeBluetooth: Bool = true
+        includeBluetooth: Bool = true,
+        includeLocal: Bool = false
     ) async throws -> SelectedDevice {
         // If explicit device specified via CLI, use it as LAN
         if let device {
@@ -205,13 +240,21 @@ extension AgentConnectionOptions {
                 name: "No device detected yet",
                 interfaces: []
             )
+            let localDevice = includeLocal ? Self.localGroupedDevice() : nil
+            let withLocal: @Sendable ([DevicesCollection.GroupedDevice]) -> [DevicesCollection.GroupedDevice] =
+                { devices in
+                    if let localDevice {
+                        return [localDevice] + devices
+                    }
+                    return devices
+                }
             return try await NooraRenderer().selectFromStreamingTable(
-                initial: [emptyDevice],
+                initial: withLocal([emptyDevice]),
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
                     if collection.isEmpty {
-                        return [emptyDevice]
+                        return withLocal([emptyDevice])
                     }
-                    return collection.groupedDevices().filter { device in
+                    let filtered = collection.groupedDevices().filter { device in
                         let interfaces = device.interfaces.map(\.type)
                         if interfaces.contains(.lan) {
                             return true
@@ -221,22 +264,31 @@ extension AgentConnectionOptions {
                         }
                         return false
                     }
+                    return withLocal(filtered)
                 },
                 pageSize: 20,
                 renderTable: { devices in
                     return (
                         headers: ["Name", "Interfaces"],
                         rows: devices.map { device in
+                            let isLocal = Self.isLocalDevice(device)
                             return [
                                 device.name,
-                                device.interfaces
-                                    .map { $0.type.rawValue }
-                                    .joined(separator: ", "),
+                                isLocal
+                                    ? "Docker"
+                                    : device.interfaces
+                                        .map { $0.type.rawValue }
+                                        .joined(separator: ", "),
                             ]
                         }
                     )
                 }
             )
+        }
+
+        if Self.isLocalDevice(device) {
+            Noora(theme: .emerald()).info(.alert("\(device.name)"))
+            return .localDocker
         }
 
         printDeviceDetails(device)

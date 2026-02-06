@@ -290,13 +290,15 @@ public struct SwiftPM: Sendable {
         }
     }
 
-    public func buildAndPushContainer(
+    public func buildContainerImage(
         swiftSDK: String,
         product: Executable,
-        device: String,
+        repository: String,
+        architecture: String?,
         entrypoint: String?,
         arguments entrypointArguments: [String],
         resources: [(source: String, destination: String)],
+        allowInsecureHTTP: Bool,
         onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
     ) async throws {
         var flags = [
@@ -305,12 +307,17 @@ public struct SwiftPM: Sendable {
             "--allow-network-connections=all",
             "build-container-image",
             "--from=swift:\(swiftVersion ?? Self.defaultSwiftVersion)-slim",
-            "--allow-insecure-http=destination",
             "--product=\(product.name)",
-            "--repository=\(device):5000/\(product.name.lowercased())",
-            // TODO: Select target architecture based on target device advertisement?
-            "--architecture=arm64",
+            "--repository=\(repository)",
         ]
+
+        if allowInsecureHTTP {
+            flags.append("--allow-insecure-http=destination")
+        }
+
+        if let architecture {
+            flags.append("--architecture=\(architecture)")
+        }
 
         flags += resources.map { "--resources=\($0.source):\($0.destination)" }
 
@@ -326,6 +333,28 @@ public struct SwiftPM: Sendable {
         try await run(
             executable: .name(executableName),
             arguments: arguments(flags),
+            onOutput: onOutput
+        )
+    }
+
+    public func buildAndPushContainer(
+        swiftSDK: String,
+        product: Executable,
+        device: String,
+        entrypoint: String?,
+        arguments entrypointArguments: [String],
+        resources: [(source: String, destination: String)],
+        onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
+    ) async throws {
+        try await buildContainerImage(
+            swiftSDK: swiftSDK,
+            product: product,
+            repository: "\(device):5000/\(product.name.lowercased())",
+            architecture: "arm64",
+            entrypoint: entrypoint,
+            arguments: entrypointArguments,
+            resources: resources,
+            allowInsecureHTTP: true,
             onOutput: onOutput
         )
     }
