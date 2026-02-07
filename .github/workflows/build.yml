@@ -3,6 +3,7 @@ name: Build products and release
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']   # v0.1.18, v1.0.0-beta.1, etc.
   workflow_dispatch:
     inputs:
       publish:
@@ -12,7 +13,7 @@ on:
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 # Add permissions needed for creating releases
 permissions:
@@ -33,24 +34,58 @@ jobs:
 
   determine-version:
     name: Determine Version
-    needs: check-bugfix
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set-version.outputs.version }}
+      is_release: ${{ steps.set-version.outputs.is_release }}
+      is_prerelease: ${{ steps.set-version.outputs.is_prerelease }}
+      tag_name: ${{ steps.set-version.outputs.tag_name }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Set version
         id: set-version
         run: |
-          TIMESTAMP=$(date +'%Y.%m.%d-%H%M%S')
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # Tag push: extract version from tag (v0.1.18 -> 0.1.18)
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
 
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            VERSION="${TIMESTAMP}"
+            IS_RELEASE="true"
+
+            # Detect pre-release suffix (anything with a hyphen after semver, e.g. 1.0.0-beta.1)
+            if [[ "$VERSION" == *-* ]]; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+
+            TAG_NAME="$TAG"
+
+            echo "Tag push: version=$VERSION, tag=$TAG_NAME, prerelease=$IS_PRERELEASE"
           else
-            VERSION="${TIMESTAMP}-dev"
+            # Main branch push or workflow_dispatch: timestamp version
+            TIMESTAMP=$(date +'%Y.%m.%d-%H%M%S')
+
+            if [ "$GITHUB_REF" == "refs/heads/main" ]; then
+              VERSION="${TIMESTAMP}"
+            else
+              VERSION="${TIMESTAMP}-dev"
+            fi
+
+            IS_RELEASE="false"
+            IS_PRERELEASE="true"
+            TAG_NAME="$VERSION"
+
+            echo "Branch push: version=$VERSION"
           fi
 
-          echo "Setting version to $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
   generate-protos:
     name: Generate Protocol Buffers
@@ -311,12 +346,17 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.determine-version.outputs.version }}"
+          $isRelease = "${{ needs.determine-version.outputs.is_release }}"
 
-          # Convert version to MSI-compatible format (X.Y.Z)
-          # Input format: YYYY.MM.DD-HHMMSS -> Output: YYYY.M.D (removing leading zeros)
-          $parts = $version -split '-'
-          $dateParts = $parts[0] -split '\.'
-          $msiVersion = "$($dateParts[0]).$([int]$dateParts[1]).$([int]$dateParts[2])"
+          if ($isRelease -eq "true") {
+            # Semver release: use MAJOR.MINOR.PATCH directly (strip any pre-release suffix)
+            $msiVersion = ($version -split '-')[0]
+          } else {
+            # Timestamp version: YYYY.MM.DD-HHMMSS -> YYYY.M.D (removing leading zeros)
+            $parts = $version -split '-'
+            $dateParts = $parts[0] -split '\.'
+            $msiVersion = "$($dateParts[0]).$([int]$dateParts[1]).$([int]$dateParts[2])"
+          }
           Write-Host "Full version: $version"
           Write-Host "MSI version: $msiVersion"
 
@@ -530,7 +570,7 @@ jobs:
     name: Package Linux (${{ matrix.arch }})
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
     needs: [check-bugfix, determine-version, build]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
       matrix:
         include:
@@ -648,7 +688,7 @@ jobs:
     name: Publish to GCP Artifact Registry
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
     needs: [check-bugfix, determine-version, package-linux]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     permissions:
       contents: read
       id-token: write
@@ -702,7 +742,7 @@ jobs:
     name: Release
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
     needs: [check-bugfix, determine-version, build, build-windows, package-linux]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -722,31 +762,104 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ needs.determine-version.outputs.version }}
-          tag_name: ${{ needs.determine-version.outputs.version }}
+          tag_name: ${{ needs.determine-version.outputs.tag_name }}
           draft: false
-          prerelease: true
+          prerelease: ${{ needs.determine-version.outputs.is_prerelease == 'true' }}
+          make_latest: ${{ needs.determine-version.outputs.is_prerelease == 'false' }}
           files: ${{ env.FILES }}
           generate_release_notes: true
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-       # NEW: move/update a 'latest' tag to this prerelease's commit
-      # needed so .git exists in the workspace
+
+      # Update floating 'latest' tag for prereleases only (semver tags don't need it)
       - name: Checkout repo
+        if: needs.determine-version.outputs.is_release != 'true'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # grab history + tags
+          fetch-depth: 0
       - name: Update 'latest' tag
+        if: needs.determine-version.outputs.is_release != 'true'
         run: |
           set -euo pipefail
           git fetch origin --tags --force
-          TAG='${{ needs.determine-version.outputs.version }}'   # your tag, e.g. 2025.09.16-224322
+          TAG='${{ needs.determine-version.outputs.tag_name }}'
           TARGET_SHA="$(git rev-list -n 1 "refs/tags/$TAG" || true)"
           if [ -z "$TARGET_SHA" ]; then TARGET_SHA="$GITHUB_SHA"; fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -fa latest "$TARGET_SHA" -m "Latest prerelease: $TAG"
           git push -f origin refs/tags/latest
+
+      # Discord notification for stable releases
+      - name: Notify Discord
+        if: needs.determine-version.outputs.is_prerelease == 'false'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.tag_name }}"
+          REPO="${{ github.repository }}"
+          URL="https://github.com/${REPO}/releases/tag/${VERSION}"
+
+          # Fetch release body via gh CLI (safe from shell injection)
+          BODY=$(gh release view "$VERSION" --repo "$REPO" --json body -q .body 2>/dev/null || echo "")
+          BODY=$(echo "$BODY" | tr -d '\r')
+          SHORT_BODY=$(echo "$BODY" | head -c 800)
+
+          # Installation instructions
+          read -r -d '' INSTALL_INSTRUCTIONS << 'INSTALL_EOF' || true
+          ## Install the Wendy CLI
+
+          **macOS (Homebrew)**
+          ```
+          brew install wendylabsinc/tap/wendy
+          ```
+
+          **Arch Linux (AUR)**
+          ```
+          yay -S wendy
+          ```
+
+          **Debian/Ubuntu (APT)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
+          ```
+
+          **Fedora/RHEL (DNF/YUM)**
+          ```
+          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
+          ```
+          INSTALL_EOF
+
+          FULL_DESCRIPTION="${SHORT_BODY}
+
+          ${INSTALL_INSTRUCTIONS}"
+
+          ESCAPED_DESC=$(echo "$FULL_DESCRIPTION" | jq -Rs .)
+
+          cat > /tmp/discord_payload.json << PAYLOAD_EOF
+          {
+            "content": "🚀 **New CLI release**: **${VERSION}**",
+            "embeds": [
+              {
+                "title": "Release ${VERSION}",
+                "url": "${URL}",
+                "description": ${ESCAPED_DESC},
+                "color": 5814783,
+                "footer": { "text": "${REPO} • ${VERSION}" }
+              }
+            ]
+          }
+          PAYLOAD_EOF
+
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            curl -sS -X POST -H "Content-Type: application/json" \
+              -d @/tmp/discord_payload.json \
+              "$DISCORD_WEBHOOK_URL" && echo "Discord notification sent" || echo "Discord notification failed"
+          else
+            echo "DISCORD_WEBHOOK_URL not configured, skipping notification"
+          fi
 
       # Bump the formula in homebrew-tap
       - name: Create GitHub App Token
@@ -771,18 +884,20 @@ jobs:
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
+          TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
           BRANCH="ci/bump-wendy-${VERSION}"
 
           git checkout -b "$BRANCH"
 
           # Calculate URLs and SHA256s for pre-built binaries
-          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-macos-arm64-${VERSION}.tar.gz"
+          # Download URL uses tag_name (e.g. v0.1.18 or 2026.02.02-123456), artifact filename uses version
+          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-macos-arm64-${VERSION}.tar.gz"
           MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
+          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
           LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
+          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
           LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
 
           echo "URLs and SHA256s:"
@@ -829,7 +944,7 @@ jobs:
     name: Publish AUR Packages
     runs-on: ubuntu-latest
     needs: [determine-version, release]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
       matrix:
         include:
@@ -848,15 +963,16 @@ jobs:
         id: checksums
         run: |
           VERSION="${{ needs.determine-version.outputs.version }}"
+          TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
 
           # Download and calculate SHA256 for x86_64
-          X86_64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/${{ matrix.x86_64_artifact }}-${VERSION}.tar.gz"
+          X86_64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${{ matrix.x86_64_artifact }}-${VERSION}.tar.gz"
           echo "Downloading $X86_64_URL"
           X86_64_SHA=$(curl -fsSL "$X86_64_URL" | sha256sum | awk '{print $1}')
           echo "x86_64_sha=${X86_64_SHA}" >> $GITHUB_OUTPUT
 
           # Download and calculate SHA256 for aarch64
-          AARCH64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/${{ matrix.aarch64_artifact }}-${VERSION}.tar.gz"
+          AARCH64_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${{ matrix.aarch64_artifact }}-${VERSION}.tar.gz"
           echo "Downloading $AARCH64_URL"
           AARCH64_SHA=$(curl -fsSL "$AARCH64_URL" | sha256sum | awk '{print $1}')
           echo "aarch64_sha=${AARCH64_SHA}" >> $GITHUB_OUTPUT
@@ -868,10 +984,12 @@ jobs:
       - name: Update PKGBUILD
         run: |
           VERSION="${{ needs.determine-version.outputs.version }}"
+          TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
           PKGBUILD="${{ matrix.pkgbuild_path }}"
 
-          # Update version
+          # Update version and tag
           sed -i "s/^_pkgver=.*/_pkgver=${VERSION}/" "$PKGBUILD"
+          sed -i "s/^_pkgtag=.*/_pkgtag=${TAG_NAME}/" "$PKGBUILD"
 
           # Update checksums
           sed -i "s/sha256sums_x86_64=.*/sha256sums_x86_64=('${{ steps.checksums.outputs.x86_64_sha }}')/" "$PKGBUILD"
