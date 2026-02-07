@@ -1,5 +1,6 @@
 import Foundation
 import NIOCore
+import NIOFoundationCompat
 import Synchronization
 
 /// JSON output renderer that collects events and outputs a single JSON response.

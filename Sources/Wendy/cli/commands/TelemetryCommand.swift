@@ -1,10 +1,10 @@
 import ArgumentParser
+import CLIOutput
 import Dispatch
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
-import Noora
 import OpenTelemetryGRPC
 import WendyAgentGRPC
 
@@ -106,7 +106,7 @@ struct LogsCommand: AsyncParsableCommand {
                 throw CancellationError()
             } catch {
                 if !json {
-                    Noora(theme: .emerald()).warning("Connection lost, reconnecting...")
+                    cliOutput.warning("Connection lost, reconnecting...")
                 }
                 try await Task.sleep(for: .seconds(2))
             }

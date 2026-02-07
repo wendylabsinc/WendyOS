@@ -1,6 +1,7 @@
 import Analytics
 import AppConfig
 import ArgumentParser
+import CLIOutput
 import ContainerRegistry
 import Crypto
 import Foundation
@@ -8,7 +9,6 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIO
-import Noora
 import Subprocess
 import WendyAgentGRPC
 
@@ -65,7 +65,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 // Python project without Dockerfile - offer to generate one
                 try await generatePythonDockerfileAndBuild()
             } else {
-                Noora(theme: .emerald()).error(
+                cliOutput.error(
                     "Directory is not a Swift Package, nor can it be built as a docker container"
                 )
             }
@@ -115,7 +115,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         if let detected = generator.detectEntryPoint() {
             cliOutput.info("Detected entry point: \(detected)")
             entryPoint = detected
-        } else if let selected = generator.promptForEntryPoint(autoAccept: shouldAutoAccept) {
+        } else if let selected = try await generator.promptForEntryPoint(
+            autoAccept: shouldAutoAccept
+        ) {
             entryPoint = selected
         } else {
             cliOutput.error(
@@ -143,8 +145,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Confirm generation
         if !shouldAutoAccept {
             guard
-                Noora(theme: .emerald()).yesOrNoChoicePrompt(
-                    question: "Generate Dockerfile and continue?"
+                try await cliOutput.yesOrNoPrompt(
+                    question: "Generate Dockerfile and continue?",
+                    defaultAnswer: true
                 )
             else {
                 return
@@ -168,10 +171,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let docker = DockerCLI()
         let dockerContext = await docker.currentContext()
 
-        let title = TerminalText(stringLiteral: "Which device do you want to build this app for?")
         try await withAgentGRPCClientAndEndpoint(
             agentConnectionOptions,
-            title: title
+            title: "Which device do you want to build this app for?"
         ) { [name, dockerContext] client, endpoint in
             // Build additional properties for analytics
             var buildPhaseProperties: [String: String] = [:]
@@ -186,12 +188,11 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 commandName: "wendy build",
                 additionalProperties: buildPhaseProperties
             ) {
-                try await Noora(theme: .emerald()).progressStep(
+                try await cliOutput.withProgress(
                     message: "Preparing builder",
                     successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder",
-                    showSpinner: true
-                ) { _ in
+                    errorMessage: "Failed to create builder"
+                ) {
                     try await docker.prepareBuildxBuilder(
                         registryHostname: endpoint.host,
                         registryPort: 5000
@@ -258,17 +259,22 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             $0.url.hasSuffix("swift-container-plugin")
                 || $0.url.hasSuffix("swift-container-plugin.git")
         }) {
-            Noora(theme: .emerald()).info(
+            cliOutput.info(
                 "Container plugin is not installed. Do you want to install it?"
             )
 
-            guard
-                shouldAutoAccept
-                    || Noora(theme: .emerald()).yesOrNoChoicePrompt(
-                        question: "Do you want to install it?"
-                    )
-            else {
-                Noora(theme: .emerald()).error(
+            let accepted: Bool
+            if shouldAutoAccept {
+                accepted = true
+            } else {
+                accepted = try await cliOutput.yesOrNoPrompt(
+                    question: "Do you want to install it?",
+                    defaultAnswer: true
+                )
+            }
+
+            guard accepted else {
+                cliOutput.error(
                     "Container plugin is required to build Swift packages. Please install it manually."
                 )
                 return
@@ -307,7 +313,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 ).print()
                 return
             }
-            Noora(theme: .emerald()).error("No executable targets found in package")
+            cliOutput.error("No executable targets found in package")
             return
         } else if executableTargets.count == 1 {
             executableTarget = executableTargets[0]
@@ -319,11 +325,12 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
             )
         } else {
-            executableTarget = Noora(theme: .emerald()).singleChoicePrompt(
+            let selectedName = try await cliOutput.singleChoicePrompt(
                 title: "Select executable target to build",
                 question: "Which executable target do you want to build?",
-                options: executableTargets
+                options: executableTargets.map(\.name)
             )
+            executableTarget = executableTargets.first(where: { $0.name == selectedName })!
         }
 
         // Use the executable target name for image naming to match what swift container plugin uses

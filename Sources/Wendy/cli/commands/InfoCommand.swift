@@ -1,4 +1,5 @@
 import ArgumentParser
+import CLIOutput
 import Foundation
 import WendyShared
 

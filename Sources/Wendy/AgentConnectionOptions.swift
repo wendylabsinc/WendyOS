@@ -1,8 +1,8 @@
 import ArgumentParser
 import Bluetooth
+import CLIOutput
 import Foundation
 import Logging
-import Noora
 import WendyShared
 
 /// Represents the selected device connection type
@@ -124,9 +124,9 @@ struct AgentConnectionOptions: ParsableArguments {
     private func printDeviceDetails(_ device: DevicesCollection.GroupedDevice) {
         // Show the selected device name and version (if available)
         if let version = device.interfaces.compactMap(\.agentVersion).first {
-            Noora(theme: .emerald()).info(.alert("\(device.name) (version: \(version))"))
+            cliOutput.info("\(device.name) (version: \(version))")
         } else {
-            Noora(theme: .emerald()).info(.alert("\(device.name)"))
+            cliOutput.info("\(device.name)")
         }
 
         let rows = device.interfaces.map { interface -> [String] in
@@ -148,7 +148,7 @@ struct AgentConnectionOptions: ParsableArguments {
             return [interfaceLabel, details]
         }
 
-        Noora(theme: .emerald()).table(
+        cliOutput.table(
             headers: ["Interface", "Details"],
             rows: rows
         )
@@ -161,7 +161,7 @@ extension AgentConnectionOptions {
     /// Read device selection, including Bluetooth devices when no LAN devices are available
     /// or when explicitly requested
     func read(
-        title: TerminalText?,
+        title: String?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
         includeBluetooth: Bool = true
@@ -205,7 +205,7 @@ extension AgentConnectionOptions {
                 name: "No device detected yet",
                 interfaces: []
             )
-            return try await NooraRenderer().selectFromStreamingTable(
+            return try await cliOutput.selectFromStreamingTable(
                 initial: [emptyDevice],
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
                     if collection.isEmpty {

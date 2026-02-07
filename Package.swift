@@ -78,7 +78,7 @@ let package = Package(
                     name: "Hummingbird",
                     package: "hummingbird"
                 ),
-                .product(name: "Noora", package: "Noora"),
+                .target(name: "CLIOutput"),
                 .product(name: "DNSClient", package: "DNSClient"),
                 .product(name: "Bluetooth", package: "bluetooth"),
                 .target(name: "WendyAgentGRPC"),
@@ -237,13 +237,22 @@ let package = Package(
             ]
         ),
 
+        /// CLI output abstraction layer (owns the Noora TUI dependency)
+        .target(
+            name: "CLIOutput",
+            dependencies: [
+                .product(name: "Noora", package: "Noora"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOFoundationCompat", package: "swift-nio"),
+            ]
+        ),
+
         /// Analytics module for privacy-first usage tracking
         .target(
             name: "Analytics",
             dependencies: [
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Noora", package: "Noora"),
                 .target(name: "WendyShared"),
             ]
         ),

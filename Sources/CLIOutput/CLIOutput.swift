@@ -1,6 +1,5 @@
 import Foundation
 import NIOCore
-import Noora
 
 // Helper to flush stdout in Swift 6
 @inline(__always)
@@ -10,6 +9,17 @@ private func flushStdout() {
     #else
         fflush(stdout)
     #endif
+}
+
+/// Our own ProgressBarUpdate type so Noora doesn't leak through the public API.
+public struct ProgressBarUpdate: Sendable, Equatable {
+    public let progress: Double
+    public let detail: String?
+
+    public init(progress: Double, detail: String? = nil) {
+        self.progress = progress
+        self.detail = detail
+    }
 }
 
 /// Protocol for CLI output rendering. Commands emit structured events
@@ -48,6 +58,15 @@ public protocol CLIOutput: Sendable {
         rows: [[String]],
         pageSize: Int
     ) async throws -> Int
+
+    /// Select an item from a streaming table that updates in real-time.
+    /// Returns the selected element.
+    func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
+        initial: S,
+        updates: some AsyncSequence<S, Never> & Sendable,
+        pageSize: Int,
+        renderTable: @escaping @Sendable ([S.Element]) -> (headers: [String], rows: [[String]])
+    ) async throws -> S.Element where S.Index == Int, S.Element: Sendable & Comparable
 
     /// Emit a structured result that can be encoded as JSON
     func result<T: Encodable & Sendable>(_ value: T)
@@ -104,6 +123,27 @@ public protocol CLIOutput: Sendable {
             ->
             T
     ) async throws -> T
+
+    // MARK: - Interactive prompts
+
+    /// Yes/No confirmation prompt
+    func yesOrNoPrompt(question: String, defaultAnswer: Bool) async throws -> Bool
+
+    /// Single choice from a list of options
+    func singleChoicePrompt(
+        title: String?,
+        question: String,
+        options: [String]
+    ) async throws -> String
+
+    /// Free-text input prompt
+    func textPrompt(title: String?, prompt: String) async throws -> String
+
+    /// Multiple choice selection from a list of options
+    func multipleChoicePrompt(question: String, options: [String]) async throws -> [String]
+
+    /// Secure password input prompt
+    func secureTextPrompt(title: String, prompt: String) throws -> String
 }
 
 // MARK: - Default implementations
@@ -139,6 +179,18 @@ extension CLIOutput {
         pageSize: Int
     ) async throws -> Int {
         // Default: not supported - requires interactive mode
+        throw InteractiveSelectionRequiredError(
+            argument: "selection",
+            description: "Provide the selection via CLI arguments"
+        )
+    }
+
+    public func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
+        initial: S,
+        updates: some AsyncSequence<S, Never> & Sendable,
+        pageSize: Int,
+        renderTable: @escaping @Sendable ([S.Element]) -> (headers: [String], rows: [[String]])
+    ) async throws -> S.Element where S.Index == Int, S.Element: Sendable & Comparable {
         throw InteractiveSelectionRequiredError(
             argument: "selection",
             description: "Provide the selection via CLI arguments"
@@ -198,13 +250,52 @@ extension CLIOutput {
             }
         }
     }
+
+    public func yesOrNoPrompt(question: String, defaultAnswer: Bool) async throws -> Bool {
+        throw InteractiveSelectionRequiredError(
+            argument: "confirmation",
+            description: "Provide confirmation via CLI arguments"
+        )
+    }
+
+    public func singleChoicePrompt(
+        title: String?,
+        question: String,
+        options: [String]
+    ) async throws -> String {
+        throw InteractiveSelectionRequiredError(
+            argument: "choice",
+            description: "Provide the choice via CLI arguments"
+        )
+    }
+
+    public func textPrompt(title: String?, prompt: String) async throws -> String {
+        throw InteractiveSelectionRequiredError(
+            argument: "input",
+            description: "Provide the input via CLI arguments"
+        )
+    }
+
+    public func multipleChoicePrompt(question: String, options: [String]) async throws -> [String] {
+        throw InteractiveSelectionRequiredError(
+            argument: "choices",
+            description: "Provide the choices via CLI arguments"
+        )
+    }
+
+    public func secureTextPrompt(title: String, prompt: String) throws -> String {
+        throw InteractiveSelectionRequiredError(
+            argument: "password",
+            description: "Provide the password via CLI arguments"
+        )
+    }
 }
 
 // MARK: - Output Mode
 
 /// The current output mode for CLI commands.
 public enum OutputMode: Sendable {
-    /// Human-readable interactive output via Noora
+    /// Human-readable interactive output
     case interactive
 
     /// Single JSON response for LLMs and third-party tools

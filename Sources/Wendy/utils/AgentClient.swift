@@ -1,9 +1,9 @@
 import Bluetooth
+import CLIOutput
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
-import Noora
 import Synchronization
 import WendyAgentGRPC
 import WendyShared
@@ -18,7 +18,7 @@ enum AgentClient {
 /// Prefers LAN when available, falls back to Bluetooth
 func withAgentClient<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     preferBluetooth: Bool = false,
     includeBluetooth: Bool = true,
     _ body: @escaping @Sendable (AgentClient) async throws -> R
@@ -37,7 +37,7 @@ func withAgentClient<R: Sendable>(
 /// Prefers LAN when available, falls back to Bluetooth
 func withAgentClientAndHostname<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     preferBluetooth: Bool = false,
     includeBluetooth: Bool = true,
     _ body: @escaping @Sendable (AgentClient, String) async throws -> R
@@ -85,7 +85,7 @@ func withAgentClientAndHostname<R: Sendable>(
 
 private func executeWithDevice<R: Sendable>(
     _ device: SelectedDevice,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (AgentClient) async throws -> R
 ) async throws -> R {
     try await executeWithDeviceAndHostname(device, title: title) { client, _ in
@@ -95,7 +95,7 @@ private func executeWithDevice<R: Sendable>(
 
 private func executeWithDeviceAndHostname<R: Sendable>(
     _ device: SelectedDevice,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (AgentClient, String) async throws -> R
 ) async throws -> R {
     switch device {
@@ -121,83 +121,57 @@ private func executeWithDeviceAndHostname<R: Sendable>(
 extension AgentClient {
 
     func discoverSSID() async throws -> String {
-        struct WifiNetwork: Sendable {
-            let ssid: String
-            let signalStrength: Int32
+        let source = self
 
-            init(network: Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork) {
-                self.ssid = network.ssid
-                self.signalStrength = network.hasSignalStrength ? network.signalStrength : 0
-            }
-        }
+        // Fetch initial WiFi networks
+        let initialNetworks = Self.deduplicateNetworks(try await source.listWiFiNetworks())
 
-        actor LiveData: nonisolated AsyncSequence {
-            nonisolated let source: AgentClient
-            var displayedNetworks: [WiFiNetworkInfo] =
-                []
-
-            init(source: AgentClient) {
-                self.source = source
-            }
-
-            func setDisplayedNetworks(
-                _ networks: [WiFiNetworkInfo]
-            ) {
-                self.displayedNetworks = networks
-            }
-
-            nonisolated func makeAsyncIterator() -> AsyncIterator {
-                return AsyncIterator(actor: self)
-            }
-
-            struct AsyncIterator: AsyncIteratorProtocol {
-                let actor: LiveData
-
-                func next() async throws -> TableData? {
-                    let networks = try await actor.source.listWiFiNetworks()
-                    // Group networks by SSID and keep the one with highest signal strength
-                    // Sort by SSID to maintain stable ordering (prevents selection index drift)
-                    let uniqueNetworks = Dictionary(grouping: networks.filter { !$0.ssid.isEmpty })
-                    { $0.ssid }
-                    .compactMapValues { networksWithSameSsid -> WiFiNetworkInfo? in
-                        networksWithSameSsid.max(by: {
-                            ($0.signalStrength ?? 0) < ($1.signalStrength ?? 0)
-                        })
-                    }
-                    .values
-                    .sorted(by: { ($0.signalStrength ?? 0) > ($1.signalStrength ?? 0) })
-
-                    // Store the displayed networks so we can look up by index later
-                    await actor.setDisplayedNetworks(uniqueNetworks)
-
-                    let rows = uniqueNetworks.map { network -> TableRow in
-                        return TableRow([
-                            TerminalText(stringLiteral: "\(network.ssid)"),
-                            TerminalText(
-                                stringLiteral: "\(network.signalStrength?.description ?? "Unknown")"
-                            ),
-                        ])
-                    }
-
-                    return TableData(
-                        columns: [TableColumn(title: "SSID"), TableColumn(title: "Strength")],
-                        rows: rows
+        // Create an async stream that periodically fetches updated WiFi networks
+        let updates = AsyncStream<[WiFiNetworkInfo]> { continuation in
+            let task = Task {
+                while !Task.isCancelled {
+                    try await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { break }
+                    let networks = Self.deduplicateNetworks(
+                        try await source.listWiFiNetworks()
                     )
+                    continuation.yield(networks)
                 }
             }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
         }
 
-        let data = LiveData(source: self)
-        guard let initial = try await data.makeAsyncIterator().next() else {
-            throw CancellationError()
-        }
-        let index = try await Noora(theme: .emerald()).selectableTable(
-            initial,
-            updates: data,
-            pageSize: 20
+        let selected = try await cliOutput.selectFromStreamingTable(
+            initial: initialNetworks,
+            updates: updates,
+            pageSize: 20,
+            renderTable: { networks in
+                return (
+                    headers: ["SSID", "Strength"],
+                    rows: networks.map { network in
+                        [
+                            network.ssid,
+                            network.signalStrength?.description ?? "Unknown",
+                        ]
+                    }
+                )
+            }
         )
-        let displayedNetworks = await data.displayedNetworks
-        return displayedNetworks[index].ssid
+        return selected.ssid
+    }
+
+    /// Deduplicate WiFi networks by SSID, keeping the one with the highest signal strength.
+    private static func deduplicateNetworks(_ networks: [WiFiNetworkInfo]) -> [WiFiNetworkInfo] {
+        Dictionary(grouping: networks.filter { !$0.ssid.isEmpty }) { $0.ssid }
+            .compactMapValues { networksWithSameSsid -> WiFiNetworkInfo? in
+                networksWithSameSsid.max(by: {
+                    ($0.signalStrength ?? 0) < ($1.signalStrength ?? 0)
+                })
+            }
+            .values
+            .sorted(by: { ($0.signalStrength ?? 0) > ($1.signalStrength ?? 0) })
     }
 
     /// List available WiFi networks
@@ -453,9 +427,19 @@ extension AgentClient {
 
 // MARK: - Unified Response Types
 
-struct WiFiNetworkInfo: Sendable {
+struct WiFiNetworkInfo: Sendable, Comparable {
     let ssid: String
     let signalStrength: Int?
+
+    static func < (lhs: WiFiNetworkInfo, rhs: WiFiNetworkInfo) -> Bool {
+        // Sort by signal strength descending (stronger first), then by SSID
+        let lhsStrength = lhs.signalStrength ?? 0
+        let rhsStrength = rhs.signalStrength ?? 0
+        if lhsStrength != rhsStrength {
+            return lhsStrength > rhsStrength
+        }
+        return lhs.ssid < rhs.ssid
+    }
 }
 
 struct WiFiConnectResult: Sendable {

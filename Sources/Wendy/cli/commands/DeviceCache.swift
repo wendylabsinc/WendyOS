@@ -1,5 +1,5 @@
+import CLIOutput
 import Foundation
-import Noora
 import WendyShared
 
 /// An interface with its last-seen timestamp
@@ -238,7 +238,7 @@ actor DeviceCache {
 }
 
 extension DevicesWithTimingResult {
-    func tableData() -> TableData {
+    func tableData() -> (headers: [String], rows: [[String]]) {
         let now = ContinuousClock.now
         // Only show "Last Seen" for interfaces stale by more than 20 seconds
         let staleDisplayThreshold: Duration = .seconds(20)
@@ -274,74 +274,70 @@ extension DevicesWithTimingResult {
             device.interfaces.contains { isStaleEnoughToDisplay($0) }
         }
 
-        // Build columns - add "Last Seen" column only when there are stale interfaces
-        var columns = [
-            TableColumn(title: "Name"),
-            TableColumn(title: "Connection"),
-            TableColumn(title: "Interfaces"),
-            TableColumn(title: "Version"),
-        ]
+        // Build headers - add "Last Seen" column only when there are stale interfaces
+        var headers = ["Name", "Connection", "Interfaces", "Version"]
         if hasStaleInterfaces {
-            columns.append(TableColumn(title: "Last Seen"))
+            headers.append("Last Seen")
         }
 
-        return TableData(
-            columns: columns,
-            rows: devices.map { deviceWithTiming in
-                // Build connection info showing LAN hostname and/or BLE RSSI
-                var connectionParts: [String] = []
+        let rows: [[String]] = devices.map { deviceWithTiming in
+            // Build connection info showing LAN hostname and/or BLE RSSI
+            var connectionParts: [String] = []
 
-                for interfaceWithTiming in deviceWithTiming.interfaces {
-                    switch interfaceWithTiming.interface {
-                    case .lan(let lanDevice):
-                        connectionParts.append("\(lanDevice.hostname) (LAN)")
-                    case .bluetooth(let btDevice):
-                        if btDevice.rssi != 0 {
-                            connectionParts.append("RSSI: \(btDevice.rssi) dBm (BLE)")
-                        } else {
-                            connectionParts.append("(BLE)")
-                        }
-                    case .usb, .ethernet:
-                        break
+            for interfaceWithTiming in deviceWithTiming.interfaces {
+                switch interfaceWithTiming.interface {
+                case .lan(let lanDevice):
+                    connectionParts.append("\(lanDevice.hostname) (LAN)")
+                case .bluetooth(let btDevice):
+                    if btDevice.rssi != 0 {
+                        connectionParts.append("RSSI: \(btDevice.rssi) dBm (BLE)")
+                    } else {
+                        connectionParts.append("(BLE)")
                     }
+                case .usb, .ethernet:
+                    break
                 }
-
-                let connection =
-                    connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
-
-                // Get agent version from any interface
-                let agentVersion =
-                    deviceWithTiming.interfaces
-                    .compactMap { $0.interface.agentVersion }
-                    .first ?? "Unknown"
-
-                var row: [TerminalText] = [
-                    "\(deviceWithTiming.name)",
-                    "\(connection)",
-                    "\(deviceWithTiming.interfaces.map { $0.interface.shortDescription }.joined(separator: ", "))",
-                    "\(agentVersion)",
-                ]
-
-                // Add "Last Seen" value if we're showing that column
-                // Only show interfaces that are stale enough to display
-                if hasStaleInterfaces {
-                    let staleInterfaceTimings = deviceWithTiming.interfaces.compactMap {
-                        iface -> String? in
-                        guard isStaleEnoughToDisplay(iface) else {
-                            return nil  // Don't show interfaces that are current or barely stale
-                        }
-                        let seconds = Int((now - iface.lastSeen).components.seconds)
-                        return "\(iface.interface.shortDescription): \(seconds)s ago"
-                    }
-
-                    let lastSeenText =
-                        staleInterfaceTimings.isEmpty
-                        ? "-" : staleInterfaceTimings.joined(separator: ", ")
-                    row.append("\(lastSeenText)")
-                }
-
-                return row
             }
-        )
+
+            let connection =
+                connectionParts.isEmpty ? "-" : connectionParts.joined(separator: ", ")
+
+            // Get agent version from any interface
+            let agentVersion =
+                deviceWithTiming.interfaces
+                .compactMap { $0.interface.agentVersion }
+                .first ?? "Unknown"
+
+            var row: [String] = [
+                deviceWithTiming.name,
+                connection,
+                deviceWithTiming.interfaces.map { $0.interface.shortDescription }.joined(
+                    separator: ", "
+                ),
+                agentVersion,
+            ]
+
+            // Add "Last Seen" value if we're showing that column
+            // Only show interfaces that are stale enough to display
+            if hasStaleInterfaces {
+                let staleInterfaceTimings = deviceWithTiming.interfaces.compactMap {
+                    iface -> String? in
+                    guard isStaleEnoughToDisplay(iface) else {
+                        return nil  // Don't show interfaces that are current or barely stale
+                    }
+                    let seconds = Int((now - iface.lastSeen).components.seconds)
+                    return "\(iface.interface.shortDescription): \(seconds)s ago"
+                }
+
+                let lastSeenText =
+                    staleInterfaceTimings.isEmpty
+                    ? "-" : staleInterfaceTimings.joined(separator: ", ")
+                row.append(lastSeenText)
+            }
+
+            return row
+        }
+
+        return (headers: headers, rows: rows)
     }
 }

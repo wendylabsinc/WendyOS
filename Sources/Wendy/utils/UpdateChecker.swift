@@ -1,3 +1,4 @@
+import CLIOutput
 import Foundation
 import Logging
 import WendyShared
