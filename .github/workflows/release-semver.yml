@@ -242,6 +242,88 @@ jobs:
             echo "⚠️ DISCORD_WEBHOOK_URL not configured, skipping notification"
           fi
 
+      # Bump the formula in homebrew-tap
+      - name: Create GitHub App Token
+        if: inputs.promote_prerelease != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CLI_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.CLI_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: wendylabsinc
+          repositories: homebrew-tap
+
+      - name: Checkout tap
+        if: inputs.promote_prerelease != ''
+        uses: actions/checkout@v4
+        with:
+          repository: wendylabsinc/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          path: tap
+
+      - name: Bump formula
+        if: inputs.promote_prerelease != ''
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="v${{ inputs.version }}"
+          BRANCH="ci/bump-wendy-${VERSION}"
+
+          git checkout -b "$BRANCH"
+
+          # Calculate URLs and SHA256s for pre-built binaries
+          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-macos-arm64-${VERSION}.tar.gz"
+          MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
+
+          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
+          LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
+
+          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${VERSION}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
+          LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
+
+          echo "URLs and SHA256s:"
+          echo "  macOS ARM64: ${MACOS_URL} -> ${MACOS_SHA}"
+          echo "  Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
+          echo "  Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
+
+          # Update formula URLs and SHA256s (Linux sed syntax)
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-macos-arm64[^\"]*|${MACOS_URL}|" Formula/wendy.rb
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-static-musl-aarch64[^\"]*|${LINUX_ARM_URL}|" Formula/wendy.rb
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-static-musl-x86_64[^\"]*|${LINUX_X86_URL}|" Formula/wendy.rb
+
+          # Update SHA256s based on URL context (not sequential position)
+          sed -i "/wendy-cli-macos-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${MACOS_SHA}\"|" Formula/wendy.rb
+          sed -i "/wendy-cli-linux-static-musl-aarch64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_ARM_SHA}\"|" Formula/wendy.rb
+          sed -i "/wendy-cli-linux-static-musl-x86_64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_X86_SHA}\"|" Formula/wendy.rb
+
+          echo "Updated formula:"
+          grep -A 1 "url\|sha256" Formula/wendy.rb | head -20
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/wendy.rb
+          git commit -m "wendy: bump to ${VERSION}"
+          git push -u origin "$BRANCH"
+
+      - name: Create Homebrew PR
+        if: inputs.promote_prerelease != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          VERSION="v${{ inputs.version }}"
+          gh pr create \
+            --repo wendylabsinc/homebrew-tap \
+            --head "ci/bump-wendy-${VERSION}" \
+            --base main \
+            --title "wendy: bump to ${VERSION}" \
+            --body "Automated bump from semver release ${VERSION}.
+
+          This PR updates the wendy formula to version ${VERSION}.
+
+          All platforms use pre-built binaries (signed and notarized for macOS ARM64)." \
+            --label "pr-pull"
+
       - name: Trigger Build from Main
         if: inputs.promote_prerelease == ''
         env:
