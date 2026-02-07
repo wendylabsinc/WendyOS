@@ -120,16 +120,16 @@ jobs:
           done
 
           # Write job summary for easy reference in GitHub Actions UI
-          cat >> $GITHUB_STEP_SUMMARY << SUMMARY_EOF
-          ## 🚀 Semver Release Created
-
-          | Field | Value |
-          |-------|-------|
-          | **Semver Version** | \`$VERSION\` |
-          | **Source Pre-release** | [\`$PRERELEASE_TAG\`]($PRERELEASE_URL) |
-          | **Release URL** | [View Release](https://github.com/${{ github.repository }}/releases/tag/$VERSION) |
-          | **Assets Uploaded** | ${#RENAMED_FILES[@]} |
-          SUMMARY_EOF
+          {
+            echo "## 🚀 Semver Release Created"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| **Semver Version** | \`$VERSION\` |"
+            echo "| **Source Pre-release** | [\`$PRERELEASE_TAG\`]($PRERELEASE_URL) |"
+            echo "| **Release URL** | [View Release](https://github.com/${{ github.repository }}/releases/tag/$VERSION) |"
+            echo "| **Assets Uploaded** | ${#RENAMED_FILES[@]} |"
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Notify Discord
         if: inputs.promote_prerelease != ''
