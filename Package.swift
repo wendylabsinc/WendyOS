@@ -37,7 +37,6 @@ let package = Package(
         .executable(name: "wendy-network-daemon", targets: ["wendy-network-daemon"]),
     ],
     dependencies: packageDependencies + [
-        .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3"),
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.2.1"),

@@ -106,6 +106,16 @@ If you're planning to test the wendy-agent on macOS, you'll need to build and ru
 swift run wendy-agent
 ```
 
+Note: On some macOS toolchains (Swift 6.2.3 / macOS 26), `swift build` may emit
+`input verification failed` warnings from `dsymutil`. If you want to silence
+those for local builds, you can use:
+
+```sh
+swift build -debug-info-format none
+```
+
+This disables debug symbols for that build.
+
 ## Examples
 
 ### Hello, world!
