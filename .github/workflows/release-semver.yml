@@ -98,13 +98,12 @@ jobs:
           echo ""
           echo "🚀 Creating release $VERSION..."
 
-          # Build release notes with promotion note at the TOP for visibility
-          PRERELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$PRERELEASE_TAG"
-          PROMOTION_HEADER="> 📦 **Promoted from pre-release [\`$PRERELEASE_TAG\`]($PRERELEASE_URL)**"
-          FULL_NOTES="$PROMOTION_HEADER"$'\n\n'"$BODY"
+          # Build release notes (appending promotion note to original body)
+          PROMOTION_NOTE="Promoted from pre-release $PRERELEASE_TAG"
+          FULL_NOTES="$BODY"$'\n\n'"$PROMOTION_NOTE"
 
           gh release create "$VERSION" \
-            --title "Release $VERSION (from $PRERELEASE_TAG)" \
+            --title "Release $VERSION" \
             --notes "$FULL_NOTES" \
             --latest \
             "${RENAMED_FILES[@]}"
@@ -118,18 +117,6 @@ jobs:
           for file in "${RENAMED_FILES[@]}"; do
             echo "  https://github.com/${{ github.repository }}/releases/download/$VERSION/$file"
           done
-
-          # Write job summary for easy reference in GitHub Actions UI
-          {
-            echo "## 🚀 Semver Release Created"
-            echo ""
-            echo "| Field | Value |"
-            echo "|-------|-------|"
-            echo "| **Semver Version** | \`$VERSION\` |"
-            echo "| **Source Pre-release** | [\`$PRERELEASE_TAG\`]($PRERELEASE_URL) |"
-            echo "| **Release URL** | [View Release](https://github.com/${{ github.repository }}/releases/tag/$VERSION) |"
-            echo "| **Assets Uploaded** | ${#RENAMED_FILES[@]} |"
-          } >> $GITHUB_STEP_SUMMARY
 
       - name: Notify Discord
         if: inputs.promote_prerelease != ''
@@ -185,14 +172,14 @@ jobs:
           # Build JSON payload
           cat > /tmp/discord_payload.json << PAYLOAD_EOF
           {
-            "content": "🚀 **New CLI release**: **${VERSION}** (from \`${PRERELEASE_TAG}\`)",
+            "content": "🚀 **New CLI release**: **${VERSION}**",
             "embeds": [
               {
                 "title": "Release ${VERSION}",
                 "url": "${URL}",
                 "description": ${ESCAPED_DESC},
                 "color": 5814783,
-                "footer": { "text": "${REPO} • ${VERSION} • from ${PRERELEASE_TAG}" }
+                "footer": { "text": "${REPO} • ${VERSION}" }
               }
             ]
           }
