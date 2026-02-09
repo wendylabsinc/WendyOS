@@ -807,6 +807,19 @@ public struct DockerCLI: Sendable {
         return output
     }
 
+    public func run(
+        name: String,
+        detach: Bool
+    ) async throws {
+        let arguments = ["run", "--rm", name]
+        _ = try await Subprocess.run(
+            Subprocess.Executable.name(self.command),
+            arguments: Subprocess.Arguments(arguments),
+            output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+            error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+        )
+    }
+
     /// Removes a buildx builder.
     public func removeBuildxBuilder(
         name: String

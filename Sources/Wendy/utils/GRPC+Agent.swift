@@ -11,14 +11,15 @@ import WendyCloudGRPC
 typealias GRPCTransport = HTTP2ClientTransport.Posix
 
 func withGRPCClient<R: Sendable>(
-    _ endpoint: AgentConnectionOptions.Endpoint,
+    host: String,
+    port: Int,
     security: GRPCTransport.TransportSecurity,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     let transport = try GRPCTransport(
         target: .dns(
-            host: endpoint.host,
-            port: endpoint.port
+            host: host,
+            port: port
         ),
         transportSecurity: security
     )
@@ -32,16 +33,13 @@ func withCloudGRPCClient<R: Sendable>(
     auth: Config.Auth,
     _ body: @escaping @Sendable (CloudGRPCClient) async throws -> R
 ) async throws -> R {
-    let endpoint = AgentConnectionOptions.Endpoint(
-        host: auth.cloudGRPC,
-        port: 50052
-    )
     guard let cert = auth.certificates.first else {
         throw RPCError(code: .aborted, message: "No certificate found")
     }
 
     return try await withGRPCClient(
-        endpoint,
+        host: auth.cloudGRPC,
+        port: 50052,
         security: .mTLS(
             certificateChain: cert.certificateChainPEM.map { cert in
                 return TLSConfig.CertificateSource.bytes(Array(cert.utf8), format: .pem)
@@ -79,7 +77,7 @@ private enum ProvisioningResult<R: Sendable>: Sendable {
 }
 
 func withAgentGRPCClient<R: Sendable>(
-    _ connectionOptions: AgentConnectionOptions,
+    _ connectionOptions: TargetOptions,
     title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
@@ -89,20 +87,21 @@ func withAgentGRPCClient<R: Sendable>(
 }
 
 func withAgentGRPCClient<R: Sendable>(
-    _ endpoint: AgentConnectionOptions.Endpoint,
+    host: String,
+    port: Int,
     title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
-    return try await _withAgentGRPCClient(endpoint, title: title) { client, _ in
+    return try await _withAgentGRPCClient(host: host, port: port, title: title) { client, _ in
         return try await body(client)
     }
 }
 
 func withAgentGRPCClientAndEndpoint<R: Sendable>(
-    _ connectionOptions: AgentConnectionOptions,
+    _ connectionOptions: TargetOptions,
     title: String,
     _ body:
-        @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
+        @escaping @Sendable (GRPCClient<GRPCTransport>, String)
         async throws -> R
 ) async throws -> R {
     func fallback() async throws -> R {
@@ -111,16 +110,11 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
             readDefault: false,
             includeBluetooth: false
         ) {
-        case .lan(let host, let port, let defaultDevice):
-            let endpoint = AgentConnectionOptions.Endpoint(
-                host: host,
-                port: port,
-                defaultDevice: defaultDevice
-            )
-            return try await withAgentGRPCClient(endpoint, title: title) { client in
-                return try await body(client, endpoint)
+        case .lan(let host, let port, _):
+            return try await withAgentGRPCClient(host: host, port: port, title: title) { client in
+                return try await body(client, host)
             }
-        case .bluetooth:
+        case .bluetooth, .local, .docker:
             throw CancellationError()
         }
     }
@@ -129,14 +123,9 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
     case .lan(let host, let port, let defaultDevice):
         let connectionSucceeded = Mutex(false)
         do {
-            let endpoint = AgentConnectionOptions.Endpoint(
-                host: host,
-                port: port,
-                defaultDevice: defaultDevice
-            )
-            return try await withAgentGRPCClient(endpoint, title: title) { client in
+            return try await withAgentGRPCClient(host: host, port: port, title: title) { client in
                 connectionSucceeded.withLock { $0 = true }
-                return try await body(client, endpoint)
+                return try await body(client, host)
             }
         } catch {
             // Only retry with device selection if we never successfully connected
@@ -145,21 +134,22 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
             }
             return try await fallback()
         }
-    case .bluetooth:
+    case .bluetooth, .local, .docker:
         return try await fallback()
     }
 }
 
 func _withAgentGRPCClient<R: Sendable>(
-    _ endpoint: AgentConnectionOptions.Endpoint,
+    host: String,
+    port: Int,
     title: String,
     _ body:
-        @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
+        @escaping @Sendable (GRPCClient<GRPCTransport>, String)
         async throws -> R
 ) async throws -> R {
     let logger = Logger(label: "sh.wendy.agent-grpc-client")
     do {
-        let result = try await withGRPCClient(endpoint, security: .plaintext) {
+        let result = try await withGRPCClient(host: host, port: port, security: .plaintext) {
             client -> ProvisioningResult<R> in
             let provisioningAPI = Wendy_Agent_Services_V1_WendyProvisioningService.Client(
                 wrapping: client
@@ -167,7 +157,7 @@ func _withAgentGRPCClient<R: Sendable>(
             let response = try await provisioningAPI.isProvisioned(.init())
             switch response.response {
             case .notProvisioned:
-                return .notProvisioned(try await body(client, endpoint))
+                return .notProvisioned(try await body(client, host))
             case .provisioned, .none:
                 return .retryWithProvisioned(
                     assetId: response.provisioned.assetID,
@@ -184,10 +174,11 @@ func _withAgentGRPCClient<R: Sendable>(
                 title: title,
                 forOrganizationId: organizationId
             ) { certificate in
-                var endpoint = endpoint
-                endpoint.port += 1
+                var port = port
+                port += 1
                 return try await withGRPCClient(
-                    endpoint,
+                    host: host,
+                    port: port,
                     security: .mTLS(
                         certificateChain: certificate.certificateChainPEM.map { cert in
                             return TLSConfig.CertificateSource.bytes(Array(cert.utf8), format: .pem)
@@ -221,8 +212,8 @@ func _withAgentGRPCClient<R: Sendable>(
                             )
                         }
                     }
-                ) { [endpoint] client in
-                    return try await body(client, endpoint)
+                ) { [host] client in
+                    return try await body(client, host)
                 }
             }
         }
@@ -230,8 +221,8 @@ func _withAgentGRPCClient<R: Sendable>(
         logger.debug(
             "Could not connect to host",
             metadata: [
-                "host": "\(endpoint.host)",
-                "port": "\(endpoint.port)",
+                "host": "\(host)",
+                "port": "\(port)",
             ]
         )
         throw error
@@ -240,8 +231,8 @@ func _withAgentGRPCClient<R: Sendable>(
         logger.debug(
             "Could not connect to host",
             metadata: [
-                "host": "\(endpoint.host)",
-                "port": "\(endpoint.port)",
+                "host": "\(host)",
+                "port": "\(port)",
             ]
         )
         throw error
@@ -251,7 +242,7 @@ func _withAgentGRPCClient<R: Sendable>(
 /// Execute a gRPC operation with automatic handling of unimplemented API errors.
 /// If the device returns an unimplemented error, prompts the user to update their device.
 func withAgentGRPCClientHandlingUpdates<R: Sendable>(
-    _ connectionOptions: AgentConnectionOptions,
+    _ connectionOptions: TargetOptions,
     title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
@@ -268,18 +259,16 @@ func withAgentGRPCClientHandlingUpdates<R: Sendable>(
             includeBluetooth: false
         )
 
-        guard case .lan(let host, let port, let defaultDevice) = selectedDevice else {
+        guard case .lan(let host, let port, _) = selectedDevice else {
             throw error
         }
 
-        let endpoint = AgentConnectionOptions.Endpoint(
-            host: host,
-            port: port,
-            defaultDevice: defaultDevice
-        )
-
         // Prompt user to update - if they decline or update fails, re-throw original error
-        let didUpdate = await promptDeviceUpdateIfUnimplemented(error: error, endpoint: endpoint)
+        let didUpdate = await promptDeviceUpdateIfUnimplemented(
+            error: error,
+            host: host,
+            port: port
+        )
         if !didUpdate {
             throw error
         }
@@ -290,7 +279,7 @@ func withAgentGRPCClientHandlingUpdates<R: Sendable>(
 }
 
 /// Wait for the gRPC socket to come back up after a device restart
-func waitForDeviceRestart(endpoint: AgentConnectionOptions.Endpoint) async throws {
+func waitForDeviceRestart(host: String, port: Int) async throws {
     try await cliOutput.withProgress(
         message: "Waiting for device to restart...",
         successMessage: "Device restarted successfully",
@@ -307,7 +296,7 @@ func waitForDeviceRestart(endpoint: AgentConnectionOptions.Endpoint) async throw
             _ = attempt  // Used for retry counting
             do {
                 // Try to connect and verify the agent is responsive
-                try await withAgentGRPCClient(endpoint, title: "") { client in
+                try await withAgentGRPCClient(host: host, port: port, title: "") { client in
                     let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
                         wrapping: client
                     )

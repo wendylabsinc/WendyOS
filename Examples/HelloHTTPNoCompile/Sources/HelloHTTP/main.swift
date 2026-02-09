@@ -23,7 +23,7 @@ router.add(middleware: MetricsMiddleware())
 router.get("hello") { request, _ -> String in
     return "Hello"
 }
-adasdsad this does not compile
+let router = Router()
 // create application using router
 var app = Application(
     router: router,

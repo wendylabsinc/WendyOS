@@ -21,11 +21,11 @@ struct WiFiCommand: AsyncParsableCommand {
             abstract: "List available WiFi networks."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             let networks = try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "For which device do you want to list wifi networks?"
             ) { client in
                 if JSONMode.isEnabled {
@@ -98,11 +98,11 @@ struct WiFiCommand: AsyncParsableCommand {
         @Option(name: .shortAndLong, help: "Password for the WiFi network")
         var password: String?
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "Which device do you want to connect to the wifi network on?"
             ) { client in
                 let ssid: String
@@ -216,11 +216,11 @@ struct WiFiCommand: AsyncParsableCommand {
             abstract: "Check the current WiFi connection status."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "For which device do you want to check the wifi status?"
             ) { client in
                 let status = try await client.getWiFiStatus()
@@ -276,14 +276,14 @@ struct WiFiCommand: AsyncParsableCommand {
             abstract: "Disconnect from the current WiFi network."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             let logger = Logger(label: "sh.wendy.cli.wifi.disconnect")
             logger.info("Disconnecting from WiFi network")
 
             try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "Which device do you want to disconnect from wifi?"
             ) { client in
                 let result = try await cliOutput.withProgress(

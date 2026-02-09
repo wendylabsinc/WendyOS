@@ -17,7 +17,7 @@ enum AgentClient {
 /// Execute a command with automatic connection type selection
 /// Prefers LAN when available, falls back to Bluetooth
 func withAgentClient<R: Sendable>(
-    _ connectionOptions: AgentConnectionOptions,
+    _ connectionOptions: TargetOptions,
     title: String,
     preferBluetooth: Bool = false,
     includeBluetooth: Bool = true,
@@ -36,7 +36,7 @@ func withAgentClient<R: Sendable>(
 /// Execute a command with automatic connection type selection, also providing the hostname
 /// Prefers LAN when available, falls back to Bluetooth
 func withAgentClientAndHostname<R: Sendable>(
-    _ connectionOptions: AgentConnectionOptions,
+    _ connectionOptions: TargetOptions,
     title: String,
     preferBluetooth: Bool = false,
     includeBluetooth: Bool = true,
@@ -50,14 +50,13 @@ func withAgentClientAndHostname<R: Sendable>(
 
     switch selectedDevice {
     case .lan(let host, let port, let defaultDevice):
-        let endpoint = AgentConnectionOptions.Endpoint(
-            host: host,
-            port: port,
-            defaultDevice: defaultDevice
-        )
         let connectionSucceeded = Mutex(false)
         do {
-            return try await withAgentGRPCClient(endpoint, title: title) { client in
+            return try await withAgentGRPCClient(
+                host: host,
+                port: port,
+                title: title
+            ) { client in
                 connectionSucceeded.withLock { $0 = true }
                 return try await body(.grpc(client), host)
             }
@@ -80,6 +79,10 @@ func withAgentClientAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
+    case .docker:
+        throw CLIError.invalidEndpoint("docker")
+    case .local:
+        throw CLIError.invalidEndpoint("localhost")
     }
 }
 
@@ -100,12 +103,11 @@ private func executeWithDeviceAndHostname<R: Sendable>(
 ) async throws -> R {
     switch device {
     case .lan(let host, let port, _):
-        let endpoint = AgentConnectionOptions.Endpoint(
+        return try await withAgentGRPCClient(
             host: host,
             port: port,
-            defaultDevice: false
-        )
-        return try await withAgentGRPCClient(endpoint, title: title) { client in
+            title: title
+        ) { client in
             try await body(.grpc(client), host)
         }
 
@@ -113,6 +115,10 @@ private func executeWithDeviceAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
+    case .docker:
+        throw CLIError.invalidEndpoint("docker")
+    case .local:
+        throw CLIError.invalidEndpoint("localhost")
     }
 }
 

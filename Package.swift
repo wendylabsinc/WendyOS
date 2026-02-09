@@ -28,7 +28,7 @@ import PackageDescription
 let package = Package(
     name: "wendy-agent",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v26)
     ],
     products: [
         .executable(name: "wendy-agent", targets: ["wendy-agent"]),

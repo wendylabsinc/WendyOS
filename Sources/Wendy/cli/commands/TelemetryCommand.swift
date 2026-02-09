@@ -52,14 +52,14 @@ struct LogsCommand: AsyncParsableCommand {
     )
     var forward: String?
 
-    @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+    @OptionGroup var target: TargetOptions
 
     func run() async throws {
         let minSeverity: Int32? = level.flatMap { parseSeverityLevel($0) }
         // Reconnection loop - keeps trying to connect when agent restarts
         while !Task.isCancelled {
             do {
-                try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
+                try await withAgentGRPCClient(target, title: "") { client in
                     let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                         wrapping: client
                     )
@@ -237,7 +237,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Only forward to collector, don't output JSONL")
     var forwardOnly: Bool = false
 
-    @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+    @OptionGroup var target: TargetOptions
 
     func run() async throws {
         // Default to all telemetry types if none specified
@@ -364,7 +364,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
         service: String?,
         minSeverity: Int32?
     ) async throws {
-        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
+        try await withAgentGRPCClient(target, title: "") { client in
             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                 wrapping: client
             )
@@ -477,7 +477,7 @@ struct TelemetryStreamCommand: AsyncParsableCommand {
         metricsCollector: MetricsClient,
         tracesCollector: TracesClient
     ) async throws {
-        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
+        try await withAgentGRPCClient(target, title: "") { client in
             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                 wrapping: client
             )

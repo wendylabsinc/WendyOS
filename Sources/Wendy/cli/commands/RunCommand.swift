@@ -13,7 +13,25 @@ import WendyAgentGRPC
 
 #if os(macOS)
     import AppKit
+    import System
+#else
+    import SystemPackage
 #endif
+
+struct RestartOptions: ParsableArguments {
+    // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
+    @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
+    var noRestart: Bool = false
+
+    @Flag(name: .customLong("restart-unless-stopped"), help: "Restart unless stopped")
+    var restartUnlessStoppedFlag: Bool = false
+
+    @Option(
+        name: .customLong("restart-on-failure"),
+        help: "Restart on failure up to N times"
+    )
+    var restartOnFailureRetries: Int?
+}
 
 struct RunCommand: AsyncParsableCommand, Sendable {
     static let configuration = CommandConfiguration(
@@ -59,7 +77,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     var passthroughArgs: [String] = []
 
     @OptionGroup
-    var agentConnectionOptions: AgentConnectionOptions
+    var restartOptions: RestartOptions
+
+    @OptionGroup
+    var target: TargetOptions
 
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
@@ -86,13 +107,13 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         if deploy {
             restartPolicyFlags.append("--deploy")
         }
-        if noRestart {
+        if restartOptions.noRestart {
             restartPolicyFlags.append("--no-restart")
         }
-        if restartUnlessStoppedFlag {
+        if restartOptions.restartUnlessStoppedFlag {
             restartPolicyFlags.append("--restart-unless-stopped")
         }
-        if restartOnFailureRetries != nil {
+        if restartOptions.restartOnFailureRetries != nil {
             restartPolicyFlags.append("--restart-on-failure")
         }
 
@@ -117,16 +138,16 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     /// Build the restart policy based on the command flags
     /// This determines how containers behave when they exit
     func buildRestartPolicy() -> RestartPolicy {
-        if noRestart {
+        if restartOptions.noRestart {
             // Explicit no restart
             return .with { $0.mode = .no }
-        } else if let retries = restartOnFailureRetries {
+        } else if let retries = restartOptions.restartOnFailureRetries {
             // Custom retry count on failure
             return .with {
                 $0.mode = .onFailure
                 $0.onFailureMaxRetries = Int32(retries)
             }
-        } else if restartUnlessStoppedFlag {
+        } else if restartOptions.restartUnlessStoppedFlag {
             // Restart unless explicitly stopped
             return .with { $0.mode = .unlessStopped }
         } else if deploy {
@@ -146,25 +167,37 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             // Validate flags before proceeding
             try validate()
 
-            try await BuildCommand(
-                debug: debug,
-                autoAccept: autoAccept,
-                executable: executable,
-                agentConnectionOptions: agentConnectionOptions
-            ).withContainer(
-                restartPolicy: buildRestartPolicy(),
-                userArgs: userPassthroughArgs
-            ) { appName, client, endpoint in
-                cliOutput.info("Starting container on \(endpoint.host)")
-                try await AppBuildHelpers.executePhase(
-                    phase: "start_container",
-                    commandName: "wendy run"
-                ) {
-                    try await startContainerdContainer(
-                        imageName: appName.name,
-                        client: client,
-                        hostname: endpoint.host
+            var command = BuildCommand()
+            command.autoAccept = shouldAutoAccept
+            command.target = target
+            command.executable = executable
+            command.target = target
+            try await command.withContainer(
+                restartPolicy: buildRestartPolicy()
+            ) { builtApp in
+                cliOutput.info("Starting app on \(builtApp.endpoint.description)")
+                switch builtApp.app {
+                case .localExecutable(let path):
+                    _ = try await Subprocess.run(
+                        Subprocess.Executable.path(FilePath(path)),
+                        arguments: [],
+                        output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                        error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
                     )
+                case .dockerDesktop(let container):
+                    let docker = DockerCLI()
+                    try await docker.run(name: container, detach: detach, )
+                case .agent(let client, let appName):
+                    try await AppBuildHelpers.executePhase(
+                        phase: "start_container",
+                        commandName: "wendy run"
+                    ) {
+                        try await startContainerdContainer(
+                            imageName: appName,
+                            client: client,
+                            endpoint: builtApp.endpoint
+                        )
+                    }
                 }
             }
         }
@@ -219,7 +252,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     func startContainerdContainer(
         imageName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>,
-        hostname: String
+        endpoint: TargetOptions.Endpoint
     ) async throws {
         let logger = Logger(label: "sh.wendy.cli.run.containerd.start")
         let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
@@ -239,11 +272,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                     case .started:
                         if debug {
                             cliOutput.success(
-                                "Started app \(imageName) on \(hostname) with debug port 4242"
+                                "Started app \(imageName) on \(endpoint) with debug port 4242"
                             )
                         } else {
                             cliOutput.success(
-                                "Started app \(imageName) on \(hostname)"
+                                "Started app \(imageName) on \(endpoint)"
                             )
                         }
 

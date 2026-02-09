@@ -41,7 +41,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     var passthroughArgs: [String] = []
 
     @OptionGroup
-    var agentConnectionOptions: AgentConnectionOptions
+    var target: TargetOptions
 
     init() {}
 
@@ -68,21 +68,22 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e"
     }
 
-    /// CLI args after `--`, with the separator itself filtered out.
-    var userPassthroughArgs: [String] {
-        passthroughArgs.filter { $0 != "--" }
-    }
+    struct BuiltAppContext: Sendable {
+        let app: BuiltApp
+        let endpoint: TargetOptions.Endpoint
 
-    struct BuiltApp: Sendable {
-        let name: String
+        enum BuiltApp: Sendable {
+            case dockerDesktop(container: String)
+            case localExecutable(path: String)
+            case agent(GRPCClient<GRPCTransport>, appName: String)
+        }
     }
 
     func run() async throws {
         try await withErrorTracking {
             try await withContainer(
-                restartPolicy: .with { $0.mode = .no },
-                userArgs: userPassthroughArgs
-            ) { _, _, _ in
+                restartPolicy: .with { $0.mode = .no }
+            ) { _ in
                 cliOutput.success("Build complete! Run 'wendy run' to start the app.")
             }
         }
@@ -93,7 +94,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         userArgs: [String] = [],
         perform:
             @Sendable @escaping (
-                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+                BuiltAppContext
             ) async throws -> Void
     ) async throws {
         let currentPath = FileManager.default.currentDirectoryPath
@@ -231,7 +232,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         userArgs: [String] = [],
         perform:
             @Sendable @escaping (
-                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+                BuiltAppContext
             ) async throws -> Void
     ) async throws {
         try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
@@ -242,71 +243,102 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let docker = DockerCLI()
         let dockerContext = await docker.currentContext()
 
-        try await withAgentGRPCClientAndEndpoint(
-            agentConnectionOptions,
-            title: "Which device do you want to build this app for?"
-        ) { [name, dockerContext, userArgs] client, endpoint in
-            // Build additional properties for analytics
-            var buildPhaseProperties: [String: String] = [:]
-            if let dockerContext {
-                buildPhaseProperties["docker_context"] = dockerContext
-            }
-
-            // Create buildx builder with insecure registry support
+        let target = try await target.read(
+            title: "Which device do you want to build this app for?",
+            includeLocal: true
+        )
+        switch target {
+        case .local:
+            cliOutput.warning("Dockerfile cannot run directly on a local machine.")
+            cliOutput.info("Falling back to Docker Desktop.")
+            fallthrough
+        case .docker:
             try await AppBuildHelpers.executePhase(
-                phase: "builder_setup",
+                phase: "build",
                 commandName: "wendy build",
-                additionalProperties: buildPhaseProperties
+                additionalProperties: [:]
             ) {
-                try await cliOutput.withProgress(
-                    message: "Preparing builder",
-                    successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder"
-                ) {
-                    try await docker.prepareBuildxBuilder(
-                        registryHostname: endpoint.host,
-                        registryPort: 5000
-                    )
-                }
-            }
-
-            // Build and push in a single operation for better performance
-            try await AppBuildHelpers.executePhase(
-                phase: "build_upload",
-                commandName: "wendy build",
-                additionalProperties: buildPhaseProperties
-            ) {
-                try await docker.buildxAndPush(
-                    name: name,
-                    registryHostname: endpoint.host,
-                    registryPort: 5000
-                )
-                cliOutput.success("Container built and uploaded successfully!")
-            }
-
-            try await AppBuildHelpers.executePhase(
-                phase: "prepare_container",
-                commandName: "wendy build"
-            ) {
-                try await cliOutput.withLabeledProgressBar(
-                    message: "Unpacking image on device"
-                ) { updateProgress in
-                    try await AppBuildHelpers.createContainerdContainer(
-                        appName: name,
-                        client: client,
-                        restartPolicy: restartPolicy,
-                        userArgs: userArgs,
-                        progress: updateProgress
-                    )
-                }
-                cliOutput.success("App ready")
+                try await docker.build(name: name)
             }
 
             try await perform(
-                BuiltApp(name: name),
-                client,
-                endpoint
+                BuiltAppContext(
+                    app: .dockerDesktop(container: name),
+                    endpoint: .init(remote: .docker)
+                )
             )
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "Bluetooth connections not supported for uploading apps yet"
+            )
+        case .lan(let host, let port, defaultDevice: _):
+            try await withAgentGRPCClient(
+                host: host,
+                port: port,
+                title: "Which device do you want to build this app for?"
+            ) { [name, dockerContext] client in
+                // Build additional properties for analytics
+                var buildPhaseProperties: [String: String] = [:]
+                if let dockerContext {
+                    buildPhaseProperties["docker_context"] = dockerContext
+                }
+
+                // Create buildx builder with insecure registry support
+                try await AppBuildHelpers.executePhase(
+                    phase: "builder_setup",
+                    commandName: "wendy build",
+                    additionalProperties: buildPhaseProperties
+                ) {
+                    try await cliOutput.withProgress(
+                        message: "Preparing builder",
+                        successMessage: "Builder ready",
+                        errorMessage: "Failed to create builder"
+                    ) {
+                        try await docker.prepareBuildxBuilder(
+                            registryHostname: host,
+                            registryPort: 5000
+                        )
+                    }
+                }
+
+                // Build and push in a single operation for better performance
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_upload",
+                    commandName: "wendy build",
+                    additionalProperties: buildPhaseProperties
+                ) {
+                    try await docker.buildxAndPush(
+                        name: name,
+                        registryHostname: host,
+                        registryPort: 5000
+                    )
+                    cliOutput.success("Container built and uploaded successfully!")
+                }
+
+                try await AppBuildHelpers.executePhase(
+                    phase: "prepare_container",
+                    commandName: "wendy build"
+                ) {
+                    try await cliOutput.withLabeledProgressBar(
+                        message: "Unpacking image on device"
+                    ) { updateProgress in
+                        try await AppBuildHelpers.createContainerdContainer(
+                            appName: name,
+                            client: client,
+                            restartPolicy: restartPolicy,
+                            progress: updateProgress
+                        )
+                    }
+                    cliOutput.success("App ready")
+                }
+
+                try await perform(
+                    BuiltAppContext(
+                        app: .agent(client, appName: name),
+                        endpoint: TargetOptions.Endpoint(host: host, port: port)
+                    )
+                )
+            }
         }
     }
 
@@ -315,7 +347,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         userArgs: [String] = [],
         perform:
             @Sendable @escaping (
-                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+                BuiltAppContext
             ) async throws -> Void
     ) async throws {
         try await AppBuildHelpers.checkSwiftRequirements(
@@ -375,46 +407,34 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             }
         }
 
-        let containerPluginURL = "https://github.com/apple/swift-container-plugin.git"
-        let requiredContainerPluginVersion = "1.3.0"
-        let pluginSupportsBacktrace: Bool
-        if let containerPluginVersion {
-            // Plugin exists, check version
-            if !SwiftPM.isVersion(containerPluginVersion, atLeast: requiredContainerPluginVersion) {
-                cliOutput.warning(
-                    "swift-container-plugin version \(containerPluginVersion) is installed, but version \(requiredContainerPluginVersion) or higher is recommended"
+        func checkContainerPlugin() async throws {
+            if !hasContainerPlugin {
+                cliOutput.info(
+                    "Container plugin is not installed. Do you want to install it?"
                 )
-                pluginSupportsBacktrace = false
-            } else {
-                pluginSupportsBacktrace = true
-            }
-        } else {
-            cliOutput.info(
-                "Container plugin is not installed. Do you want to install it?"
-            )
 
-            let accepted: Bool
-            if shouldAutoAccept {
-                accepted = true
-            } else {
-                accepted = try await cliOutput.yesOrNoPrompt(
-                    question: "Do you want to install it?",
-                    defaultAnswer: true
+                let accepted: Bool
+                if shouldAutoAccept {
+                    accepted = true
+                } else {
+                    accepted = try await cliOutput.yesOrNoPrompt(
+                        question: "Do you want to install it?",
+                        defaultAnswer: true
+                    )
+                }
+
+                guard accepted else {
+                    cliOutput.error(
+                        "Container plugin is required to build Swift packages. Please install it manually."
+                    )
+                    return
+                }
+
+                try await swiftPM.addDependency(
+                    url: "https://github.com/apple/swift-container-plugin.git",
+                    from: "1.3.0"
                 )
             }
-
-            guard accepted else {
-                cliOutput.error(
-                    "Container plugin is required to build Swift packages. Please install it manually."
-                )
-                return
-            }
-
-            try await swiftPM.addDependency(
-                url: containerPluginURL,
-                from: requiredContainerPluginVersion
-            )
-            pluginSupportsBacktrace = true
         }
 
         let executableTargets = allExecutables.filter {
@@ -459,144 +479,131 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Use the executable target name for image naming to match what swift container plugin uses
         let appName = executableTarget.name.lowercased()
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let endpoint = try await target.read(
+            title: "Which device do you want to build this app for?",
+            includeLocal: true
+        )
 
-        try await withAgentGRPCClientAndEndpoint(
-            agentConnectionOptions,
-            title: "Which device do you want to build this app for?"
-        ) { client, endpoint in
-            try await AppBuildHelpers.executePhase(
-                phase: "build_swift_app",
-                commandName: "wendy build"
-            ) {
-                var resources: [(source: String, destination: String)] = []
-                var entrypoint: String?
-                let debugArguments = [
-                    "gdbserver",
-                    "0.0.0.0:4242",
-                    "/\(url.lastPathComponent)",
-                ]
-                var arguments: [String] = []
-                var additionalEnv: [String] = []
-                var hasBacktrace = false
+        switch endpoint {
+        case .local:
+            try await swiftPM.build(.product(executableTarget.name))
+            try await perform(
+                BuiltAppContext(
+                    app: .localExecutable(
+                        path: url.appendingPathComponent(".build/debug/\(executableTarget.name)")
+                            .path
+                    ),
+                    endpoint: .init(remote: .local)
+                )
+            )
+        case .docker:
+            // try await checkContainerPlugin()
+            // TODO: Should use https://github.com/apple/swift-container-plugin/pull/152
+            throw CLIError.unsupportedPlatform(
+                reason:
+                    "Docker Desktop targets are not supported for building Swift apps yet. Please let us know you're needing this!"
+            )
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "Bluetooth connections not supported for uploading apps yet"
+            )
+        case .lan(let host, let port, defaultDevice: _):
+            try await checkContainerPlugin()
+            try await withAgentGRPCClient(
+                host: host,
+                port: port,
+                title: "Which device do you want to build this app for?"
+            ) { client in
+                try await AppBuildHelpers.executePhase(
+                    phase: "build_swift_app",
+                    commandName: "wendy build"
+                ) {
+                    var resources: [(source: String, destination: String)] = []
+                    var entrypoint: String?
+                    let debugArguments = [
+                        "gdbserver",
+                        "0.0.0.0:4242",
+                        "/\(url.lastPathComponent)",
+                    ]
+                    var arguments: [String] = []
 
-                // Add swift-backtrace binaries for crash reporting
-                findBacktrace: for binaryName in [
-                    "swift-backtrace-static-linux-arm64",
-                    "swift-backtrace-linux-arm64",
-                ] where pluginSupportsBacktrace {
-                    let destination = "/swift-backtrace"
-                    if let backtraceUrl = Bundle.module.url(
-                        forResource: binaryName,
-                        withExtension: nil
-                    ) {
-                        hasBacktrace = true
-                        resources.append((source: backtraceUrl.path(), destination: destination))
-                        break findBacktrace
-                    }
-                    let backtraceUrl = URL(fileURLWithPath: CommandLine.arguments[0])
-                        .deletingLastPathComponent()
-                        .appending(path: "wendy-agent_wendy.bundle")
-                        .appending(path: "Contents")
-                        .appending(path: "Resources")
-                        .appending(path: "Resources")
-                        .appending(component: binaryName)
-
-                    if FileManager.default.fileExists(atPath: backtraceUrl.path()) {
-                        hasBacktrace = true
-                        resources.append(
-                            (source: backtraceUrl.path(), destination: destination)
-                        )
-                        break findBacktrace
-                    }
-                }
-
-                if hasBacktrace {
-                    additionalEnv.append(
-                        "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
-                    )
-                } else {
-                    cliOutput.warning(
-                        "swift-backtrace binary not found. Crash backtraces will not be available."
-                    )
-                }
-
-                if debug {
-                    let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
-                    // Include the ds2 executable in the container image.
-                    if let url = Bundle.module.url(
-                        forResource: ds2BinaryName,
-                        withExtension: nil
-                    ) {
-                        resources.append((source: url.path(), destination: "/bin/ds2"))
-                        entrypoint = "/bin/ds2"
-                        arguments = debugArguments
-                    } else {
-                        let url = URL(fileURLWithPath: CommandLine.arguments[0])
-                            .deletingLastPathComponent()
-                            .appending(path: "wendy-agent_wendy.bundle")
-                            .appending(path: "Contents")
-                            .appending(path: "Resources")
-                            .appending(path: "Resources")
-                            .appending(component: ds2BinaryName)
-
-                        if FileManager.default.fileExists(atPath: url.path()) {
+                    if debug {
+                        let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
+                        // Include the ds2 executable in the container image.
+                        if let url = Bundle.module.url(
+                            forResource: ds2BinaryName,
+                            withExtension: nil
+                        ) {
                             resources.append((source: url.path(), destination: "/bin/ds2"))
                             entrypoint = "/bin/ds2"
                             arguments = debugArguments
                         } else {
-                            cliOutput.warning(
-                                "ds2 binary not found. Debugging will not be available."
-                            )
+                            let url = URL(fileURLWithPath: CommandLine.arguments[0])
+                                .deletingLastPathComponent()
+                                .appending(path: "wendy-agent_wendy.bundle")
+                                .appending(path: "Contents")
+                                .appending(path: "Resources")
+                                .appending(path: "Resources")
+                                .appending(component: ds2BinaryName)
+
+                            if FileManager.default.fileExists(atPath: url.path()) {
+                                resources.append((source: url.path(), destination: "/bin/ds2"))
+                                entrypoint = "/bin/ds2"
+                                arguments = debugArguments
+                            } else {
+                                cliOutput.warning(
+                                    "ds2 binary not found. Debugging will not be available."
+                                )
+                            }
                         }
                     }
+
+                    // Copy to let for Sendable closure capture
+                    let finalEntrypoint = entrypoint
+                    let finalArguments = arguments
+                    let finalResources = resources
+
+                    try await cliOutput.withStreamingOutputBox(
+                        title: "Building Swift app",
+                        maxLines: 20
+                    ) { emit in
+                        try await swiftPM.buildAndPushContainer(
+                            swiftSDK: swiftSDK,
+                            product: executableTarget,
+                            device: host,
+                            entrypoint: finalEntrypoint,
+                            arguments: finalArguments,
+                            resources: finalResources,
+                            onOutput: emit
+                        )
+                    }
+                    cliOutput.success("Swift app built successfully!")
                 }
 
-                // Copy to let for Sendable closure capture
-                let finalEntrypoint = entrypoint
-                let finalArguments = arguments
-                let finalResources = resources
+                try await AppBuildHelpers.executePhase(
+                    phase: "create_container",
+                    commandName: "wendy build"
+                ) {
+                    try await cliOutput.withLabeledProgressBar(
+                        message: "Unpacking image on device"
+                    ) { updateProgress in
+                        try await AppBuildHelpers.createContainerdContainer(
+                            appName: appName,
+                            client: client,
+                            restartPolicy: restartPolicy,
+                            progress: updateProgress
+                        )
+                    }
+                    cliOutput.success("Container created")
+                }
 
-                try await cliOutput.withStreamingOutputBox(
-                    title: "Building Swift app",
-                    maxLines: 20
-                ) { [additionalEnv] emit in
-                    try await swiftPM.buildAndPushContainer(
-                        swiftSDK: swiftSDK,
-                        product: executableTarget,
-                        device: endpoint.host,
-                        entrypoint: finalEntrypoint,
-                        additionalEnv: additionalEnv,
-                        arguments: finalArguments,
-                        resources: finalResources,
-                        onOutput: emit
+                try await perform(
+                    BuiltAppContext(
+                        app: .agent(client, appName: appName),
+                        endpoint: TargetOptions.Endpoint(host: host, port: port)
                     )
-                }
-                cliOutput.success("Swift app built successfully!")
+                )
             }
-
-            try await AppBuildHelpers.executePhase(
-                phase: "create_container",
-                commandName: "wendy build"
-            ) {
-                try await cliOutput.withLabeledProgressBar(
-                    message: "Unpacking image on device"
-                ) { updateProgress in
-                    try await AppBuildHelpers.createContainerdContainer(
-                        appName: appName,
-                        client: client,
-                        restartPolicy: restartPolicy,
-                        userArgs: userArgs,
-                        progress: updateProgress
-                    )
-                }
-                cliOutput.success("Container created")
-            }
-
-            try await perform(
-                BuiltApp(name: appName),
-                client,
-                endpoint
-            )
         }
     }
 }

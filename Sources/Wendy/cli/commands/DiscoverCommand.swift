@@ -108,7 +108,7 @@ struct DiscoverCommand: AsyncParsableCommand {
                 // Merge devices by name and render as table
                 let grouped = collection.groupedDevices()
                 let headers = ["Name", "Connection", "Interfaces", "Version"]
-                let rows: [[String]] = grouped.map { device in
+                var rows: [[String]] = grouped.map { device in
                     // Build connection info (hostname or RSSI)
                     var connectionParts: [String] = []
                     for iface in device.interfaces {
@@ -134,6 +134,8 @@ struct DiscoverCommand: AsyncParsableCommand {
 
                     return [device.name, connection, interfaces, version]
                 }
+                rows.append(["Local (This Device)", "", "", Version.current])
+                rows.append(["Docker Desktop", "", "", Version.current])
                 return (headers: headers, rows: rows)
             }
 
@@ -275,7 +277,8 @@ extension DevicesCollection {
                 group.addTask {
                     do {
                         return try await withGRPCClient(
-                            AgentConnectionOptions.Endpoint(host: device.hostname, port: 50051),
+                            host: device.hostname,
+                            port: 50051,
                             security: .plaintext
                         ) { client in
                             let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
