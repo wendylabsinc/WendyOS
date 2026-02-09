@@ -25,13 +25,13 @@ struct GA4EventNameSanitizationTests {
     @Test("Names starting with a number get e_ prefix")
     func numberPrefixHandled() async {
         let result = await client.sanitizeEventName("123_event")
-        #expect(result == "e__123_event")
+        #expect(result == "e_123_event")
     }
 
     @Test("Names starting with underscore get e_ prefix")
     func underscorePrefixHandled() async {
         let result = await client.sanitizeEventName("_private_event")
-        #expect(result == "e___private_event")
+        #expect(result == "e__private_event")
     }
 
     @Test("Names are truncated to 40 characters")

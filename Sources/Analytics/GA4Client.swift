@@ -158,7 +158,7 @@ public actor GA4Client {
     func buildPayload(events: [AnalyticsEvent]) -> Data? {
         guard let firstEvent = events.first else { return nil }
 
-        let ga4Events: [[String: Any]] = events.map { event in
+        let ga4Events: [GA4Event] = events.map { event in
             var params: [String: String] = [:]
             for (key, value) in event.properties {
                 params[sanitizeParamName(key)] = truncateParamValue(value)
@@ -167,19 +167,19 @@ public actor GA4Client {
             if params["engagement_time_msec"] == nil {
                 params["engagement_time_msec"] = "100"
             }
-            return [
-                "name": sanitizeEventName(event.event),
-                "params": params,
-            ] as [String: Any]
+            return GA4Event(
+                name: sanitizeEventName(event.event),
+                params: params
+            )
         }
 
-        let payload: [String: Any] = [
-            "client_id": firstEvent.distinctId,
-            "timestamp_micros": toMicroseconds(firstEvent.timestamp),
-            "events": ga4Events,
-        ]
+        let payload = GA4Payload(
+            clientId: firstEvent.distinctId,
+            timestampMicros: toMicroseconds(firstEvent.timestamp),
+            events: ga4Events
+        )
 
-        return try? JSONSerialization.data(withJSONObject: payload)
+        return try? JSONEncoder().encode(payload)
     }
 
     // MARK: - GA4 Compliance Helpers
@@ -221,4 +221,25 @@ public actor GA4Client {
     func truncateParamValue(_ value: String) -> String {
         String(value.prefix(100))
     }
+}
+
+// MARK: - GA4 Payload Types
+
+/// Top-level GA4 Measurement Protocol request body
+struct GA4Payload: Codable, Sendable {
+    let clientId: String
+    let timestampMicros: String
+    let events: [GA4Event]
+
+    enum CodingKeys: String, CodingKey {
+        case clientId = "client_id"
+        case timestampMicros = "timestamp_micros"
+        case events
+    }
+}
+
+/// A single event within a GA4 Measurement Protocol request
+struct GA4Event: Codable, Sendable {
+    let name: String
+    let params: [String: String]
 }
