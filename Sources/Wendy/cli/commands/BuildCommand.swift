@@ -53,8 +53,10 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     }
 
     func run() async throws {
-        try await withContainer { _, _, _ in
-            cliOutput.success("Build complete! Run 'wendy run' to start the app.")
+        try await withErrorTracking {
+            try await withContainer { _, _, _ in
+                cliOutput.success("Build complete! Run 'wendy run' to start the app.")
+            }
         }
     }
 
@@ -64,29 +66,27 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
             ) async throws -> Void
     ) async throws {
-        try await withErrorTracking {
-            let currentPath = FileManager.default.currentDirectoryPath
-            let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
-            let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
+        let currentPath = FileManager.default.currentDirectoryPath
+        let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
+        let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
 
-            for item in directory where isDockerfile(item) {
-                try await withBuiltDockerfileApp(perform: perform)
-                return
-            }
+        for item in directory where isDockerfile(item) {
+            try await withBuiltDockerfileApp(perform: perform)
+            return
+        }
 
-            if isSwiftPackage {
-                try await withBuiltSwiftApp(perform: perform)
-            } else if isPythonProject(directory: directory) {
-                // Python project without Dockerfile - offer to generate one
-                try await generatePythonDockerfileAndBuild()
+        if isSwiftPackage {
+            try await withBuiltSwiftApp(perform: perform)
+        } else if isPythonProject(directory: directory) {
+            // Python project without Dockerfile - offer to generate one
+            try await generatePythonDockerfileAndBuild()
 
-                // Now build as a Dockerfile app
-                try await withBuiltDockerfileApp(perform: perform)
-            } else {
-                cliOutput.error(
-                    "Directory is not a Swift Package, nor can it be built as a docker container"
-                )
-            }
+            // Now build as a Dockerfile app
+            try await withBuiltDockerfileApp(perform: perform)
+        } else {
+            cliOutput.error(
+                "Directory is not a Swift Package, nor can it be built as a docker container"
+            )
         }
     }
 
