@@ -167,16 +167,6 @@ public struct SwiftPM: Sendable {
         #endif
     }
 
-    public func updateDependencies() async throws {
-        let args = arguments(["package", "update"])
-        _ = try await Subprocess.run(
-            .name(executableName),
-            arguments: args,
-            output: .discarded,
-            error: .discarded
-        )
-    }
-
     public func installSDK(
         from url: String,
         checksum: String
