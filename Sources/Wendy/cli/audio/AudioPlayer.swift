@@ -1,6 +1,7 @@
 #if os(macOS)
     import AVFoundation
     import Foundation
+    import os
 
     /// Audio player for streaming PCM audio to Mac speakers
     final class AudioPlayer: @unchecked Sendable {
@@ -9,6 +10,7 @@
         private let format: AVAudioFormat
         private let bufferQueue = DispatchQueue(label: "audio.buffer.queue")
         private var isRunning = false
+        private let logger = Logger(subsystem: "wendy.audio", category: "AudioPlayer")
 
         /// Initialize the audio player with specified format
         /// - Parameters:
@@ -71,7 +73,10 @@
                 let bytesPerFrame = Int(self.format.streamDescription.pointee.mBytesPerFrame)
                 let frameCount = pcmData.count / bytesPerFrame
 
-                guard frameCount > 0 else { return }
+                guard frameCount > 0 else {
+                    self.logger.debug("Skipping audio chunk with no complete frames")
+                    return
+                }
 
                 // Create audio buffer
                 guard
@@ -80,6 +85,7 @@
                         frameCapacity: AVAudioFrameCount(frameCount)
                     )
                 else {
+                    self.logger.error("Failed to create AVAudioPCMBuffer")
                     return
                 }
 
@@ -87,12 +93,16 @@
 
                 // Copy PCM data to buffer - use audioBufferList for interleaved format
                 pcmData.withUnsafeBytes { rawBuffer in
-                    guard let baseAddress = rawBuffer.baseAddress else { return }
+                    guard let baseAddress = rawBuffer.baseAddress else {
+                        self.logger.error("Failed to get base address from PCM data")
+                        return
+                    }
                     
                     // For interleaved format, there should be exactly one buffer
                     let bufferList = buffer.audioBufferList.pointee
                     guard bufferList.mNumberBuffers == 1,
                           let audioData = bufferList.mBuffers.mData else {
+                        self.logger.error("Invalid audio buffer configuration: expected 1 buffer for interleaved format, got \(bufferList.mNumberBuffers)")
                         return
                     }
                     
