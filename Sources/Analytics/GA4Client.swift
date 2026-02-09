@@ -197,7 +197,9 @@ public actor GA4Client {
     /// 40 chars max, alphanumeric + underscores, must start with a letter
     func sanitizeEventName(_ name: String) -> String {
         var sanitized = name.replacingOccurrences(
-            of: "[^a-zA-Z0-9_]", with: "_", options: .regularExpression
+            of: "[^a-zA-Z0-9_]",
+            with: "_",
+            options: .regularExpression
         )
         if let first = sanitized.first, !first.isLetter {
             sanitized = "e_" + sanitized
@@ -208,7 +210,9 @@ public actor GA4Client {
     /// Sanitizes a parameter name: 40 chars max, alphanumeric + underscores
     func sanitizeParamName(_ name: String) -> String {
         let sanitized = name.replacingOccurrences(
-            of: "[^a-zA-Z0-9_]", with: "_", options: .regularExpression
+            of: "[^a-zA-Z0-9_]",
+            with: "_",
+            options: .regularExpression
         )
         return String(sanitized.prefix(40))
     }

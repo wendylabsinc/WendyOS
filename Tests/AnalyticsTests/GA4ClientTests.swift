@@ -147,9 +147,11 @@ struct GA4PayloadStructureTests {
         )
 
         let data = await client.buildPayload(events: [event])
-        let json = try #require(data.flatMap {
-            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-        })
+        let json = try #require(
+            data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+        )
 
         #expect(json["client_id"] as? String == "test-user-id")
         #expect(json["timestamp_micros"] is String)
@@ -174,9 +176,11 @@ struct GA4PayloadStructureTests {
         }
 
         let data = await client.buildPayload(events: events)
-        let json = try #require(data.flatMap {
-            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-        })
+        let json = try #require(
+            data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+        )
 
         let ga4Events = try #require(json["events"] as? [[String: Any]])
         #expect(ga4Events.count == 5)
@@ -191,9 +195,11 @@ struct GA4PayloadStructureTests {
         )
 
         let data = await client.buildPayload(events: [event])
-        let json = try #require(data.flatMap {
-            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-        })
+        let json = try #require(
+            data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+        )
 
         let events = try #require(json["events"] as? [[String: Any]])
         let params = try #require(events[0]["params"] as? [String: String])
