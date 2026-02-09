@@ -7,8 +7,27 @@ import WendyShared
 
 /// Represents the selected device connection type
 enum SelectedDevice: Sendable {
+    case local
+    case docker
     case lan(host: String, port: Int, defaultDevice: Bool)
     case bluetooth(peripheral: Peripheral, address: String)
+
+    init(endpoint: TargetOptions.Endpoint) {
+        switch endpoint.remote {
+        case .local:
+            self = .local
+        case .docker:
+            self = .docker
+        case .grpc(let host, let port):
+            self = .lan(host: host, port: port, defaultDevice: endpoint.defaultDevice)
+        case .bluetooth(let uuid):
+            let peripheral = Peripheral(
+                id: BluetoothDeviceID(uuid),
+                name: "WendyOS Device \(uuid)"
+            )
+            self = .bluetooth(peripheral: peripheral, address: uuid)
+        }
+    }
 
     var isLAN: Bool {
         if case .lan = self { return true }
@@ -28,19 +47,44 @@ enum SelectedDevice: Sendable {
     }
 }
 
-struct AgentConnectionOptions: ParsableArguments {
-    struct Endpoint: ExpressibleByArgument {
-        let host: String
-        var port: Int
+struct TargetOptions: ParsableArguments {
+    struct Endpoint: ExpressibleByArgument, CustomStringConvertible, Sendable {
+        enum Remote: Sendable, Equatable {
+            case local
+            case docker
+            case grpc(host: String, port: Int)
+            case bluetooth(uuid: String)
+        }
+
+        var remote: Remote
         var defaultDevice: Bool
 
+        init(remote: Remote, defaultDevice: Bool = false) {
+            self.remote = remote
+            self.defaultDevice = defaultDevice
+        }
+
         init(host: String, port: Int, defaultDevice: Bool = false) {
-            self.host = host
-            self.port = port
+            self.remote = .grpc(host: host, port: port)
             self.defaultDevice = defaultDevice
         }
 
         init?(argument: String) {
+            if argument == "local" {
+                self.remote = .local
+                self.defaultDevice = false
+                return
+            }
+            if argument == "docker" {
+                self.remote = .docker
+                self.defaultDevice = false
+                return
+            }
+            if let uuid = UUID(uuidString: argument) {
+                self.remote = .bluetooth(uuid: uuid.uuidString)
+                self.defaultDevice = false
+                return
+            }
             // Create a dummy URL to use URLComponents parsing capabilities
             var urlString = argument
             let hasScheme = urlString.contains("://")
@@ -66,8 +110,7 @@ struct AgentConnectionOptions: ParsableArguments {
                 cleanHost = String(cleanHost.dropFirst().dropLast())
             }
 
-            self.host = cleanHost
-            self.port = components.port ?? 50051
+            self.remote = .grpc(host: cleanHost, port: components.port ?? 50051)
             self.defaultDevice = false
         }
 
@@ -75,15 +118,27 @@ struct AgentConnectionOptions: ParsableArguments {
             "localhost:50051"
         }
 
-        var description: String {
-            "\(host):\(port)"
+        public var description: String {
+            switch remote {
+            case .local:
+                return "Local (This Device)"
+            case .docker:
+                return "Docker Container"
+            case .grpc(let host, let port):
+                return "\(host):\(port)"
+            case .bluetooth(let uuid):
+                return uuid
+            }
         }
     }
 
     @Option(
         name: .shortAndLong,
         help:
-            "The host and port of the Wendy Agent to connect to (format: host or host:port). IPv6 addresses must be enclosed in square brackets, e.g. [2001:db8::1] or [2001:db8::1]:8080. Defaults to the `WENDY_AGENT` environment variable."
+            """
+            The host (and optional port) of the WendyOS Agent to connect to (format: host or host:port).
+            IPv6 addresses must be enclosed in square brackets, e.g. [2001:db8::1] or [2001:db8::1]:50051.
+            """
     )
     var device: Endpoint?
 
@@ -148,37 +203,40 @@ struct AgentConnectionOptions: ParsableArguments {
             return [interfaceLabel, details]
         }
 
-        cliOutput.table(
-            headers: ["Interface", "Details"],
-            rows: rows
-        )
+        if !rows.isEmpty {
+            cliOutput.table(
+                headers: ["Interface", "Details"],
+                rows: rows
+            )
+        }
     }
 }
 
 // MARK: - Device Selection with Bluetooth Support
 
-extension AgentConnectionOptions {
+extension TargetOptions {
     /// Read device selection, including Bluetooth devices when no LAN devices are available
     /// or when explicitly requested
     func read(
         title: String?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
+        includeLocal: Bool = false,
         includeBluetooth: Bool = true
     ) async throws -> SelectedDevice {
         // If explicit device specified via CLI, use it as LAN
         if let device {
-            return .lan(host: device.host, port: device.port, defaultDevice: false)
+            return SelectedDevice(endpoint: device)
         }
 
         if let endpoint = ProcessInfo.processInfo.environment["WENDY_AGENT"],
             let endpoint = Endpoint(argument: endpoint)
         {
-            return .lan(host: endpoint.host, port: endpoint.port, defaultDevice: false)
+            return SelectedDevice(endpoint: endpoint)
         }
 
         if readDefault, !preferBluetooth, let defaultDevice = Self.defaultDevice() {
-            return .lan(host: defaultDevice.host, port: defaultDevice.port, defaultDevice: true)
+            return SelectedDevice(endpoint: defaultDevice)
         }
 
         // In JSON mode, we cannot use interactive device selection
@@ -201,17 +259,29 @@ extension AgentConnectionOptions {
             }
 
             defer { group.cancelAll() }
-            let emptyDevice = DevicesCollection.GroupedDevice(
-                name: "No device detected yet",
-                interfaces: []
-            )
+            var initial = [DevicesCollection.GroupedDevice]()
+            if includeLocal {
+                initial.append(.local)
+                initial.append(.docker)
+            } else {
+                initial.append(
+                    DevicesCollection.GroupedDevice(
+                        name: "No device detected yet",
+                        interfaces: []
+                    )
+                )
+            }
             return try await cliOutput.selectFromStreamingTable(
-                initial: [emptyDevice],
+                initial: initial,
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
-                    if collection.isEmpty {
-                        return [emptyDevice]
+                    var devices = collection.groupedDevices()
+
+                    if includeLocal {
+                        devices.append(.local)
+                        devices.append(.docker)
                     }
-                    return collection.groupedDevices().filter { device in
+
+                    return devices.sorted().filter { device in
                         let interfaces = device.interfaces.map(\.type)
                         if interfaces.contains(.lan) {
                             return true
@@ -219,7 +289,7 @@ extension AgentConnectionOptions {
                         if interfaces.contains(.bluetooth), includeBluetooth {
                             return true
                         }
-                        return false
+                        return device.isLocalhost || device.isDocker
                     }
                 },
                 pageSize: 20,
@@ -240,6 +310,11 @@ extension AgentConnectionOptions {
         }
 
         printDeviceDetails(device)
+        if device.isLocalhost {
+            return .local
+        } else if device.isDocker {
+            return .docker
+        }
 
         for interface in device.interfaces {
             switch interface {
@@ -256,7 +331,7 @@ extension AgentConnectionOptions {
                 )
                 return .bluetooth(peripheral: peripheral, address: btDevice.address)
             default:
-                continue
+                ()
             }
         }
 

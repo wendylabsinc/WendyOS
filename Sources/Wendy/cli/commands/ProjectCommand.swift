@@ -305,7 +305,7 @@ struct AddCommand: ModifyProjectCommand {
                     newEntitlement = .video(VideoEntitlements(mode: .all))
                 case .allowlist:
                     let devices = try await withAgentGRPCClient(
-                        AgentConnectionOptions(endpoint: nil),
+                        TargetOptions(endpoint: nil),
                         title: "Select a WendyOS device to discover video inputs"
                     ) { client in
                         let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(

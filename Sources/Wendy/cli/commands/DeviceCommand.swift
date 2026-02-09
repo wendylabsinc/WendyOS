@@ -65,11 +65,11 @@ struct DeviceCommand: AsyncParsableCommand {
             let latestVersion: String?
         }
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             let version = try await withAgentGRPCClient(
-                agentConnectionOptions,
+                target,
                 title: "For which device do you want to get the agent version?"
             ) { client in
                 let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
@@ -114,10 +114,10 @@ struct DeviceCommand: AsyncParsableCommand {
             abstract: "Set the default device."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
-            let endpoint = try await agentConnectionOptions.read(
+            let endpoint = try await target.read(
                 title: "Set default device",
                 readDefault: false
             )
@@ -126,7 +126,7 @@ struct DeviceCommand: AsyncParsableCommand {
             switch endpoint {
             case .lan(let host, _, _):
                 config.defaultDevice = host
-            case .bluetooth:
+            case .bluetooth, .local, .docker:
                 ()
             }
             try config.save()
@@ -143,7 +143,7 @@ struct DeviceCommand: AsyncParsableCommand {
             abstract: "Unset the default device."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             var config = getConfig()
@@ -172,7 +172,7 @@ struct DeviceCommand: AsyncParsableCommand {
         @Flag(help: "Download the latest pre-release version instead of stable release")
         var prerelease: Bool = false
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             #if os(Windows)
@@ -209,8 +209,8 @@ struct DeviceCommand: AsyncParsableCommand {
                     ).path
                 }
 
-                let endpoint = try await withAgentGRPCClientAndEndpoint(
-                    agentConnectionOptions,
+                let host = try await withAgentGRPCClientAndEndpoint(
+                    target,
                     title: "Which device do you want to update?"
                 ) { client, endpoint in
                     let agent = Agent(client: client)
@@ -224,7 +224,10 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 // Wait for the gRPC socket to come back up after the device restarts
-                try await waitForDeviceRestart(endpoint: endpoint)
+                try await waitForDeviceRestart(
+                    host: host,
+                    port: 50051
+                )
 
                 cliOutput.success("Agent updated successfully")
             #endif
@@ -237,7 +240,7 @@ struct DeviceCommand: AsyncParsableCommand {
             abstract: "Setup the Wendy agent."
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withCloudGRPCClient(title: "Setup agent") { cloudClient in
@@ -269,7 +272,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     metadata: cloudClient.metadata
                 )
 
-                try await withAgentClient(agentConnectionOptions, title: "Provisioning device") {
+                try await withAgentClient(target, title: "Provisioning device") {
                     agent in
                     switch agent {
                     case .grpc(let client):
@@ -292,7 +295,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     try Task.checkCancellation()
                     do {
                         return try await withAgentClient(
-                            agentConnectionOptions,
+                            target,
                             title: "Checking agent status"
                         ) { agent in
                             try await agent.getWiFiStatus()
@@ -304,7 +307,7 @@ struct DeviceCommand: AsyncParsableCommand {
             }
 
             let shouldWaitForRestart = try await withAgentClientAndHostname(
-                agentConnectionOptions,
+                target,
                 title: "Listing available WiFi networks"
             ) { agent, hostname -> Bool in
                 let setupWifi = try await cliOutput.yesOrNoPrompt(
@@ -369,18 +372,15 @@ struct DeviceCommand: AsyncParsableCommand {
             if shouldWaitForRestart {
                 // Get the endpoint to wait for device restart
                 // The device is now provisioned, so this will connect via mTLS on the proper port
-                let endpoint = try await agentConnectionOptions.read(
+                let endpoint = try await target.read(
                     title: "Waiting for device",
                     includeBluetooth: false
                 )
 
-                if case .lan(let host, let port, let defaultDevice) = endpoint {
+                if case .lan(let host, let port, _) = endpoint {
                     try await waitForDeviceRestart(
-                        endpoint: AgentConnectionOptions.Endpoint(
-                            host: host,
-                            port: port,
-                            defaultDevice: defaultDevice
-                        )
+                        host: host,
+                        port: port
                     )
                 }
 

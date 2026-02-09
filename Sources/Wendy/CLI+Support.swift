@@ -39,7 +39,8 @@ public func withErrorTracking(
 /// Returns true if the user chose to update and the update was initiated.
 func promptDeviceUpdateIfUnimplemented(
     error: any Error,
-    endpoint: AgentConnectionOptions.Endpoint
+    host: String,
+    port: Int
 ) async -> Bool {
     guard let rpcError = error as? RPCError,
         rpcError.code == .unimplemented
@@ -87,7 +88,11 @@ func promptDeviceUpdateIfUnimplemented(
             // Download and apply the update
             let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
 
-            try await withAgentGRPCClient(endpoint, title: "Updating device") { client in
+            try await withAgentGRPCClient(
+                host: host,
+                port: port,
+                title: "Updating device"
+            ) { client in
                 let agent = Agent(client: client)
                 _ = try await cliOutput.withProgressBar(message: "Updating Device") {
                     updateProgress in
@@ -96,7 +101,10 @@ func promptDeviceUpdateIfUnimplemented(
             }
 
             // Wait for the device to restart
-            try await waitForDeviceRestart(endpoint: endpoint)
+            try await waitForDeviceRestart(
+                host: host,
+                port: port
+            )
 
             cliOutput.success("Device updated successfully. Please try your command again.")
             return true

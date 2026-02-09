@@ -30,11 +30,11 @@ struct AppsCommand: AsyncParsableCommand {
         )
         var purgeImage: Bool = false
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClientAndHostname(
-                agentConnectionOptions,
+                target,
                 title: "Removing application"
             ) { client, hostname in
                 try await client.removeApp(name: appName, purgeImage: purgeImage)
@@ -57,11 +57,11 @@ struct AppsCommand: AsyncParsableCommand {
         @Argument(help: "Application name used when the app was created")
         var appName: String
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClientAndHostname(
-                agentConnectionOptions,
+                target,
                 title: "Starting application"
             ) { client, hostname in
                 try await client.startApp(name: appName)
@@ -79,11 +79,11 @@ struct AppsCommand: AsyncParsableCommand {
         @Argument(help: "Application name used when the app was created")
         var appName: String
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClientAndHostname(
-                agentConnectionOptions,
+                target,
                 title: "Stopping application"
             ) { client, hostname in
                 try await client.stopApp(name: appName)
@@ -98,11 +98,11 @@ struct AppsCommand: AsyncParsableCommand {
             abstract: "List applications on the device"
         )
 
-        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+        @OptionGroup var target: TargetOptions
 
         func run() async throws {
             try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "Listing applications"
             ) { client in
                 let apps = try await client.listApps()

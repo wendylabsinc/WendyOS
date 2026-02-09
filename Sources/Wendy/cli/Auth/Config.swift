@@ -294,12 +294,9 @@ func setupConfig(
 ) async throws -> Config.Auth {
     var config = getConfig()
 
-    let endpoint = AgentConnectionOptions.Endpoint(
-        host: cloudGRPC,
-        port: 50051
-    )
     let auth = try await withGRPCClient(
-        endpoint,
+        host: cloudGRPC,
+        port: 50051,
         security: .plaintext
     ) { client in
         let client = CloudGRPCClient(

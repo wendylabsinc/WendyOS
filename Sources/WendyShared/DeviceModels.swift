@@ -106,6 +106,8 @@ public struct DevicesCollection: Encodable, Sendable {
 
     public struct GroupedDevice: Sendable, Hashable, CustomStringConvertible, Comparable {
         public let name: String
+        public let isLocalhost: Bool
+        public let isDocker: Bool
         public let interfaces: [InterfaceInfo]
 
         public var description: String {
@@ -119,9 +121,44 @@ public struct DevicesCollection: Encodable, Sendable {
         public init(name: String, interfaces: [InterfaceInfo]) {
             self.name = name
             self.interfaces = interfaces
+            self.isLocalhost = false
+            self.isDocker = false
         }
 
+        internal init(
+            name: String,
+            interfaces: [InterfaceInfo],
+            isLocalhost: Bool,
+            isDocker: Bool
+        ) {
+            self.name = name
+            self.interfaces = interfaces
+            self.isLocalhost = isLocalhost
+            self.isDocker = isDocker
+        }
+
+        public static let local = GroupedDevice(
+            name: "Local (This Device)",
+            interfaces: [],
+            isLocalhost: true,
+            isDocker: false
+        )
+
+        public static let docker = GroupedDevice(
+            name: "Docker Desktop",
+            interfaces: [],
+            isLocalhost: false,
+            isDocker: true
+        )
+
         public static func < (lhs: GroupedDevice, rhs: GroupedDevice) -> Bool {
+            if lhs.isLocalhost != rhs.isLocalhost {
+                return lhs.isLocalhost
+            }
+            if lhs.isDocker != rhs.isDocker {
+                return lhs.isDocker
+            }
+
             return lhs.name < rhs.name
         }
     }

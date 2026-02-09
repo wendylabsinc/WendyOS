@@ -225,8 +225,7 @@ public struct SwiftPM: Sendable {
 
     /// Build the Swift package.
     public func buildWithOutput(_ options: BuildOption...) async throws -> String {
-        let version = swiftVersion.map { ["+\($0)"] } ?? []
-        let allArgs = arguments(["build"] + version + options.flatMap(\.arguments))
+        let allArgs = arguments(["build"] + options.flatMap(\.arguments))
 
         let result = try await Subprocess.run(
             .name(executableName),
@@ -254,9 +253,8 @@ public struct SwiftPM: Sendable {
 
     /// Build the Swift package.
     public func build(_ options: BuildOption...) async throws {
-        let version = swiftVersion.map { [$0] } ?? []
         let allArgs = arguments(
-            ["build"] + version + options.flatMap(\.arguments)
+            ["build"] + options.flatMap(\.arguments)
         )
 
         let result = try await cliOutput.withProgress(

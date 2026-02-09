@@ -42,7 +42,7 @@ struct DashboardCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Filter logs by app/container name")
     var app: String?
 
-    @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+    @OptionGroup var target: TargetOptions
 
     func run() async throws {
         let dashboard = Dashboard()
@@ -64,7 +64,7 @@ struct DashboardCommand: AsyncParsableCommand {
             group.addTask {
                 while !Task.isCancelled {
                     do {
-                        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
+                        try await withAgentGRPCClient(target, title: "") { client in
                             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                                 wrapping: client
                             )
@@ -100,7 +100,7 @@ struct DashboardCommand: AsyncParsableCommand {
             group.addTask { [service, app] in
                 while !Task.isCancelled {
                     do {
-                        try await withAgentGRPCClient(agentConnectionOptions, title: "") { client in
+                        try await withAgentGRPCClient(target, title: "") { client in
                             let telemetry = Wendy_Agent_Services_V1_WendyTelemetryService.Client(
                                 wrapping: client
                             )

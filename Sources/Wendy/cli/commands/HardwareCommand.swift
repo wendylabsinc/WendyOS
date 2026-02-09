@@ -15,14 +15,14 @@ struct HardwareCommand: AsyncParsableCommand {
     )
     var category: String?
 
-    @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+    @OptionGroup var target: TargetOptions
 
     func run() async throws {
         let logger = Logger(label: "hardware.discovery")
 
         do {
             let capabilities = try await withAgentClient(
-                agentConnectionOptions,
+                target,
                 title: "For which device do you want to discover hardware?"
             ) { client in
                 try await client.listHardware(categoryFilter: category)
