@@ -382,7 +382,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 var additionalEnv: [String] = []
 
                 // Add swift-backtrace binaries for crash reporting
-                var backtraceFound = false
                 findBacktrace: for binaryName in [
                     "swift-backtrace-static-linux-arm64",
                     "swift-backtrace-linux-arm64",
@@ -393,7 +392,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                         withExtension: nil
                     ) {
                         resources.append((source: backtraceUrl.path(), destination: destination))
-                        backtraceFound = true
+                        additionalEnv.append(
+                            "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
+                        )
                         break findBacktrace
                     }
                     let backtraceUrl = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -408,19 +409,11 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                         resources.append(
                             (source: backtraceUrl.path(), destination: destination)
                         )
-                        backtraceFound = true
+                        additionalEnv.append(
+                            "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
+                        )
                         break findBacktrace
                     }
-                }
-
-                if backtraceFound {
-                    additionalEnv.append(
-                        "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
-                    )
-                } else {
-                    cliOutput.warning(
-                        "swift-backtrace binary not found. Backtraces may not be available."
-                    )
                 }
 
                 if debug {

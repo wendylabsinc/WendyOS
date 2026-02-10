@@ -636,7 +636,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
                 if !hasOlderContainerPluginVersion {
                     // Add swift-backtrace binaries for crash reporting
-                    for binaryName in [
+                    findBacktrace: for binaryName in [
                         "swift-backtrace-static-linux-arm64",
                         "swift-backtrace-linux-arm64",
                     ] {
@@ -651,6 +651,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                             additionalEnv.append(
                                 "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
                             )
+                            break findBacktrace
                         } else {
                             let backtraceUrl = URL(fileURLWithPath: CommandLine.arguments[0])
                                 .deletingLastPathComponent()
@@ -667,10 +668,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                                 additionalEnv.append(
                                     "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
                                 )
-                            } else {
-                                cliOutput.warning(
-                                    "\(binaryName) not found. Backtraces may not be available."
-                                )
+                                break findBacktrace
                             }
                         }
                     }
