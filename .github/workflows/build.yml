@@ -171,7 +171,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: joannis/swift-nio
-          ref: jo/winsock-fixes
+          ref: 3b99cc49dd9ed80fe3f9a0ecc4088ea7fdd4ab8c
           path: swift-nio
 
       - name: Checkout Custom SwiftNIO-SSL
