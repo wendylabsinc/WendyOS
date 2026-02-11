@@ -3,7 +3,6 @@
     import Logging
     import NIOCore
     import Subprocess
-    import SwiftMDNS
 
     public struct PlatformDeviceDiscovery: DeviceDiscovery {
         private let logger: Logger
@@ -197,8 +196,6 @@
             _ handler: (LANDevice) async throws -> Void
         ) async throws {
             let mdnsLogger = Logger(label: "sh.wendy.mdns")
-            let client = MDNSClient(logger: mdnsLogger)
-            defer { client.shutdown() }
 
             let timeoutSeconds = Int64(timeout.nanoseconds / 1_000_000_000)
             let browseTimeout: Duration = .seconds(timeoutSeconds)
@@ -209,9 +206,10 @@
             )
 
             var seen: Set<String> = []
-            for await entry in client.browse(
-                serviceType: "_wendyos._udp.local",
-                timeout: browseTimeout
+            for await entry in MdnsBrowser.browse(
+                serviceType: "_wendyos._udp.local.",
+                timeout: browseTimeout,
+                logger: mdnsLogger
             ) {
                 let displayName =
                     entry.text["displayname"]
