@@ -1,8 +1,13 @@
 #if os(Linux)
     import CMdns
     import Foundation
-    import Glibc
     import Logging
+
+    #if canImport(Glibc)
+        import Glibc
+    #elseif canImport(Musl)
+        import Musl
+    #endif
 
     /// A discovered mDNS service entry.
     package struct MdnsServiceEntry: Sendable {
@@ -25,7 +30,7 @@
             AsyncStream { continuation in
                 let task = Task.detached {
                     do {
-                        try await Self.performBrowse(
+                        try Self.performBrowse(
                             serviceType: serviceType,
                             timeout: timeout,
                             logger: logger,
@@ -44,7 +49,6 @@
 
         // MARK: - Internal
 
-        @concurrent
         private static func performBrowse(
             serviceType: String,
             timeout: Duration,
@@ -72,8 +76,8 @@
             // 2. Send PTR queries on all sockets
             var sendBuf = [UInt8](repeating: 0, count: 2048)
             for sock in sockets {
-                serviceType.withCString { cstr in
-                    _ = cmdns_query_send(
+                let result = serviceType.withCString { cstr in
+                    cmdns_query_send(
                         sock,
                         UInt16(CMDNS_RECORDTYPE_PTR),
                         cstr,
@@ -83,50 +87,59 @@
                         0
                     )
                 }
+                if result < 0 {
+                    logger.warning(
+                        "Failed to send PTR query",
+                        metadata: ["socket": "\(sock)"]
+                    )
+                }
             }
 
-            // 3. poll() loop with timeout
+            // 3. Recv loop using select()-based waiting per socket
             let deadline = ContinuousClock.now + timeout
             var recvBuf = [UInt8](repeating: 0, count: 4096)
             var seen = Set<String>()
 
             // Context for the C callback
             let context = BrowseContext(serviceType: serviceType)
+            let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
 
             while !Task.isCancelled {
                 let remaining = deadline - ContinuousClock.now
                 let remainingMs = Int32(
-                    max(0, remaining.components.seconds * 1000
-                        + remaining.components.attoseconds / 1_000_000_000_000_000))
+                    max(
+                        0,
+                        remaining.components.seconds * 1000
+                            + remaining.components.attoseconds / 1_000_000_000_000_000
+                    )
+                )
                 if remainingMs <= 0 { break }
 
-                var fds = sockets.map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
-                let pollTimeout = min(remainingMs, 500)  // wake every 500ms to check cancellation
-                let ret = poll(&fds, nfds_t(fds.count), pollTimeout)
-
-                if ret <= 0 { continue }
-
-                for i in 0..<fds.count {
-                    guard fds[i].revents & Int16(POLLIN) != 0 else { continue }
-
+                let waitMs = min(remainingMs, 100)
+                for sock in sockets {
                     // Reset context for this packet
                     context.currentPartials.removeAll()
+                    context.hostnameToInstance.removeAll()
 
-                    let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
-                    _ = cmdns_query_recv(
-                        fds[i].fd,
+                    let recvCount = cmdns_query_recv_wait(
+                        sock,
                         &recvBuf,
                         recvBuf.count,
                         recordCallback,
                         ctxPtr,
-                        0  // accept any query ID
+                        0,  // accept any query ID
+                        waitMs
                     )
+
+                    guard recvCount > 0 else { continue }
 
                     // Assemble complete service entries from accumulated records
                     for partial in context.currentPartials.values {
                         guard let hostname = partial.hostname,
                             let port = partial.port
-                        else { continue }
+                        else {
+                            continue
+                        }
 
                         let key = "\(partial.name).\(hostname)"
                         guard !seen.contains(key) else { continue }
@@ -190,28 +203,45 @@
                 if sa.pointee.sa_family == UInt16(AF_INET) {
                     var addr = sockaddr_in()
                     memcpy(&addr, sa, MemoryLayout<sockaddr_in>.size)
-                    let sock = withUnsafePointer(to: &addr) { ptr in
-                        cmdns_socket_open_ipv4(ptr)
+                    // Bind to mDNS port so we receive multicast responses
+                    addr.sin_port = UInt16(5353).bigEndian
+                    // Use interface-aware open to ensure multicast goes out the right interface
+                    let sock = name.withCString { ifname in
+                        withUnsafePointer(to: &addr) { ptr in
+                            cmdns_socket_open_ipv4_iface(ptr, ifname)
+                        }
                     }
                     if sock >= 0 {
-                        logger.trace(
+                        logger.debug(
                             "Opened IPv4 mDNS socket",
-                            metadata: ["interface": "\(name)"]
+                            metadata: ["interface": "\(name)", "fd": "\(sock)"]
                         )
                         sockets.append(sock)
+                    } else {
+                        logger.warning(
+                            "Failed to open IPv4 socket",
+                            metadata: ["interface": "\(name)"]
+                        )
                     }
                 } else if sa.pointee.sa_family == UInt16(AF_INET6) {
                     var addr = sockaddr_in6()
                     memcpy(&addr, sa, MemoryLayout<sockaddr_in6>.size)
+                    // Bind to mDNS port so we receive multicast responses
+                    addr.sin6_port = UInt16(5353).bigEndian
                     let sock = withUnsafePointer(to: &addr) { ptr in
                         cmdns_socket_open_ipv6(ptr)
                     }
                     if sock >= 0 {
-                        logger.trace(
+                        logger.debug(
                             "Opened IPv6 mDNS socket",
-                            metadata: ["interface": "\(name)"]
+                            metadata: ["interface": "\(name)", "fd": "\(sock)"]
                         )
                         sockets.append(sock)
+                    } else {
+                        logger.warning(
+                            "Failed to open IPv6 socket",
+                            metadata: ["interface": "\(name)"]
+                        )
                     }
                 }
             }
@@ -251,13 +281,28 @@
     /// Extract a Swift String from a cmdns_string_t (non-null-terminated).
     private func extractString(_ s: cmdns_string_t) -> String? {
         guard let ptr = s.str, s.length > 0 else { return nil }
-        return String(bytes: UnsafeBufferPointer(start: ptr, count: s.length), encoding: .utf8)
+        return ptr.withMemoryRebound(to: UInt8.self, capacity: s.length) { ubuf in
+            String(bytes: UnsafeBufferPointer(start: ubuf, count: s.length), encoding: .utf8)
+        }
     }
 
     /// The C callback invoked by cmdns_query_recv for each DNS record.
     private let recordCallback: cmdns_callback_fn = {
-        sock, from, addrlen, entryType, queryId, rtype, rclass, ttl,
-        data, size, nameOffset, nameLength, recordOffset, recordLength, userData
+        sock,
+        from,
+        addrlen,
+        entryType,
+        queryId,
+        rtype,
+        rclass,
+        ttl,
+        data,
+        size,
+        nameOffset,
+        nameLength,
+        recordOffset,
+        recordLength,
+        userData
             -> Int32 in
 
         guard let userData else { return 0 }
@@ -269,13 +314,20 @@
         case Int32(CMDNS_RECORDTYPE_PTR):
             // PTR record data = the instance FQDN (e.g., "mydevice._wendyos._udp.local.")
             let ptr = cmdns_record_parse_ptr(
-                data, size, recordOffset, recordLength, &nameBuf, nameBuf.count)
+                data,
+                size,
+                recordOffset,
+                recordLength,
+                &nameBuf,
+                nameBuf.count
+            )
             guard let fqdn = extractString(ptr) else { return 0 }
 
             // Extract short name: everything before ".<serviceType>"
             let shortName: String
             // Remove trailing dot for comparison
-            let svcType = ctx.serviceType.hasSuffix(".")
+            let svcType =
+                ctx.serviceType.hasSuffix(".")
                 ? String(ctx.serviceType.dropLast()) : ctx.serviceType
             let fqdnClean = fqdn.hasSuffix(".") ? String(fqdn.dropLast()) : fqdn
 
@@ -293,12 +345,23 @@
             // SRV record: extract the record name to find which instance it belongs to
             var nameOfs = nameOffset
             let recordName = cmdns_string_extract(
-                data, size, &nameOfs, &nameBuf, nameBuf.count)
+                data,
+                size,
+                &nameOfs,
+                &nameBuf,
+                nameBuf.count
+            )
             guard let instanceFQDN = extractString(recordName) else { return 0 }
 
             var srvBuf = [CChar](repeating: 0, count: 256)
             let srv = cmdns_record_parse_srv(
-                data, size, recordOffset, recordLength, &srvBuf, srvBuf.count)
+                data,
+                size,
+                recordOffset,
+                recordLength,
+                &srvBuf,
+                srvBuf.count
+            )
             guard let hostname = extractString(srv.name) else { return 0 }
 
             let key =
@@ -313,12 +376,23 @@
             // TXT record: key=value pairs
             var nameOfs = nameOffset
             let recordName = cmdns_string_extract(
-                data, size, &nameOfs, &nameBuf, nameBuf.count)
+                data,
+                size,
+                &nameOfs,
+                &nameBuf,
+                nameBuf.count
+            )
             guard let instanceFQDN = extractString(recordName) else { return 0 }
 
             var txtRecords = [cmdns_txt_t](repeating: cmdns_txt_t(), count: 16)
             let count = cmdns_record_parse_txt(
-                data, size, recordOffset, recordLength, &txtRecords, 16)
+                data,
+                size,
+                recordOffset,
+                recordLength,
+                &txtRecords,
+                16
+            )
 
             let key =
                 instanceFQDN.hasSuffix(".") ? String(instanceFQDN.dropLast()) : instanceFQDN
@@ -335,7 +409,12 @@
             // A record: the record name is the hostname, not the instance
             var nameOfs = nameOffset
             let recordName = cmdns_string_extract(
-                data, size, &nameOfs, &nameBuf, nameBuf.count)
+                data,
+                size,
+                &nameOfs,
+                &nameBuf,
+                nameBuf.count
+            )
             guard let hostname = extractString(recordName) else { return 0 }
             let cleanHost = hostname.hasSuffix(".") ? String(hostname.dropLast()) : hostname
 
@@ -345,7 +424,6 @@
             var addrStr = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             if inet_ntop(AF_INET, &addr.sin_addr, &addrStr, socklen_t(INET_ADDRSTRLEN)) != nil {
                 let ip = String(cString: addrStr)
-                // Find partial by hostname
                 if let instanceKey = ctx.hostnameToInstance[cleanHost],
                     let partial = ctx.currentPartials[instanceKey]
                 {
@@ -356,7 +434,12 @@
         case Int32(CMDNS_RECORDTYPE_AAAA):
             var nameOfs = nameOffset
             let recordName = cmdns_string_extract(
-                data, size, &nameOfs, &nameBuf, nameBuf.count)
+                data,
+                size,
+                &nameOfs,
+                &nameBuf,
+                nameBuf.count
+            )
             guard let hostname = extractString(recordName) else { return 0 }
             let cleanHost = hostname.hasSuffix(".") ? String(hostname.dropLast()) : hostname
 
@@ -364,8 +447,7 @@
             _ = cmdns_record_parse_aaaa(data, size, recordOffset, recordLength, &addr)
 
             var addrStr = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-            if inet_ntop(AF_INET6, &addr.sin6_addr, &addrStr, socklen_t(INET6_ADDRSTRLEN)) != nil
-            {
+            if inet_ntop(AF_INET6, &addr.sin6_addr, &addrStr, socklen_t(INET6_ADDRSTRLEN)) != nil {
                 let ip = String(cString: addrStr)
                 if let instanceKey = ctx.hostnameToInstance[cleanHost],
                     let partial = ctx.currentPartials[instanceKey]

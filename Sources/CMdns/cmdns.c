@@ -105,3 +105,90 @@ cmdns_string_t cmdns_string_extract(const void* buffer, size_t size,
     cmdns_string_t ret = { r.str, r.length };
     return ret;
 }
+
+#include <sys/select.h>
+#include <errno.h>
+
+size_t cmdns_query_recv_wait(int sock, void* buffer, size_t capacity,
+                              cmdns_callback_fn callback, void* user_data,
+                              int query_id, int timeout_ms) {
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(sock, &readfds);
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    int ret = select(sock + 1, &readfds, NULL, NULL, &tv);
+    if (ret <= 0 || !FD_ISSET(sock, &readfds))
+        return 0;
+
+    // Data available — cmdns_query_recv's internal recvfrom will succeed
+    return cmdns_query_recv(sock, buffer, capacity, callback, user_data, query_id);
+}
+
+int cmdns_socket_open_ipv4_iface(const struct sockaddr_in* saddr, const char* ifname) {
+    int sock = (int)socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) return -1;
+
+    unsigned int reuseaddr = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuseaddr, sizeof(reuseaddr));
+#ifdef SO_REUSEPORT
+    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuseaddr, sizeof(reuseaddr));
+#endif
+
+    unsigned char ttl = 1;
+    unsigned char loopback = 1;
+    setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&ttl, sizeof(ttl));
+    setsockopt(sock, IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&loopback, sizeof(loopback));
+
+    // Join multicast group on this interface
+    struct ip_mreq req;
+    memset(&req, 0, sizeof(req));
+    req.imr_multiaddr.s_addr = htonl((((uint32_t)224U) << 24U) | ((uint32_t)251U));
+    if (saddr)
+        req.imr_interface = saddr->sin_addr;
+    if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&req, sizeof(req))) {
+        close(sock);
+        return -1;
+    }
+
+    // Bind socket to a specific network device — ensures multicast goes out this interface.
+    // Requires CAP_NET_RAW or root. Falls back to IP_MULTICAST_IF if unavailable.
+    int bound_to_device = 0;
+    if (ifname) {
+#ifdef SO_BINDTODEVICE
+        if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) == 0) {
+            bound_to_device = 1;
+        }
+#endif
+    }
+
+    if (!bound_to_device && saddr) {
+        // Fallback: try IP_MULTICAST_IF (may fail on musl)
+        setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&saddr->sin_addr,
+                   sizeof(saddr->sin_addr));
+    }
+
+    // Bind to INADDR_ANY (needed to receive multicast)
+    struct sockaddr_in bind_addr;
+    if (saddr) {
+        memcpy(&bind_addr, saddr, sizeof(bind_addr));
+    } else {
+        memset(&bind_addr, 0, sizeof(bind_addr));
+        bind_addr.sin_family = AF_INET;
+    }
+    bind_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr))) {
+        close(sock);
+        return -1;
+    }
+
+    // Non-blocking
+    const int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    return sock;
+}
+
