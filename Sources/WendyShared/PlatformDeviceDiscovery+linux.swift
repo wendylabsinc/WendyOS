@@ -220,10 +220,18 @@
                     ?? entry.text["id"]
                     ?? displayName
 
+                // Prefer a resolved IP address for the gRPC connection host,
+                // because the gRPC DNS resolver (c-ares) can't resolve .local mDNS names.
+                // Prefer non-link-local IPv4, then any IPv4, then hostname as fallback.
+                let connectionHost =
+                    entry.addresses.first(where: { !$0.hasPrefix("fe80:") && $0.contains(".") })
+                    ?? entry.addresses.first(where: { $0.contains(".") })
+                    ?? entry.hostname
+
                 let lanDevice = LANDevice(
                     id: id,
                     displayName: displayName,
-                    hostname: entry.hostname,
+                    hostname: connectionHost,
                     port: Int(entry.port),
                     interfaceType: "LAN",
                     isWendyDevice: true
