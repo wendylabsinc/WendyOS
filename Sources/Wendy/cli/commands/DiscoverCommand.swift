@@ -155,12 +155,17 @@ struct DiscoverCommand: AsyncParsableCommand {
         let sharedContinuation = consume continuation
 
         try? await withThrowingDiscardingTaskGroup { group in
-            // Refresh task: update every second
+            // Refresh task: update every second, but only yield when data changes
             group.addTask {
+                var lastVersion = await deviceCache.version
                 while !Task.isCancelled {
                     try await Task.sleep(for: .seconds(1))
-                    let collection = await deviceCache.currentCollection()
-                    sharedContinuation.yield(collection)
+                    let currentVersion = await deviceCache.version
+                    if currentVersion != lastVersion {
+                        lastVersion = currentVersion
+                        let collection = await deviceCache.currentCollection()
+                        sharedContinuation.yield(collection)
+                    }
                 }
             }
 

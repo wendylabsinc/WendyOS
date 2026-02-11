@@ -1,8 +1,8 @@
 #if os(Linux)
-    import DNSClient
     import NIOCore
     import Foundation
     import Logging
+    import SwiftMDNS
     #if os(Linux)
         import Subprocess
     #endif
@@ -188,63 +188,72 @@
         }
 
         public func findLANDevices() async throws -> [LANDevice] {
-            let dns = try await DNSClient.connectMulticast(
-                on: .singletonMultiThreadedEventLoopGroup
-            ).get()
-            let messages = try await dns.sendMulticastQuery(
-                forHost: "_wendyos._udp.local",
-                type: .any,
-                timeout: timeout
-            ).get()
-            logger.debug(
-                "Going to process answers to multicast query",
-                metadata: ["answers": .stringConvertible(messages.count)]
+            var devices: [LANDevice] = []
+            try await withLANDeviceDiscovery { device in
+                devices.append(device)
+            }
+            return devices
+        }
+
+        public func withLANDeviceDiscovery(
+            _ handler: (LANDevice) async throws -> Void
+        ) async throws {
+            let mdnsLogger = Logger(label: "sh.wendy.mdns")
+            let client = MDNSClient(logger: mdnsLogger)
+            defer { client.shutdown() }
+
+            let timeoutSeconds = Int64(timeout.nanoseconds / 1_000_000_000)
+            let browseTimeout: Duration = .seconds(timeoutSeconds)
+
+            logger.info(
+                "Starting mDNS LAN device discovery",
+                metadata: ["timeout": "\(browseTimeout)"]
             )
 
-            var interfaces: [LANDevice] = []
-            for message in messages {
-                let srv = message.answers.compactMap { answer in
-                    switch answer {
-                    case .srv(let srv):
-                        return srv
-                    default:
-                        return nil
-                    }
-                }.first
-
-                let txt = message.answers.compactMap { answer in
-                    switch answer {
-                    case .txt(let txt):
-                        return txt
-                    default:
-                        return nil
-                    }
-                }.first
-
-                guard let srv = srv else {
-                    logger.debug("Got no SRV answer")
-                    continue
-                }
-
-                let id = txt?.resource.values.values.first ?? "WendyOS Device"
+            var seen: Set<String> = []
+            for await entry in client.browse(
+                serviceType: "_wendyos._udp.local",
+                timeout: browseTimeout
+            ) {
+                let displayName =
+                    entry.text["displayname"]
+                    ?? entry.text["name"]
+                    ?? entry.name
+                let id =
+                    entry.text["wendyosdevice"]
+                    ?? entry.text["id"]
+                    ?? displayName
 
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: id,
-                    hostname: srv.resource.domainName.string,
-                    port: Int(srv.resource.port),
+                    displayName: displayName,
+                    hostname: entry.hostname,
+                    port: Int(entry.port),
                     interfaceType: "LAN",
                     isWendyDevice: true
                 )
 
                 // Prevent duplicates
-                if !interfaces.contains(where: { $0.id == id || $0.hostname == lanDevice.hostname })
-                {
-                    interfaces.append(lanDevice)
-                }
+                let key = lanDevice.hostname
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+
+                logger.info(
+                    "Discovered LAN device",
+                    metadata: [
+                        "id": "\(id)",
+                        "hostname": "\(entry.hostname)",
+                        "port": "\(entry.port)",
+                        "addresses": "\(entry.addresses)",
+                    ]
+                )
+                try await handler(lanDevice)
             }
 
-            return interfaces
+            logger.info(
+                "LAN discovery complete",
+                metadata: ["deviceCount": "\(seen.count)"]
+            )
         }
 
         public func findBluetoothDevices(

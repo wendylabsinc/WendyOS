@@ -17,6 +17,7 @@ import PackageDescription
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
         .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
+        .package(url: "https://github.com/wendylabsinc/swift-mdns.git", revision: "67d01bfae4a1fc136a20503fadf297d7464149a7"),
         .package(
             url: "https://github.com/grpc/grpc-swift-nio-transport.git",
             from: "2.3.0"
@@ -166,6 +167,7 @@ let package = Package(
                 ),
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "DNSClient", package: "DNSClient"),
+                .product(name: "SwiftMDNS", package: "swift-mdns"),
                 .product(name: "Bluetooth", package: "bluetooth"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),

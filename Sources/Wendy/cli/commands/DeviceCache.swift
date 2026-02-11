@@ -52,6 +52,9 @@ actor DeviceCache {
     /// Stale timeout for fast discovery types (LAN/USB/Ethernet)
     private let fastStaleTimeout: Duration = .seconds(30)
 
+    /// Incremented on every data change; used to skip redundant table redraws
+    private(set) var version: Int = 0
+
     /// Tracks the last time each device type was updated
     private var lastBLEUpdateTime: ContinuousClock.Instant = .now
     private var lastFastUpdateTime: ContinuousClock.Instant = .now
@@ -61,16 +64,19 @@ actor DeviceCache {
     /// Update cache with fast discovery results (USB, Ethernet, LAN)
     func updateFastDevices(with collection: DevicesCollection) {
         let now = ContinuousClock.now
+        var changed = false
 
         // Update USB devices
         for device in collection.usbDevices {
             let key = "\(device.vendorId)-\(device.productId)-\(device.serialNumber ?? "")"
+            if usbDevices[key] == nil { changed = true }
             usbDevices[key] = (device, now)
         }
 
         // Update Ethernet devices
         for device in collection.ethernetDevices {
             let key = device.name
+            if ethernetDevices[key] == nil { changed = true }
             ethernetDevices[key] = (device, now)
         }
 
@@ -79,53 +85,78 @@ actor DeviceCache {
             let key = device.hostname
             // Preserve agent version if we already have it
             var updatedDevice = device
-            if let existing = lanDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
+            if let existing = lanDevices[key] {
+                if updatedDevice.agentVersion == nil {
+                    updatedDevice.agentVersion = existing.device.agentVersion
+                } else if updatedDevice.agentVersion != existing.device.agentVersion {
+                    changed = true
+                }
+            } else {
+                changed = true
             }
             lanDevices[key] = (updatedDevice, now)
         }
 
         // Remove stale fast devices
+        let prevCount = usbDevices.count + ethernetDevices.count + lanDevices.count
         removeStaleDevices(olderThan: now)
+        let newCount = usbDevices.count + ethernetDevices.count + lanDevices.count
+        if newCount != prevCount { changed = true }
 
         // Track when fast discovery happened
         lastFastUpdateTime = now
+        if changed { version &+= 1 }
     }
 
     /// Update cache with BLE discovery results
     func updateBLEDevices(with devices: [BluetoothDevice]) {
         let now = ContinuousClock.now
+        var changed = false
 
         for device in devices {
             let key = device.id
             // Preserve agent version if we already have it
             var updatedDevice = device
-            if let existing = bluetoothDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
+            if let existing = bluetoothDevices[key] {
+                if updatedDevice.agentVersion == nil {
+                    updatedDevice.agentVersion = existing.device.agentVersion
+                } else if updatedDevice.agentVersion != existing.device.agentVersion {
+                    changed = true
+                }
+            } else {
+                changed = true
             }
             bluetoothDevices[key] = (updatedDevice, now)
         }
 
         // Remove stale BLE devices
+        let prevCount = bluetoothDevices.count
         removeStaleDevices(olderThan: now)
+        if bluetoothDevices.count != prevCount { changed = true }
 
         // Track when BLE discovery happened
         lastBLEUpdateTime = now
+        if changed { version &+= 1 }
     }
 
     /// Update cache with all device types (for backwards compatibility with JSON streaming)
     func update(with collection: DevicesCollection) {
         let now = ContinuousClock.now
+        let prevTotal =
+            usbDevices.count + ethernetDevices.count + lanDevices.count + bluetoothDevices.count
+        var changed = false
 
         // Update USB devices
         for device in collection.usbDevices {
             let key = "\(device.vendorId)-\(device.productId)-\(device.serialNumber ?? "")"
+            if usbDevices[key] == nil { changed = true }
             usbDevices[key] = (device, now)
         }
 
         // Update Ethernet devices
         for device in collection.ethernetDevices {
             let key = device.name
+            if ethernetDevices[key] == nil { changed = true }
             ethernetDevices[key] = (device, now)
         }
 
@@ -134,8 +165,14 @@ actor DeviceCache {
             let key = device.hostname
             // Preserve agent version if we already have it
             var updatedDevice = device
-            if let existing = lanDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
+            if let existing = lanDevices[key] {
+                if updatedDevice.agentVersion == nil {
+                    updatedDevice.agentVersion = existing.device.agentVersion
+                } else if updatedDevice.agentVersion != existing.device.agentVersion {
+                    changed = true
+                }
+            } else {
+                changed = true
             }
             lanDevices[key] = (updatedDevice, now)
         }
@@ -145,18 +182,28 @@ actor DeviceCache {
             let key = device.id
             // Preserve agent version if we already have it
             var updatedDevice = device
-            if let existing = bluetoothDevices[key], updatedDevice.agentVersion == nil {
-                updatedDevice.agentVersion = existing.device.agentVersion
+            if let existing = bluetoothDevices[key] {
+                if updatedDevice.agentVersion == nil {
+                    updatedDevice.agentVersion = existing.device.agentVersion
+                } else if updatedDevice.agentVersion != existing.device.agentVersion {
+                    changed = true
+                }
+            } else {
+                changed = true
             }
             bluetoothDevices[key] = (updatedDevice, now)
         }
 
         // Remove stale devices
         removeStaleDevices(olderThan: now)
+        let newTotal =
+            usbDevices.count + ethernetDevices.count + lanDevices.count + bluetoothDevices.count
+        if newTotal != prevTotal { changed = true }
 
         // Track when this update happened
         lastFastUpdateTime = now
         lastBLEUpdateTime = now
+        if changed { version &+= 1 }
     }
 
     private func removeStaleDevices(olderThan now: ContinuousClock.Instant) {
