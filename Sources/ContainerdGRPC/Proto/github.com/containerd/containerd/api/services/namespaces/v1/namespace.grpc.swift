@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.namespaces.v1.Namespaces" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Namespaces_V1_Namespaces {
+public enum Containerd_Services_Namespaces_V1_Namespaces: Sendable {
     /// Service descriptor for the "containerd.services.namespaces.v1.Namespaces" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.namespaces.v1.Namespaces")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Get" metadata.
-        public enum Get {
+        public enum Get: Sendable {
             /// Request type for "Get".
             public typealias Input = Containerd_Services_Namespaces_V1_GetNamespaceRequest
             /// Response type for "Get".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Namespaces_V1_Namespaces {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Namespaces_V1_ListNamespacesRequest
             /// Response type for "List".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Namespaces_V1_Namespaces {
             )
         }
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Namespaces_V1_CreateNamespaceRequest
             /// Response type for "Create".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Namespaces_V1_Namespaces {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Namespaces_V1_UpdateNamespaceRequest
             /// Response type for "Update".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Namespaces_V1_Namespaces {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Namespaces_V1_DeleteNamespaceRequest
             /// Response type for "Delete".

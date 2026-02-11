@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.snapshots.v1.Snapshots" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Snapshots_V1_Snapshots {
+public enum Containerd_Services_Snapshots_V1_Snapshots: Sendable {
     /// Service descriptor for the "containerd.services.snapshots.v1.Snapshots" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.snapshots.v1.Snapshots")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Prepare" metadata.
-        public enum Prepare {
+        public enum Prepare: Sendable {
             /// Request type for "Prepare".
             public typealias Input = Containerd_Services_Snapshots_V1_PrepareSnapshotRequest
             /// Response type for "Prepare".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "View" metadata.
-        public enum View {
+        public enum View: Sendable {
             /// Request type for "View".
             public typealias Input = Containerd_Services_Snapshots_V1_ViewSnapshotRequest
             /// Response type for "View".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Mounts" metadata.
-        public enum Mounts {
+        public enum Mounts: Sendable {
             /// Request type for "Mounts".
             public typealias Input = Containerd_Services_Snapshots_V1_MountsRequest
             /// Response type for "Mounts".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Commit" metadata.
-        public enum Commit {
+        public enum Commit: Sendable {
             /// Request type for "Commit".
             public typealias Input = Containerd_Services_Snapshots_V1_CommitSnapshotRequest
             /// Response type for "Commit".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Remove" metadata.
-        public enum Remove {
+        public enum Remove: Sendable {
             /// Request type for "Remove".
             public typealias Input = Containerd_Services_Snapshots_V1_RemoveSnapshotRequest
             /// Response type for "Remove".
@@ -97,7 +97,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Stat" metadata.
-        public enum Stat {
+        public enum Stat: Sendable {
             /// Request type for "Stat".
             public typealias Input = Containerd_Services_Snapshots_V1_StatSnapshotRequest
             /// Response type for "Stat".
@@ -109,7 +109,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Snapshots_V1_UpdateSnapshotRequest
             /// Response type for "Update".
@@ -121,7 +121,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Snapshots_V1_ListSnapshotsRequest
             /// Response type for "List".
@@ -133,7 +133,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Usage" metadata.
-        public enum Usage {
+        public enum Usage: Sendable {
             /// Request type for "Usage".
             public typealias Input = Containerd_Services_Snapshots_V1_UsageRequest
             /// Response type for "Usage".
@@ -145,7 +145,7 @@ public enum Containerd_Services_Snapshots_V1_Snapshots {
             )
         }
         /// Namespace for "Cleanup" metadata.
-        public enum Cleanup {
+        public enum Cleanup: Sendable {
             /// Request type for "Cleanup".
             public typealias Input = Containerd_Services_Snapshots_V1_CleanupRequest
             /// Response type for "Cleanup".

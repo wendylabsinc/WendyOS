@@ -24,6 +24,10 @@ public struct BluetoothDevice: Device, Encodable, Sendable {
     public let rssi: Int
     public let isWendyDevice: Bool
     public var agentVersion: String?
+    public var os: String?
+    public var osVersion: String?
+    public var cpuArchitecture: String?
+    public var featureset: Set<String> = []
     /// The L2CAP PSM advertised by the device for connection
     public var l2capPSM: UInt16?
 
@@ -34,6 +38,10 @@ public struct BluetoothDevice: Device, Encodable, Sendable {
         rssi: Int,
         isWendyDevice: Bool = true,
         agentVersion: String? = nil,
+        os: String? = nil,
+        osVersion: String? = nil,
+        cpuArchitecture: String? = nil,
+        featureset: Set<String> = [],
         l2capPSM: UInt16? = nil
     ) {
         self.id = id
@@ -42,6 +50,10 @@ public struct BluetoothDevice: Device, Encodable, Sendable {
         self.rssi = rssi
         self.isWendyDevice = isWendyDevice
         self.agentVersion = agentVersion
+        self.os = os
+        self.osVersion = osVersion
+        self.cpuArchitecture = cpuArchitecture
+        self.featureset = featureset
         self.l2capPSM = l2capPSM
     }
 

@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.NotificationService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_NotificationService {
+public enum Wendycloud_V1_NotificationService: Sendable {
     /// Service descriptor for the "wendycloud.v1.NotificationService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateNotification" metadata.
-        public enum CreateNotification {
+        public enum CreateNotification: Sendable {
             /// Request type for "CreateNotification".
             public typealias Input = Wendycloud_V1_CreateNotificationRequest
             /// Response type for "CreateNotification".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_NotificationService {
             )
         }
         /// Namespace for "ListNotifications" metadata.
-        public enum ListNotifications {
+        public enum ListNotifications: Sendable {
             /// Request type for "ListNotifications".
             public typealias Input = Wendycloud_V1_ListNotificationsRequest
             /// Response type for "ListNotifications".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_NotificationService {
             )
         }
         /// Namespace for "GetNotification" metadata.
-        public enum GetNotification {
+        public enum GetNotification: Sendable {
             /// Request type for "GetNotification".
             public typealias Input = Wendycloud_V1_GetNotificationRequest
             /// Response type for "GetNotification".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_NotificationService {
             )
         }
         /// Namespace for "DeleteNotification" metadata.
-        public enum DeleteNotification {
+        public enum DeleteNotification: Sendable {
             /// Request type for "DeleteNotification".
             public typealias Input = Wendycloud_V1_DeleteNotificationRequest
             /// Response type for "DeleteNotification".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_NotificationService {
             )
         }
         /// Namespace for "MarkAsRead" metadata.
-        public enum MarkAsRead {
+        public enum MarkAsRead: Sendable {
             /// Request type for "MarkAsRead".
             public typealias Input = Wendycloud_V1_MarkAsReadRequest
             /// Response type for "MarkAsRead".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_NotificationService {
             )
         }
         /// Namespace for "GetUnreadCount" metadata.
-        public enum GetUnreadCount {
+        public enum GetUnreadCount: Sendable {
             /// Request type for "GetUnreadCount".
             public typealias Input = Wendycloud_V1_GetUnreadCountRequest
             /// Response type for "GetUnreadCount".

@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.events.ttrpc.v1.Events" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Events_Ttrpc_V1_Events {
+public enum Containerd_Services_Events_Ttrpc_V1_Events: Sendable {
     /// Service descriptor for the "containerd.services.events.ttrpc.v1.Events" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.events.ttrpc.v1.Events")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Forward" metadata.
-        public enum Forward {
+        public enum Forward: Sendable {
             /// Request type for "Forward".
             public typealias Input = Containerd_Services_Events_Ttrpc_V1_ForwardRequest
             /// Response type for "Forward".

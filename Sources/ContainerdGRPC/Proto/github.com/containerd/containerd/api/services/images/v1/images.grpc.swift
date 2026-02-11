@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.images.v1.Images" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Images_V1_Images {
+public enum Containerd_Services_Images_V1_Images: Sendable {
     /// Service descriptor for the "containerd.services.images.v1.Images" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.images.v1.Images")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Get" metadata.
-        public enum Get {
+        public enum Get: Sendable {
             /// Request type for "Get".
             public typealias Input = Containerd_Services_Images_V1_GetImageRequest
             /// Response type for "Get".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Images_V1_Images {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Images_V1_ListImagesRequest
             /// Response type for "List".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Images_V1_Images {
             )
         }
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Images_V1_CreateImageRequest
             /// Response type for "Create".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Images_V1_Images {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Images_V1_UpdateImageRequest
             /// Response type for "Update".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Images_V1_Images {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Images_V1_DeleteImageRequest
             /// Response type for "Delete".

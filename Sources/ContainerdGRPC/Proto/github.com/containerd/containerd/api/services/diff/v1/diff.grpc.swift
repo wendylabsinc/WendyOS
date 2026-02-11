@@ -30,13 +30,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "containerd.services.diff.v1.Diff" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Diff_V1_Diff {
+public enum Containerd_Services_Diff_V1_Diff: Sendable {
     /// Service descriptor for the "containerd.services.diff.v1.Diff" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.diff.v1.Diff")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Apply" metadata.
-        public enum Apply {
+        public enum Apply: Sendable {
             /// Request type for "Apply".
             public typealias Input = Containerd_Services_Diff_V1_ApplyRequest
             /// Response type for "Apply".
@@ -48,7 +48,7 @@ public enum Containerd_Services_Diff_V1_Diff {
             )
         }
         /// Namespace for "Diff" metadata.
-        public enum Diff {
+        public enum Diff: Sendable {
             /// Request type for "Diff".
             public typealias Input = Containerd_Services_Diff_V1_DiffRequest
             /// Response type for "Diff".

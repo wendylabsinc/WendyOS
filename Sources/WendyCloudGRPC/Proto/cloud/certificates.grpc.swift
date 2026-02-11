@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.CertificateService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_CertificateService {
+public enum Wendycloud_V1_CertificateService: Sendable {
     /// Service descriptor for the "wendycloud.v1.CertificateService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "IssueCertificate" metadata.
-        public enum IssueCertificate {
+        public enum IssueCertificate: Sendable {
             /// Request type for "IssueCertificate".
             public typealias Input = Wendycloud_V1_IssueCertificateRequest
             /// Response type for "IssueCertificate".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "RefreshCertificate" metadata.
-        public enum RefreshCertificate {
+        public enum RefreshCertificate: Sendable {
             /// Request type for "RefreshCertificate".
             public typealias Input = Wendycloud_V1_RefreshCertificateRequest
             /// Response type for "RefreshCertificate".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "RevokeCertificate" metadata.
-        public enum RevokeCertificate {
+        public enum RevokeCertificate: Sendable {
             /// Request type for "RevokeCertificate".
             public typealias Input = Wendycloud_V1_RevokeCertificateRequest
             /// Response type for "RevokeCertificate".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "GetCertificate" metadata.
-        public enum GetCertificate {
+        public enum GetCertificate: Sendable {
             /// Request type for "GetCertificate".
             public typealias Input = Wendycloud_V1_GetCertificateRequest
             /// Response type for "GetCertificate".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "ListCertificates" metadata.
-        public enum ListCertificates {
+        public enum ListCertificates: Sendable {
             /// Request type for "ListCertificates".
             public typealias Input = Wendycloud_V1_ListCertificatesRequest
             /// Response type for "ListCertificates".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "GetCaBundle" metadata.
-        public enum GetCaBundle {
+        public enum GetCaBundle: Sendable {
             /// Request type for "GetCaBundle".
             public typealias Input = Wendycloud_V1_GetCaBundleRequest
             /// Response type for "GetCaBundle".
@@ -93,7 +93,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "CreateAssetEnrollmentToken" metadata.
-        public enum CreateAssetEnrollmentToken {
+        public enum CreateAssetEnrollmentToken: Sendable {
             /// Request type for "CreateAssetEnrollmentToken".
             public typealias Input = Wendycloud_V1_CreateAssetEnrollmentTokenRequest
             /// Response type for "CreateAssetEnrollmentToken".
@@ -105,7 +105,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "CreateUserEnrollmentToken" metadata.
-        public enum CreateUserEnrollmentToken {
+        public enum CreateUserEnrollmentToken: Sendable {
             /// Request type for "CreateUserEnrollmentToken".
             public typealias Input = Wendycloud_V1_CreateUserEnrollmentTokenRequest
             /// Response type for "CreateUserEnrollmentToken".
@@ -117,7 +117,7 @@ public enum Wendycloud_V1_CertificateService {
             )
         }
         /// Namespace for "GetCertificateMetadata" metadata.
-        public enum GetCertificateMetadata {
+        public enum GetCertificateMetadata: Sendable {
             /// Request type for "GetCertificateMetadata".
             public typealias Input = Wendycloud_V1_GetCertificateMetadataRequest
             /// Response type for "GetCertificateMetadata".

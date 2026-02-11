@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendy.agent.services.v1.WendyContainerService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendy_Agent_Services_V1_WendyContainerService {
+public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
     /// Service descriptor for the "wendy.agent.services.v1.WendyContainerService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "ListLayers" metadata.
-        public enum ListLayers {
+        public enum ListLayers: Sendable {
             /// Request type for "ListLayers".
             public typealias Input = Wendy_Agent_Services_V1_ListLayersRequest
             /// Response type for "ListLayers".
@@ -33,7 +33,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "WriteLayer" metadata.
-        public enum WriteLayer {
+        public enum WriteLayer: Sendable {
             /// Request type for "WriteLayer".
             public typealias Input = Wendy_Agent_Services_V1_WriteLayerRequest
             /// Response type for "WriteLayer".
@@ -45,7 +45,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "CreateContainer" metadata.
-        public enum CreateContainer {
+        public enum CreateContainer: Sendable {
             /// Request type for "CreateContainer".
             public typealias Input = Wendy_Agent_Services_V1_CreateContainerRequest
             /// Response type for "CreateContainer".
@@ -57,7 +57,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "CreateContainerWithProgress" metadata.
-        public enum CreateContainerWithProgress {
+        public enum CreateContainerWithProgress: Sendable {
             /// Request type for "CreateContainerWithProgress".
             public typealias Input = Wendy_Agent_Services_V1_CreateContainerRequest
             /// Response type for "CreateContainerWithProgress".
@@ -69,7 +69,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "RunContainer" metadata.
-        public enum RunContainer {
+        public enum RunContainer: Sendable {
             /// Request type for "RunContainer".
             public typealias Input = Wendy_Agent_Services_V1_RunContainerLayersRequest
             /// Response type for "RunContainer".
@@ -81,7 +81,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "StartContainer" metadata.
-        public enum StartContainer {
+        public enum StartContainer: Sendable {
             /// Request type for "StartContainer".
             public typealias Input = Wendy_Agent_Services_V1_StartContainerRequest
             /// Response type for "StartContainer".
@@ -93,7 +93,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "StopContainer" metadata.
-        public enum StopContainer {
+        public enum StopContainer: Sendable {
             /// Request type for "StopContainer".
             public typealias Input = Wendy_Agent_Services_V1_StopContainerRequest
             /// Response type for "StopContainer".
@@ -105,7 +105,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "DeleteContainer" metadata.
-        public enum DeleteContainer {
+        public enum DeleteContainer: Sendable {
             /// Request type for "DeleteContainer".
             public typealias Input = Wendy_Agent_Services_V1_DeleteContainerRequest
             /// Response type for "DeleteContainer".
@@ -117,7 +117,7 @@ public enum Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
         /// Namespace for "ListContainers" metadata.
-        public enum ListContainers {
+        public enum ListContainers: Sendable {
             /// Request type for "ListContainers".
             public typealias Input = Wendy_Agent_Services_V1_ListContainersRequest
             /// Response type for "ListContainers".

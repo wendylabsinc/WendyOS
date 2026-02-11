@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.content.v1.Content" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Content_V1_Content {
+public enum Containerd_Services_Content_V1_Content: Sendable {
     /// Service descriptor for the "containerd.services.content.v1.Content" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.content.v1.Content")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Info" metadata.
-        public enum Info {
+        public enum Info: Sendable {
             /// Request type for "Info".
             public typealias Input = Containerd_Services_Content_V1_InfoRequest
             /// Response type for "Info".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Content_V1_UpdateRequest
             /// Response type for "Update".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Content_V1_ListContentRequest
             /// Response type for "List".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Content_V1_DeleteContentRequest
             /// Response type for "Delete".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Read" metadata.
-        public enum Read {
+        public enum Read: Sendable {
             /// Request type for "Read".
             public typealias Input = Containerd_Services_Content_V1_ReadContentRequest
             /// Response type for "Read".
@@ -97,7 +97,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Status" metadata.
-        public enum Status {
+        public enum Status: Sendable {
             /// Request type for "Status".
             public typealias Input = Containerd_Services_Content_V1_StatusRequest
             /// Response type for "Status".
@@ -109,7 +109,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "ListStatuses" metadata.
-        public enum ListStatuses {
+        public enum ListStatuses: Sendable {
             /// Request type for "ListStatuses".
             public typealias Input = Containerd_Services_Content_V1_ListStatusesRequest
             /// Response type for "ListStatuses".
@@ -121,7 +121,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Write" metadata.
-        public enum Write {
+        public enum Write: Sendable {
             /// Request type for "Write".
             public typealias Input = Containerd_Services_Content_V1_WriteContentRequest
             /// Response type for "Write".
@@ -133,7 +133,7 @@ public enum Containerd_Services_Content_V1_Content {
             )
         }
         /// Namespace for "Abort" metadata.
-        public enum Abort {
+        public enum Abort: Sendable {
             /// Request type for "Abort".
             public typealias Input = Containerd_Services_Content_V1_AbortRequest
             /// Response type for "Abort".

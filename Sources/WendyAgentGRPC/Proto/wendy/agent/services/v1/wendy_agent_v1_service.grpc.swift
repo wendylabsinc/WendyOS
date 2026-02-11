@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendy.agent.services.v1.WendyAgentService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendy_Agent_Services_V1_WendyAgentService {
+public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
     /// Service descriptor for the "wendy.agent.services.v1.WendyAgentService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "RunContainer" metadata.
-        public enum RunContainer {
+        public enum RunContainer: Sendable {
             /// Request type for "RunContainer".
             public typealias Input = Wendy_Agent_Services_V1_RunContainerRequest
             /// Response type for "RunContainer".
@@ -33,7 +33,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "UpdateAgent" metadata.
-        public enum UpdateAgent {
+        public enum UpdateAgent: Sendable {
             /// Request type for "UpdateAgent".
             public typealias Input = Wendy_Agent_Services_V1_UpdateAgentRequest
             /// Response type for "UpdateAgent".
@@ -45,7 +45,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "GetAgentVersion" metadata.
-        public enum GetAgentVersion {
+        public enum GetAgentVersion: Sendable {
             /// Request type for "GetAgentVersion".
             public typealias Input = Wendy_Agent_Services_V1_GetAgentVersionRequest
             /// Response type for "GetAgentVersion".
@@ -57,7 +57,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "ListWiFiNetworks" metadata.
-        public enum ListWiFiNetworks {
+        public enum ListWiFiNetworks: Sendable {
             /// Request type for "ListWiFiNetworks".
             public typealias Input = Wendy_Agent_Services_V1_ListWiFiNetworksRequest
             /// Response type for "ListWiFiNetworks".
@@ -69,7 +69,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "ConnectToWiFi" metadata.
-        public enum ConnectToWiFi {
+        public enum ConnectToWiFi: Sendable {
             /// Request type for "ConnectToWiFi".
             public typealias Input = Wendy_Agent_Services_V1_ConnectToWiFiRequest
             /// Response type for "ConnectToWiFi".
@@ -81,7 +81,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "GetWiFiStatus" metadata.
-        public enum GetWiFiStatus {
+        public enum GetWiFiStatus: Sendable {
             /// Request type for "GetWiFiStatus".
             public typealias Input = Wendy_Agent_Services_V1_GetWiFiStatusRequest
             /// Response type for "GetWiFiStatus".
@@ -93,7 +93,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "DisconnectWiFi" metadata.
-        public enum DisconnectWiFi {
+        public enum DisconnectWiFi: Sendable {
             /// Request type for "DisconnectWiFi".
             public typealias Input = Wendy_Agent_Services_V1_DisconnectWiFiRequest
             /// Response type for "DisconnectWiFi".
@@ -105,7 +105,7 @@ public enum Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
         /// Namespace for "ListHardwareCapabilities" metadata.
-        public enum ListHardwareCapabilities {
+        public enum ListHardwareCapabilities: Sendable {
             /// Request type for "ListHardwareCapabilities".
             public typealias Input = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest
             /// Response type for "ListHardwareCapabilities".
