@@ -488,6 +488,25 @@ actor BluetoothService: Service {
             case .agentVersion:
                 response.agentVersion = Wendy_Agent_Services_V1_AgentVersionResponse()
                 response.agentVersion.version = Version.current
+                response.agentVersion.featureset = try await WendyFeature.detect().map {
+                    $0.rawValue
+                }
+
+                #if arch(aarch64)
+                    response.agentVersion.cpuArchitecture = "aarch64"
+                #elseif arch(x86_64)
+                    response.agentVersion.cpuArchitecture = "x86_64"
+                #endif
+
+                #if os(Windows)
+                    response.agentVersion.os = "Windows"
+                #elseif os(Linux)
+                    response.agentVersion.os = "Linux"
+                #elseif os(macOS)
+                    response.agentVersion.os = "macOS"
+                #else
+                    response.agentVersion.os = "unknown"
+                #endif
             case .hardwareList:
                 response.hardwareList = try await handleHardwareList()
             case .none:

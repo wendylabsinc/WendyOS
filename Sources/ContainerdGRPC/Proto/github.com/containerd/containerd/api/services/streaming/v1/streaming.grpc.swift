@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.streaming.v1.Streaming" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Streaming_V1_Streaming {
+public enum Containerd_Services_Streaming_V1_Streaming: Sendable {
     /// Service descriptor for the "containerd.services.streaming.v1.Streaming" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.streaming.v1.Streaming")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Stream" metadata.
-        public enum Stream {
+        public enum Stream: Sendable {
             /// Request type for "Stream".
             public typealias Input = SwiftProtobuf.Google_Protobuf_Any
             /// Response type for "Stream".

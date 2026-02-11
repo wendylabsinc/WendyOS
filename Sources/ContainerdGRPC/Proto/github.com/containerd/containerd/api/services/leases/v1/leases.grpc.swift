@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.leases.v1.Leases" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Leases_V1_Leases {
+public enum Containerd_Services_Leases_V1_Leases: Sendable {
     /// Service descriptor for the "containerd.services.leases.v1.Leases" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.leases.v1.Leases")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Leases_V1_CreateRequest
             /// Response type for "Create".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Leases_V1_Leases {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Leases_V1_DeleteRequest
             /// Response type for "Delete".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Leases_V1_Leases {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Leases_V1_ListRequest
             /// Response type for "List".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Leases_V1_Leases {
             )
         }
         /// Namespace for "AddResource" metadata.
-        public enum AddResource {
+        public enum AddResource: Sendable {
             /// Request type for "AddResource".
             public typealias Input = Containerd_Services_Leases_V1_AddResourceRequest
             /// Response type for "AddResource".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Leases_V1_Leases {
             )
         }
         /// Namespace for "DeleteResource" metadata.
-        public enum DeleteResource {
+        public enum DeleteResource: Sendable {
             /// Request type for "DeleteResource".
             public typealias Input = Containerd_Services_Leases_V1_DeleteResourceRequest
             /// Response type for "DeleteResource".
@@ -97,7 +97,7 @@ public enum Containerd_Services_Leases_V1_Leases {
             )
         }
         /// Namespace for "ListResources" metadata.
-        public enum ListResources {
+        public enum ListResources: Sendable {
             /// Request type for "ListResources".
             public typealias Input = Containerd_Services_Leases_V1_ListResourcesRequest
             /// Response type for "ListResources".

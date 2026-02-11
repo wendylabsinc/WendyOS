@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.transfer.v1.Transfer" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Transfer_V1_Transfer {
+public enum Containerd_Services_Transfer_V1_Transfer: Sendable {
     /// Service descriptor for the "containerd.services.transfer.v1.Transfer" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.transfer.v1.Transfer")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Transfer" metadata.
-        public enum Transfer {
+        public enum Transfer: Sendable {
             /// Request type for "Transfer".
             public typealias Input = Containerd_Services_Transfer_V1_TransferRequest
             /// Response type for "Transfer".

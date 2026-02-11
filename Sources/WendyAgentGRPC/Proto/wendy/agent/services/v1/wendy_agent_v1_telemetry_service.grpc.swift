@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendy.agent.services.v1.WendyTelemetryService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendy_Agent_Services_V1_WendyTelemetryService {
+public enum Wendy_Agent_Services_V1_WendyTelemetryService: Sendable {
     /// Service descriptor for the "wendy.agent.services.v1.WendyTelemetryService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyTelemetryService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "StreamLogs" metadata.
-        public enum StreamLogs {
+        public enum StreamLogs: Sendable {
             /// Request type for "StreamLogs".
             public typealias Input = Wendy_Agent_Services_V1_StreamLogsRequest
             /// Response type for "StreamLogs".
@@ -33,7 +33,7 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService {
             )
         }
         /// Namespace for "StreamMetrics" metadata.
-        public enum StreamMetrics {
+        public enum StreamMetrics: Sendable {
             /// Request type for "StreamMetrics".
             public typealias Input = Wendy_Agent_Services_V1_StreamMetricsRequest
             /// Response type for "StreamMetrics".
@@ -45,7 +45,7 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService {
             )
         }
         /// Namespace for "StreamTraces" metadata.
-        public enum StreamTraces {
+        public enum StreamTraces: Sendable {
             /// Request type for "StreamTraces".
             public typealias Input = Wendy_Agent_Services_V1_StreamTracesRequest
             /// Response type for "StreamTraces".

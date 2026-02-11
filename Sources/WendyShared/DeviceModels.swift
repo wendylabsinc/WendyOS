@@ -440,6 +440,10 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
     public let interfaceType: String
     public let isWendyDevice: Bool
     public var agentVersion: String?
+    public var os: String?
+    public var osVersion: String?
+    public var cpuArchitecture: String
+    public var featureset: Set<String>
 
     public init(
         id: String,
@@ -448,7 +452,11 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         port: Int,
         interfaceType: String,
         isWendyDevice: Bool,
-        agentVersion: String? = nil
+        agentVersion: String? = nil,
+        os: String? = nil,
+        osVersion: String? = nil,
+        cpuArchitecture: String = "aarch64",
+        featureset: Set<String> = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -457,6 +465,10 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         self.interfaceType = interfaceType
         self.isWendyDevice = isWendyDevice
         self.agentVersion = agentVersion
+        self.os = os
+        self.osVersion = osVersion
+        self.cpuArchitecture = cpuArchitecture
+        self.featureset = featureset
     }
 
     public func toJSON() throws -> String {

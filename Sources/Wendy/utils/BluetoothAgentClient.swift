@@ -171,7 +171,7 @@ actor BluetoothAgentClient {
 
     // MARK: - Other Commands
 
-    func getAgentVersion() async throws -> String {
+    func getAgentVersion() async throws -> Wendy_Agent_Services_V1_AgentVersionResponse {
         var command = Wendy_Agent_Services_V1_BluetoothCommand()
         command.agentVersion = Wendy_Agent_Services_V1_AgentVersionCommand()
 
@@ -179,7 +179,7 @@ actor BluetoothAgentClient {
         guard case .agentVersion(let agentVersion) = response.response else {
             throw BluetoothAgentError.unexpectedResponse
         }
-        return agentVersion.version
+        return agentVersion
     }
 
     func listHardware() async throws -> [Wendy_Agent_Services_V1_HardwareInfo] {

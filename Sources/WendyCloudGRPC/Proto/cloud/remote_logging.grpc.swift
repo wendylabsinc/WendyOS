@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.RemoteLoggingService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_RemoteLoggingService {
+public enum Wendycloud_V1_RemoteLoggingService: Sendable {
     /// Service descriptor for the "wendycloud.v1.RemoteLoggingService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.RemoteLoggingService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "WriteLogEntries" metadata.
-        public enum WriteLogEntries {
+        public enum WriteLogEntries: Sendable {
             /// Request type for "WriteLogEntries".
             public typealias Input = Wendycloud_V1_WriteLogEntriesRequest
             /// Response type for "WriteLogEntries".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_RemoteLoggingService {
             )
         }
         /// Namespace for "TailLogEntries" metadata.
-        public enum TailLogEntries {
+        public enum TailLogEntries: Sendable {
             /// Request type for "TailLogEntries".
             public typealias Input = Wendycloud_V1_TailLogEntriesRequest
             /// Response type for "TailLogEntries".

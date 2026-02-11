@@ -29,13 +29,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "opentelemetry.proto.collector.metrics.v1.MetricsService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Opentelemetry_Proto_Collector_Metrics_V1_MetricsService {
+public enum Opentelemetry_Proto_Collector_Metrics_V1_MetricsService: Sendable {
     /// Service descriptor for the "opentelemetry.proto.collector.metrics.v1.MetricsService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "opentelemetry.proto.collector.metrics.v1.MetricsService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Export" metadata.
-        public enum Export {
+        public enum Export: Sendable {
             /// Request type for "Export".
             public typealias Input = Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest
             /// Response type for "Export".

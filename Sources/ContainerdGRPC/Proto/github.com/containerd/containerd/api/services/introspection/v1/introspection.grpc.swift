@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.introspection.v1.Introspection" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Introspection_V1_Introspection {
+public enum Containerd_Services_Introspection_V1_Introspection: Sendable {
     /// Service descriptor for the "containerd.services.introspection.v1.Introspection" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.introspection.v1.Introspection")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Plugins" metadata.
-        public enum Plugins {
+        public enum Plugins: Sendable {
             /// Request type for "Plugins".
             public typealias Input = Containerd_Services_Introspection_V1_PluginsRequest
             /// Response type for "Plugins".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Introspection_V1_Introspection {
             )
         }
         /// Namespace for "Server" metadata.
-        public enum Server {
+        public enum Server: Sendable {
             /// Request type for "Server".
             public typealias Input = SwiftProtobuf.Google_Protobuf_Empty
             /// Response type for "Server".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Introspection_V1_Introspection {
             )
         }
         /// Namespace for "PluginInfo" metadata.
-        public enum PluginInfo {
+        public enum PluginInfo: Sendable {
             /// Request type for "PluginInfo".
             public typealias Input = Containerd_Services_Introspection_V1_PluginInfoRequest
             /// Response type for "PluginInfo".

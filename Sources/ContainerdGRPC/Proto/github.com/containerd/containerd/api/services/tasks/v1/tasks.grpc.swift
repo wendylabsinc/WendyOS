@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.tasks.v1.Tasks" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Tasks_V1_Tasks {
+public enum Containerd_Services_Tasks_V1_Tasks: Sendable {
     /// Service descriptor for the "containerd.services.tasks.v1.Tasks" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.tasks.v1.Tasks")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Tasks_V1_CreateTaskRequest
             /// Response type for "Create".
@@ -49,7 +49,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Start" metadata.
-        public enum Start {
+        public enum Start: Sendable {
             /// Request type for "Start".
             public typealias Input = Containerd_Services_Tasks_V1_StartRequest
             /// Response type for "Start".
@@ -61,7 +61,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Tasks_V1_DeleteTaskRequest
             /// Response type for "Delete".
@@ -73,7 +73,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "DeleteProcess" metadata.
-        public enum DeleteProcess {
+        public enum DeleteProcess: Sendable {
             /// Request type for "DeleteProcess".
             public typealias Input = Containerd_Services_Tasks_V1_DeleteProcessRequest
             /// Response type for "DeleteProcess".
@@ -85,7 +85,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Get" metadata.
-        public enum Get {
+        public enum Get: Sendable {
             /// Request type for "Get".
             public typealias Input = Containerd_Services_Tasks_V1_GetRequest
             /// Response type for "Get".
@@ -97,7 +97,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Tasks_V1_ListTasksRequest
             /// Response type for "List".
@@ -109,7 +109,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Kill" metadata.
-        public enum Kill {
+        public enum Kill: Sendable {
             /// Request type for "Kill".
             public typealias Input = Containerd_Services_Tasks_V1_KillRequest
             /// Response type for "Kill".
@@ -121,7 +121,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Exec" metadata.
-        public enum Exec {
+        public enum Exec: Sendable {
             /// Request type for "Exec".
             public typealias Input = Containerd_Services_Tasks_V1_ExecProcessRequest
             /// Response type for "Exec".
@@ -133,7 +133,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "ResizePty" metadata.
-        public enum ResizePty {
+        public enum ResizePty: Sendable {
             /// Request type for "ResizePty".
             public typealias Input = Containerd_Services_Tasks_V1_ResizePtyRequest
             /// Response type for "ResizePty".
@@ -145,7 +145,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "CloseIO" metadata.
-        public enum CloseIO {
+        public enum CloseIO: Sendable {
             /// Request type for "CloseIO".
             public typealias Input = Containerd_Services_Tasks_V1_CloseIORequest
             /// Response type for "CloseIO".
@@ -157,7 +157,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Pause" metadata.
-        public enum Pause {
+        public enum Pause: Sendable {
             /// Request type for "Pause".
             public typealias Input = Containerd_Services_Tasks_V1_PauseTaskRequest
             /// Response type for "Pause".
@@ -169,7 +169,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Resume" metadata.
-        public enum Resume {
+        public enum Resume: Sendable {
             /// Request type for "Resume".
             public typealias Input = Containerd_Services_Tasks_V1_ResumeTaskRequest
             /// Response type for "Resume".
@@ -181,7 +181,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "ListPids" metadata.
-        public enum ListPids {
+        public enum ListPids: Sendable {
             /// Request type for "ListPids".
             public typealias Input = Containerd_Services_Tasks_V1_ListPidsRequest
             /// Response type for "ListPids".
@@ -193,7 +193,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Checkpoint" metadata.
-        public enum Checkpoint {
+        public enum Checkpoint: Sendable {
             /// Request type for "Checkpoint".
             public typealias Input = Containerd_Services_Tasks_V1_CheckpointTaskRequest
             /// Response type for "Checkpoint".
@@ -205,7 +205,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Tasks_V1_UpdateTaskRequest
             /// Response type for "Update".
@@ -217,7 +217,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Metrics" metadata.
-        public enum Metrics {
+        public enum Metrics: Sendable {
             /// Request type for "Metrics".
             public typealias Input = Containerd_Services_Tasks_V1_MetricsRequest
             /// Response type for "Metrics".
@@ -229,7 +229,7 @@ public enum Containerd_Services_Tasks_V1_Tasks {
             )
         }
         /// Namespace for "Wait" metadata.
-        public enum Wait {
+        public enum Wait: Sendable {
             /// Request type for "Wait".
             public typealias Input = Containerd_Services_Tasks_V1_WaitRequest
             /// Response type for "Wait".

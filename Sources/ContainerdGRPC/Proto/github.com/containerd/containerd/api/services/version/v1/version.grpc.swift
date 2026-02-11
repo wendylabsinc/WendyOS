@@ -31,13 +31,13 @@ import SwiftProtobuf
 
 /// Namespace containing generated types for the "containerd.services.version.v1.Version" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Version_V1_Version {
+public enum Containerd_Services_Version_V1_Version: Sendable {
     /// Service descriptor for the "containerd.services.version.v1.Version" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.version.v1.Version")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Version" metadata.
-        public enum Version {
+        public enum Version: Sendable {
             /// Request type for "Version".
             public typealias Input = SwiftProtobuf.Google_Protobuf_Empty
             /// Response type for "Version".

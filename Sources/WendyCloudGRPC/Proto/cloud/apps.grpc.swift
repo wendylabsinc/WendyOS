@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.AppService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_AppService {
+public enum Wendycloud_V1_AppService: Sendable {
     /// Service descriptor for the "wendycloud.v1.AppService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateApp" metadata.
-        public enum CreateApp {
+        public enum CreateApp: Sendable {
             /// Request type for "CreateApp".
             public typealias Input = Wendycloud_V1_CreateAppRequest
             /// Response type for "CreateApp".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "GetApp" metadata.
-        public enum GetApp {
+        public enum GetApp: Sendable {
             /// Request type for "GetApp".
             public typealias Input = Wendycloud_V1_GetAppRequest
             /// Response type for "GetApp".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "UpdateApp" metadata.
-        public enum UpdateApp {
+        public enum UpdateApp: Sendable {
             /// Request type for "UpdateApp".
             public typealias Input = Wendycloud_V1_UpdateAppRequest
             /// Response type for "UpdateApp".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "DeleteApp" metadata.
-        public enum DeleteApp {
+        public enum DeleteApp: Sendable {
             /// Request type for "DeleteApp".
             public typealias Input = Wendycloud_V1_DeleteAppRequest
             /// Response type for "DeleteApp".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "ListApps" metadata.
-        public enum ListApps {
+        public enum ListApps: Sendable {
             /// Request type for "ListApps".
             public typealias Input = Wendycloud_V1_ListAppsRequest
             /// Response type for "ListApps".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "CreateAppVersion" metadata.
-        public enum CreateAppVersion {
+        public enum CreateAppVersion: Sendable {
             /// Request type for "CreateAppVersion".
             public typealias Input = Wendycloud_V1_CreateAppVersionRequest
             /// Response type for "CreateAppVersion".
@@ -93,7 +93,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "GetAppVersion" metadata.
-        public enum GetAppVersion {
+        public enum GetAppVersion: Sendable {
             /// Request type for "GetAppVersion".
             public typealias Input = Wendycloud_V1_GetAppVersionRequest
             /// Response type for "GetAppVersion".
@@ -105,7 +105,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "ListAppVersions" metadata.
-        public enum ListAppVersions {
+        public enum ListAppVersions: Sendable {
             /// Request type for "ListAppVersions".
             public typealias Input = Wendycloud_V1_ListAppVersionsRequest
             /// Response type for "ListAppVersions".
@@ -117,7 +117,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "CreateAssetContainer" metadata.
-        public enum CreateAssetContainer {
+        public enum CreateAssetContainer: Sendable {
             /// Request type for "CreateAssetContainer".
             public typealias Input = Wendycloud_V1_CreateAssetContainerRequest
             /// Response type for "CreateAssetContainer".
@@ -129,7 +129,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "GetAssetContainer" metadata.
-        public enum GetAssetContainer {
+        public enum GetAssetContainer: Sendable {
             /// Request type for "GetAssetContainer".
             public typealias Input = Wendycloud_V1_GetAssetContainerRequest
             /// Response type for "GetAssetContainer".
@@ -141,7 +141,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "UpdateAssetContainer" metadata.
-        public enum UpdateAssetContainer {
+        public enum UpdateAssetContainer: Sendable {
             /// Request type for "UpdateAssetContainer".
             public typealias Input = Wendycloud_V1_UpdateAssetContainerRequest
             /// Response type for "UpdateAssetContainer".
@@ -153,7 +153,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "ListAssetContainers" metadata.
-        public enum ListAssetContainers {
+        public enum ListAssetContainers: Sendable {
             /// Request type for "ListAssetContainers".
             public typealias Input = Wendycloud_V1_ListAssetContainersRequest
             /// Response type for "ListAssetContainers".
@@ -165,7 +165,7 @@ public enum Wendycloud_V1_AppService {
             )
         }
         /// Namespace for "ListAssetContainersByApp" metadata.
-        public enum ListAssetContainersByApp {
+        public enum ListAssetContainersByApp: Sendable {
             /// Request type for "ListAssetContainersByApp".
             public typealias Input = Wendycloud_V1_ListAssetContainersByAppRequest
             /// Response type for "ListAssetContainersByApp".

@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.AssetService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_AssetService {
+public enum Wendycloud_V1_AssetService: Sendable {
     /// Service descriptor for the "wendycloud.v1.AssetService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateAsset" metadata.
-        public enum CreateAsset {
+        public enum CreateAsset: Sendable {
             /// Request type for "CreateAsset".
             public typealias Input = Wendycloud_V1_CreateAssetRequest
             /// Response type for "CreateAsset".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "GetAsset" metadata.
-        public enum GetAsset {
+        public enum GetAsset: Sendable {
             /// Request type for "GetAsset".
             public typealias Input = Wendycloud_V1_GetAssetRequest
             /// Response type for "GetAsset".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "UpdateAsset" metadata.
-        public enum UpdateAsset {
+        public enum UpdateAsset: Sendable {
             /// Request type for "UpdateAsset".
             public typealias Input = Wendycloud_V1_UpdateAssetRequest
             /// Response type for "UpdateAsset".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "DeleteAsset" metadata.
-        public enum DeleteAsset {
+        public enum DeleteAsset: Sendable {
             /// Request type for "DeleteAsset".
             public typealias Input = Wendycloud_V1_DeleteAssetRequest
             /// Response type for "DeleteAsset".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "ListAssets" metadata.
-        public enum ListAssets {
+        public enum ListAssets: Sendable {
             /// Request type for "ListAssets".
             public typealias Input = Wendycloud_V1_ListAssetsRequest
             /// Response type for "ListAssets".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "ListAssetChildren" metadata.
-        public enum ListAssetChildren {
+        public enum ListAssetChildren: Sendable {
             /// Request type for "ListAssetChildren".
             public typealias Input = Wendycloud_V1_ListAssetChildrenRequest
             /// Response type for "ListAssetChildren".
@@ -93,7 +93,7 @@ public enum Wendycloud_V1_AssetService {
             )
         }
         /// Namespace for "GetAssetLineage" metadata.
-        public enum GetAssetLineage {
+        public enum GetAssetLineage: Sendable {
             /// Request type for "GetAssetLineage".
             public typealias Input = Wendycloud_V1_GetAssetLineageRequest
             /// Response type for "GetAssetLineage".

@@ -61,7 +61,10 @@ struct DeviceCommand: AsyncParsableCommand {
 
         struct JSONOutput: Codable {
             let currentVersion: String
+            let os: String?
             let osVersion: String?
+            let cpuArchitecture: String?
+            let featureset: Set<String>
             let latestVersion: String?
         }
 
@@ -89,7 +92,10 @@ struct DeviceCommand: AsyncParsableCommand {
             if JSONMode.isEnabled {
                 let output = JSONOutput(
                     currentVersion: version.version,
+                    os: version.os,
                     osVersion: version.hasOsVersion ? version.osVersion : nil,
+                    cpuArchitecture: version.cpuArchitecture,
+                    featureset: Set(version.featureset),
                     latestVersion: latestVersion
                 )
                 let data = try JSONEncoder().encode(output)

@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.OrganizationService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_OrganizationService {
+public enum Wendycloud_V1_OrganizationService: Sendable {
     /// Service descriptor for the "wendycloud.v1.OrganizationService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateOrganization" metadata.
-        public enum CreateOrganization {
+        public enum CreateOrganization: Sendable {
             /// Request type for "CreateOrganization".
             public typealias Input = Wendycloud_V1_CreateOrganizationRequest
             /// Response type for "CreateOrganization".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "GetOrganization" metadata.
-        public enum GetOrganization {
+        public enum GetOrganization: Sendable {
             /// Request type for "GetOrganization".
             public typealias Input = Wendycloud_V1_GetOrganizationRequest
             /// Response type for "GetOrganization".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "UpdateOrganization" metadata.
-        public enum UpdateOrganization {
+        public enum UpdateOrganization: Sendable {
             /// Request type for "UpdateOrganization".
             public typealias Input = Wendycloud_V1_UpdateOrganizationRequest
             /// Response type for "UpdateOrganization".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "DeleteOrganization" metadata.
-        public enum DeleteOrganization {
+        public enum DeleteOrganization: Sendable {
             /// Request type for "DeleteOrganization".
             public typealias Input = Wendycloud_V1_DeleteOrganizationRequest
             /// Response type for "DeleteOrganization".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "ListOrganizations" metadata.
-        public enum ListOrganizations {
+        public enum ListOrganizations: Sendable {
             /// Request type for "ListOrganizations".
             public typealias Input = Wendycloud_V1_ListOrganizationsRequest
             /// Response type for "ListOrganizations".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "AddMember" metadata.
-        public enum AddMember {
+        public enum AddMember: Sendable {
             /// Request type for "AddMember".
             public typealias Input = Wendycloud_V1_AddMemberRequest
             /// Response type for "AddMember".
@@ -93,7 +93,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "AddMembersByEmails" metadata.
-        public enum AddMembersByEmails {
+        public enum AddMembersByEmails: Sendable {
             /// Request type for "AddMembersByEmails".
             public typealias Input = Wendycloud_V1_AddMembersByEmailsRequest
             /// Response type for "AddMembersByEmails".
@@ -105,7 +105,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "UpdateMemberRole" metadata.
-        public enum UpdateMemberRole {
+        public enum UpdateMemberRole: Sendable {
             /// Request type for "UpdateMemberRole".
             public typealias Input = Wendycloud_V1_UpdateMemberRoleRequest
             /// Response type for "UpdateMemberRole".
@@ -117,7 +117,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "RemoveMember" metadata.
-        public enum RemoveMember {
+        public enum RemoveMember: Sendable {
             /// Request type for "RemoveMember".
             public typealias Input = Wendycloud_V1_RemoveMemberRequest
             /// Response type for "RemoveMember".
@@ -129,7 +129,7 @@ public enum Wendycloud_V1_OrganizationService {
             )
         }
         /// Namespace for "ListMembers" metadata.
-        public enum ListMembers {
+        public enum ListMembers: Sendable {
             /// Request type for "ListMembers".
             public typealias Input = Wendycloud_V1_ListMembersRequest
             /// Response type for "ListMembers".

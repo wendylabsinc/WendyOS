@@ -141,6 +141,10 @@ message GetAgentVersionResponse {
     string version = 1;
     // OS version read from /etc/wendy/version.txt (only present on WendyOS)
     optional string os_version = 2;
+    string os = 3;
+    string cpu_architecture = 4;
+    optional string public_key = 5;
+    repeated string featureset = 6;
 }
 
 // Request message for listing WiFi networks

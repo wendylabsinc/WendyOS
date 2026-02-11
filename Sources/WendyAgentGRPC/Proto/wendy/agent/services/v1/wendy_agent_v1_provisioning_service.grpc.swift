@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendy.agent.services.v1.WendyProvisioningService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendy_Agent_Services_V1_WendyProvisioningService {
+public enum Wendy_Agent_Services_V1_WendyProvisioningService: Sendable {
     /// Service descriptor for the "wendy.agent.services.v1.WendyProvisioningService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyProvisioningService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "StartProvisioning" metadata.
-        public enum StartProvisioning {
+        public enum StartProvisioning: Sendable {
             /// Request type for "StartProvisioning".
             public typealias Input = Wendy_Agent_Services_V1_StartProvisioningRequest
             /// Response type for "StartProvisioning".
@@ -33,7 +33,7 @@ public enum Wendy_Agent_Services_V1_WendyProvisioningService {
             )
         }
         /// Namespace for "IsProvisioned" metadata.
-        public enum IsProvisioned {
+        public enum IsProvisioned: Sendable {
             /// Request type for "IsProvisioned".
             public typealias Input = Wendy_Agent_Services_V1_IsProvisionedRequest
             /// Response type for "IsProvisioned".

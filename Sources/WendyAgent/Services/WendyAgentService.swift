@@ -359,6 +359,8 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetAgentVersionResponse> {
         // Read OS version from /etc/wendy/version.txt if it exists (WendyOS only)
         let osVersion: String?
+        var arch: String?
+        let os: String
         let versionFilePath = "/etc/wendy/version.txt"
         if let versionData = FileManager.default.contents(atPath: versionFilePath),
             let version = String(data: versionData, encoding: .utf8)
@@ -368,11 +370,34 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             osVersion = nil
         }
 
+        #if arch(aarch64)
+            arch = "aarch64"
+        #elseif arch(x86_64)
+            arch = "x86_64"
+        #endif
+
+        #if os(Windows)
+            os = "Windows"
+        #elseif os(Linux)
+            os = "Linux"
+        #elseif os(macOS)
+            os = "macOS"
+        #else
+            os = "unknown"
+        #endif
+
+        let featueset = try await WendyFeature.detect()
+
         return ServerResponse(
             message: .with {
                 $0.version = Version.current
                 if let osVersion {
                     $0.osVersion = osVersion
+                    $0.os = os
+                    if let arch {
+                        $0.cpuArchitecture = arch
+                    }
+                    $0.featureset = featueset.map { $0.rawValue }
                 }
             }
         )
