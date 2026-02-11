@@ -102,11 +102,11 @@ cmdns_string_t cmdns_string_extract(const void* buffer, size_t size,
                                     size_t* offset,
                                     char* strbuffer, size_t capacity);
 
-// Like cmdns_query_recv, but uses select() to wait up to timeout_ms for data first.
-// Returns number of records parsed, or 0 if timeout/no data.
-size_t cmdns_query_recv_wait(int sock, void* buffer, size_t capacity,
-                              cmdns_callback_fn callback, void* user_data,
-                              int query_id, int timeout_ms);
+// Wait for data on any of the given sockets using select().
+// Returns number of ready sockets. ready_indices[] is filled with 0-based indices
+// of sockets that have data available. timeout_ms is the max wait time.
+int cmdns_select_multi(const int* sockets, int socket_count,
+                       int* ready_indices, int timeout_ms);
 
 // Open an IPv4 mDNS socket bound to a specific interface for both send and recv.
 // Uses SO_BINDTODEVICE to force multicast through the correct interface.

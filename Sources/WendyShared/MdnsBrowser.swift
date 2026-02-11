@@ -95,7 +95,7 @@
                 }
             }
 
-            // 3. Recv loop using select()-based waiting per socket
+            // 3. Recv loop — single select() across all sockets per iteration
             let deadline = ContinuousClock.now + timeout
             var recvBuf = [UInt8](repeating: 0, count: 4096)
             var seen = Set<String>()
@@ -103,6 +103,8 @@
             // Context for the C callback
             let context = BrowseContext(serviceType: serviceType)
             let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
+
+            var readyIndices = [Int32](repeating: 0, count: sockets.count)
 
             while !Task.isCancelled {
                 let remaining = deadline - ContinuousClock.now
@@ -115,20 +117,37 @@
                 )
                 if remainingMs <= 0 { break }
 
-                let waitMs = min(remainingMs, 100)
-                for sock in sockets {
+                let waitMs = min(remainingMs, 200)
+
+                // Wait for data on any socket (single select call)
+                let readyCount = sockets.withUnsafeBufferPointer { socksBuf in
+                    readyIndices.withUnsafeMutableBufferPointer { readyBuf in
+                        cmdns_select_multi(
+                            socksBuf.baseAddress,
+                            Int32(sockets.count),
+                            readyBuf.baseAddress,
+                            waitMs
+                        )
+                    }
+                }
+
+                guard readyCount > 0 else { continue }
+
+                // Read from each ready socket
+                for r in 0..<Int(readyCount) {
+                    let sock = sockets[Int(readyIndices[r])]
+
                     // Reset context for this packet
                     context.currentPartials.removeAll()
                     context.hostnameToInstance.removeAll()
 
-                    let recvCount = cmdns_query_recv_wait(
+                    let recvCount = cmdns_query_recv(
                         sock,
                         &recvBuf,
                         recvBuf.count,
                         recordCallback,
                         ctxPtr,
-                        0,  // accept any query ID
-                        waitMs
+                        0  // accept any query ID
                     )
 
                     guard recvCount > 0 else { continue }
@@ -153,7 +172,7 @@
                             text: partial.text
                         )
 
-                        logger.info(
+                        logger.debug(
                             "Discovered mDNS service",
                             metadata: [
                                 "name": "\(entry.name)",
@@ -331,11 +350,10 @@
                 ? String(ctx.serviceType.dropLast()) : ctx.serviceType
             let fqdnClean = fqdn.hasSuffix(".") ? String(fqdn.dropLast()) : fqdn
 
-            if let range = fqdnClean.range(of: ".\(svcType)", options: .caseInsensitive) {
-                shortName = String(fqdnClean[..<range.lowerBound])
-            } else {
-                shortName = fqdnClean
-            }
+            // Only accept PTR records that match our queried service type
+            guard let range = fqdnClean.range(of: ".\(svcType)", options: .caseInsensitive)
+            else { return 0 }
+            shortName = String(fqdnClean[..<range.lowerBound])
 
             if ctx.currentPartials[fqdnClean] == nil {
                 ctx.currentPartials[fqdnClean] = PartialService(name: shortName)

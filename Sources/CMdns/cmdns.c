@@ -107,24 +107,33 @@ cmdns_string_t cmdns_string_extract(const void* buffer, size_t size,
 }
 
 #include <sys/select.h>
-#include <errno.h>
 
-size_t cmdns_query_recv_wait(int sock, void* buffer, size_t capacity,
-                              cmdns_callback_fn callback, void* user_data,
-                              int query_id, int timeout_ms) {
+int cmdns_select_multi(const int* sockets, int socket_count,
+                       int* ready_indices, int timeout_ms) {
+    if (socket_count <= 0) return 0;
+
     fd_set readfds;
     FD_ZERO(&readfds);
-    FD_SET(sock, &readfds);
+    int maxfd = -1;
+    for (int i = 0; i < socket_count; i++) {
+        FD_SET(sockets[i], &readfds);
+        if (sockets[i] > maxfd) maxfd = sockets[i];
+    }
+
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
 
-    int ret = select(sock + 1, &readfds, NULL, NULL, &tv);
-    if (ret <= 0 || !FD_ISSET(sock, &readfds))
-        return 0;
+    int ret = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+    if (ret <= 0) return 0;
 
-    // Data available — cmdns_query_recv's internal recvfrom will succeed
-    return cmdns_query_recv(sock, buffer, capacity, callback, user_data, query_id);
+    int ready = 0;
+    for (int i = 0; i < socket_count; i++) {
+        if (FD_ISSET(sockets[i], &readfds)) {
+            ready_indices[ready++] = i;
+        }
+    }
+    return ready;
 }
 
 int cmdns_socket_open_ipv4_iface(const struct sockaddr_in* saddr, const char* ifname) {
