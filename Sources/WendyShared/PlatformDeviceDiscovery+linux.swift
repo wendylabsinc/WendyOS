@@ -1,11 +1,9 @@
 #if os(Linux)
-    import NIOCore
     import Foundation
     import Logging
+    import NIOCore
+    import Subprocess
     import SwiftMDNS
-    #if os(Linux)
-        import Subprocess
-    #endif
 
     public struct PlatformDeviceDiscovery: DeviceDiscovery {
         private let logger: Logger
