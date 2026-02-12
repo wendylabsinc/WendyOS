@@ -31,17 +31,23 @@ public struct DevicesCollection: Encodable, Sendable {
     public var ethernetDevices: [EthernetInterface]
     public var lanDevices: [LANDevice]
     public var bluetoothDevices: [BluetoothDevice]
+    public var dockerDesktop: Bool
+    public var local: Bool
 
     public init(
         usb: [USBDevice] = [],
         ethernet: [EthernetInterface] = [],
         lan: [LANDevice] = [],
-        bluetooth: [BluetoothDevice] = []
+        bluetooth: [BluetoothDevice] = [],
+        dockerDesktop: Bool = true,
+        local: Bool = true
     ) {
         self.usbDevices = usb
         self.ethernetDevices = ethernet
         self.lanDevices = lan
         self.bluetoothDevices = bluetooth
+        self.dockerDesktop = dockerDesktop
+        self.local = local
     }
 
     /// Whether the collection contains no devices
