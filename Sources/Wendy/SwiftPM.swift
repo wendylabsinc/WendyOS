@@ -225,7 +225,7 @@ public struct SwiftPM: Sendable {
 
     /// Build the Swift package.
     public func buildWithOutput(_ options: BuildOption...) async throws -> String {
-        let allArgs = arguments(["build"] + options.flatMap(\.arguments))
+        let allArgs = arguments(["build", "--force-resolved-versions"] + options.flatMap(\.arguments))
 
         let result = try await Subprocess.run(
             .name(executableName),
@@ -254,7 +254,10 @@ public struct SwiftPM: Sendable {
     /// Build the Swift package.
     public func build(_ options: BuildOption...) async throws {
         let allArgs = arguments(
-            ["build"] + options.flatMap(\.arguments)
+            [
+                "build",
+                "--force-resolved-versions"
+            ] + options.flatMap(\.arguments)
         )
 
         let result = try await cliOutput.withProgress(
@@ -287,9 +290,9 @@ public struct SwiftPM: Sendable {
         }
     }
 
-    public func buildAndPushContainer(
+    func buildAndPushContainer(
         swiftSDK: String,
-        product: Executable,
+        product: Serialization.Product,
         device: String,
         entrypoint: String?,
         additionalEnv: [String],
@@ -297,6 +300,14 @@ public struct SwiftPM: Sendable {
         resources: [(source: String, destination: String)],
         onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
     ) async throws {
+        guard case .executable = product.type else {
+            throw CLIError.invalidArgument(
+                name: "product",
+                value: product.name,
+                reason: "Only executable products can be built into containers"
+            )
+        }
+
         var flags = [
             "package",
             "--swift-sdk=\(swiftSDK)",
@@ -332,6 +343,7 @@ public struct SwiftPM: Sendable {
     public func addDependency(url: String, from: String) async throws {
         let args = arguments([
             "package",
+            "--force-resolved-versions",
             "add-dependency",
             url,
             "--from",
@@ -355,7 +367,9 @@ public struct SwiftPM: Sendable {
     }
 
     public func showDependencies() async throws -> Dependency {
-        let args = arguments(["package", "show-dependencies", "--format", "json"])
+        let args = arguments(["package", 
+            "--force-resolved-versions",
+            "show-dependencies", "--format", "json"])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,
@@ -380,8 +394,38 @@ public struct SwiftPM: Sendable {
         }
     }
 
+    func describe() async throws -> Serialization.Package {
+        let args = arguments(["package", 
+            "--force-resolved-versions",
+            "describe", "--type", "json"])
+        let result = try await Subprocess.run(
+            Subprocess.Executable.name(executableName),
+            arguments: args,
+            output: .string(limit: 1_000_000),
+            error: .discarded
+        )
+
+        if result.terminationStatus.isSuccess, let output = result.standardOutput {
+            return try JSONDecoder().decode(Serialization.Package.self, from: ByteBuffer(string: output))
+        } else {
+            let exitCode: Int
+            switch result.terminationStatus {
+            case .exited(let code), .unhandledException(let code):
+                exitCode = Int(code)
+            }
+            throw SubprocessError(
+                command: args.description,
+                exitCode: exitCode,
+                output: result.standardOutput ?? "",
+                error: ""
+            )
+        }
+    }
+
     public func showExecutables() async throws -> [Executable] {
-        let args = arguments(["package", "show-executables", "--format", "json"])
+        let args = arguments(["package", 
+            "--force-resolved-versions",
+            "show-executables", "--format", "json"])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,

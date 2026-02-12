@@ -83,6 +83,22 @@ struct DiscoverCommand: AsyncParsableCommand {
                             }
                         }
                     }
+
+                    // External provider discovery
+                    if type == .all {
+                        group.addTask {
+                            while !Task.isCancelled {
+                                var allExternal = [ExternalDevice]()
+                                for provider in DeviceProviderRegistry.availableProviders {
+                                    if let devices = try? await provider.discoverDevices() {
+                                        allExternal.append(contentsOf: devices)
+                                    }
+                                }
+                                await deviceCache.updateExternalDevices(with: allExternal)
+                                try await Task.sleep(for: .seconds(3))
+                            }
+                        }
+                    }
                 }
             } catch is CancellationError {
                 // Timeout reached - this is expected
@@ -118,6 +134,8 @@ struct DiscoverCommand: AsyncParsableCommand {
                         case .bluetooth(let ble):
                             connectionParts.append("BLE: \(ble.address)")
                             connectionParts.append("RSSI: \(ble.rssi)")
+                        case .external(let ext):
+                            connectionParts.append("\(ext.providerKey): \(ext.id)")
                         case .usb, .ethernet:
                             break
                         }
@@ -232,6 +250,23 @@ struct DiscoverCommand: AsyncParsableCommand {
                     }
 
                     try await Task.sleep(for: .seconds(2))
+                }
+            }
+
+            // External provider discovery task (poll every 3 seconds)
+            group.addTask {
+                while !Task.isCancelled {
+                    var allExternal = [ExternalDevice]()
+                    for provider in DeviceProviderRegistry.availableProviders {
+                        do {
+                            let devices = try await provider.discoverDevices()
+                            allExternal.append(contentsOf: devices)
+                        } catch {
+                            logger.debug("Provider \(provider.key) discovery failed: \(error)")
+                        }
+                    }
+                    await deviceCache.updateExternalDevices(with: allExternal)
+                    try await Task.sleep(for: .seconds(3))
                 }
             }
         }

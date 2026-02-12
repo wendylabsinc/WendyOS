@@ -73,8 +73,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     )
     var executable: String?
 
-    @Argument(parsing: .captureForPassthrough)
-    var passthroughArgs: [String] = []
+    @Argument(
+        help: "The product to build. Required when a package has multiple products."
+    )
+    var product: String?
 
     @OptionGroup
     var restartOptions: RestartOptions
@@ -171,7 +173,10 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             command.autoAccept = shouldAutoAccept
             command.target = target
             command.executable = executable
+            command.product = product
             command.target = target
+            command.debug = debug
+            
             try await command.withContainer(
                 restartPolicy: buildRestartPolicy()
             ) { builtApp in
@@ -198,6 +203,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                             endpoint: builtApp.endpoint
                         )
                     }
+                case .provider(let providerBuiltApp):
+                    try await runProviderApp(providerBuiltApp)
                 }
             }
         }
@@ -246,6 +253,52 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 "Failed to stop container",
                 metadata: ["container": "\(imageName)", "error": "\(error)"]
             )
+        }
+    }
+
+    func runProviderApp(_ builtApp: ProviderBuiltApp) async throws {
+        let (stream, continuation) = AsyncStream<ProviderRunOutput>.makeStream()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await builtApp.provider.run(
+                    builtApp,
+                    detach: isDetached,
+                    output: continuation
+                )
+            }
+
+            group.addTask {
+                for await event in stream {
+                    switch event {
+                    case .started:
+                        cliOutput.success(
+                            "Started app \(builtApp.appName) on \(builtApp.device.displayName)"
+                        )
+                        if isDetached {
+                            return
+                        }
+                    case .stdout(let data):
+                        data.withUnsafeBytes { bytes in
+                            _ = write(STDOUT_FILENO, bytes.baseAddress!, bytes.count)
+                        }
+                    case .stderr(let data):
+                        data.withUnsafeBytes { bytes in
+                            _ = write(STDERR_FILENO, bytes.baseAddress!, bytes.count)
+                        }
+                    }
+                }
+            }
+
+            do {
+                try await group.next()
+                group.cancelAll()
+            } catch {
+                if !isDetached {
+                    try? await builtApp.provider.stop(builtApp)
+                }
+                throw error
+            }
         }
     }
 

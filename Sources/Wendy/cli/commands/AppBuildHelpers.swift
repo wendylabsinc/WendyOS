@@ -103,6 +103,7 @@ enum AppBuildHelpers {
         case failedToUploadLayers(Int)
         case noExecutableTarget
         case invalidExecutableTarget(String)
+        case invalidProduct(String)
         case multipleExecutableTargets([String])
         case noManifestFound
 
@@ -114,6 +115,8 @@ enum AppBuildHelpers {
                 return "No executable target found in package"
             case .invalidExecutableTarget(let name):
                 return "No executable target named '\(name)' found in package"
+            case .invalidProduct(let name):
+                return "No product named '\(name)' found in package"
             case .multipleExecutableTargets(let names):
                 return
                     "multiple executable targets available, but none specified: \(names.joined(separator: ", "))"

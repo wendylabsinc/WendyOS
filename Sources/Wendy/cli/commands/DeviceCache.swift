@@ -46,6 +46,8 @@ actor DeviceCache {
     private var lanDevices: [String: (device: LANDevice, lastSeen: ContinuousClock.Instant)] = [:]
     private var bluetoothDevices:
         [String: (device: BluetoothDevice, lastSeen: ContinuousClock.Instant)] = [:]
+    private var externalDevices:
+        [String: (device: ExternalDevice, lastSeen: ContinuousClock.Instant)] = [:]
 
     /// Stale timeout for BLE devices (slower discovery)
     private let bleStaleTimeout: Duration = .seconds(60)
@@ -113,6 +115,19 @@ actor DeviceCache {
         lastBLEUpdateTime = now
     }
 
+    /// Update cache with external provider devices
+    func updateExternalDevices(with devices: [ExternalDevice]) {
+        let now = ContinuousClock.now
+
+        for device in devices {
+            let key = device.id
+            externalDevices[key] = (device, now)
+        }
+
+        removeStaleDevices(olderThan: now)
+        lastFastUpdateTime = now
+    }
+
     /// Update cache with all device types (for backwards compatibility with JSON streaming)
     func update(with collection: DevicesCollection) {
         let now = ContinuousClock.now
@@ -167,6 +182,7 @@ actor DeviceCache {
         ethernetDevices = ethernetDevices.filter { $0.value.lastSeen > fastCutoff }
         lanDevices = lanDevices.filter { $0.value.lastSeen > fastCutoff }
         bluetoothDevices = bluetoothDevices.filter { $0.value.lastSeen > bleCutoff }
+        externalDevices = externalDevices.filter { $0.value.lastSeen > fastCutoff }
     }
 
     func groupedDevices() -> DevicesWithTimingResult {
@@ -174,15 +190,17 @@ actor DeviceCache {
             usb: usbDevices.values.map(\.device),
             ethernet: ethernetDevices.values.map(\.device),
             lan: lanDevices.values.map(\.device),
-            bluetooth: bluetoothDevices.values.map(\.device)
+            bluetooth: bluetoothDevices.values.map(\.device),
+            external: externalDevices.values.map(\.device)
         )
 
         // Build lookup using unique keys that match how we store devices
-        // USB: vendorId-productId-serialNumber, Ethernet: name, LAN: hostname, BLE: id
+        // USB: vendorId-productId-serialNumber, Ethernet: name, LAN: hostname, BLE: id, External: id
         var usbLastSeen: [String: ContinuousClock.Instant] = [:]
         var ethernetLastSeen: [String: ContinuousClock.Instant] = [:]
         var lanLastSeen: [String: ContinuousClock.Instant] = [:]
         var bleLastSeen: [String: ContinuousClock.Instant] = [:]
+        var externalLastSeen: [String: ContinuousClock.Instant] = [:]
 
         for (key, value) in usbDevices {
             usbLastSeen[key] = value.lastSeen
@@ -195,6 +213,9 @@ actor DeviceCache {
         }
         for (key, value) in bluetoothDevices {
             bleLastSeen[key] = value.lastSeen
+        }
+        for (key, value) in externalDevices {
+            externalLastSeen[key] = value.lastSeen
         }
 
         let devices = collection.groupedDevices().map { groupedDevice in
@@ -212,6 +233,8 @@ actor DeviceCache {
                     lastSeen = lanLastSeen[device.hostname] ?? .now
                 case .bluetooth(let device):
                     lastSeen = bleLastSeen[device.id] ?? .now
+                case .external(let device):
+                    lastSeen = externalLastSeen[device.id] ?? .now
                 }
                 return InterfaceWithTiming(interface: interface, lastSeen: lastSeen)
             }
@@ -232,7 +255,8 @@ actor DeviceCache {
             usb: usbDevices.values.map(\.device),
             ethernet: ethernetDevices.values.map(\.device),
             lan: lanDevices.values.map(\.device),
-            bluetooth: bluetoothDevices.values.map(\.device)
+            bluetooth: bluetoothDevices.values.map(\.device),
+            external: externalDevices.values.map(\.device)
         )
     }
 }
@@ -250,7 +274,7 @@ extension DevicesWithTimingResult {
             switch interface {
             case .bluetooth:
                 return lastBLEDiscoveryTime
-            case .usb, .ethernet, .lan:
+            case .usb, .ethernet, .lan, .external:
                 return lastFastDiscoveryTime
             }
         }
@@ -294,6 +318,8 @@ extension DevicesWithTimingResult {
                     } else {
                         connectionParts.append("(BLE)")
                     }
+                case .external(let ext):
+                    connectionParts.append("\(ext.providerKey): \(ext.id)")
                 case .usb, .ethernet:
                     break
                 }

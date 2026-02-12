@@ -83,6 +83,8 @@ func withAgentClientAndHostname<R: Sendable>(
         throw CLIError.invalidEndpoint("docker")
     case .local:
         throw CLIError.invalidEndpoint("localhost")
+    case .external:
+        throw CLIError.invalidEndpoint("external devices do not support agent connections")
     }
 }
 
@@ -119,6 +121,8 @@ private func executeWithDeviceAndHostname<R: Sendable>(
         throw CLIError.invalidEndpoint("docker")
     case .local:
         throw CLIError.invalidEndpoint("localhost")
+    case .external:
+        throw CLIError.invalidEndpoint("external devices do not support agent connections")
     }
 }
 

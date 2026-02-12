@@ -7,20 +7,8 @@ struct PackageCache: Sendable {
     struct CachedPackageInfo: Codable, Sendable {
         let packageSwiftHash: String
         let packageIdentity: String
-        let executables: [SwiftPM.Executable]
-        let containerPluginVersion: String?
-
-        init(
-            packageSwiftHash: String,
-            packageIdentity: String,
-            executables: [SwiftPM.Executable],
-            containerPluginVersion: String? = nil
-        ) {
-            self.packageSwiftHash = packageSwiftHash
-            self.packageIdentity = packageIdentity
-            self.executables = executables
-            self.containerPluginVersion = containerPluginVersion
-        }
+        let products: [Serialization.Product]
+        let hasContainerPlugin: Bool
     }
 
     let projectPath: URL
@@ -54,9 +42,8 @@ struct PackageCache: Sendable {
 
     /// Write package info to cache
     func write(_ info: CachedPackageInfo) throws {
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: cacheDirectory.path) {
-            try fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: cacheDirectory.path) {
+            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         }
 
         let data = try JSONEncoder().encode(info)
@@ -81,7 +68,7 @@ struct PackageCache: Sendable {
         if cached.packageSwiftHash == currentHash {
             return cached
         }
-
+        
         return nil
     }
 }

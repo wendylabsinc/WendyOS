@@ -32,6 +32,9 @@ struct WendyCLI {
             || ProcessInfo.processInfo.arguments.contains("-j")
             || isatty(STDOUT_FILENO) == 0
 
+        // Initialize device provider plugins (filter by availability)
+        await DeviceProviderRegistry.initialize()
+
         // Check for CLI updates (runs once per day, non-blocking)
         await UpdateChecker.checkForUpdatesIfNeeded()
 

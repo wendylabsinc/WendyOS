@@ -11,6 +11,7 @@ public enum InterfaceType: String, Sendable, Hashable {
     case ethernet = "Ethernet"
     case lan = "LAN"
     case bluetooth = "Bluetooth"
+    case external = "External"
 }
 
 // Add to DeviceModels.swift or create a separate file like Device.swift in the domain folder
@@ -31,6 +32,7 @@ public struct DevicesCollection: Encodable, Sendable {
     public var ethernetDevices: [EthernetInterface]
     public var lanDevices: [LANDevice]
     public var bluetoothDevices: [BluetoothDevice]
+    public var externalDevices: [ExternalDevice]
     public var dockerDesktop: Bool
     public var local: Bool
 
@@ -39,6 +41,7 @@ public struct DevicesCollection: Encodable, Sendable {
         ethernet: [EthernetInterface] = [],
         lan: [LANDevice] = [],
         bluetooth: [BluetoothDevice] = [],
+        external: [ExternalDevice] = [],
         dockerDesktop: Bool = true,
         local: Bool = true
     ) {
@@ -46,6 +49,7 @@ public struct DevicesCollection: Encodable, Sendable {
         self.ethernetDevices = ethernet
         self.lanDevices = lan
         self.bluetoothDevices = bluetooth
+        self.externalDevices = external
         self.dockerDesktop = dockerDesktop
         self.local = local
     }
@@ -53,7 +57,7 @@ public struct DevicesCollection: Encodable, Sendable {
     /// Whether the collection contains no devices
     public var isEmpty: Bool {
         return usbDevices.isEmpty && ethernetDevices.isEmpty && lanDevices.isEmpty
-            && bluetoothDevices.isEmpty
+            && bluetoothDevices.isEmpty && externalDevices.isEmpty
     }
 
     /// The number of unique devices (counting each unique device name once)
@@ -105,6 +109,9 @@ public struct DevicesCollection: Encodable, Sendable {
             names.insert(normalizeDeviceName(device.displayName))
         }
         for device in bluetoothDevices {
+            names.insert(normalizeDeviceName(device.displayName))
+        }
+        for device in externalDevices {
             names.insert(normalizeDeviceName(device.displayName))
         }
         return names
@@ -279,6 +286,16 @@ public struct DevicesCollection: Encodable, Sendable {
             }
         }
 
+        // Group External (provider) devices
+        for device in externalDevices {
+            let normalizedName = normalizeDeviceName(device.displayName)
+            var group =
+                deviceGroups[normalizedName] ?? (displayName: device.displayName, interfaces: [])
+            group.displayName = betterDisplayName(group.displayName, device.displayName)
+            group.interfaces.append(.external(device))
+            deviceGroups[normalizedName] = group
+        }
+
         // Sort by display name, then by first interface identifier for stability
         return deviceGroups.map { GroupedDevice(name: $1.displayName, interfaces: $1.interfaces) }
             .sorted { lhs, rhs in
@@ -298,6 +315,7 @@ public struct DevicesCollection: Encodable, Sendable {
         case ethernet(EthernetInterface)
         case lan(LANDevice)
         case bluetooth(BluetoothDevice)
+        case external(ExternalDevice)
 
         public var type: InterfaceType {
             switch self {
@@ -305,6 +323,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet: return .ethernet
             case .lan: return .lan
             case .bluetooth: return .bluetooth
+            case .external: return .external
             }
         }
 
@@ -314,6 +333,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet: return "Ethernet"
             case .lan: return "LAN"
             case .bluetooth: return "BLE"
+            case .external(let device): return device.providerKey
             }
         }
 
@@ -354,6 +374,12 @@ public struct DevicesCollection: Encodable, Sendable {
                     string += " (RSSI: \(device.rssi))"
                 }
                 return string
+            case .external(let device):
+                string += "\(device.providerKey): \(device.displayName)"
+                if let arch = device.cpuArchitecture {
+                    string += " (\(arch))"
+                }
+                return string
             }
         }
 
@@ -363,6 +389,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet(let device): return device.displayName
             case .lan(let device): return device.displayName
             case .bluetooth(let device): return device.displayName
+            case .external(let device): return device.displayName
             }
         }
 
@@ -372,6 +399,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet(let device): return device.agentVersion
             case .lan(let device): return device.agentVersion
             case .bluetooth(let device): return device.agentVersion
+            case .external(let device): return device.agentVersion
             }
         }
 
@@ -393,6 +421,7 @@ public struct DevicesCollection: Encodable, Sendable {
             case .ethernet(let device): return device.name
             case .lan(let device): return device.hostname
             case .bluetooth(let device): return device.id
+            case .external(let device): return device.id
             }
         }
     }

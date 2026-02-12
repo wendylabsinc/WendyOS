@@ -31,8 +31,12 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     /// Whether prompts should be auto-accepted (either explicit -y or JSON mode)
     var shouldAutoAccept: Bool { autoAccept || JSONMode.isEnabled }
 
-    @Option(
-        name: .shortAndLong,
+    @Argument(
+        help: "The product to build. Required when a package has multiple products."
+    )
+    var product: String?
+
+    @Argument(
         help: "The executable to build. Required when a package has multiple executable targets."
     )
     var executable: String?
@@ -76,6 +80,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             case dockerDesktop(container: String)
             case localExecutable(path: String)
             case agent(GRPCClient<GRPCTransport>, appName: String)
+            case provider(ProviderBuiltApp)
         }
     }
 
@@ -271,6 +276,10 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             throw CLIError.unsupportedPlatform(
                 reason: "Bluetooth connections not supported for uploading apps yet"
             )
+        case .external(let device):
+            throw CLIError.unsupportedPlatform(
+                reason: "Dockerfile builds are not supported for \(device.providerKey) devices"
+            )
         case .lan(let host, let port, defaultDevice: _):
             try await withAgentGRPCClient(
                 host: host,
@@ -350,6 +359,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 BuiltAppContext
             ) async throws -> Void
     ) async throws {
+        // TODO: Swiftly is super slow on airplane mode
         try await AppBuildHelpers.checkSwiftRequirements(
             swiftVersion: swiftVersion,
             swiftSDK: swiftSDK,
@@ -363,13 +373,13 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let cache = PackageCache(projectPath: projectPath)
 
         // Try to use cached data for executables and plugin status
-        let allExecutables: [SwiftPM.Executable]
+        let allProducts: [Serialization.Product]
         let packageIdentity: String
         var containerPluginVersion: String? = nil
 
         if let cached = cache.getValidCache() {
             // Cache hit - use cached data
-            allExecutables = cached.executables
+            allProducts = cached.products
             packageIdentity = cached.packageIdentity
             containerPluginVersion = cached.containerPluginVersion
         } else {
@@ -382,15 +392,15 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 try await swiftPM.showDependencies()
             }
 
-            let executables = try await cliOutput.withProgress(
-                message: "Finding executables",
-                successMessage: "Found executables",
-                errorMessage: "Failed to find executables"
+            let dump = try await cliOutput.withProgress(
+                message: "Finding products",
+                successMessage: "Found products",
+                errorMessage: "Failed to find products"
             ) {
-                try await swiftPM.showExecutables()
+                try await swiftPM.describe()
             }
 
-            allExecutables = executables
+            allProducts = dump.products
             packageIdentity = package.identity
             let containerPlugin = package.findDependency(urlSuffix: "swift-container-plugin")
 
@@ -400,8 +410,8 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     PackageCache.CachedPackageInfo(
                         packageSwiftHash: hash,
                         packageIdentity: packageIdentity,
-                        executables: allExecutables,
-                        containerPluginVersion: containerPlugin?.version
+                        products: allProducts,
+                        hasContainerPlugin: hasContainerPlugin
                     )
                 )
             }
@@ -437,60 +447,71 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             }
         }
 
-        let executableTargets = allExecutables.filter {
-            $0.package == packageIdentity || $0.package == nil
-        }
-
         // Use specified executable or handle multiple executable targets
-        let executableTarget: SwiftPM.Executable
+        let target: Serialization.Product
         if let executableName = executable {
-            guard let target = executableTargets.first(where: { $0.name == executableName }) else {
+            guard let product = allProducts.first(where: { product in
+                if product.name == executableName, case .executable = product.type {
+                    return true
+                }
+                return false
+            }) else {
                 throw AppBuildHelpers.Error.invalidExecutableTarget(executableName)
             }
-            executableTarget = target
-        } else if executableTargets.isEmpty {
+            target = product
+        } else if let productName = self.product {
+            guard let product = allProducts.first(where: { product in
+                if product.name == productName {
+                    return true
+                }
+                return false
+            }) else {
+                throw AppBuildHelpers.Error.invalidProduct(productName)
+            }
+            target = product
+        } else if allProducts.isEmpty {
             if JSONMode.isEnabled {
                 JSONErrorResponse(
-                    error: "no_executable_targets",
-                    reason: "No executable targets found in package"
+                    error: "no_product_targets",
+                    reason: "No product targets found in package"
                 ).print()
                 return
             }
-            cliOutput.error("No executable targets found in package")
+            cliOutput.error("No product targets found in package")
             return
-        } else if executableTargets.count == 1 {
-            executableTarget = executableTargets[0]
+        } else if allProducts.count == 1 {
+            target = allProducts[0]
         } else if JSONMode.isEnabled {
             // Multiple executable targets and no --executable specified
             jsonModeRequiresArgument(
-                argument: "executable",
+                argument: "product",
                 description:
-                    "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
+                    "Multiple product available: \(allProducts.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
             )
         } else {
             let selectedName = try await cliOutput.singleChoicePrompt(
-                title: "Select executable target to build",
-                question: "Which executable target do you want to build?",
-                options: executableTargets.map(\.name)
+                title: "Select product to build",
+                question: "Which product do you want to build?",
+                options: allProducts.map(\.name)
             )
-            executableTarget = executableTargets.first(where: { $0.name == selectedName })!
+            target = allProducts.first(where: { $0.name == selectedName })!
         }
 
         // Use the executable target name for image naming to match what swift container plugin uses
-        let appName = executableTarget.name.lowercased()
+        let appName = target.name.lowercased()
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let endpoint = try await target.read(
+        let endpoint = try await self.target.read(
             title: "Which device do you want to build this app for?",
             includeLocal: true
         )
 
         switch endpoint {
         case .local:
-            try await swiftPM.build(.product(executableTarget.name))
+            try await swiftPM.build(.product(target.name))
             try await perform(
                 BuiltAppContext(
                     app: .localExecutable(
-                        path: url.appendingPathComponent(".build/debug/\(executableTarget.name)")
+                        path: url.appendingPathComponent(".build/debug/\(target.name)")
                             .path
                     ),
                     endpoint: .init(remote: .local)
@@ -506,6 +527,28 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         case .bluetooth:
             throw CLIError.unsupportedPlatform(
                 reason: "Bluetooth connections not supported for uploading apps yet"
+            )
+        case .external(let device):
+            guard let provider = DeviceProviderRegistry.provider(forKey: device.providerKey) else {
+                throw CLIError.unsupportedPlatform(
+                    reason: "No provider found for '\(device.providerKey)'"
+                )
+            }
+
+            try await provider.checkRequirements(shouldAutoAccept: shouldAutoAccept)
+
+            let builtApp = try await provider.build(
+                for: device,
+                projectPath: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+                executable: target.name,
+                debug: debug
+            )
+
+            try await perform(
+                BuiltAppContext(
+                    app: .provider(builtApp),
+                    endpoint: .init(remote: .external(device))
+                )
             )
         case .lan(let host, let port, defaultDevice: _):
             try await checkContainerPlugin()
@@ -569,7 +612,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     ) { emit in
                         try await swiftPM.buildAndPushContainer(
                             swiftSDK: swiftSDK,
-                            product: executableTarget,
+                            product: target,
                             device: host,
                             entrypoint: finalEntrypoint,
                             arguments: finalArguments,

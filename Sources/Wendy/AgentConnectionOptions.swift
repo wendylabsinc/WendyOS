@@ -11,6 +11,7 @@ enum SelectedDevice: Sendable {
     case docker
     case lan(host: String, port: Int, defaultDevice: Bool)
     case bluetooth(peripheral: Peripheral, address: String)
+    case external(ExternalDevice)
 
     init(endpoint: TargetOptions.Endpoint) {
         switch endpoint.remote {
@@ -26,6 +27,8 @@ enum SelectedDevice: Sendable {
                 name: "WendyOS Device \(uuid)"
             )
             self = .bluetooth(peripheral: peripheral, address: uuid)
+        case .external(let device):
+            self = .external(device)
         }
     }
 
@@ -54,6 +57,7 @@ struct TargetOptions: ParsableArguments {
             case docker
             case grpc(host: String, port: Int)
             case bluetooth(uuid: String)
+            case external(ExternalDevice)
         }
 
         var remote: Remote
@@ -128,6 +132,8 @@ struct TargetOptions: ParsableArguments {
                 return "\(host):\(port)"
             case .bluetooth(let uuid):
                 return uuid
+            case .external(let device):
+                return "\(device.displayName) [\(device.providerKey)]"
             }
         }
     }
@@ -289,6 +295,9 @@ extension TargetOptions {
                         if interfaces.contains(.bluetooth), includeBluetooth {
                             return true
                         }
+                        if interfaces.contains(.external) {
+                            return true
+                        }
                         return device.isLocalhost || device.isDocker
                     }
                 },
@@ -330,6 +339,8 @@ extension TargetOptions {
                     name: btDevice.displayName
                 )
                 return .bluetooth(peripheral: peripheral, address: btDevice.address)
+            case .external(let externalDevice):
+                return .external(externalDevice)
             default:
                 ()
             }
