@@ -18,8 +18,132 @@
         package let text: [String: String]
     }
 
+    /// A socket opened on a specific network interface.
+    private struct InterfaceSocket {
+        let fd: Int32
+        let interfaceName: String
+    }
+
     /// Browse for mDNS services on the local network using the C mdns library.
     package enum MdnsBrowser {
+
+        /// Resolve a `.local` hostname to IP addresses using mDNS A/AAAA queries.
+        /// Returns addresses with scope IDs for link-local IPv6 (e.g., `fe80::1%eth0`).
+        /// Prefers non-link-local IPv4 addresses.
+        package static func resolveHostname(
+            _ hostname: String,
+            timeout: Duration = .seconds(2),
+            logger: Logger
+        ) async -> [String] {
+            await withCheckedContinuation { continuation in
+                Task.detached {
+                    let result = performResolve(
+                        hostname: hostname,
+                        timeout: timeout,
+                        logger: logger
+                    )
+                    continuation.resume(returning: result)
+                }
+            }
+        }
+
+        private static func performResolve(
+            hostname: String,
+            timeout: Duration,
+            logger: Logger
+        ) -> [String] {
+            let sockets = openMulticastSockets(logger: logger)
+            defer {
+                for s in sockets { cmdns_socket_close(s.fd) }
+            }
+            guard !sockets.isEmpty else { return [] }
+
+            // Ensure hostname has trailing dot for mDNS wire format
+            let queryName = hostname.hasSuffix(".") ? hostname : hostname + "."
+
+            // Send A and AAAA queries on all sockets
+            var sendBuf = [UInt8](repeating: 0, count: 2048)
+            for s in sockets {
+                for recordType in [CMDNS_RECORDTYPE_A, CMDNS_RECORDTYPE_AAAA] {
+                    queryName.withCString { cstr in
+                        _ = cmdns_query_send(
+                            s.fd,
+                            UInt16(recordType),
+                            cstr,
+                            queryName.utf8.count,
+                            &sendBuf,
+                            sendBuf.count,
+                            0
+                        )
+                    }
+                }
+            }
+
+            // Collect addresses from responses
+            let context = ResolveContext()
+            let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
+            let deadline = ContinuousClock.now + timeout
+            var recvBuf = [UInt8](repeating: 0, count: 4096)
+            let fds = sockets.map(\.fd)
+            var readyIndices = [Int32](repeating: 0, count: sockets.count)
+
+            while !Task.isCancelled {
+                let remaining = deadline - ContinuousClock.now
+                let remainingMs = Int32(
+                    max(
+                        0,
+                        remaining.components.seconds * 1000
+                            + remaining.components.attoseconds / 1_000_000_000_000_000
+                    )
+                )
+                if remainingMs <= 0 { break }
+
+                let waitMs = min(remainingMs, 200)
+                let readyCount = fds.withUnsafeBufferPointer { socksBuf in
+                    readyIndices.withUnsafeMutableBufferPointer { readyBuf in
+                        cmdns_select_multi(
+                            socksBuf.baseAddress,
+                            Int32(fds.count),
+                            readyBuf.baseAddress,
+                            waitMs
+                        )
+                    }
+                }
+                guard readyCount > 0 else { continue }
+
+                for r in 0..<Int(readyCount) {
+                    let idx = Int(readyIndices[r])
+                    let s = sockets[idx]
+                    context.currentInterface = s.interfaceName
+
+                    let recvCount = cmdns_query_recv(
+                        s.fd,
+                        &recvBuf,
+                        recvBuf.count,
+                        resolveCallback,
+                        ctxPtr,
+                        0
+                    )
+                    guard recvCount > 0 else { continue }
+                }
+
+                // If we have at least one non-link-local IPv4, we can stop early
+                if context.addresses.contains(where: {
+                    $0.contains(".") && !$0.hasPrefix("169.254.")
+                }) {
+                    break
+                }
+            }
+
+            logger.debug(
+                "mDNS hostname resolution",
+                metadata: [
+                    "hostname": "\(hostname)",
+                    "addresses": "\(context.addresses)",
+                ]
+            )
+            return context.addresses
+        }
 
         /// Browse for services of the given type, yielding entries as they are discovered.
         package static func browse(
@@ -58,8 +182,8 @@
             // 1. Open sockets on all multicast-capable interfaces
             let sockets = openMulticastSockets(logger: logger)
             defer {
-                for sock in sockets {
-                    cmdns_socket_close(sock)
+                for s in sockets {
+                    cmdns_socket_close(s.fd)
                 }
             }
 
@@ -75,10 +199,10 @@
 
             // 2. Send PTR queries on all sockets
             var sendBuf = [UInt8](repeating: 0, count: 2048)
-            for sock in sockets {
+            for s in sockets {
                 let result = serviceType.withCString { cstr in
                     cmdns_query_send(
-                        sock,
+                        s.fd,
                         UInt16(CMDNS_RECORDTYPE_PTR),
                         cstr,
                         serviceType.utf8.count,
@@ -90,7 +214,7 @@
                 if result < 0 {
                     logger.warning(
                         "Failed to send PTR query",
-                        metadata: ["socket": "\(sock)"]
+                        metadata: ["socket": "\(s.fd)"]
                     )
                 }
             }
@@ -104,6 +228,7 @@
             let context = BrowseContext(serviceType: serviceType)
             let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
 
+            let fds = sockets.map(\.fd)
             var readyIndices = [Int32](repeating: 0, count: sockets.count)
 
             while !Task.isCancelled {
@@ -120,11 +245,11 @@
                 let waitMs = min(remainingMs, 200)
 
                 // Wait for data on any socket (single select call)
-                let readyCount = sockets.withUnsafeBufferPointer { socksBuf in
+                let readyCount = fds.withUnsafeBufferPointer { socksBuf in
                     readyIndices.withUnsafeMutableBufferPointer { readyBuf in
                         cmdns_select_multi(
                             socksBuf.baseAddress,
-                            Int32(sockets.count),
+                            Int32(fds.count),
                             readyBuf.baseAddress,
                             waitMs
                         )
@@ -135,7 +260,7 @@
 
                 // Read from each ready socket
                 for r in 0..<Int(readyCount) {
-                    let sock = sockets[Int(readyIndices[r])]
+                    let sock = sockets[Int(readyIndices[r])].fd
 
                     // Reset context for this packet
                     context.currentPartials.removeAll()
@@ -190,8 +315,8 @@
 
         // MARK: - Interface enumeration
 
-        private static func openMulticastSockets(logger: Logger) -> [Int32] {
-            var sockets: [Int32] = []
+        private static func openMulticastSockets(logger: Logger) -> [InterfaceSocket] {
+            var sockets: [InterfaceSocket] = []
             var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
 
             guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else {
@@ -235,7 +360,7 @@
                             "Opened IPv4 mDNS socket",
                             metadata: ["interface": "\(name)", "fd": "\(sock)"]
                         )
-                        sockets.append(sock)
+                        sockets.append(InterfaceSocket(fd: sock, interfaceName: name))
                     } else {
                         logger.warning(
                             "Failed to open IPv4 socket",
@@ -255,7 +380,7 @@
                             "Opened IPv6 mDNS socket",
                             metadata: ["interface": "\(name)", "fd": "\(sock)"]
                         )
-                        sockets.append(sock)
+                        sockets.append(InterfaceSocket(fd: sock, interfaceName: name))
                     } else {
                         logger.warning(
                             "Failed to open IPv6 socket",
@@ -272,7 +397,11 @@
     // MARK: - Browse context & callback
 
     /// Accumulates records from a single response packet.
-    private final class PartialService {
+    // These context classes are only accessed from a single Task.detached and the synchronous
+    // C callbacks within it — they never cross concurrency domains. Marked @unchecked Sendable
+    // because they're passed through C void* user_data pointers via Unmanaged.
+
+    private final class PartialService: @unchecked Sendable {
         var name: String
         var hostname: String?
         var port: UInt16?
@@ -285,7 +414,7 @@
     }
 
     /// Context passed through the C callback via user_data pointer.
-    private final class BrowseContext {
+    private final class BrowseContext: @unchecked Sendable {
         let serviceType: String
         /// Partials accumulated during one cmdns_query_recv call, keyed by instance FQDN.
         var currentPartials: [String: PartialService] = [:]
@@ -471,6 +600,73 @@
                     let partial = ctx.currentPartials[instanceKey]
                 {
                     partial.addresses.append(ip)
+                }
+            }
+
+        default:
+            break
+        }
+
+        return 0
+    }
+
+    // MARK: - Hostname resolution context & callback
+
+    /// Context for hostname resolution (A/AAAA queries only).
+    private final class ResolveContext: @unchecked Sendable {
+        var addresses: [String] = []
+        /// Set before each cmdns_query_recv call to the interface name of the receiving socket.
+        var currentInterface: String = ""
+    }
+
+    /// C callback for hostname resolution — only handles A and AAAA records.
+    private let resolveCallback: cmdns_callback_fn = {
+        sock,
+        from,
+        addrlen,
+        entryType,
+        queryId,
+        rtype,
+        rclass,
+        ttl,
+        data,
+        size,
+        nameOffset,
+        nameLength,
+        recordOffset,
+        recordLength,
+        userData
+            -> Int32 in
+
+        guard let userData else { return 0 }
+        let ctx = Unmanaged<ResolveContext>.fromOpaque(userData).takeUnretainedValue()
+
+        switch Int32(rtype) {
+        case Int32(CMDNS_RECORDTYPE_A):
+            var addr = sockaddr_in()
+            _ = cmdns_record_parse_a(data, size, recordOffset, recordLength, &addr)
+
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            if inet_ntop(AF_INET, &addr.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil {
+                let ip = String(cString: buf)
+                if !ctx.addresses.contains(ip) {
+                    ctx.addresses.append(ip)
+                }
+            }
+
+        case Int32(CMDNS_RECORDTYPE_AAAA):
+            var addr = sockaddr_in6()
+            _ = cmdns_record_parse_aaaa(data, size, recordOffset, recordLength, &addr)
+
+            var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            if inet_ntop(AF_INET6, &addr.sin6_addr, &buf, socklen_t(INET6_ADDRSTRLEN)) != nil {
+                var ip = String(cString: buf)
+                // Append scope ID for link-local so connect() knows which interface to use
+                if ip.hasPrefix("fe80:") {
+                    ip = "\(ip)%\(ctx.currentInterface)"
+                }
+                if !ctx.addresses.contains(ip) {
+                    ctx.addresses.append(ip)
                 }
             }
 

@@ -7,17 +7,43 @@ import NIOSSL
 import Synchronization
 import WendyAgentGRPC
 import WendyCloudGRPC
+import WendyShared
 
 typealias GRPCTransport = HTTP2ClientTransport.Posix
+
+/// Resolve a `.local` hostname to an IP address using mDNS on Linux.
+/// On Linux, gRPC uses c-ares for DNS which cannot resolve mDNS `.local` names,
+/// and our statically-linked musl binary can't use nss-mdns via getaddrinfo either.
+/// Uses our CMdns library to send A/AAAA queries directly.
+/// Returns the original host unchanged on macOS (where .local resolution works natively).
+private func resolveLocalHostname(_ host: String) async -> String {
+    #if os(Linux)
+        guard host.hasSuffix(".local") || host.hasSuffix(".local.") else {
+            return host
+        }
+
+        let logger = Logger(label: "sh.wendy.mdns.resolve")
+        let addresses = await MdnsBrowser.resolveHostname(host, logger: logger)
+
+        // Prefer non-link-local IPv4, then any IPv4, then any address
+        return addresses.first(where: { $0.contains(".") && !$0.hasPrefix("169.254.") })
+            ?? addresses.first(where: { $0.contains(".") })
+            ?? addresses.first
+            ?? host
+    #else
+        return host
+    #endif
+}
 
 func withGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
     security: GRPCTransport.TransportSecurity,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
+    let host = await resolveLocalHostname(endpoint.host)
     let transport = try GRPCTransport(
         target: .dns(
-            host: endpoint.host,
+            host: host,
             port: endpoint.port
         ),
         transportSecurity: security
