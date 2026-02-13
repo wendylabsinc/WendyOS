@@ -11,9 +11,10 @@ wait-device-timeout=60000
 mac-address-blacklist=
 
 [ipv4]
-method=auto
+method=manual
+address1=192.168.7.1/24
 dns-search=
-# Uses DHCP to get IP from host computer's internet sharing
+# Static IP for USB gadget - host should use 192.168.7.2 or auto-config
 
 [ipv6]
 method=link-local

@@ -57,7 +57,7 @@ META_LAYER_DIR="${HOME_DIR}"
 DOCKER_WORK_DIR="/home/${USER_NAME}/${IMAGE_NAME}"
 
 
-YOCTO_BRANCH="scarthgap"
+YOCTO_BRANCH="whinlatter"
 YOCTO_BUILD_DIR="build"
 
 cleanup() {
@@ -68,13 +68,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-SRCREV_POKY="353491479086e8d3f209d5cce0019a29e143b064"
-SRCREV_OE="2759d8870ea387b76c902070bed8a6649ff47b56"
-SRCREV_TEGRA="447c21467f65be2389f68a189b6871f13729d222"
-SRCREV_TEGRA_COMM="241d1073ba8e610ef8da3fe8470b0a4d0567521f"
-SRCREV_VIRT="f92518e20530edfebca45e4170e11460949a5303"
-SRCREV_MENDER="76404a7b914676a57d76ccb5fe12149112c05c03"
-SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"
+# Yocto 5.3 (whinlatter) + L4T R38.2.x for NVIDIA Jetson AGX Thor
+# Released February 2026 with Linux 6.16, GCC 15, glibc 2.42
+SRCREV_POKY="5c2b3d184065b0a15695bad7db455ef65653e4c6"  # master (whinlatter)
+SRCREV_OE="d28d0a23615f4d91d125fdcd247a71245087dab3"  # whinlatter
+SRCREV_TEGRA="21e2baa2674b4a62054ee2dcb8e46651eb794f3b"  # whinlatter (includes R38.2.x)
+SRCREV_TEGRA_COMM="8aa39863cb95ad383ee52a907545d296ed734d9d"  # master
+SRCREV_VIRT="8f03a0cc8950ef5d5e4f11d9ae494946d1991e45"  # whinlatter
+SRCREV_MENDER="c3064a2767be4779589bd276079d7bb535dcb481"  # scarthgap (no whinlatter yet)
+SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"  # scarthgap
 
 declare -Ar repos=(
     [0]="1|git://git.yoctoproject.org/poky.git||${SRCREV_POKY}"

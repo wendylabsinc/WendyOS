@@ -11,13 +11,22 @@ PATH =. "${STAGING_BINDIR_NATIVE}/tegra-flash:"
 # This runs AFTER meta-mender-tegra's do_install:append which creates the _rootfs_ab.xml variant
 
 do_install:append() {
-    # Only apply to NVMe variant
-    if [ "${MACHINE}" != "jetson-orin-nano-devkit-nvme-wendyos" ]; then
-        return
-    fi
+    # Only apply to NVMe-based WendyOS machines
+    # Determine the layout file based on machine type
+    local layout_file=""
+    case "${MACHINE}" in
+        jetson-orin-nano-devkit-nvme-wendyos)
+            layout_file="flash_l4t_t234_nvme_rootfs_ab.xml"
+            ;;
+        jetson-agx-thor-devkit-nvme-wendyos)
+            layout_file="flash_l4t_t264_nvme_rootfs_ab.xml"
+            ;;
+        *)
+            # Not a WendyOS NVMe machine, skip modifications
+            return
+            ;;
+    esac
 
-    # Modify the _rootfs_ab.xml file created by meta-mender-tegra
-    local layout_file="flash_l4t_t234_nvme_rootfs_ab.xml"
     local layout_path="${D}${datadir}/l4t-storage-layout/${layout_file}"
 
     if [ ! -f "${layout_path}" ]; then
@@ -25,7 +34,7 @@ do_install:append() {
         return
     fi
 
-    bbnote "wendyos: Modifying ${layout_file} to use mender_data partition..."
+    bbnote "WendyOS: Modifying ${layout_file} for ${MACHINE} to use mender_data partition..."
 
     # 1. Remove the "reserved" partition (between UDA and APP)
     #    This partition blocks expansion and is not needed

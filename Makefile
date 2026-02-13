@@ -19,7 +19,7 @@
 SHELL := /bin/bash
 IMAGE_NAME := wendyos
 DOCKER_REPO := wendyos-build
-DOCKER_TAG := scarthgap
+DOCKER_TAG := whinlatter
 DOCKER_USER := dev
 DOCKER_WORKDIR := /home/$(DOCKER_USER)/$(IMAGE_NAME)
 BUILD_DIR := build

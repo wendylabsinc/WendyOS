@@ -37,6 +37,8 @@ SUBSYSTEMS=="usb", ATTRS{idVendor}=="0955", ATTRS{idProduct}=="7423", GROUP="plu
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="0955", ATTRS{idProduct}=="7523", GROUP="plugdev"
 # Jetson Orin Nano (P3767-0004 with 4GB)
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="0955", ATTRS{idProduct}=="7623", GROUP="plugdev"
+# Jetson AGX Thor (P3834-0008 with P4071-0000 carrier)
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="0955", ATTRS{idProduct}=="7026", GROUP="plugdev"
 EOF
 udevadm control --reload
 echo "udev settings applied, please disconnect/reconnect your device"

@@ -4,12 +4,15 @@ LICENSE = "MIT"
 
 inherit core-image
 inherit mender-full
+inherit mender-dataimg
+inherit image_types_tegra
 
 DISTRO_FEATURES:append = " systemd"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 
-# Make this image also produce an ext4 alongside tegraflash/mender/dataimg
-IMAGE_FSTYPES += " ext4"
+# Image format types for Tegra platforms
+# Use package-specific override to avoid affecting other images
+IMAGE_FSTYPES = "tegraflash.tar mender dataimg ext4"
 
 # Release-style naming for this image:
 # - IMAGE_VERSION_SUFFIX is a common pattern to carry a release tag.
@@ -53,12 +56,13 @@ IMAGE_INSTALL:append = " \
     setup-nv-boot-control \
     bluez5 \
     bluez5-obex \
-    pipewire \
-    wireplumber \
-    pipewire-pulse \
-    pipewire-alsa \
     rtkit \
-    audio-config \
+    pipewire \
+    pipewire-alsa \
+    pipewire-tools \
+    pipewire-spa-plugins-support \
+    wireplumber \
+    alsa-utils \
     "
 
 # Note: mender-tegra-capsule-update removed - capsule staging now handled
@@ -105,7 +109,7 @@ IMAGE_INSTALL += " \
     ${@oe.utils.ifelse( \
         d.getVar('WENDYOS_DEEPSTREAM') == '1', \
             ' \
-                deepstream-7.1 \
+                deepstream-8.0 \
             ', \
             '' \
         )} \
