@@ -9,19 +9,28 @@ import WendyAgentGRPC
 import WendyCloudGRPC
 import WendyShared
 
+#if canImport(Darwin)
+    import Darwin
+#endif
+
 typealias GRPCTransport = HTTP2ClientTransport.Posix
 
-/// Resolve a `.local` hostname to an IP address using mDNS on Linux.
+/// Resolve a `.local` hostname to an IP address.
+///
 /// On Linux, gRPC uses c-ares for DNS which cannot resolve mDNS `.local` names,
 /// and our statically-linked musl binary can't use nss-mdns via getaddrinfo either.
 /// Uses our CMdns library to send A/AAAA queries directly.
-/// Returns the original host unchanged on macOS (where .local resolution works natively).
+///
+/// On macOS, getaddrinfo resolves `.local` natively via mDNSResponder, but gRPC's
+/// DNS resolver doesn't preserve IPv6 scope IDs (sin6_scope_id). Without the scope
+/// ID, connect() to link-local fe80:: addresses fails with EHOSTUNREACH. We resolve
+/// manually and format with `%interface` suffix.
 private func resolveLocalHostname(_ host: String) async -> String {
-    #if os(Linux)
-        guard host.hasSuffix(".local") || host.hasSuffix(".local.") else {
-            return host
-        }
+    guard host.hasSuffix(".local") || host.hasSuffix(".local.") else {
+        return host
+    }
 
+    #if os(Linux)
         let logger = Logger(label: "sh.wendy.mdns.resolve")
         let addresses = await MdnsBrowser.resolveHostname(host, logger: logger)
 
@@ -29,6 +38,63 @@ private func resolveLocalHostname(_ host: String) async -> String {
         return addresses.first(where: { $0.contains(".") && !$0.hasPrefix("169.254.") })
             ?? addresses.first(where: { $0.contains(".") })
             ?? addresses.first
+            ?? host
+    #elseif canImport(Darwin)
+        // Use getaddrinfo which resolves .local via mDNSResponder.
+        // This preserves sin6_scope_id for IPv6 link-local addresses.
+        var hints = addrinfo()
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_family = AF_UNSPEC
+        var result: UnsafeMutablePointer<addrinfo>?
+
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let result else {
+            return host
+        }
+        defer { freeaddrinfo(result) }
+
+        // Collect all resolved addresses, preferring IPv4 non-link-local
+        var ipv4Addresses: [String] = []
+        var ipv6Addresses: [String] = []
+
+        var current: UnsafeMutablePointer<addrinfo>? = result
+        while let info = current {
+            defer { current = info.pointee.ai_next }
+
+            if info.pointee.ai_family == AF_INET {
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
+                    var addr = sin.pointee.sin_addr
+                    inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN))
+                }
+                let ip = String(cString: buf)
+                if !ip.isEmpty && !ipv4Addresses.contains(ip) {
+                    ipv4Addresses.append(ip)
+                }
+            } else if info.pointee.ai_family == AF_INET6 {
+                var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { sin6 in
+                    var addr = sin6.pointee.sin6_addr
+                    inet_ntop(AF_INET6, &addr, &buf, socklen_t(INET6_ADDRSTRLEN))
+                    var ip = String(cString: buf)
+                    // Append scope ID for link-local so connect() knows which interface
+                    let scopeId = sin6.pointee.sin6_scope_id
+                    if ip.hasPrefix("fe80:") && scopeId != 0 {
+                        var ifname = [CChar](repeating: 0, count: Int(IFNAMSIZ))
+                        if if_indextoname(scopeId, &ifname) != nil {
+                            ip = "\(ip)%\(String(cString: ifname))"
+                        }
+                    }
+                    if !ip.isEmpty && !ipv6Addresses.contains(ip) {
+                        ipv6Addresses.append(ip)
+                    }
+                }
+            }
+        }
+
+        // Prefer non-link-local IPv4, then any IPv4, then IPv6 (with scope)
+        return ipv4Addresses.first(where: { !$0.hasPrefix("169.254.") })
+            ?? ipv4Addresses.first
+            ?? ipv6Addresses.first
             ?? host
     #else
         return host
@@ -41,11 +107,20 @@ func withGRPCClient<R: Sendable>(
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     let host = await resolveLocalHostname(endpoint.host)
+
+    // Use .ipv6 target for IPv6 addresses (especially link-local with scope ID),
+    // since .dns() re-resolves and strips the scope ID.
+    let target: any ResolvableTarget
+    if host.contains(":") {
+        target = .ipv6(host: host, port: endpoint.port)
+    } else if host.contains(".") && host.first?.isNumber == true {
+        target = .ipv4(host: host, port: endpoint.port)
+    } else {
+        target = .dns(host: host, port: endpoint.port)
+    }
+
     let transport = try GRPCTransport(
-        target: .dns(
-            host: host,
-            port: endpoint.port
-        ),
+        target: target,
         transportSecurity: security
     )
 
