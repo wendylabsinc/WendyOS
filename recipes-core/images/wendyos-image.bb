@@ -41,30 +41,26 @@ IMAGE_FEATURES += " \
     package-management \
     "
 
+# Temporarily disabled for whinlatter migration - Go modules build structure issue:
+#    mender-connect
 IMAGE_INSTALL:append = " \
     packagegroup-wendyos-base \
     packagegroup-wendyos-kernel \
     packagegroup-wendyos-debug \
     mender-esp \
     mender-configure \
-    mender-connect \
     tegra-bootcontrol-overlay \
     python3-pip-jetson-config \
     setup-nv-boot-control \
     bluez5 \
     bluez5-obex \
+    pipewire \
+    wireplumber \
+    pipewire-pulse \
+    pipewire-alsa \
+    rtkit \
+    audio-config \
     "
-
-# Audio support temporarily disabled for Yocto 5.3 (whinlatter)
-# meta-openembedded/meta-multimedia has UNPACKDIR compatibility issues
-# Re-enable when meta-openembedded whinlatter stabilizes
-#    rtkit
-#    pipewire
-#    pipewire-alsa
-#    pipewire-tools
-#    pipewire-spa-plugins-support
-#    wireplumber
-#    alsa-utils
 
 # Note: mender-tegra-capsule-update removed - capsule staging now handled
 # by switch-rootfs state script for atomic rootfs+bootloader updates
