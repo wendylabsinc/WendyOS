@@ -25,6 +25,38 @@ check_service() {
     fi
 }
 
+# Function to check dev registry (container-based service)
+check_dev_registry() {
+    SERVICE_NAME=$1
+    DISPLAY_NAME=$2
+
+    # Check if containerd is running first
+    if ! systemctl is-active --quiet containerd.service 2>/dev/null; then
+        # Containerd not running, service can't be up
+        if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+            echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ enabled (not running)${NC}"
+        fi
+        return
+    fi
+
+    # Check if the container is actually running
+    if timeout 2 /usr/bin/nerdctl ps --quiet --filter "name=wendyos-dev-registry" 2>/dev/null | grep -q .; then
+        echo -e "  ${DISPLAY_NAME}: ${GREEN}● running${NC}"
+        return
+    fi
+
+    # Container not running - check if service is active (starting up)
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo -e "  ${DISPLAY_NAME}: ${YELLOW}◐ starting${NC}"
+        return
+    fi
+
+    # Service not active
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ enabled (not running)${NC}"
+    fi
+}
+
 # Check critical services
 check_service "sshd" "SSH"
 check_service "ssh" "SSH"  # Some systems use 'ssh' instead of 'sshd'
@@ -34,6 +66,6 @@ check_service "usb-gadget" "USB Gadget"
 check_service "avahi-daemon" "mDNS"
 check_service "systemd-timesyncd" "Time Sync"
 check_service "wendyos-agent" "Wendy Agent"
-check_service "wendyos-dev-registry" "Dev Registry"
+check_dev_registry "wendyos-dev-registry" "Dev Registry"
 
 echo

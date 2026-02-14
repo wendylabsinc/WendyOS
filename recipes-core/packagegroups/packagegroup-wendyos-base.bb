@@ -7,7 +7,6 @@ inherit packagegroup
 SUMMARY:${PN} = "Base support"
 RDEPENDS:${PN} = " \
     packagegroup-core-boot \
-    tegra-flash-reboot \
     bash \
     efibootmgr \
     coreutils \
@@ -28,14 +27,13 @@ RDEPENDS:${PN} = " \
     avahi-utils \
     k3s-agent \
     wendyos-identity \
-    wendyos-etc-binds \
     wendyos-agent \
     wendyos-user \
     wendyos-motd \
     systemd-mount-containerd \
     swapfile-setup \
+    wendyos-etc-binds \
     containerd-config \
-    tegra-tools-tegrastats \
     "
 
 RDEPENDS:${PN}:append = " \
@@ -47,3 +45,17 @@ RDEPENDS:${PN}:append = " \
         '' \
         )} \
     "
+
+# Remove data partition dependent services for QEMU
+# QEMU uses single-partition layout without separate /data
+RDEPENDS:${PN}:remove:qemuall = " \
+    wendyos-user \
+    wendyos-etc-binds \
+    swapfile-setup \
+    systemd-mount-containerd \
+    systemd-mount-home \
+    "
+
+# Include hardware-specific packagegroup configuration
+require ${@bb.utils.contains('MACHINEOVERRIDES', 'qemuall', 'qemu-packagegroup-base.inc', '', d)}
+require ${@bb.utils.contains('MACHINEOVERRIDES', 'tegra', 'tegra-packagegroup-base.inc', '', d)}
