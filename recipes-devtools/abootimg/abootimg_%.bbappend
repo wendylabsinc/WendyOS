@@ -1,5 +1,5 @@
-# Fix S path for scarthgap - git recipes unpack to ${WORKDIR}/git
-S = "${WORKDIR}/git"
+# Whinlatter compatibility: S is automatically set correctly for git recipes
+# No longer need to manually set S = "${WORKDIR}/git"
 
 # Skip license-checksum QA for scarthgap compatibility
 ERROR_QA:remove = "license-checksum"
