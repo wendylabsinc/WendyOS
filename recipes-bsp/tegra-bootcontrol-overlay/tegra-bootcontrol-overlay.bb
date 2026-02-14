@@ -8,7 +8,7 @@ SRC_URI = " \
     file://boot-priority.dtso \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
+# Whinlatter: UNPACKDIR is already set by the system, no need to override
 S = "${UNPACKDIR}"
 
 inherit allarch
