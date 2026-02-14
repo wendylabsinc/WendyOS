@@ -11,19 +11,21 @@ do_compile() {
 
 # Install our prebuilt DTB
 # Install to both /boot/devicetree (for rootfs) and /usr/share/tegraflash (for sysroot staging)
+# Whinlatter compatibility: Files unpack to UNPACKDIR, not WORKDIR
 do_install() {
     install -d ${D}/boot/devicetree
-    install -m 0644 ${WORKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${D}/boot/devicetree/
+    install -m 0644 ${UNPACKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${D}/boot/devicetree/
 
     # Also install to /usr/share/tegraflash so it gets staged to sysroot for tegraflash build
     install -d ${D}/usr/share/tegraflash
-    install -m 0644 ${WORKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${D}/usr/share/tegraflash/
+    install -m 0644 ${UNPACKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${D}/usr/share/tegraflash/
 }
 
 # Deploy the prebuilt DTB
+# Whinlatter compatibility: Files unpack to UNPACKDIR, not WORKDIR
 do_deploy() {
     install -d ${DEPLOYDIR}
-    install -m 0644 ${WORKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${DEPLOYDIR}/
+    install -m 0644 ${UNPACKDIR}/tegra264-p4071-0000+p3834-0008-nv.dtb ${DEPLOYDIR}/
 }
 
 FILES:${PN} = "/boot/devicetree/*.dtb /usr/share/tegraflash/*.dtb"
