@@ -14,7 +14,6 @@ SRC_URI[sha256sum] = "af3b5a919acf2ff799b19b3fab16ca61f05f6b7192b4b16aece6a3cc07
 
 inherit allarch
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 # Directory where offline images are stored

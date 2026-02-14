@@ -14,7 +14,6 @@ SRC_URI = " \
     file://wireplumber-dbus.conf \
 "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 SYSTEMD_SERVICE:${PN} = "pipewire-user-setup.service"

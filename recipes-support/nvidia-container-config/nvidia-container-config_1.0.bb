@@ -19,7 +19,6 @@ SRC_URI = " \
     file://fix-cdi-gstreamer-paths.sh \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 SYSTEMD_SERVICE:${PN} = "wendyos-cdi-generate.service wendyos-cuda-detect.service"

@@ -10,7 +10,6 @@ SRC_URI = " \
     file://gadget-setup.service \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 inherit systemd

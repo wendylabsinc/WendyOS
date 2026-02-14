@@ -9,7 +9,6 @@ SRC_URI = " \
     file://30-services \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 do_install() {

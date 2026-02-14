@@ -16,7 +16,6 @@ SRC_URI = " \
     file://nouns.txt \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 SYSTEMD_SERVICE:${PN} = "wendyos-uuid-generate.service wendyos-device-name-generate.service wendyos-identity.service"

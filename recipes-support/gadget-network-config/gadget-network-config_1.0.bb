@@ -8,7 +8,6 @@ SRC_URI = " \
     file://gadget-dnsmasq.service \
     "
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 inherit systemd

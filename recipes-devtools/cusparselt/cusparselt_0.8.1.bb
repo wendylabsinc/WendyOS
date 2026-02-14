@@ -13,7 +13,6 @@ PACKAGE_ARCH = "${TEGRA_PKGARCH}"
 
 DEPENDS = "cuda-cudart"
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 # The outer deb is a repo installer containing the actual package debs

@@ -9,7 +9,6 @@ SRC_URI = "file://wendyos-agent.service \
            file://wendyos-agent-updater.sh \
            file://download-wendyos-agent.sh"
 
-UNPACKDIR = "${UNPACKDIR}/sources"
 S = "${UNPACKDIR}"
 
 inherit systemd
