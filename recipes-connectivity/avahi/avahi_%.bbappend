@@ -20,18 +20,19 @@ EXTRA_OECONF += " \
 
 inherit systemd
 
+# Whinlatter compatibility: Use UNPACKDIR for file paths
 do_install:append() {
     # Install hostname generation script + systemd unit (goes to sub-package)
     install -d ${D}${sbindir}
-    install -m 0755 ${WORKDIR}/generate-hostname.sh ${D}${sbindir}/
+    install -m 0755 ${UNPACKDIR}/generate-hostname.sh ${D}${sbindir}/
 
     # Install Avahi service file
     install -d ${D}${sysconfdir}/avahi/services
-    install -m 0644 ${WORKDIR}/wendyos-mdns.service ${D}${sysconfdir}/avahi/services/
+    install -m 0644 ${UNPACKDIR}/wendyos-mdns.service ${D}${sysconfdir}/avahi/services/
 
     # Install systemd service for hostname setup
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/wendyos-hostname.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-hostname.service ${D}${systemd_system_unitdir}/
 
     # Ensure NSS mDNS is properly configured
     if [ -f "${D}${sysconfdir}/nsswitch.conf" ]
@@ -41,7 +42,7 @@ do_install:append() {
         then
             # Replace the hosts line with our configuration
             sed -i '/^hosts:/d' "${D}${sysconfdir}/nsswitch.conf"
-            cat "${WORKDIR}/nsswitch.conf.append" >> "${D}${sysconfdir}/nsswitch.conf"
+            cat "${UNPACKDIR}/nsswitch.conf.append" >> "${D}${sysconfdir}/nsswitch.conf"
         fi
     fi
 
@@ -70,7 +71,7 @@ do_install:append() {
 
     # Systemd preset to auto-enable hostname service by default
     install -d ${D}${systemd_unitdir}/system-preset
-    install -m 0644 ${WORKDIR}/90-wendyos.preset \
+    install -m 0644 ${UNPACKDIR}/90-wendyos.preset \
         ${D}${systemd_unitdir}/system-preset/90-wendyos.preset
 }
 
