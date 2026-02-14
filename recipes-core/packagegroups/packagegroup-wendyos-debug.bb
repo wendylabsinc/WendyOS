@@ -20,8 +20,16 @@ RDEPENDS:${PN} = " \
             sysstat \
             ldd \
             bc  \
-            python3-jetson-stats \
         ', \
+        '' \
+        )} \
+    "
+
+# Tegra-specific debug tools (Jetson hardware only)
+RDEPENDS:${PN}:append:tegra = " \
+    ${@oe.utils.ifelse( \
+        d.getVar('WENDYOS_DEBUG') == '1', \
+        'python3-jetson-stats', \
         '' \
         )} \
     "
