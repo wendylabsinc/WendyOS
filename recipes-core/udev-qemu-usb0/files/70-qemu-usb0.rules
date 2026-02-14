@@ -1,0 +1,5 @@
+# Rename QEMU virtio-net interface to usb0 for WendyOS compatibility
+# This allows QEMU builds to work with NetworkManager profiles and
+# Wendy agent that expect a usb0 interface (like on real Jetson hardware)
+
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="virtio_net", NAME="usb0"

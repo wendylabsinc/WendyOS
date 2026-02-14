@@ -3,7 +3,9 @@ DESCRIPTION = "WendyOS Image"
 LICENSE = "MIT"
 
 inherit core-image
-inherit mender-full
+
+# Note: mender-full is inherited via conf/distro/include/mender.inc
+# which is conditionally included in wendyos.conf (not for QEMU)
 
 DISTRO_FEATURES:append = " systemd"
 VIRTUAL-RUNTIME_init_manager = "systemd"
@@ -21,15 +23,12 @@ IMAGE_VERSION_SUFFIX ?= "${DISTRO_VERSION}"
 MENDER_ARTIFACT_NAME = "${IMAGE_BASENAME}-${MACHINE}-${IMAGE_VERSION_SUFFIX}"
 # MENDER_ARTIFACT_NAME = "${IMAGE_BASENAME}-${DISTRO_VERSION}-${DATETIME}"
 
+# Mender configuration (only used when mender-full is inherited)
 MENDER_UPDATE_POLL_INTERVAL_SECONDS    = "1800"
 MENDER_INVENTORY_POLL_INTERVAL_SECONDS = "28800"
 MENDER_RETRY_POLL_INTERVAL_SECONDS     = "300"
 MENDER_SYSTEMD_AUTO_ENABLE = "1"
-
 MENDER_CONNECT_ENABLE = "1"
-
-# Apply our UEFI boot-priority overlay during flash
-TEGRA_BOOTCONTROL_OVERLAYS += "boot-priority.dtbo"
 
 IMAGE_FEATURES += " \
     ssh-server-openssh \
@@ -37,20 +36,14 @@ IMAGE_FEATURES += " \
     package-management \
     "
 
+# Common packages for all machines (real hardware and QEMU)
 IMAGE_INSTALL:append = " \
     packagegroup-wendyos-base \
     packagegroup-wendyos-kernel \
     packagegroup-wendyos-debug \
-    mender-esp \
-    mender-configure \
-    mender-connect \
-    tegra-bootcontrol-overlay \
-    packagegroup-nvidia-container \
-    nvidia-container-config \
+    nerdctl \
     wendyos-containerd-registry \
     wendyos-dev-registry-image \
-    python3-pip-jetson-config \
-    setup-nv-boot-control \
     bluez5 \
     bluez5-obex \
     pipewire \
@@ -61,24 +54,20 @@ IMAGE_INSTALL:append = " \
     audio-config \
     "
 
-# Note: mender-tegra-capsule-update removed - capsule staging now handled
-# by switch-rootfs state script for atomic rootfs+bootloader updates
-
-# Conditional UEFI capsule package installation
-# Controlled by WENDYOS_UPDATE_BOOTLOADER (defined in conf/distro/wendyos.conf)
-IMAGE_INSTALL += " \
-    ${@oe.utils.ifelse( \
-        d.getVar('WENDYOS_UPDATE_BOOTLOADER') == '1', \
-            ' \
-                tegra-uefi-capsules \
-                bootloader-update \
-            ', \
-            '' \
-        )} \
+# Mender packages (only for real hardware, not QEMU)
+IMAGE_INSTALL:append = " \
+    ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'mender-configure mender-connect'} \
+    ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'python3-pip-jetson-config'} \
     "
 
-# Enable USB peripheral (gadget) support
-IMAGE_INSTALL += " \
+# # Jetson-specific packages (not for QEMU)
+# IMAGE_INSTALL:append = " \
+#     ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'python3-pip-jetson-config'} \
+#     "
+
+# Enable USB peripheral (gadget) support for real hardware
+# Controlled by WENDYOS_USB_GADGET variable (not needed for QEMU)
+IMAGE_INSTALL:append = " \
     ${@oe.utils.ifelse( \
         d.getVar('WENDYOS_USB_GADGET') == '1', \
             ' \
@@ -95,27 +84,11 @@ IMAGE_INSTALL += " \
 # Note: gadget-network-config (standalone dnsmasq) removed
 # NetworkManager's connection sharing provides DHCP via dnsmasq with DBus support
 
-# Enable DeepStream SDK support (optional - adds ~1GB to image)
-# Also enables l4t-deepstream.csv which provides:
-# - GPU device nodes (/dev/nvhost-*) for tegrastats and GPU monitoring
-# - CUDA compilation toolchain (headers, binaries, nvvm) for Triton/JIT
-# - Additional libraries (libnuma) and monitoring paths
-WENDYOS_DEEPSTREAM ?= "1"
-IMAGE_INSTALL += " \
-    ${@oe.utils.ifelse( \
-        d.getVar('WENDYOS_DEEPSTREAM') == '1', \
-            ' \
-                deepstream-7.1 \
-            ', \
-            '' \
-        )} \
-    "
-
 IMAGE_ROOTFS_SIZE ?= "8192"
 IMAGE_ROOTFS_EXTRA_SPACE:append = "${@bb.utils.contains("DISTRO_FEATURES", "systemd", " + 4096", "", d)}"
 
 # A space-separated list of variable names that BitBake prints in the
-# “Build Configuration” banner at the start of a build.
+# "Build Configuration" banner at the start of a build.
 BUILDCFG_VARS += " \
     WENDYOS_DEBUG \
     WENDYOS_DEBUG_UART \
@@ -124,3 +97,8 @@ BUILDCFG_VARS += " \
     WENDYOS_UPDATE_BOOTLOADER \
     WENDYOS_DEEPSTREAM \
     "
+
+# Include hardware-specific image configuration
+# These files contain IMAGE_INSTALL modifications and other hardware-specific settings
+require ${@'conf/distro/include/qemu-image.inc' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'conf/distro/include/tegra-image.inc' if 'tegra' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
