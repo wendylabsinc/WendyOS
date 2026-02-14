@@ -182,16 +182,6 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             ) { builtApp in
                 cliOutput.info("Starting app on \(builtApp.endpoint.description)")
                 switch builtApp.app {
-                case .localExecutable(let path):
-                    _ = try await Subprocess.run(
-                        Subprocess.Executable.path(FilePath(path)),
-                        arguments: [],
-                        output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
-                        error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
-                    )
-                case .dockerDesktop(let container):
-                    let docker = DockerCLI()
-                    try await docker.run(name: container, detach: detach, )
                 case .agent(let client, let appName):
                     try await AppBuildHelpers.executePhase(
                         phase: "start_container",

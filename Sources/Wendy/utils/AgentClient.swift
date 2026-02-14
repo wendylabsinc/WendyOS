@@ -79,10 +79,6 @@ func withAgentClientAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
-    case .docker:
-        throw CLIError.invalidEndpoint("docker")
-    case .local:
-        throw CLIError.invalidEndpoint("localhost")
     case .external:
         throw CLIError.invalidEndpoint("external devices do not support agent connections")
     }
@@ -117,10 +113,6 @@ private func executeWithDeviceAndHostname<R: Sendable>(
         return try await BluetoothAgentClient.withConnection(to: peripheral) { client in
             try await body(.bluetooth(client), address)
         }
-    case .docker:
-        throw CLIError.invalidEndpoint("docker")
-    case .local:
-        throw CLIError.invalidEndpoint("localhost")
     case .external:
         throw CLIError.invalidEndpoint("external devices do not support agent connections")
     }

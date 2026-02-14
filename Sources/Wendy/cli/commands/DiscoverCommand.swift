@@ -124,7 +124,7 @@ struct DiscoverCommand: AsyncParsableCommand {
                 // Merge devices by name and render as table
                 let grouped = collection.groupedDevices()
                 let headers = ["Name", "Connection", "Interfaces", "Version"]
-                var rows: [[String]] = grouped.map { device in
+                let rows: [[String]] = grouped.map { device in
                     // Build connection info (hostname or RSSI)
                     var connectionParts: [String] = []
                     for iface in device.interfaces {
@@ -152,8 +152,6 @@ struct DiscoverCommand: AsyncParsableCommand {
 
                     return [device.name, connection, interfaces, version]
                 }
-                rows.insert(["Docker Desktop", "", "", Version.current], at: 0)
-                rows.insert(["Local (This Device)", "", "", Version.current], at: 0)
                 return (headers: headers, rows: rows)
             }
 

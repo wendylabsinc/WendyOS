@@ -132,7 +132,7 @@ struct DeviceCommand: AsyncParsableCommand {
             switch endpoint {
             case .lan(let host, _, _):
                 config.defaultDevice = host
-            case .bluetooth, .local, .docker, .external:
+            case .bluetooth, .external:
                 ()
             }
             try config.save()

@@ -6,6 +6,8 @@ import WendyShared
 enum DeviceProviderRegistry {
     /// All registered providers (before availability filtering)
     private static let allProviders: [any DeviceProvider] = [
+        LocalDeviceProvider(),
+        DockerDeviceProvider(),
         AndroidDeviceProvider(),
     ]
 

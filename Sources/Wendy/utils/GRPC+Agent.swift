@@ -114,7 +114,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
             return try await withAgentGRPCClient(host: host, port: port, title: title) { client in
                 return try await body(client, host)
             }
-        case .bluetooth, .local, .docker, .external:
+        case .bluetooth, .external:
             throw CancellationError()
         }
     }
@@ -134,7 +134,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
             }
             return try await fallback()
         }
-    case .bluetooth, .local, .docker, .external:
+    case .bluetooth, .external:
         return try await fallback()
     }
 }

@@ -33,25 +33,18 @@ public struct DevicesCollection: Encodable, Sendable {
     public var lanDevices: [LANDevice]
     public var bluetoothDevices: [BluetoothDevice]
     public var externalDevices: [ExternalDevice]
-    public var dockerDesktop: Bool
-    public var local: Bool
-
     public init(
         usb: [USBDevice] = [],
         ethernet: [EthernetInterface] = [],
         lan: [LANDevice] = [],
         bluetooth: [BluetoothDevice] = [],
-        external: [ExternalDevice] = [],
-        dockerDesktop: Bool = true,
-        local: Bool = true
+        external: [ExternalDevice] = []
     ) {
         self.usbDevices = usb
         self.ethernetDevices = ethernet
         self.lanDevices = lan
         self.bluetoothDevices = bluetooth
         self.externalDevices = external
-        self.dockerDesktop = dockerDesktop
-        self.local = local
     }
 
     /// Whether the collection contains no devices
@@ -119,9 +112,15 @@ public struct DevicesCollection: Encodable, Sendable {
 
     public struct GroupedDevice: Sendable, Hashable, CustomStringConvertible, Comparable {
         public let name: String
-        public let isLocalhost: Bool
-        public let isDocker: Bool
         public let interfaces: [InterfaceInfo]
+
+        public var isLocalhost: Bool {
+            interfaces.contains { if case .external(let d) = $0 { return d.providerKey == "local" } else { return false } }
+        }
+
+        public var isDocker: Bool {
+            interfaces.contains { if case .external(let d) = $0 { return d.providerKey == "docker" } else { return false } }
+        }
 
         public var description: String {
             let interfaceSummary = interfaces.map(\.type.rawValue).joined(separator: ", ")
@@ -134,35 +133,7 @@ public struct DevicesCollection: Encodable, Sendable {
         public init(name: String, interfaces: [InterfaceInfo]) {
             self.name = name
             self.interfaces = interfaces
-            self.isLocalhost = false
-            self.isDocker = false
         }
-
-        internal init(
-            name: String,
-            interfaces: [InterfaceInfo],
-            isLocalhost: Bool,
-            isDocker: Bool
-        ) {
-            self.name = name
-            self.interfaces = interfaces
-            self.isLocalhost = isLocalhost
-            self.isDocker = isDocker
-        }
-
-        public static let local = GroupedDevice(
-            name: "Local (This Device)",
-            interfaces: [],
-            isLocalhost: true,
-            isDocker: false
-        )
-
-        public static let docker = GroupedDevice(
-            name: "Docker Desktop",
-            interfaces: [],
-            isLocalhost: false,
-            isDocker: true
-        )
 
         public static func < (lhs: GroupedDevice, rhs: GroupedDevice) -> Bool {
             if lhs.isLocalhost != rhs.isLocalhost {

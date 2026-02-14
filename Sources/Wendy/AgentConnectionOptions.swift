@@ -7,8 +7,6 @@ import WendyShared
 
 /// Represents the selected device connection type
 enum SelectedDevice: Sendable {
-    case local
-    case docker
     case lan(host: String, port: Int, defaultDevice: Bool)
     case bluetooth(peripheral: Peripheral, address: String)
     case external(ExternalDevice)
@@ -16,9 +14,17 @@ enum SelectedDevice: Sendable {
     init(endpoint: TargetOptions.Endpoint) {
         switch endpoint.remote {
         case .local:
-            self = .local
+            self = .external(ExternalDevice(
+                id: "local",
+                displayName: "Local (This Device)",
+                providerKey: "local"
+            ))
         case .docker:
-            self = .docker
+            self = .external(ExternalDevice(
+                id: "docker",
+                displayName: "Docker Desktop",
+                providerKey: "docker"
+            ))
         case .grpc(let host, let port):
             self = .lan(host: host, port: port, defaultDevice: endpoint.defaultDevice)
         case .bluetooth(let uuid):
@@ -227,7 +233,7 @@ extension TargetOptions {
         title: String?,
         readDefault: Bool = true,
         preferBluetooth: Bool = false,
-        includeLocal: Bool = false,
+        includeLocalProviders: Bool = false,
         includeBluetooth: Bool = true
     ) async throws -> SelectedDevice {
         // If explicit device specified via CLI, use it as LAN
@@ -265,26 +271,19 @@ extension TargetOptions {
             }
 
             defer { group.cancelAll() }
-            var initial = [DevicesCollection.GroupedDevice]()
-            if includeLocal {
-                initial.append(.local)
-                initial.append(.docker)
-            } else {
-                initial.append(
-                    DevicesCollection.GroupedDevice(
-                        name: "No device detected yet",
-                        interfaces: []
-                    )
+            let initial = [
+                DevicesCollection.GroupedDevice(
+                    name: "No device detected yet",
+                    interfaces: []
                 )
-            }
+            ]
             return try await cliOutput.selectFromStreamingTable(
                 initial: initial,
                 updates: stream.map { collection -> [DevicesCollection.GroupedDevice] in
                     var devices = collection.groupedDevices()
 
-                    if includeLocal {
-                        devices.append(.local)
-                        devices.append(.docker)
+                    if !includeLocalProviders {
+                        devices.removeAll { $0.isLocalhost || $0.isDocker }
                     }
 
                     return devices.sorted().filter { device in
@@ -298,7 +297,7 @@ extension TargetOptions {
                         if interfaces.contains(.external) {
                             return true
                         }
-                        return device.isLocalhost || device.isDocker
+                        return false
                     }
                 },
                 pageSize: 20,
@@ -319,11 +318,6 @@ extension TargetOptions {
         }
 
         printDeviceDetails(device)
-        if device.isLocalhost {
-            return .local
-        } else if device.isDocker {
-            return .docker
-        }
 
         for interface in device.interfaces {
             switch interface {

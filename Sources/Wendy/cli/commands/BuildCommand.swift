@@ -77,8 +77,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let endpoint: TargetOptions.Endpoint
 
         enum BuiltApp: Sendable {
-            case dockerDesktop(container: String)
-            case localExecutable(path: String)
             case agent(GRPCClient<GRPCTransport>, appName: String)
             case provider(ProviderBuiltApp)
         }
@@ -240,8 +238,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 BuiltAppContext
             ) async throws -> Void
     ) async throws {
-        try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
-
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let name = url.lastPathComponent.lowercased()
 
@@ -250,37 +246,43 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
 
         let target = try await target.read(
             title: "Which device do you want to build this app for?",
-            includeLocal: true
+            includeLocalProviders: true
         )
         switch target {
-        case .local:
-            cliOutput.warning("Dockerfile cannot run directly on a local machine.")
-            cliOutput.info("Falling back to Docker Desktop.")
-            fallthrough
-        case .docker:
-            try await AppBuildHelpers.executePhase(
-                phase: "build",
-                commandName: "wendy build",
-                additionalProperties: [:]
-            ) {
-                try await docker.build(name: name)
+        case .external(let device):
+            guard let provider = DeviceProviderRegistry.provider(forKey: device.providerKey) else {
+                throw CLIError.unsupportedPlatform(
+                    reason: "No provider found for '\(device.providerKey)'"
+                )
             }
+
+            guard await provider.canBuild(projectPath: url) else {
+                throw CLIError.unsupportedPlatform(
+                    reason: "Provider '\(device.providerKey)' cannot build Dockerfile projects"
+                )
+            }
+
+            try await provider.checkRequirements(shouldAutoAccept: shouldAutoAccept)
+
+            let builtApp = try await provider.build(
+                for: device,
+                projectPath: url,
+                executable: name,
+                debug: debug
+            )
 
             try await perform(
                 BuiltAppContext(
-                    app: .dockerDesktop(container: name),
-                    endpoint: .init(remote: .docker)
+                    app: .provider(builtApp),
+                    endpoint: .init(remote: .external(device))
                 )
             )
         case .bluetooth:
             throw CLIError.unsupportedPlatform(
                 reason: "Bluetooth connections not supported for uploading apps yet"
             )
-        case .external(let device):
-            throw CLIError.unsupportedPlatform(
-                reason: "Dockerfile builds are not supported for \(device.providerKey) devices"
-            )
         case .lan(let host, let port, defaultDevice: _):
+            try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
             try await withAgentGRPCClient(
                 host: host,
                 port: port,
@@ -502,28 +504,10 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let endpoint = try await self.target.read(
             title: "Which device do you want to build this app for?",
-            includeLocal: true
+            includeLocalProviders: true
         )
 
         switch endpoint {
-        case .local:
-            try await swiftPM.build(.product(target.name))
-            try await perform(
-                BuiltAppContext(
-                    app: .localExecutable(
-                        path: url.appendingPathComponent(".build/debug/\(target.name)")
-                            .path
-                    ),
-                    endpoint: .init(remote: .local)
-                )
-            )
-        case .docker:
-            // try await checkContainerPlugin()
-            // TODO: Should use https://github.com/apple/swift-container-plugin/pull/152
-            throw CLIError.unsupportedPlatform(
-                reason:
-                    "Docker Desktop targets are not supported for building Swift apps yet. Please let us know you're needing this!"
-            )
         case .bluetooth:
             throw CLIError.unsupportedPlatform(
                 reason: "Bluetooth connections not supported for uploading apps yet"
@@ -532,6 +516,12 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             guard let provider = DeviceProviderRegistry.provider(forKey: device.providerKey) else {
                 throw CLIError.unsupportedPlatform(
                     reason: "No provider found for '\(device.providerKey)'"
+                )
+            }
+
+            guard await provider.canBuild(projectPath: url) else {
+                throw CLIError.unsupportedPlatform(
+                    reason: "Provider '\(device.providerKey)' cannot build Swift packages"
                 )
             }
 
