@@ -14,9 +14,10 @@ SRC_URI = "file://var-lib-containerd.mount"
 SYSTEMD_SERVICE:${PN} = "var-lib-containerd.mount"
 SYSTEMD_AUTO_ENABLE = "enable"
 
+# Whinlatter compatibility: Files unpack to UNPACKDIR, not WORKDIR
 do_install() {
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/var-lib-containerd.mount ${D}${systemd_system_unitdir}/var-lib-containerd.mount
+    install -m 0644 ${UNPACKDIR}/var-lib-containerd.mount ${D}${systemd_system_unitdir}/var-lib-containerd.mount
 }
 
 FILES:${PN} += "${systemd_system_unitdir}/var-lib-containerd.mount"

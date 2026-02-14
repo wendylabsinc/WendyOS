@@ -16,13 +16,14 @@ SRC_URI = "\
 SYSTEMD_SERVICE:${PN} = "swapfile-setup.service data-swapfile.swap"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
+# Whinlatter compatibility: Files unpack to UNPACKDIR, not WORKDIR
 do_install() {
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/swapfile-setup.service ${D}${systemd_system_unitdir}/swapfile-setup.service
-    install -m 0644 ${WORKDIR}/data-swapfile.swap ${D}${systemd_system_unitdir}/data-swapfile.swap
+    install -m 0644 ${UNPACKDIR}/swapfile-setup.service ${D}${systemd_system_unitdir}/swapfile-setup.service
+    install -m 0644 ${UNPACKDIR}/data-swapfile.swap ${D}${systemd_system_unitdir}/data-swapfile.swap
 
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/swapfile-setup.sh ${D}${bindir}/swapfile-setup.sh
+    install -m 0755 ${UNPACKDIR}/swapfile-setup.sh ${D}${bindir}/swapfile-setup.sh
 }
 
 FILES:${PN} += "\
