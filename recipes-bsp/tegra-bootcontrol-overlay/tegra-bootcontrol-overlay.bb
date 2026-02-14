@@ -7,7 +7,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRC_URI = " \
     file://boot-priority.dtso \
     "
-S = "${WORKDIR}"
+
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 inherit allarch
 
@@ -18,11 +20,11 @@ DEPENDS += "dtc-native"
 DEPLOYDIR = "${DEPLOY_DIR_IMAGE}"
 
 do_compile() {
-    # dtc -I dts -O dtb -o ${B}/boot-priority.dtbo ${WORKDIR}/boot-priority.dtso
+    # dtc -I dts -O dtb -o ${B}/boot-priority.dtbo ${UNPACKDIR}/boot-priority.dtso
     # Use the dtc from the native sysroot explicitly (robust across PATHs)
     ${STAGING_BINDIR_NATIVE}/dtc -I dts -O dtb \
         -o ${B}/boot-priority.dtbo \
-        ${WORKDIR}/boot-priority.dtso
+        ${UNPACKDIR}/boot-priority.dtso
 }
 
 # deploy to tmp/deploy/images/${MACHINE}/ so tegraflash can pick it up

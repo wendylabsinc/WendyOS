@@ -11,19 +11,19 @@ SRC_URI += " \
     "
 
 do_install:append() {
-    install -m 0644 ${WORKDIR}/hosts ${D}${sysconfdir}/hosts
+    install -m 0644 ${UNPACKDIR}/hosts ${D}${sysconfdir}/hosts
 
     # Install profile.d defaults
     install -d ${D}${sysconfdir}/profile.d
-    install -m 0755 ${WORKDIR}/profile.d/wendyos-defaults.sh ${D}${sysconfdir}/profile.d/wendyos-defaults.sh
+    install -m 0755 ${UNPACKDIR}/profile.d/wendyos-defaults.sh ${D}${sysconfdir}/profile.d/wendyos-defaults.sh
 
     # Install console login branding (displayed before login prompt)
-    install -m 0644 ${WORKDIR}/issue ${D}${sysconfdir}/issue
-    install -m 0644 ${WORKDIR}/issue.net ${D}${sysconfdir}/issue.net
+    install -m 0644 ${UNPACKDIR}/issue ${D}${sysconfdir}/issue
+    install -m 0644 ${UNPACKDIR}/issue.net ${D}${sysconfdir}/issue.net
 
     # Install sysctl config to quiet console (reduce kernel/audit messages)
     install -d ${D}${sysconfdir}/sysctl.d
-    install -m 0644 ${WORKDIR}/sysctl.d/99-quiet-console.conf ${D}${sysconfdir}/sysctl.d/
+    install -m 0644 ${UNPACKDIR}/sysctl.d/99-quiet-console.conf ${D}${sysconfdir}/sysctl.d/
 }
 
 # Make it a config file so local edits survive upgrades

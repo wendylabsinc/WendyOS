@@ -14,7 +14,7 @@ SYSTEMD_AUTO_ENABLE = "enable"
 
 do_install() {
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/home.mount ${D}${systemd_system_unitdir}/home.mount
+    install -m 0644 ${UNPACKDIR}/home.mount ${D}${systemd_system_unitdir}/home.mount
 }
 
 FILES:${PN} += "${systemd_system_unitdir}/home.mount"

@@ -16,7 +16,8 @@ SRC_URI = " \
     file://nouns.txt \
     "
 
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 SYSTEMD_SERVICE:${PN} = "wendyos-uuid-generate.service wendyos-device-name-generate.service wendyos-identity.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
@@ -24,32 +25,32 @@ SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 do_install() {
     # Install scripts to /usr/bin
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/generate-uuid.sh ${D}${bindir}/
-    install -m 0755 ${WORKDIR}/generate-device-name.sh ${D}${bindir}/
-    install -m 0755 ${WORKDIR}/update-mdns-uuid.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/generate-uuid.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/generate-device-name.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/update-mdns-uuid.sh ${D}${bindir}/
 
     # Install word lists for device name generation
     install -d ${D}${datadir}/wendyos
-    install -m 0644 ${WORKDIR}/adjectives.txt ${D}${datadir}/wendyos/
-    install -m 0644 ${WORKDIR}/nouns.txt ${D}${datadir}/wendyos/
+    install -m 0644 ${UNPACKDIR}/adjectives.txt ${D}${datadir}/wendyos/
+    install -m 0644 ${UNPACKDIR}/nouns.txt ${D}${datadir}/wendyos/
 
     # Install systemd services
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/wendyos-uuid-generate.service ${D}${systemd_system_unitdir}/
-    install -m 0644 ${WORKDIR}/wendyos-device-name-generate.service ${D}${systemd_system_unitdir}/
-    install -m 0644 ${WORKDIR}/wendyos-identity.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-uuid-generate.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-device-name-generate.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-identity.service ${D}${systemd_system_unitdir}/
 
     # Create directory for identity storage
     install -d ${D}${sysconfdir}/wendyos
 
     # Create Wendy/WendyOS version file
     install -d ${D}${sysconfdir}/wendy
-    echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/version.txt
-    install -m 0644 ${WORKDIR}/version.txt ${D}${sysconfdir}/wendy/version.txt
+    echo "WendyOS-${DISTRO_VERSION}" > ${UNPACKDIR}/version.txt
+    install -m 0644 ${UNPACKDIR}/version.txt ${D}${sysconfdir}/wendy/version.txt
 
     # Create build ID file (actual date will be set at first boot if needed)
-    echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/wendyos-build-id
-    install -m 0644 ${WORKDIR}/wendyos-build-id ${D}${sysconfdir}/wendyos-build-id
+    echo "WendyOS-${DISTRO_VERSION}" > ${UNPACKDIR}/wendyos-build-id
+    install -m 0644 ${UNPACKDIR}/wendyos-build-id ${D}${sysconfdir}/wendyos-build-id
 }
 
 FILES:${PN} += "${bindir}/generate-uuid.sh"

@@ -1,6 +1,10 @@
 DEPENDS:append = " tegra-helper-scripts-native"
 PATH =. "${STAGING_BINDIR_NATIVE}/tegra-flash:"
 
+# Whinlatter compatibility: Disable sstate to avoid uid/gid hash computation issues
+# Files unpacked to UNPACKDIR may have build user ownership that causes sstate failures
+SSTATE_SKIP_CREATION = "1"
+
 # Override NVMe partition layout for WendyOS to:
 # 1. Remove "reserved" partition (between UDA and APP)
 # 2. Rename "permanet_user_storage" (p17) to "mender_data"

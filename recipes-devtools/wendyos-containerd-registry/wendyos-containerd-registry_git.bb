@@ -13,7 +13,7 @@ SRC_URI = "git://github.com/mihai-chiorean/containerd-registry.git;protocol=http
 # Use latest commit on main branch (update SRCREV as needed)
 SRCREV = "${AUTOREV}"
 
-S = "${WORKDIR}/git"
+S = "${UNPACKDIR}/git"
 
 # We don't build the Go binary - it's provided in the container image
 # This recipe only installs systemd services and management scripts
@@ -43,12 +43,12 @@ SYSTEMD_AUTO_ENABLE:wendyos-dev-registry.service = "disable"
 do_install:append() {
     # Install systemd services
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/wendyos-dev-registry.service ${D}${systemd_system_unitdir}/
-    install -m 0644 ${WORKDIR}/wendyos-dev-registry-import.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-dev-registry.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-dev-registry-import.service ${D}${systemd_system_unitdir}/
 
     # Install management script
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/wendyos-dev-registry.sh ${D}${bindir}/wendyos-dev-registry
+    install -m 0755 ${UNPACKDIR}/wendyos-dev-registry.sh ${D}${bindir}/wendyos-dev-registry
 
     # Create directory for state file
     install -d ${D}${localstatedir}/lib/wendyos

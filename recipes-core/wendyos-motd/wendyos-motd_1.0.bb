@@ -9,14 +9,15 @@ SRC_URI = " \
     file://30-services \
     "
 
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 do_install() {
     # Install update-motd.d scripts
     install -d ${D}${sysconfdir}/update-motd.d
-    install -m 0755 ${WORKDIR}/10-wendyos-header ${D}${sysconfdir}/update-motd.d/
-    install -m 0755 ${WORKDIR}/20-system-info ${D}${sysconfdir}/update-motd.d/
-    install -m 0755 ${WORKDIR}/30-services ${D}${sysconfdir}/update-motd.d/
+    install -m 0755 ${UNPACKDIR}/10-wendyos-header ${D}${sysconfdir}/update-motd.d/
+    install -m 0755 ${UNPACKDIR}/20-system-info ${D}${sysconfdir}/update-motd.d/
+    install -m 0755 ${UNPACKDIR}/30-services ${D}${sysconfdir}/update-motd.d/
 
     # Create wrapper script to generate MOTD
     install -d ${D}${bindir}

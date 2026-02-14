@@ -36,7 +36,8 @@ TEGRA_BOOTCONTROL_OVERLAYS += "boot-priority.dtbo"
 
 IMAGE_FEATURES += " \
     ssh-server-openssh \
-    debug-tweaks \
+    empty-root-password \
+    allow-root-login \
     package-management \
     "
 
@@ -48,22 +49,22 @@ IMAGE_INSTALL:append = " \
     mender-configure \
     mender-connect \
     tegra-bootcontrol-overlay \
-    packagegroup-nvidia-container \
-    nvidia-container-config \
-    wendyos-containerd-registry \
-    wendyos-dev-registry-image \
     python3-pip-jetson-config \
     setup-nv-boot-control \
     bluez5 \
     bluez5-obex \
-    rtkit \
-    pipewire \
-    pipewire-alsa \
-    pipewire-tools \
-    pipewire-spa-plugins-support \
-    wireplumber \
-    alsa-utils \
     "
+
+# Audio support temporarily disabled for Yocto 5.3 (whinlatter)
+# meta-openembedded/meta-multimedia has UNPACKDIR compatibility issues
+# Re-enable when meta-openembedded whinlatter stabilizes
+#    rtkit
+#    pipewire
+#    pipewire-alsa
+#    pipewire-tools
+#    pipewire-spa-plugins-support
+#    wireplumber
+#    alsa-utils
 
 # Note: mender-tegra-capsule-update removed - capsule staging now handled
 # by switch-rootfs state script for atomic rootfs+bootloader updates

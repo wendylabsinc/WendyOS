@@ -15,10 +15,10 @@ SRC_URI = "\
 do_install() {
     # Install systemd drop-in to limit total containerd memory
     install -d ${D}${systemd_system_unitdir}/containerd.service.d
-    install -m 0644 ${WORKDIR}/containerd-memory-limit.conf ${D}${systemd_system_unitdir}/containerd.service.d/memory-limit.conf
+    install -m 0644 ${UNPACKDIR}/containerd-memory-limit.conf ${D}${systemd_system_unitdir}/containerd.service.d/memory-limit.conf
 
     install -d ${D}${docdir}/${PN}
-    install -m 0644 ${WORKDIR}/README-memory-limits.md ${D}${docdir}/${PN}/README-memory-limits.md
+    install -m 0644 ${UNPACKDIR}/README-memory-limits.md ${D}${docdir}/${PN}/README-memory-limits.md
 }
 
 FILES:${PN} += "\

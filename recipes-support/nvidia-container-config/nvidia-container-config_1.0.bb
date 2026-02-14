@@ -19,7 +19,8 @@ SRC_URI = " \
     file://fix-cdi-gstreamer-paths.sh \
     "
 
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 SYSTEMD_SERVICE:${PN} = "wendyos-cdi-generate.service wendyos-cuda-detect.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
@@ -29,12 +30,12 @@ do_install() {
     install -d ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d
 
     # Install base l4t.csv (CUDA/PyTorch libraries)
-    install -m 0644 ${WORKDIR}/l4t.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
+    install -m 0644 ${UNPACKDIR}/l4t.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
 
     # Install DeepStream CSV if enabled
     if [ "${WENDYOS_DEEPSTREAM}" = "1" ]; then
         bbnote "Installing DeepStream l4t-deepstream.csv"
-        install -m 0644 ${WORKDIR}/l4t-deepstream.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
+        install -m 0644 ${UNPACKDIR}/l4t-deepstream.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
 
         # Create multiarch compatibility symlinks for GStreamer DeepStream plugins
         # This allows the CDI GST_PLUGIN_PATH to work with both Yocto and Debian/Ubuntu conventions
@@ -47,23 +48,23 @@ do_install() {
     fi
 
     # Install WendyOS device/sysfs mappings (supplements meta-tegra's devices.csv)
-    install -m 0644 ${WORKDIR}/devices-wendyos.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
+    install -m 0644 ${UNPACKDIR}/devices-wendyos.csv ${D}${sysconfdir}/nvidia-container-runtime/host-files-for-container.d/
 
     # Install CUDA environment detection script
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/generate-cuda-env.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/generate-cuda-env.sh ${D}${bindir}/
 
     # Install CDI post-processing script for DeepStream path fixes
-    install -m 0755 ${WORKDIR}/fix-cdi-gstreamer-paths.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/fix-cdi-gstreamer-paths.sh ${D}${bindir}/
 
     # Install systemd services
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/wendyos-cdi-generate.service ${D}${systemd_system_unitdir}/
-    install -m 0644 ${WORKDIR}/wendyos-cuda-detect.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-cdi-generate.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/wendyos-cuda-detect.service ${D}${systemd_system_unitdir}/
 
     # Install udev rules for GPU device permissions (z- prefix ensures it runs last)
     install -d ${D}${sysconfdir}/udev/rules.d
-    install -m 0644 ${WORKDIR}/99-z-nvidia-tegra.rules ${D}${sysconfdir}/udev/rules.d/
+    install -m 0644 ${UNPACKDIR}/99-z-nvidia-tegra.rules ${D}${sysconfdir}/udev/rules.d/
 
     # Create directory for CUDA environment file
     install -d ${D}${sysconfdir}/default

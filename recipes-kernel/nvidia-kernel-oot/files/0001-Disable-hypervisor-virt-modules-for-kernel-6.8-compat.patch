@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WendyOS <noreply@wendyos.com>
+Date: Wed, 12 Feb 2026 00:00:00 +0000
+Subject: [PATCH] Disable hypervisor/virt modules for kernel 6.8 compatibility
+
+Disable tegra_virt_storage and related hypervisor virtual device modules
+that have kernel 6.8 API compatibility issues. These modules are only
+needed for virtualization/hypervisor scenarios and are not required for
+normal Thor operation.
+
+Modules disabled:
+- block/tegra_virt_storage (virtual block devices)
+- block/tegra_oops_virt_storage (virtual oops storage)
+- sound/soc/tegra-virt-alt (virtual audio - has kernel 6.8 issues)
+- sound/tegra-safety-audio (safety audio - has compatibility issues)
+
+Upstream-Status: Inappropriate [workaround for kernel API changes]
+Signed-off-by: WendyOS <noreply@wendyos.com>
+---
+ nvidia-oot/Makefile         | 4 ++--
+ nvidia-oot/drivers/Makefile | 6 ++++--
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/nvidia-oot/Makefile b/nvidia-oot/Makefile
+index 1234567890ab..abcdef1234567 100644
+--- a/nvidia-oot/Makefile
++++ b/nvidia-oot/Makefile
+@@ -48,8 +48,8 @@ obj-m += drivers/
+
+ ifdef CONFIG_SND_SOC
+ obj-m += sound/soc/tegra/
+-obj-m += sound/tegra-safety-audio/
+-obj-m += sound/soc/tegra-virt-alt/
++#obj-m += sound/tegra-safety-audio/
++#obj-m += sound/soc/tegra-virt-alt/
+ endif
+
+ ifdef CONFIG_THERMAL
+diff --git a/nvidia-oot/drivers/Makefile b/nvidia-oot/drivers/Makefile
+index 1234567890ab..abcdef1234567 100644
+--- a/nvidia-oot/drivers/Makefile
++++ b/nvidia-oot/drivers/Makefile
+@@ -6,10 +6,12 @@ LINUXINCLUDE += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/hw/
+ LINUXINCLUDE += -I$(srctree.nvidia-oot)/drivers/video/tegra/host/
+ LINUXINCLUDE += -I$(srctree.hwpm)/include
+
+-obj-m += block/tegra_virt_storage/
++# Disabled: kernel 6.8 API compatibility issues (hypervisor modules not needed)
++#obj-m += block/tegra_virt_storage/
+ ifdef CONFIG_PSTORE
+-obj-m += block/tegra_oops_virt_storage/
++#obj-m += block/tegra_oops_virt_storage/
+ endif
++
+ ifdef CONFIG_BT
+ ifneq ($(NV_OOT_REALTEK_BTUSB_SKIP_BUILD),y)
+ obj-m += bluetooth/realtek/
+--
+2.34.1

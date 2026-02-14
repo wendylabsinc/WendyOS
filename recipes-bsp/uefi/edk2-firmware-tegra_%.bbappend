@@ -16,12 +16,12 @@
 # Set to "1" for DEBUG mode (verbose UEFI debug output)
 EDK2_BUILD_RELEASE = "${@'0' if d.getVar('WENDYOS_EFI_DEBUG') == '1' else '1'}"
 
-# Fix UNPACKDIR compatibility for scarthgap
-S = "${WORKDIR}/edk2-tegra/edk2"
+# Fix for Yocto 5.3 (whinlatter) UNPACKDIR changes
+# UNPACKDIR defaults to ${WORKDIR}/sources in whinlatter
+# S must reference UNPACKDIR, not WORKDIR directly
+UNPACKDIR = "${WORKDIR}/sources"
+S = "${UNPACKDIR}/edk2-tegra/edk2"
 
-# Make UNPACKDIR work in scarthgap by mapping it to WORKDIR
-UNPACKDIR = "${WORKDIR}"
-
-# Ignore patch-fuzz warnings for R38 patches on scarthgap
-WARN_QA:remove = "patch-fuzz"
-ERROR_QA:remove = "patch-fuzz"
+# Ignore patch-fuzz and patch-status warnings for R38 patches on whinlatter
+WARN_QA:remove = "patch-fuzz patch-status"
+ERROR_QA:remove = "patch-fuzz patch-status"

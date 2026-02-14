@@ -13,7 +13,8 @@ PACKAGE_ARCH = "${TEGRA_PKGARCH}"
 
 DEPENDS = "cuda-cudart"
 
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 # The outer deb is a repo installer containing the actual package debs
 do_unpack[depends] += "xz-native:do_populate_sysroot"
@@ -85,8 +86,8 @@ do_install() {
 
     # Install runtime libraries from the extracted deb
     # Libraries are in usr/lib/aarch64-linux-gnu/libcusparseLt/12/
-    if [ -d ${WORKDIR}/cusparselt/usr/lib/aarch64-linux-gnu/libcusparseLt/12 ]; then
-        for lib in ${WORKDIR}/cusparselt/usr/lib/aarch64-linux-gnu/libcusparseLt/12/*.so*; do
+    if [ -d ${UNPACKDIR}/cusparselt/usr/lib/aarch64-linux-gnu/libcusparseLt/12 ]; then
+        for lib in ${UNPACKDIR}/cusparselt/usr/lib/aarch64-linux-gnu/libcusparseLt/12/*.so*; do
             if [ -f "$lib" ]; then
                 install -m 0755 "$lib" ${D}${libdir}/
             fi
@@ -103,9 +104,9 @@ do_install() {
     fi
 
     # Install headers from dev package
-    if [ -d ${WORKDIR}/cusparselt-dev/usr/include ]; then
+    if [ -d ${UNPACKDIR}/cusparselt-dev/usr/include ]; then
         install -d ${D}${includedir}
-        install -m 0644 ${WORKDIR}/cusparselt-dev/usr/include/*.h ${D}${includedir}/ 2>/dev/null || true
+        install -m 0644 ${UNPACKDIR}/cusparselt-dev/usr/include/*.h ${D}${includedir}/ 2>/dev/null || true
     fi
 }
 

@@ -9,15 +9,17 @@ SRC_URI = " \
     file://gadget-setup.sh \
     file://gadget-setup.service \
     "
-S = "${WORKDIR}"
+
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 inherit systemd
 
 do_install() {
     install -d ${D}${bindir}
-    install -m 0755 ${WORKDIR}/gadget-setup.sh ${D}${bindir}/
+    install -m 0755 ${UNPACKDIR}/gadget-setup.sh ${D}${bindir}/
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/gadget-setup.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${UNPACKDIR}/gadget-setup.service ${D}${systemd_system_unitdir}/
 }
 
 SYSTEMD_SERVICE:${PN} = "gadget-setup.service"

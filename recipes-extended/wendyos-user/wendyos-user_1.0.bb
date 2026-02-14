@@ -24,11 +24,11 @@ SYSTEMD_AUTO_ENABLE = "enable"
 do_install() {
     # Install first-boot setup script
     install -d ${D}${sbindir}
-    install -m 0755 ${WORKDIR}/wendyos-user-setup.sh ${D}${sbindir}/wendyos-user-setup.sh
+    install -m 0755 ${UNPACKDIR}/wendyos-user-setup.sh ${D}${sbindir}/wendyos-user-setup.sh
 
     # Install systemd service
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/wendyos-user-setup.service ${D}${systemd_system_unitdir}/wendyos-user-setup.service
+    install -m 0644 ${UNPACKDIR}/wendyos-user-setup.service ${D}${systemd_system_unitdir}/wendyos-user-setup.service
 }
 
 pkg_postinst_ontarget:${PN}() {

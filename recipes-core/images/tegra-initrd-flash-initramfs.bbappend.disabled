@@ -1,0 +1,19 @@
+# Extend pseudo workaround to cover all image tasks
+# The wip-l4t-r38.4.0 branch has pseudo corruption issues with image tasks
+python sstate_report_unihash() {
+    report_unihash = getattr(bb.parse.siggen, 'report_unihash', None)
+
+    if report_unihash:
+        ss = sstate_state_fromvars(d)
+        # Disable pseudo for all image-related tasks to avoid corruption
+        if ss['task'] in ['image_complete', 'image_qa', 'image', 'image_cpio', 'flush_pseudodb']:
+            os.environ['PSEUDO_DISABLED'] = '1'
+        report_unihash(os.getcwd(), ss['task'], d)
+}
+
+# Override reproducible_final_image_task to be a no-op
+# This task accesses the rootfs which can trigger pseudo errors
+reproducible_final_image_task() {
+    # No-op - skip reproducibility for this initramfs
+    :
+}

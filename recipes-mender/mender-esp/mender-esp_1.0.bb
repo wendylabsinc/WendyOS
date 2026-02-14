@@ -9,13 +9,14 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRC_URI = " \
     file://10-requires-esp.conf \
     "
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 inherit systemd
 
 do_install() {
     install -d ${D}${systemd_system_unitdir}/mender-updated.service.d
-    install -m 0644 ${WORKDIR}/10-requires-esp.conf \
+    install -m 0644 ${UNPACKDIR}/10-requires-esp.conf \
         ${D}${systemd_system_unitdir}/mender-updated.service.d/10-requires-esp.conf
 }
 

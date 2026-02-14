@@ -1,0 +1,28 @@
+# Fix for R38.2.x: S is incorrectly set to ${WORKDIR}/${BPN}-${PV} instead of ${WORKDIR}/git
+# The git source is in ${WORKDIR}/git but module.bbclass is setting S incorrectly
+S = "${WORKDIR}/git"
+
+# Fix compilation issues with GCC 13.4: -Wno-error=header-guard is not supported
+# Override the base recipe's EXTRA_OEMAKE to remove this flag
+EXTRA_OEMAKE = '\
+    IGNORE_PREEMPT_RT_PRESENCE=1 KERNEL_PATH="${STAGING_KERNEL_BUILDDIR}" \
+    CC="${KERNEL_CC} -std=gnu17" CXX="${KERNEL_CC} -x c++" LD="${KERNEL_LD}" AR="${KERNEL_AR}" \
+    OBJCOPY="${KERNEL_OBJCOPY}" OPENRM=1 kernel_name="noble" \
+    IGNORE_CC_MISMATCH=1 \
+'
+
+# Fix for R38.4.0 add_nvethernetrm_symlink issue (not needed for R38.2.x)
+# add_nvethernetrm_symlink() {
+#     local target_dir="${S}/nvidia-oot/drivers/net/ethernet/nvidia/nvethernet"
+#     mkdir -p "$target_dir"
+#     ln -sf ../../../../../../nvethernetrm "$target_dir/nvethernetrm"
+# }
+
+# Skip RTL WiFi driver patch that doesn't apply in R38.4.0
+# The rtl8852ce driver structure changed and this patch is only for build warnings
+SRC_URI:remove = "file://0001-Fix-build-warning-on-rtl8852ce-driver.patch;patchdir=nvidia-oot"
+
+# Fix for R38.2.x: License files referenced in LIC_FILES_CHKSUM don't exist
+# This is a bug in meta-tegra R38.2.x - downgrade license-checksum from error to warning
+ERROR_QA:remove = "license-checksum"
+WARN_QA:append = " license-checksum"

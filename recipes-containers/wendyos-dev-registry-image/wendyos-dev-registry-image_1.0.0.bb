@@ -14,7 +14,8 @@ SRC_URI[sha256sum] = "af3b5a919acf2ff799b19b3fab16ca61f05f6b7192b4b16aece6a3cc07
 
 inherit allarch
 
-S = "${WORKDIR}"
+UNPACKDIR = "${UNPACKDIR}/sources"
+S = "${UNPACKDIR}"
 
 # Directory where offline images are stored
 OFFLINE_IMAGES_DIR = "${datadir}/wendyos/offline-images"
@@ -22,7 +23,7 @@ OFFLINE_IMAGES_DIR = "${datadir}/wendyos/offline-images"
 do_install() {
     install -d ${D}${OFFLINE_IMAGES_DIR}
     # Since we used ;unpack=0, manually decompress .tar.gz to .tar (like non-Yocto build)
-    gunzip -c ${WORKDIR}/containerd-registry-arm64.tar.gz > ${D}${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar
+    gunzip -c ${UNPACKDIR}/containerd-registry-arm64.tar.gz > ${D}${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar
     chmod 0644 ${D}${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar
 }
 
