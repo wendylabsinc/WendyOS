@@ -447,6 +447,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 ]
                 var arguments: [String] = []
                 var additionalEnv: [String] = []
+                var hasBacktrace = false
 
                 // Add swift-backtrace binaries for crash reporting
                 findBacktrace: for binaryName in [
@@ -458,10 +459,8 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                         forResource: binaryName,
                         withExtension: nil
                     ) {
+                        hasBacktrace = true
                         resources.append((source: backtraceUrl.path(), destination: destination))
-                        additionalEnv.append(
-                            "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
-                        )
                         break findBacktrace
                     }
                     let backtraceUrl = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -473,14 +472,22 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                         .appending(component: binaryName)
 
                     if FileManager.default.fileExists(atPath: backtraceUrl.path()) {
+                        hasBacktrace = true
                         resources.append(
                             (source: backtraceUrl.path(), destination: destination)
                         )
-                        additionalEnv.append(
-                            "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
-                        )
                         break findBacktrace
                     }
+                }
+
+                if hasBacktrace {
+                    additionalEnv.append(
+                        "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
+                    )
+                } else {
+                    cliOutput.warning(
+                        "swift-backtrace binary not found. Crash backtraces will not be available."
+                    )
                 }
 
                 if debug {
