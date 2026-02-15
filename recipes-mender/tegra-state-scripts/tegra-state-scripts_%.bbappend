@@ -19,9 +19,9 @@ FILES:${PN} += "${datadir}/mender/modules/v3/ArtifactVerifyReboot_50_verify-boot
 
 do_compile:prepend() {
     # Verify our custom switch-rootfs is being used
-    if grep -q "^WENDYOS_SWITCH_ROOTFS_VERSION=" ${WORKDIR}/switch-rootfs
+    if grep -q "^WENDYOS_SWITCH_ROOTFS_VERSION=" ${UNPACKDIR}/switch-rootfs
     then
-        version=$(grep "^WENDYOS_SWITCH_ROOTFS_VERSION=" ${WORKDIR}/switch-rootfs | cut -d'"' -f2)
+        version=$(grep "^WENDYOS_SWITCH_ROOTFS_VERSION=" ${UNPACKDIR}/switch-rootfs | cut -d'"' -f2)
         bbnote "Using WendyOS custom switch-rootfs v${version} (conditional capsule staging)"
     else
         bbfatal "FILESEXTRAPATHS not working! Upstream switch-rootfs detected - this breaks conditional updates."
@@ -33,6 +33,6 @@ do_install:append() {
     # Add comprehensive bootloader verification script (ArtifactVerifyReboot)
     # This supplements upstream's verify-slot (ArtifactCommit) with version+ESRT checks
     mkdir -p ${D}${datadir}/mender/modules/v3
-    install -m 0755 ${WORKDIR}/verify-bootloader-update \
+    install -m 0755 ${UNPACKDIR}/verify-bootloader-update \
         ${D}${datadir}/mender/modules/v3/ArtifactVerifyReboot_50_verify-bootloader-update
 }

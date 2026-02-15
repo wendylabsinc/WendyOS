@@ -12,7 +12,8 @@ VIRTUAL-RUNTIME_init_manager = "systemd"
 
 # Image format types for Tegra platforms
 # Use package-specific override to avoid affecting other images
-IMAGE_FSTYPES = "tegraflash.tar mender dataimg ext4"
+# Note: dataimg removed for NVMe-only platforms (Thor) - ext4 + mender provide complete flash images
+IMAGE_FSTYPES = "tegraflash.tar mender ext4"
 
 # Release-style naming for this image:
 # - IMAGE_VERSION_SUFFIX is a common pattern to carry a release tag.

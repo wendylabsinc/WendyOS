@@ -25,3 +25,7 @@ tegraflash_custom_post:append() {
         bberror "Files present: $(ls -la)"
     fi
 }
+
+# Override tegraflash data file variable to be empty for NVMe-only configurations
+# The data partition is created dynamically on first boot, not pre-flashed
+TEGRAFLASH_DATAFILE = ""
