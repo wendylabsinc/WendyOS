@@ -28,4 +28,5 @@ tegraflash_custom_post:append() {
 
 # Override tegraflash data file variable to be empty for NVMe-only configurations
 # The data partition is created dynamically on first boot, not pre-flashed
-TEGRAFLASH_DATAFILE = ""
+DATAFILE = ""
+IMAGE_TEGRAFLASH_DATA = ""
