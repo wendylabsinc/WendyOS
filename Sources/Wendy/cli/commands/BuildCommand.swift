@@ -39,6 +39,20 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     @OptionGroup
     var agentConnectionOptions: AgentConnectionOptions
 
+    init() {}
+
+    init(
+        debug: Bool,
+        autoAccept: Bool,
+        executable: String?,
+        agentConnectionOptions: AgentConnectionOptions
+    ) {
+        self.debug = debug
+        self.autoAccept = autoAccept
+        self.executable = executable
+        self.agentConnectionOptions = agentConnectionOptions
+    }
+
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {

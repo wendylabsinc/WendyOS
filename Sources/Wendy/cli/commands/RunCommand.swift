@@ -141,8 +141,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             try await BuildCommand(
                 debug: debug,
                 autoAccept: autoAccept,
-                executable: _executable,
-                agentConnectionOptions: _agentConnectionOptions
+                executable: executable,
+                agentConnectionOptions: agentConnectionOptions
             ).withContainer(
                 restartPolicy: buildRestartPolicy()
             ) { appName, client, endpoint in
