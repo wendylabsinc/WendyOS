@@ -1,6 +1,16 @@
-# WendyOS for NVIDIA Jetson Orin Nano Developer Kit
+# WendyOS for NVIDIA Jetson Developer Kits
 
-This repository provides the meta-layer and build flow to build **WendyOS** for the **NVIDIA Jetson Orin Nano Developer Kit**.
+This repository provides the meta-layer and build flow to build **WendyOS** for **NVIDIA Jetson Developer Kits**, including:
+- **Jetson Orin Nano Developer Kit** (8GB)
+- **Jetson AGX Orin Developer Kit** (64GB)
+
+### Supported Hardware
+
+| Hardware | SoC | RAM | Machine Config | Boot Device |
+|----------|-----|-----|----------------|-------------|
+| Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-wendyos` | eMMC/SD |
+| Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-nvme-wendyos` | NVMe |
+| Jetson AGX Orin DevKit | Tegra234 | 64GB | `jetson-agx-orin-devkit-nvme-wendyos` | NVMe |
 
 ## TL;DR
 
@@ -118,11 +128,14 @@ make shell
 
 **Build for different targets:**
 ```bash
-# Build for NVMe (default)
+# Build for Orin Nano NVMe (default)
 make build
 
-# Build for SD card
-make build MACHINE=jetson-orin-nano-devkit-edgeos
+# Build for AGX Orin 64GB (NVMe)
+make build MACHINE=jetson-agx-orin-devkit-nvme-wendyos
+
+# Build for Orin Nano SD card/eMMC
+make build MACHINE=jetson-orin-nano-devkit-wendyos
 ```
 
 #### Option B: Manual Steps
@@ -157,8 +170,9 @@ make build MACHINE=jetson-orin-nano-devkit-edgeos
    - `DL_DIR` - Download directory for source tarballs (recommended for caching)
    - `SSTATE_DIR` - Shared state cache directory (speeds up rebuilds)
    - `MACHINE` - Target machine configuration:
-     - `jetson-orin-nano-devkit-nvme-wendyos` (NVMe boot) [**default**]
-     - `jetson-orin-nano-devkit-wendyos` (eMMC/SD card boot)
+     - `jetson-orin-nano-devkit-nvme-wendyos` (Orin Nano - NVMe boot) [**default**]
+     - `jetson-orin-nano-devkit-wendyos` (Orin Nano - eMMC/SD card boot)
+     - `jetson-agx-orin-devkit-nvme-wendyos` (AGX Orin 64GB - NVMe boot)
    - `WENDYOS_FLASH_IMAGE_SIZE` - Flash image size: "64GB"):
      - `"4GB"` - 3.2GB Mender storage (~1.3GB per rootfs partition)
      - `"8GB"` - 6.4GB Mender storage (~2.9GB per rootfs partition)
@@ -191,7 +205,7 @@ build/tmp/deploy/images/<machine>/wendyos-image-<machine>.rootfs.tegraflash.tar.
 ```
 
 **Important**: The flashing script differs based on your target machine:
-- **NVMe** (`jetson-orin-nano-devkit-nvme-wendyos`) → use `doexternal.sh`
+- **NVMe** (`jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`) → use `doexternal.sh`
 - **eMMC/SD card** (`jetson-orin-nano-devkit-wendyos`) → use `dosdcard.sh`
 
 #### For eMMC/SD Card Builds
@@ -383,7 +397,7 @@ sudo ./initrd-flash.sh
 ```
 
 **Note:** The script reads configuration from `.env.initrd-flash` (created during build), which contains:
-- Machine type (jetson-orin-nano-devkit-nvme-wendyos or jetson-orin-nano-devkit-wendyos)
+- Machine type (e.g., `jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`, `jetson-orin-nano-devkit-wendyos`)
 - Target device (NVMe or eMMC)
 - Board IDs and other hardware parameters
 
