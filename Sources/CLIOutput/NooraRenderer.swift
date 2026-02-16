@@ -1,6 +1,6 @@
 import Foundation
 import NIOCore
-import Noora
+internal import Noora
 
 // Helper to flush stdout in Swift 6
 @inline(__always)
@@ -12,33 +12,35 @@ private func flushStdout() {
     #endif
 }
 
+let noora = Noora(theme: .emerald(), terminal: Terminal(signalBehavior: .none))
+
 /// Interactive CLI output renderer using Noora TUI library.
 public struct NooraRenderer: CLIOutput, Sendable {
     public init() {}
 
     public func success(_ message: String) {
-        Noora().success(SuccessAlert(stringLiteral: message))
+        noora.success(SuccessAlert(stringLiteral: message))
     }
 
     public func error(_ message: String, suggestion: String?) {
         // ErrorAlert doesn't support suggestions in its string literal init,
         // so we show them separately
-        Noora().error(ErrorAlert(stringLiteral: message))
+        noora.error(ErrorAlert(stringLiteral: message))
         if let suggestion {
-            Noora().info(InfoAlert(stringLiteral: "Suggestion: \(suggestion)"))
+            noora.info(InfoAlert(stringLiteral: "Suggestion: \(suggestion)"))
         }
     }
 
     public func info(_ message: String) {
-        Noora().info(InfoAlert(stringLiteral: message))
+        noora.info(InfoAlert(stringLiteral: message))
     }
 
     public func warning(_ message: String) {
-        Noora().warning(WarningAlert(stringLiteral: message))
+        noora.warning(WarningAlert(stringLiteral: message))
     }
 
     public func table(headers: [String], rows: [[String]]) {
-        Noora().table(headers: headers, rows: rows)
+        noora.table(headers: headers, rows: rows)
     }
 
     public func streamingTable<T: Encodable & Sendable>(
@@ -68,7 +70,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
             continuation.finish()
         }()
 
-        async let consumer: Void = Noora().table(tableData, updates: stream)
+        async let consumer: Void = noora.table(tableData, updates: stream)
 
         _ = await (producer, consumer)
     }
@@ -129,7 +131,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
 
             defer { group.cancelAll() }
             repeat {
-                let index = try await Noora().selectableTable(
+                let index = try await noora.selectableTable(
                     tableData,
                     updates: stream,
                     pageSize: pageSize
@@ -150,7 +152,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
         pageSize: Int
     ) async throws -> Int {
         let tableRows: [TableRow] = rows.map { row in
-            row.map { TerminalText(stringLiteral: $0) }
+            TableRow(row.map { TerminalText(stringLiteral: $0) })
         }
 
         let tableData = TableData(
@@ -158,7 +160,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
             rows: tableRows
         )
 
-        return try await Noora().selectableTable(tableData, pageSize: pageSize)
+        return try await noora.selectableTable(tableData, pageSize: pageSize)
     }
 
     public func result<T: Encodable & Sendable>(_ value: T) {
@@ -182,7 +184,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
         } else {
             text = message
         }
-        Noora().info(InfoAlert(stringLiteral: text))
+        noora.info(InfoAlert(stringLiteral: text))
     }
 
     public func withProgress<T: Sendable>(
@@ -191,7 +193,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
         errorMessage: String,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await Noora().progressStep(
+        try await noora.progressStep(
             message: message,
             successMessage: successMessage,
             errorMessage: errorMessage,
@@ -205,9 +207,16 @@ public struct NooraRenderer: CLIOutput, Sendable {
         message: String,
         operation: @escaping @Sendable (@escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
-        try await Noora().progressBarStep(message: message) { updateProgress in
+        try await noora.progressBarStep(message: message) { updateProgress in
             try await operation(updateProgress)
         }
+    }
+
+    public func withLabeledProgressBar<T: Sendable>(
+        message: String,
+        operation: @escaping @Sendable (@escaping (ProgressBarUpdate) -> Void) async throws -> T
+    ) async throws -> T {
+        try await _withLabeledProgressBarImpl(message: message, operation: operation)
     }
 
     public func withStreamingOutput<T: Sendable>(
@@ -249,7 +258,7 @@ public struct NooraRenderer: CLIOutput, Sendable {
                 await collector.append(chunk)
             }
             await collector.finish()
-            Noora().success("Full output: \(logFile.path)")
+            noora.success("Full output: \(logFile.path)")
             return value
         } catch {
             await collector.finish()
@@ -259,9 +268,48 @@ public struct NooraRenderer: CLIOutput, Sendable {
                 output.writeString("\n")
             }
             try FileHandle.standardError.write(contentsOf: output.readableBytesView)
-            Noora().error("Full output: \(logFile.path)")
+            noora.error("Full output: \(logFile.path)")
             throw error
         }
+    }
+
+    // MARK: - Interactive prompts
+
+    public func yesOrNoPrompt(question: String, defaultAnswer: Bool) async throws -> Bool {
+        noora.yesOrNoChoicePrompt(
+            question: TerminalText(stringLiteral: question),
+            defaultAnswer: defaultAnswer
+        )
+    }
+
+    public func singleChoicePrompt(
+        title: String?,
+        question: String,
+        options: [String]
+    ) async throws -> String {
+        noora.singleChoicePrompt(
+            title: title.map { TerminalText(stringLiteral: $0) },
+            question: TerminalText(stringLiteral: question),
+            options: options
+        )
+    }
+
+    public func textPrompt(title: String?, prompt: String) async throws -> String {
+        noora.textPrompt(
+            title: title.map { TerminalText(stringLiteral: $0) },
+            prompt: TerminalText(stringLiteral: prompt)
+        )
+    }
+
+    public func multipleChoicePrompt(question: String, options: [String]) async throws -> [String] {
+        noora.multipleChoicePrompt(
+            question: TerminalText(stringLiteral: question),
+            options: options
+        )
+    }
+
+    public func secureTextPrompt(title: String, prompt: String) throws -> String {
+        try CLIOutput_secureTextPrompt(title: title, prompt: prompt)
     }
 }
 

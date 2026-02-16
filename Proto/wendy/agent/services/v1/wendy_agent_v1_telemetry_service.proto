@@ -4,9 +4,10 @@ package wendy.agent.services.v1;
 
 import "opentelemetry/proto/collector/logs/v1/logs_service.proto";
 import "opentelemetry/proto/collector/metrics/v1/metrics_service.proto";
+import "opentelemetry/proto/collector/trace/v1/trace_service.proto";
 
 // Service for streaming telemetry data from the agent to CLI clients.
-// This allows observing logs and metrics from containers running on the device.
+// This allows observing logs, metrics, and traces from containers running on the device.
 service WendyTelemetryService {
     // Stream log records from containers running on the device.
     // Returns OTLP log data that can be displayed or forwarded to a local collector.
@@ -15,6 +16,10 @@ service WendyTelemetryService {
     // Stream metrics from containers running on the device.
     // Returns OTLP metrics data that can be displayed or forwarded to a local collector.
     rpc StreamMetrics(StreamMetricsRequest) returns (stream StreamMetricsResponse);
+
+    // Stream trace spans from containers running on the device.
+    // Returns OTLP trace data that can be displayed or forwarded to a local collector.
+    rpc StreamTraces(StreamTracesRequest) returns (stream StreamTracesResponse);
 }
 
 message StreamLogsRequest {
@@ -49,4 +54,21 @@ message StreamMetricsResponse {
     // OTLP metrics data using the standard OpenTelemetry format.
     // Can be forwarded directly to a local OTLP collector.
     opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest metrics = 1;
+}
+
+message StreamTracesRequest {
+    // Optional filter by service name
+    optional string service_name = 1;
+
+    // Optional filter by app/container name
+    optional string app_name = 2;
+
+    // Optional filter by span name prefix
+    optional string span_name_prefix = 3;
+}
+
+message StreamTracesResponse {
+    // OTLP trace data using the standard OpenTelemetry format.
+    // Can be forwarded directly to a local OTLP collector.
+    opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest traces = 1;
 }

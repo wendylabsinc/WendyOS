@@ -44,10 +44,23 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService {
                 method: "StreamMetrics"
             )
         }
+        /// Namespace for "StreamTraces" metadata.
+        public enum StreamTraces {
+            /// Request type for "StreamTraces".
+            public typealias Input = Wendy_Agent_Services_V1_StreamTracesRequest
+            /// Response type for "StreamTraces".
+            public typealias Output = Wendy_Agent_Services_V1_StreamTracesResponse
+            /// Descriptor for "StreamTraces".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyTelemetryService"),
+                method: "StreamTraces"
+            )
+        }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyTelemetryService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             StreamLogs.descriptor,
-            StreamMetrics.descriptor
+            StreamMetrics.descriptor,
+            StreamTraces.descriptor
         ]
     }
 }
@@ -76,7 +89,7 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
     /// > Source IDL Documentation:
     /// >
     /// > Service for streaming telemetry data from the agent to CLI clients.
-    /// > This allows observing logs and metrics from containers running on the device.
+    /// > This allows observing logs, metrics, and traces from containers running on the device.
     public protocol StreamingServiceProtocol: GRPCCore.RegistrableRPCService {
         /// Handle the "StreamLogs" method.
         ///
@@ -115,6 +128,25 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_StreamMetricsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamMetricsResponse>
+
+        /// Handle the "StreamTraces" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Stream trace spans from containers running on the device.
+        /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_StreamTracesRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_StreamTracesResponse` messages.
+        func streamTraces(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamTracesResponse>
     }
 
     /// Service protocol for the "wendy.agent.services.v1.WendyTelemetryService" service.
@@ -128,7 +160,7 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
     /// > Source IDL Documentation:
     /// >
     /// > Service for streaming telemetry data from the agent to CLI clients.
-    /// > This allows observing logs and metrics from containers running on the device.
+    /// > This allows observing logs, metrics, and traces from containers running on the device.
     public protocol ServiceProtocol: Wendy_Agent_Services_V1_WendyTelemetryService.StreamingServiceProtocol {
         /// Handle the "StreamLogs" method.
         ///
@@ -167,6 +199,25 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StreamMetricsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamMetricsResponse>
+
+        /// Handle the "StreamTraces" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Stream trace spans from containers running on the device.
+        /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_StreamTracesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_StreamTracesResponse` messages.
+        func streamTraces(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamTracesResponse>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v1.WendyTelemetryService" service.
@@ -178,7 +229,7 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
     /// > Source IDL Documentation:
     /// >
     /// > Service for streaming telemetry data from the agent to CLI clients.
-    /// > This allows observing logs and metrics from containers running on the device.
+    /// > This allows observing logs, metrics, and traces from containers running on the device.
     public protocol SimpleServiceProtocol: Wendy_Agent_Services_V1_WendyTelemetryService.ServiceProtocol {
         /// Handle the "StreamLogs" method.
         ///
@@ -219,6 +270,26 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
             response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_StreamMetricsResponse>,
             context: GRPCCore.ServerContext
         ) async throws
+
+        /// Handle the "StreamTraces" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Stream trace spans from containers running on the device.
+        /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_StreamTracesRequest` message.
+        ///   - response: A response stream of `Wendy_Agent_Services_V1_StreamTracesResponse` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        func streamTraces(
+            request: Wendy_Agent_Services_V1_StreamTracesRequest,
+            response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_StreamTracesResponse>,
+            context: GRPCCore.ServerContext
+        ) async throws
     }
 }
 
@@ -248,6 +319,17 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService.StreamingServiceProtocol
                 )
             }
         )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyTelemetryService.Method.StreamTraces.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_StreamTracesRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_StreamTracesResponse>(),
+            handler: { request, context in
+                try await self.streamTraces(
+                    request: request,
+                    context: context
+                )
+            }
+        )
     }
 }
 
@@ -270,6 +352,17 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamMetricsResponse> {
         let response = try await self.streamMetrics(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return response
+    }
+
+    public func streamTraces(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamTracesResponse> {
+        let response = try await self.streamTraces(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -313,6 +406,23 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService.SimpleServiceProtocol {
             }
         )
     }
+
+    public func streamTraces(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamTracesResponse> {
+        return GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_StreamTracesResponse>(
+            metadata: [:],
+            producer: { writer in
+                try await self.streamTraces(
+                    request: request.message,
+                    response: writer,
+                    context: context
+                )
+                return [:]
+            }
+        )
+    }
 }
 
 // MARK: wendy.agent.services.v1.WendyTelemetryService (client)
@@ -327,7 +437,7 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
     /// > Source IDL Documentation:
     /// >
     /// > Service for streaming telemetry data from the agent to CLI clients.
-    /// > This allows observing logs and metrics from containers running on the device.
+    /// > This allows observing logs, metrics, and traces from containers running on the device.
     public protocol ClientProtocol: Sendable {
         /// Call the "StreamLogs" method.
         ///
@@ -376,6 +486,30 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_StreamMetricsResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
+
+        /// Call the "StreamTraces" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Stream trace spans from containers running on the device.
+        /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_StreamTracesRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_StreamTracesRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_StreamTracesResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func streamTraces<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_StreamTracesResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_StreamTracesResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
     }
 
     /// Generated client for the "wendy.agent.services.v1.WendyTelemetryService" service.
@@ -387,7 +521,7 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
     /// > Source IDL Documentation:
     /// >
     /// > Service for streaming telemetry data from the agent to CLI clients.
-    /// > This allows observing logs and metrics from containers running on the device.
+    /// > This allows observing logs, metrics, and traces from containers running on the device.
     public struct Client<Transport>: ClientProtocol where Transport: GRPCCore.ClientTransport {
         private let client: GRPCCore.GRPCClient<Transport>
 
@@ -464,6 +598,39 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService {
                 onResponse: handleResponse
             )
         }
+
+        /// Call the "StreamTraces" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Stream trace spans from containers running on the device.
+        /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_StreamTracesRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_StreamTracesRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_StreamTracesResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func streamTraces<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_StreamTracesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_StreamTracesResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_StreamTracesResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.serverStreaming(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyTelemetryService.Method.StreamTraces.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
     }
 }
 
@@ -521,6 +688,34 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_StreamMetricsRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_StreamMetricsResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StreamTraces" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Stream trace spans from containers running on the device.
+    /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_StreamTracesRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func streamTraces<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_StreamTracesRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_StreamTracesResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        try await self.streamTraces(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_StreamTracesRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_StreamTracesResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -588,6 +783,38 @@ extension Wendy_Agent_Services_V1_WendyTelemetryService.ClientProtocol {
             metadata: metadata
         )
         return try await self.streamMetrics(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StreamTraces" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Stream trace spans from containers running on the device.
+    /// > Returns OTLP trace data that can be displayed or forwarded to a local collector.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func streamTraces<Result>(
+        _ message: Wendy_Agent_Services_V1_StreamTracesRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_StreamTracesResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_StreamTracesRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.streamTraces(
             request: request,
             options: options,
             onResponse: handleResponse

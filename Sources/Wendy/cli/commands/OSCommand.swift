@@ -1,4 +1,5 @@
 import ArgumentParser
+import CLIOutput
 import Crypto
 import Foundation
 import GRPCCore
@@ -7,7 +8,6 @@ import Imager
 import Logging
 import NIOCore
 import NIOFoundationCompat
-import Noora
 import Subprocess
 import WendyAgentGRPC
 import _NIOFileSystem
@@ -46,7 +46,7 @@ private struct SendableProgressUpdater: @unchecked Sendable {
     }
 }
 
-// Removed unused text/progress formatting helpers; Noora handles rendering.
+// Removed unused text/progress formatting helpers; CLIOutput handles rendering.
 
 private enum DeviceFamily: String, CaseIterable {
     // Prefer showing NVIDIA Jetson first in interactive lists
@@ -145,7 +145,7 @@ struct OSCommand: AsyncParsableCommand {
                 print("No external drives found.")
             } else {
                 print("\nAvailable drives:")
-                Noora().table(
+                cliOutput.table(
                     headers: [
                         "Disk",
                         "Identifier",
@@ -189,9 +189,8 @@ struct OSCommand: AsyncParsableCommand {
             } else if deviceList.isEmpty {
                 print("No devices found in the manifest.")
             } else {
-                let noora = Noora()
                 print("\nAvailable devices:")
-                noora.table(
+                cliOutput.table(
                     headers: [
                         "Device",
                         "Latest Version",
@@ -242,17 +241,14 @@ struct OSCommand: AsyncParsableCommand {
             let diskLister = DiskListerFactory.createDiskLister()
             let drive = try await diskLister.findDrive(byId: driveId)
 
-            // Use DiskWriter to write the image with Noora progress bar
+            // Use DiskWriter to write the image with progress bar
             let diskWriter = DiskWriterFactory.createDiskWriter()
-            let noora = Noora()
 
             print("Press Ctrl+C to cancel\n")
 
-            try await noora.progressBarStep(
-                message: "Writing image to \(drive.name) (\(drive.id))",
-                successMessage: "Image successfully written to \(drive.name)",
-                errorMessage: "Failed to write the image"
-            ) { updateProgress in
+            try await cliOutput.withProgressBar(
+                message: "Writing image to \(drive.name) (\(drive.id))"
+            ) { [diskWriter, imagePath] updateProgress in
                 let progressUpdater = SendableProgressUpdater(updateProgress)
                 let monotonic = Monotonic()
                 try await diskWriter.write(imagePath: imagePath, drive: drive) { p in
@@ -263,7 +259,7 @@ struct OSCommand: AsyncParsableCommand {
                             progressUpdater.update(m)
                         }
                     }
-                    // Avoid printing extra lines to keep Noora progress single-line.
+                    // Avoid printing extra lines to keep progress single-line.
                 }
                 progressUpdater.update(1.0)
             }
@@ -296,10 +292,9 @@ struct OSCommand: AsyncParsableCommand {
             let logger = Logger(label: "wendy.imager")
             let manifestManager = ManifestManagerFactory.createManifestManager()
             let diskLister = DiskListerFactory.createDiskLister()
-            let noora = Noora()
 
             #if os(Windows)
-                noora.info(
+                cliOutput.info(
                     "Administrator privileges are required to write raw disks. Please ensure you have administrative rights."
                 )
             #endif
@@ -309,7 +304,7 @@ struct OSCommand: AsyncParsableCommand {
             if deviceName == nil {
                 let allDevices = try await manifestManager.getAvailableDevices()
                 guard !allDevices.isEmpty else {
-                    noora.error("No devices found in the manifest.")
+                    cliOutput.error("No devices found in the manifest.")
                     return
                 }
 
@@ -321,7 +316,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let familyIndex = try await noora.selectableTable(
+                let familyIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Device Family",
                         "Available Images",
@@ -380,7 +376,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let deviceIndex = try await noora.selectableTable(
+                let deviceIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Device",
                         nightly ? "Latest Nightly" : "Latest Version",
@@ -407,7 +404,7 @@ struct OSCommand: AsyncParsableCommand {
                 drives.removeAll { $0.id.hasSuffix("disk0") }
 
                 guard !drives.isEmpty else {
-                    noora.error("No removable drives detected.")
+                    cliOutput.error("No removable drives detected.")
                     return
                 }
 
@@ -420,7 +417,8 @@ struct OSCommand: AsyncParsableCommand {
                     ]
                 }
 
-                let driveIndex = try await noora.selectableTable(
+                let driveIndex = try await cliOutput.selectFromTable(
+                    title: nil,
                     headers: [
                         "Disk",
                         "Identifier",
@@ -433,21 +431,21 @@ struct OSCommand: AsyncParsableCommand {
 
                 let driveChoice = drives[driveIndex]
 
-                noora.warning(
+                cliOutput.warning(
                     "Writing \(selectedDeviceName) will erase all data on \(driveChoice.name) (\(driveChoice.id))."
                 )
 
                 if force {
-                    noora.warning("Proceeding due to --force flag.")
+                    cliOutput.warning("Proceeding due to --force flag.")
                     selectedDrive = driveChoice
                 } else {
-                    let confirmed = noora.yesOrNoChoicePrompt(
+                    let confirmed = try await cliOutput.yesOrNoPrompt(
                         question: "Do you want to continue?",
                         defaultAnswer: false
                     )
 
                     guard confirmed else {
-                        noora.info("Operation aborted.")
+                        cliOutput.info("Operation aborted.")
                         return
                     }
 
@@ -474,9 +472,9 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             if nightly {
-                noora.info("🔍 Finding latest nightly image for \(selectedDeviceName)...")
+                cliOutput.info("🔍 Finding latest nightly image for \(selectedDeviceName)...")
             } else {
-                noora.info("🔍 Finding latest image for \(selectedDeviceName)...")
+                cliOutput.info("🔍 Finding latest image for \(selectedDeviceName)...")
             }
 
             // Get the latest image information for the device
@@ -496,8 +494,8 @@ struct OSCommand: AsyncParsableCommand {
                 nightly: nightly
             )
 
-            noora.info("📥 Found image for \(selectedDeviceName)")
-            noora.table(
+            cliOutput.info("📥 Found image for \(selectedDeviceName)")
+            cliOutput.table(
                 headers: [
                     "Image",
                     "Version",
@@ -538,19 +536,17 @@ struct OSCommand: AsyncParsableCommand {
 
             if shouldUseCache, let cachedPath = cachedZipPath {
                 zipPath = cachedPath
-                noora.info(
+                cliOutput.info(
                     "Using cached image for \(selectedDeviceName) (version: \(latestVersion))"
                 )
             } else {
                 if !redownload && cachedZipPath != nil && !isCachedLatest {
-                    noora.info("Newer version available, downloading updated image...")
+                    cliOutput.info("Newer version available, downloading updated image...")
                 }
                 // Download archive to cache
-                zipPath = try await noora.progressBarStep(
-                    message: "Downloading image for \(selectedDeviceName)",
-                    successMessage: "Download complete",
-                    errorMessage: "Failed to download image"
-                ) { updateProgress in
+                zipPath = try await cliOutput.withProgressBar(
+                    message: "Downloading image for \(selectedDeviceName)"
+                ) { [imageDownloader, imageUrl] updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
                     let result = try await imageDownloader.downloadArchiveOnly(
@@ -576,7 +572,7 @@ struct OSCommand: AsyncParsableCommand {
             }
 
             logger.debug("✅ Archive ready at: \(zipPath)")
-            noora.info(
+            cliOutput.info(
                 """
                 💾 Writing image to \(selectedDrive.name) (\(selectedDrive.id))...
                    Streaming decompression directly to disk (no extraction step)
@@ -590,26 +586,38 @@ struct OSCommand: AsyncParsableCommand {
             // Use DiskWriter to stream the zip directly to disk
             let diskWriter = DiskWriterFactory.createDiskWriter()
 
-            try await noora.progressBarStep(
-                message: "Writing image to \(selectedDrive.name) (\(selectedDrive.id))",
-                successMessage: "Image successfully written to \(selectedDrive.name)",
-                errorMessage: "Failed to write the image"
-            ) { updateProgress in
+            try await cliOutput.withProgressBar(
+                message: "Writing image to \(selectedDrive.name) (\(selectedDrive.id))"
+            ) { [diskWriter, zipPath] updateProgress in
                 let progressUpdater = SendableProgressUpdater(updateProgress)
                 let monotonic = Monotonic()
-                try await diskWriter.writeFromZip(zipPath: zipPath, drive: selectedDrive) { p in
-                    if let percent = p.percentComplete {
-                        let fraction = clampProgress(percent / 100.0)
-                        Task {
-                            let m = await monotonic.next(fraction)
-                            progressUpdater.update(m)
+                do {
+                    try await diskWriter.writeFromZip(zipPath: zipPath, drive: selectedDrive) { p in
+                        if let percent = p.percentComplete {
+                            let fraction = clampProgress(percent / 100.0)
+                            Task {
+                                let m = await monotonic.next(fraction)
+                                progressUpdater.update(m)
+                            }
                         }
                     }
+                    progressUpdater.update(1.0)
+                } catch DiskWriterError.writeFailed(let reason) {
+                    cliOutput.error(
+                        """
+                        Failed to write image. Please try again with `wendy os install --redownload`
+
+                        \(reason)
+                        """
+                    )
+                    return
+                } catch {
+                    cliOutput.error("Failed to write image: \(error.localizedDescription)")
+                    return
                 }
-                progressUpdater.update(1.0)
             }
 
-            noora.success("🎉 Device \(selectedDeviceName) successfully imaged!")
+            cliOutput.success("🎉 Device \(selectedDeviceName) successfully imaged!")
         }
     }
 
@@ -896,7 +904,7 @@ private func ensureAdminPrivileges() async throws {
         }
 
         // Inform the user about privilege requirements
-        Noora().info(
+        cliOutput.info(
             "Administrator privileges are required to write raw disks. Continuing..."
         )
     #elseif os(macOS) || os(Linux)
@@ -904,7 +912,7 @@ private func ensureAdminPrivileges() async throws {
         if getuid() == 0 { return }
 
         // Inform the user and validate sudo timestamp (may prompt for password in the terminal)
-        Noora().info(
+        cliOutput.info(
             "Administrator privileges are required to write raw disks. You may be prompted for your password."
         )
         do {

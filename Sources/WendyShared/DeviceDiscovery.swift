@@ -324,7 +324,7 @@ extension CentralManager {
             }
 
             if state == .poweredOff || state == .unauthorized || state == .unsupported {
-                logger.warning(
+                logger.debug(
                     "Bluetooth not available",
                     metadata: ["state": "\(state)"]
                 )
@@ -338,7 +338,7 @@ extension CentralManager {
                     break
                 }
                 if state == .poweredOff || state == .unauthorized || state == .unsupported {
-                    logger.warning(
+                    logger.debug(
                         "Bluetooth not available",
                         metadata: ["state": "\(state)"]
                     )

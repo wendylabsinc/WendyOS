@@ -1,5 +1,5 @@
 import Foundation
-import Noora
+internal import Noora
 
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
     import Darwin
@@ -22,13 +22,13 @@ private func flushStdout() {
     #endif
 }
 
-/// Prompt for password input with Noora-style rendering and masked characters
+/// Prompt for password input with styled rendering and masked characters
 /// - Parameters:
 ///   - title: The title displayed above the prompt (e.g., "Enter WiFi password")
 ///   - prompt: The prompt label (e.g., "Password")
 /// - Returns: The password entered by the user
 /// - Throws: `CancellationError` if the user presses Ctrl+C
-func secureTextPrompt(title: String, prompt: String) throws -> String {
+func CLIOutput_secureTextPrompt(title: String, prompt: String) throws -> String {
     // Print styled title
     print(title.bold)
     // Use the simple prompt with masking
@@ -36,8 +36,7 @@ func secureTextPrompt(title: String, prompt: String) throws -> String {
 }
 
 /// Prompt for password input with masked characters (shows * for each character)
-/// - Throws: `CancellationError` if the user presses Ctrl+C
-func securePasswordPrompt(_ prompt: String) throws -> String {
+private func securePasswordPrompt(_ prompt: String) throws -> String {
     // Print prompt without newline
     print(prompt, terminator: "")
     flushStdout()
@@ -116,7 +115,7 @@ func securePasswordPrompt(_ prompt: String) throws -> String {
             if char == EOF || char == 10 || char == 13 || char == 4 {  // EOF, Enter, or Ctrl+D
                 break
             } else if char == 3 {  // Ctrl+C (ETX)
-                throw CancellationError()
+                return ""
             } else if char == 127 || char == 8 {  // Backspace or Delete
                 if !password.isEmpty {
                     password.removeLast()

@@ -1,5 +1,6 @@
 import ArgumentParser
 import AsyncAlgorithms
+import CLIOutput
 import Foundation
 import Logging
 import WendyAgentGRPC

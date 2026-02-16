@@ -154,6 +154,7 @@ struct WendyAgent: AsyncParsableCommand {
                     services: [
                         LocalOTelLogsReceiver(broadcaster: telemetryBroadcaster),
                         LocalOTelMetricsReceiver(broadcaster: telemetryBroadcaster),
+                        LocalOTelTracesReceiver(broadcaster: telemetryBroadcaster),
                     ]
                 )
             )

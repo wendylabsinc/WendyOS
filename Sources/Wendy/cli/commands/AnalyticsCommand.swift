@@ -1,7 +1,7 @@
 import Analytics
 import ArgumentParser
+import CLIOutput
 import Foundation
-import Noora
 
 struct AnalyticsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -63,7 +63,7 @@ extension AnalyticsCommand {
                 print(String(data: data, encoding: .utf8)!)
             } else {
                 // Show what data we collect
-                Noora().info(
+                cliOutput.info(
                     """
                     Analytics has been enabled.
 
@@ -107,7 +107,7 @@ extension AnalyticsCommand {
                 let data = try encoder.encode(response)
                 print(String(data: data, encoding: .utf8)!)
             } else {
-                Noora().info(
+                cliOutput.info(
                     """
                     Analytics has been disabled.
 
@@ -159,7 +159,7 @@ extension AnalyticsCommand {
             // Display the status
             print(config.analytics.enabled ? "✅ Analytics is enabled" : "❌ Analytics is disabled")
             if let optOutDate = config.analytics.optOutDate {
-                Noora().info("Opt Out Date: \(optOutDate.formatted().underline)")
+                cliOutput.info("Opt Out Date: \(optOutDate.formatted())")
             }
 
             if verbose {

@@ -154,6 +154,73 @@ public struct Wendy_Agent_Services_V1_StreamMetricsResponse: Sendable {
   fileprivate var _metrics: Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest? = nil
 }
 
+public struct Wendy_Agent_Services_V1_StreamTracesRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Optional filter by service name
+  public var serviceName: String {
+    get {return _serviceName ?? String()}
+    set {_serviceName = newValue}
+  }
+  /// Returns true if `serviceName` has been explicitly set.
+  public var hasServiceName: Bool {return self._serviceName != nil}
+  /// Clears the value of `serviceName`. Subsequent reads from it will return its default value.
+  public mutating func clearServiceName() {self._serviceName = nil}
+
+  /// Optional filter by app/container name
+  public var appName: String {
+    get {return _appName ?? String()}
+    set {_appName = newValue}
+  }
+  /// Returns true if `appName` has been explicitly set.
+  public var hasAppName: Bool {return self._appName != nil}
+  /// Clears the value of `appName`. Subsequent reads from it will return its default value.
+  public mutating func clearAppName() {self._appName = nil}
+
+  /// Optional filter by span name prefix
+  public var spanNamePrefix: String {
+    get {return _spanNamePrefix ?? String()}
+    set {_spanNamePrefix = newValue}
+  }
+  /// Returns true if `spanNamePrefix` has been explicitly set.
+  public var hasSpanNamePrefix: Bool {return self._spanNamePrefix != nil}
+  /// Clears the value of `spanNamePrefix`. Subsequent reads from it will return its default value.
+  public mutating func clearSpanNamePrefix() {self._spanNamePrefix = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _serviceName: String? = nil
+  fileprivate var _appName: String? = nil
+  fileprivate var _spanNamePrefix: String? = nil
+}
+
+public struct Wendy_Agent_Services_V1_StreamTracesResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// OTLP trace data using the standard OpenTelemetry format.
+  /// Can be forwarded directly to a local OTLP collector.
+  public var traces: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest {
+    get {return _traces ?? Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest()}
+    set {_traces = newValue}
+  }
+  /// Returns true if `traces` has been explicitly set.
+  public var hasTraces: Bool {return self._traces != nil}
+  /// Clears the value of `traces`. Subsequent reads from it will return its default value.
+  public mutating func clearTraces() {self._traces = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _traces: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest? = nil
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "wendy.agent.services.v1"
@@ -309,6 +376,84 @@ extension Wendy_Agent_Services_V1_StreamMetricsResponse: SwiftProtobuf.Message, 
 
   public static func ==(lhs: Wendy_Agent_Services_V1_StreamMetricsResponse, rhs: Wendy_Agent_Services_V1_StreamMetricsResponse) -> Bool {
     if lhs._metrics != rhs._metrics {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_StreamTracesRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".StreamTracesRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}service_name\0\u{3}app_name\0\u{3}span_name_prefix\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._serviceName) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._appName) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._spanNamePrefix) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._serviceName {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._appName {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._spanNamePrefix {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_StreamTracesRequest, rhs: Wendy_Agent_Services_V1_StreamTracesRequest) -> Bool {
+    if lhs._serviceName != rhs._serviceName {return false}
+    if lhs._appName != rhs._appName {return false}
+    if lhs._spanNamePrefix != rhs._spanNamePrefix {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_StreamTracesResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".StreamTracesResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}traces\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._traces) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._traces {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_StreamTracesResponse, rhs: Wendy_Agent_Services_V1_StreamTracesResponse) -> Bool {
+    if lhs._traces != rhs._traces {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

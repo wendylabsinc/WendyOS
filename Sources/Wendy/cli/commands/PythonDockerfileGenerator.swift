@@ -1,5 +1,5 @@
+import CLIOutput
 import Foundation
-import Noora
 
 /// Generates Dockerfiles for Python projects that have requirements.txt but no Dockerfile
 struct PythonDockerfileGenerator {
@@ -305,7 +305,7 @@ struct PythonDockerfileGenerator {
     }
 
     /// Prompts user to select an entry point if auto-detection fails
-    func promptForEntryPoint(autoAccept: Bool) -> String? {
+    func promptForEntryPoint(autoAccept: Bool) async throws -> String? {
         let pythonFiles = listPythonFiles()
 
         if pythonFiles.isEmpty {
@@ -322,7 +322,7 @@ struct PythonDockerfileGenerator {
         }
 
         // Let user choose
-        return Noora().singleChoicePrompt(
+        return try await cliOutput.singleChoicePrompt(
             title: "Select entry point",
             question: "Which Python file is the main entry point?",
             options: pythonFiles

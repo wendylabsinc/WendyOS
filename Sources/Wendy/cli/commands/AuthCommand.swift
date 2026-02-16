@@ -1,7 +1,7 @@
 import ArgumentParser
+import CLIOutput
 import Crypto
 import Foundation
-import Noora
 import SwiftASN1
 import WendyCloudGRPC
 import WendySDK
@@ -37,7 +37,7 @@ struct LoginCommand: AsyncParsableCommand {
             cloudDashboard: cloudDashboard,
             cloudGRPC: cloudGRPC
         ) { token in
-            Noora().success("Logged in")
+            cliOutput.success("Logged in")
             #if canImport(Darwin)
                 Task {
                     try await Task.sleep(for: .seconds(1))
@@ -95,19 +95,9 @@ struct RefreshCertsCommand: AsyncParsableCommand {
                 var config = getConfig()
                 config.addAuth(auth)
                 try config.save()
-                Noora().success("Refreshed certificates")
+                cliOutput.success("Refreshed certificates")
             }
         }
-    }
-}
-
-struct EnrollmentTokenRule: ValidatableRule {
-    var error: ValidatableError {
-        "Code must be 6 alphanumeric characters"
-    }
-
-    func validate(input: String) -> Bool {
-        input.count >= 6 && !input.contains(where: \.isWhitespace)
     }
 }
 
@@ -130,7 +120,7 @@ struct LogoutCommand: AsyncParsableCommand {
                     reason: "No accounts found to log out from"
                 ).print()
             } else {
-                Noora().error("No accounts found")
+                cliOutput.error("No accounts found")
             }
             return
         }
@@ -145,7 +135,9 @@ struct LogoutCommand: AsyncParsableCommand {
                         reason: "No account found for cloud dashboard: \(cloudDashboard)"
                     ).print()
                 } else {
-                    Noora().error("No account found for cloud dashboard: \(cloudDashboard)")
+                    cliOutput.error(
+                        "No account found for cloud dashboard: \(cloudDashboard)"
+                    )
                 }
                 return
             }
@@ -156,11 +148,17 @@ struct LogoutCommand: AsyncParsableCommand {
                 description: "Provide --cloud-dashboard <url> to specify which account to log out"
             )
         } else {
-            logout = Noora().singleChoicePrompt(
+            let options = config.auth.map(\.description)
+            let selected = try await cliOutput.singleChoicePrompt(
                 title: "Logout",
                 question: "Which account do you want to log out of?",
-                options: config.auth
+                options: options
             )
+            guard let match = config.auth.first(where: { $0.description == selected }) else {
+                cliOutput.error("No matching account found")
+                return
+            }
+            logout = match
         }
 
         config.auth.removeAll { $0 == logout }

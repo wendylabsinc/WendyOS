@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import GRPCCore
-import Noora
 import OpenTelemetryGRPC
 import WendyAgentGRPC
 

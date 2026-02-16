@@ -12,7 +12,7 @@
     private let FSCTL_DISMOUNT_VOLUME: UInt32 = 0x0009_0020  // (0x9 << 16) | (8 << 2)
 
     /// Windows implementation of the DiskWriter protocol using PowerShell and direct file I/O.
-    public class WindowsDiskWriter: DiskWriter {
+    public final class WindowsDiskWriter: DiskWriter {
         public init() {}
 
         public func write(

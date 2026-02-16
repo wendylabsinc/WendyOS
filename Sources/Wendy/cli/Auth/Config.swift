@@ -1,8 +1,8 @@
 import Analytics
+import CLIOutput
 import Crypto
 import Foundation
 import Hummingbird
-import Noora
 import SwiftASN1
 import Synchronization
 import WendyCloudGRPC
@@ -13,6 +13,49 @@ import X509
     import AppKit
     import Darwin
 #endif
+
+/// Represents the package manager used to install the CLI
+public enum PackageManagerType: String, Sendable, Codable {
+    case brew
+    case apt
+    case pacman
+    case yum
+    case dnf
+    case winget
+    case unknown
+}
+
+/// Tracks the state of update checks and user prompts
+public struct UpdateCheckState: Sendable, Codable {
+    /// Last time we checked for updates
+    public var lastCheckTime: Date?
+
+    /// Last time user was prompted about an update
+    public var lastPromptTime: Date?
+
+    /// User's response to the prompt (true = yes, false = no, nil = not asked)
+    public var lastPromptResponse: Bool?
+
+    /// The latest known version from last check
+    public var latestKnownVersion: String?
+
+    /// Detected package manager (cached)
+    public var detectedPackageManager: PackageManagerType?
+
+    public init(
+        lastCheckTime: Date? = nil,
+        lastPromptTime: Date? = nil,
+        lastPromptResponse: Bool? = nil,
+        latestKnownVersion: String? = nil,
+        detectedPackageManager: PackageManagerType? = nil
+    ) {
+        self.lastCheckTime = lastCheckTime
+        self.lastPromptTime = lastPromptTime
+        self.lastPromptResponse = lastPromptResponse
+        self.latestKnownVersion = latestKnownVersion
+        self.detectedPackageManager = detectedPackageManager
+    }
+}
 
 public struct Config: Sendable, Codable {
     public struct Auth: Sendable, Codable, Hashable, CustomStringConvertible {
@@ -35,11 +78,55 @@ public struct Config: Sendable, Codable {
     public var auth: [Auth]
     public var analytics: WendyAnalyticsConfig
     public var defaultDevice: String?
+    public var updateCheck: UpdateCheckState?
+
+    private enum CodingKeys: String, CodingKey {
+        case auth
+        case analytics
+        case defaultDevice
+        case updateCheck
+        case lastUpdateCheck  // Legacy field for migration
+    }
 
     public init() {
         self.auth = []
         self.defaultDevice = nil
         self.analytics = WendyAnalyticsConfig()
+        self.updateCheck = nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.auth = try container.decodeIfPresent([Auth].self, forKey: .auth) ?? []
+        self.analytics =
+            try container.decodeIfPresent(WendyAnalyticsConfig.self, forKey: .analytics)
+            ?? WendyAnalyticsConfig()
+        self.defaultDevice = try container.decodeIfPresent(String.self, forKey: .defaultDevice)
+
+        // Handle migration from old lastUpdateCheck to new updateCheck
+        if let updateCheck = try container.decodeIfPresent(
+            UpdateCheckState.self,
+            forKey: .updateCheck
+        ) {
+            self.updateCheck = updateCheck
+        } else if let lastUpdateCheck = try container.decodeIfPresent(
+            Date.self,
+            forKey: .lastUpdateCheck
+        ) {
+            // Migrate old config format
+            self.updateCheck = UpdateCheckState(lastCheckTime: lastUpdateCheck)
+        } else {
+            self.updateCheck = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(auth, forKey: .auth)
+        try container.encode(analytics, forKey: .analytics)
+        try container.encodeIfPresent(defaultDevice, forKey: .defaultDevice)
+        try container.encodeIfPresent(updateCheck, forKey: .updateCheck)
+        // Note: We intentionally don't encode lastUpdateCheck anymore
     }
 
     public mutating func addAuth(_ newAuth: Auth) {
@@ -78,20 +165,18 @@ func getConfig() -> Config {
 }
 
 func authenticate<R: Sendable>(
-    title: TerminalText,
+    title: String,
     forOrganizationId orgId: Int32? = nil,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
-    var cloudDashboard = Noora().textPrompt(
+    var cloudDashboard = try await cliOutput.textPrompt(
         title: title,
-        prompt: "Enter the cloud dashboard URL",
-        collapseOnAnswer: false
+        prompt: "Enter the cloud dashboard URL"
     )
 
-    var cloudGRPC = Noora().textPrompt(
+    var cloudGRPC = try await cliOutput.textPrompt(
         title: title,
-        prompt: "Enter the cloud gRPC URL",
-        collapseOnAnswer: false
+        prompt: "Enter the cloud gRPC URL"
     )
 
     // TODO: Add organisation ID preference to dashboard
@@ -113,7 +198,7 @@ func authenticate<R: Sendable>(
 }
 
 func withCertificates<R: Sendable>(
-    title: TerminalText,
+    title: String,
     forOrganizationId orgId: Int32,
     perform: @Sendable @escaping (Config.Auth.Certificates) async throws -> R
 ) async throws -> R {
@@ -140,7 +225,7 @@ func withCertificates<R: Sendable>(
 }
 
 func withAuth<R: Sendable>(
-    title: TerminalText,
+    title: String,
     perform: @Sendable @escaping (Config.Auth) async throws -> R
 ) async throws -> R {
     let config = getConfig()
@@ -150,11 +235,15 @@ func withAuth<R: Sendable>(
     } else if config.auth.count == 1 {
         return try await perform(config.auth[0])
     } else {
-        let account = Noora().singleChoicePrompt(
+        let options = config.auth.map(\.description)
+        let selected = try await cliOutput.singleChoicePrompt(
             title: title,
             question: "Which account do you want to use?",
-            options: config.auth
+            options: options
         )
+        guard let account = config.auth.first(where: { $0.description == selected }) else {
+            throw RPCError(code: .aborted, message: "No matching account found")
+        }
         return try await perform(account)
     }
 }
@@ -316,7 +405,7 @@ func loginFlow<R: Sendable>(
                 "\(cloudDashboard)/cli-auth?redirect_uri=http://localhost:\(port)/cli-callback"
             #if os(macOS)
                 if NSWorkspace.shared.open(URL(string: url)!) {
-                    Noora().info(
+                    cliOutput.info(
                         """
                         Open the following link in your browser:
                         > \(cloudDashboard)/cli-auth?redirect_uri=http://localhost:\(port)/cli-callback
@@ -327,7 +416,7 @@ func loginFlow<R: Sendable>(
             #endif
 
             //         repeat {
-            //             let enrollmentToken = Noora().textPrompt(
+            //             let enrollmentToken = Noora(theme: .emerald()).textPrompt(
             //                 title: "Provide the enrollment token",
             //                 prompt: "Enter token",
             //                 collapseOnAnswer: false,
@@ -348,7 +437,7 @@ func loginFlow<R: Sendable>(
             //                 continuation.yield(try await withAuth(auth))
             //                 continuation.finish()
             //             } catch {
-            //                 Noora().error("Failed to setup config: \(error)")
+            //                 Noora(theme: .emerald()).error("Failed to setup config: \(error)")
             //             }
             //         } while !isFinished.withLock(\.self)
         }

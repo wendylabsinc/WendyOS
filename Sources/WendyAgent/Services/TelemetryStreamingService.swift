@@ -104,6 +104,51 @@ actor TelemetryStreamingService: Wendy_Agent_Services_V1_WendyTelemetryService.S
         logger.info("Client disconnected from metrics stream")
     }
 
+    func streamTraces(
+        request: Wendy_Agent_Services_V1_StreamTracesRequest,
+        response: RPCWriter<Wendy_Agent_Services_V1_StreamTracesResponse>,
+        context: ServerContext
+    ) async throws {
+        let serviceFilter = request.hasServiceName ? "\(request.serviceName)" : "none"
+        let spanPrefix = request.hasSpanNamePrefix ? "\(request.spanNamePrefix)" : "none"
+
+        logger.info(
+            "Client subscribed to traces stream",
+            metadata: [
+                "service_filter": .string(serviceFilter),
+                "span_prefix": .string(spanPrefix),
+            ]
+        )
+
+        let (subscriptionId, stream) = await broadcaster.subscribeTraces()
+        defer {
+            Task {
+                await broadcaster.unsubscribeTraces(id: subscriptionId)
+            }
+        }
+
+        for await tracesRequest in stream {
+            // Apply filters if specified
+            let filteredRequest = filterTraces(
+                tracesRequest,
+                serviceName: request.hasServiceName ? request.serviceName : nil,
+                appName: request.hasAppName ? request.appName : nil,
+                spanNamePrefix: request.hasSpanNamePrefix ? request.spanNamePrefix : nil
+            )
+
+            // Only send if there are traces after filtering
+            if !filteredRequest.resourceSpans.isEmpty {
+                try await response.write(
+                    Wendy_Agent_Services_V1_StreamTracesResponse.with {
+                        $0.traces = filteredRequest
+                    }
+                )
+            }
+        }
+
+        logger.info("Client disconnected from traces stream")
+    }
+
     // MARK: - Filtering
 
     private func filterLogs(
@@ -187,6 +232,49 @@ actor TelemetryStreamingService: Wendy_Agent_Services_V1_WendyTelemetryService.S
                 }.filter { !$0.metrics.isEmpty }
                 return filtered
             }.filter { !$0.scopeMetrics.isEmpty }
+        }
+
+        return filtered
+    }
+
+    private func filterTraces(
+        _ request: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest,
+        serviceName: String?,
+        appName: String?,
+        spanNamePrefix: String?
+    ) -> Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest {
+        var filtered = request
+
+        if let serviceName = serviceName {
+            filtered.resourceSpans = filtered.resourceSpans.filter { resourceSpans in
+                // Check if service.name attribute matches
+                resourceSpans.resource.attributes.contains { attr in
+                    attr.key == "service.name" && attr.value.stringValue == serviceName
+                }
+            }
+        }
+
+        if let appName = appName {
+            filtered.resourceSpans = filtered.resourceSpans.filter { resourceSpans in
+                // Check if wendy.app.name attribute matches
+                resourceSpans.resource.attributes.contains { attr in
+                    attr.key == "wendy.app.name" && attr.value.stringValue == appName
+                }
+            }
+        }
+
+        if let spanNamePrefix = spanNamePrefix {
+            filtered.resourceSpans = filtered.resourceSpans.map { resourceSpans in
+                var filtered = resourceSpans
+                filtered.scopeSpans = filtered.scopeSpans.map { scopeSpans in
+                    var filtered = scopeSpans
+                    filtered.spans = filtered.spans.filter { span in
+                        span.name.hasPrefix(spanNamePrefix)
+                    }
+                    return filtered
+                }.filter { !$0.spans.isEmpty }
+                return filtered
+            }.filter { !$0.scopeSpans.isEmpty }
         }
 
         return filtered

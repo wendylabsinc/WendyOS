@@ -6,6 +6,12 @@
         {
             "type": "network",
             "mode": "host"
+        },
+        {
+            "type": "gpu"
+        },
+        {
+            "type": "video"
         }
     ]
 }

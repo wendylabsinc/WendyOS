@@ -1,11 +1,11 @@
 import ArgumentParser
+import CLIOutput
 import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIOFoundationCompat
-import Noora
 import WendyAgentGRPC
 import WendyCloudGRPC
 import WendySDK
@@ -34,6 +34,7 @@ struct DeviceCommand: AsyncParsableCommand {
                 subcommands: [
                     LogsCommand.self,
                     DashboardCommand.self,
+                    TelemetryStreamCommand.self,
                 ]
             ),
             CommandGroup(
@@ -130,7 +131,9 @@ struct DeviceCommand: AsyncParsableCommand {
             }
             try config.save()
 
-            Noora().success("Default device set to \(config.defaultDevice ?? "none")")
+            cliOutput.success(
+                "Default device set to \(config.defaultDevice ?? "none")"
+            )
         }
     }
 
@@ -147,7 +150,7 @@ struct DeviceCommand: AsyncParsableCommand {
             config.defaultDevice = nil
             try config.save()
 
-            Noora().success("Default device unset")
+            cliOutput.success("Default device unset")
         }
     }
 
@@ -173,7 +176,7 @@ struct DeviceCommand: AsyncParsableCommand {
 
         func run() async throws {
             #if os(Windows)
-                Noora().error("Device update is not supported on Windows hosts")
+                cliOutput.error("Device update is not supported on Windows hosts")
             #else
                 let binary: String
 
@@ -189,10 +192,11 @@ struct DeviceCommand: AsyncParsableCommand {
                         case "linux-x86_64", "x86_64", "amd64":
                             targetPlatform = .linuxX86_64
                         default:
-                            Noora().error(
-                                "Invalid platform '\(platformStr)'. Use 'linux-aarch64' or 'linux-x86_64'"
+                            throw CLIError.invalidArgument(
+                                name: "platform",
+                                value: platformStr,
+                                reason: "Use 'linux-aarch64' or 'linux-x86_64'"
                             )
-                            Self.exit(withError: nil)
                         }
                     } else {
                         // Default to aarch64 (most common for devices)
@@ -205,23 +209,24 @@ struct DeviceCommand: AsyncParsableCommand {
                     ).path
                 }
 
-                let success = try await withAgentGRPCClient(
+                let endpoint = try await withAgentGRPCClientAndEndpoint(
                     agentConnectionOptions,
                     title: "Which device do you want to update?"
-                ) { client in
+                ) { client, endpoint in
                     let agent = Agent(client: client)
-                    return try await Noora().progressBarStep(message: "Updating Device") {
+                    _ = try await cliOutput.withProgressBar(
+                        message: "Updating Device"
+                    ) {
                         updateProgress in
                         try await agent.update(fromBinary: binary, onProgress: updateProgress)
                     }
+                    return endpoint
                 }
 
-                guard success else {
-                    Noora().error("Failed to update agent")
-                    Self.exit(withError: nil)
-                }
+                // Wait for the gRPC socket to come back up after the device restarts
+                try await waitForDeviceRestart(endpoint: endpoint)
 
-                Noora().success("Agent updated successfully")
+                cliOutput.success("Agent updated successfully")
             #endif
         }
     }
@@ -239,20 +244,20 @@ struct DeviceCommand: AsyncParsableCommand {
                 let orgs = try await cloudClient.listOrganizations()
 
                 if orgs.isEmpty {
-                    Noora().error("No organizations found")
+                    cliOutput.error("No organizations found")
                     Self.exit(withError: nil)
                 }
 
-                let org = Noora().singleChoicePrompt(
+                let orgName = try await cliOutput.singleChoicePrompt(
                     title: "Enroll device",
                     question: "Which organization do you want to enroll into?",
-                    options: orgs
+                    options: orgs.map(\.description)
                 )
+                let org = orgs.first(where: { $0.description == orgName })!
 
-                let name = Noora().textPrompt(
+                let name = try await cliOutput.textPrompt(
                     title: "Name your device",
-                    prompt: "Name",
-                    collapseOnAnswer: false
+                    prompt: "Name"
                 )
 
                 let certsAPI = Wendycloud_V1_CertificateService.Client(wrapping: cloudClient.grpc)
@@ -298,20 +303,20 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
             }
 
-            try await withAgentClient(
+            let shouldWaitForRestart = try await withAgentClientAndHostname(
                 agentConnectionOptions,
                 title: "Listing available WiFi networks"
-            ) { agent in
-                let setupWifi = Noora().yesOrNoChoicePrompt(
+            ) { agent, hostname -> Bool in
+                let setupWifi = try await cliOutput.yesOrNoPrompt(
                     question: "Do you want to setup WiFi?",
-                    collapseOnSelection: false
+                    defaultAnswer: true
                 )
 
                 if setupWifi {
                     while !Task.isCancelled {
                         let ssid = try await agent.discoverSSID()
 
-                        let password = try secureTextPrompt(
+                        let password = try cliOutput.secureTextPrompt(
                             title: "Enter the password for '\(ssid)'",
                             prompt: "Password"
                         )
@@ -322,10 +327,10 @@ struct DeviceCommand: AsyncParsableCommand {
                         )
 
                         if result.success {
-                            Noora().success("Connected to WiFi network \(ssid)")
+                            cliOutput.success("Connected to WiFi network \(ssid)")
                             break
                         } else {
-                            Noora().error(
+                            cliOutput.error(
                                 "Failed to connect to WiFi network: \(result.errorMessage ?? "Unknown error")"
                             )
                         }
@@ -333,19 +338,21 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 #if !os(Windows)
-                    let shouldUpdate = Noora().yesOrNoChoicePrompt(
+                    let shouldUpdate = try await cliOutput.yesOrNoPrompt(
                         question: "Do you want to update the agent?",
-                        collapseOnSelection: false
+                        defaultAnswer: true
                     )
 
                     guard shouldUpdate, case .grpc(let client) = agent else {
-                        return
+                        return false
                     }
 
                     // TODO: Detect platform of remote device
                     // Default to Linux aarch64 for device updates during setup
                     let binary = try await downloadLatestRelease(platform: .linuxAarch64).path
-                    let success = try await Noora().progressBarStep(message: "Updating Device") {
+                    _ = try await cliOutput.withProgressBar(
+                        message: "Updating Device"
+                    ) {
                         updateProgress in
                         try await Agent(client: client).update(
                             fromBinary: binary,
@@ -353,13 +360,31 @@ struct DeviceCommand: AsyncParsableCommand {
                         )
                     }
 
-                    guard success else {
-                        Noora().error("Failed to update agent")
-                        Self.exit(withError: nil)
-                    }
-
-                    Noora().success("Agent updated successfully")
+                    return true
+                #else
+                    return false
                 #endif
+            }
+
+            if shouldWaitForRestart {
+                // Get the endpoint to wait for device restart
+                // The device is now provisioned, so this will connect via mTLS on the proper port
+                let endpoint = try await agentConnectionOptions.read(
+                    title: "Waiting for device",
+                    includeBluetooth: false
+                )
+
+                if case .lan(let host, let port, let defaultDevice) = endpoint {
+                    try await waitForDeviceRestart(
+                        endpoint: AgentConnectionOptions.Endpoint(
+                            host: host,
+                            port: port,
+                            defaultDevice: defaultDevice
+                        )
+                    )
+                }
+
+                cliOutput.success("Agent updated successfully")
             }
         }
     }

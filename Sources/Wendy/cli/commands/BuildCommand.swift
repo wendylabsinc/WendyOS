@@ -1,6 +1,7 @@
 import Analytics
 import AppConfig
 import ArgumentParser
+import CLIOutput
 import ContainerRegistry
 import Crypto
 import Foundation
@@ -8,7 +9,6 @@ import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIO
-import Noora
 import Subprocess
 import WendyAgentGRPC
 
@@ -39,6 +39,20 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     @OptionGroup
     var agentConnectionOptions: AgentConnectionOptions
 
+    init() {}
+
+    init(
+        debug: Bool,
+        autoAccept: Bool,
+        executable: String?,
+        agentConnectionOptions: AgentConnectionOptions
+    ) {
+        self.debug = debug
+        self.autoAccept = autoAccept
+        self.executable = executable
+        self.agentConnectionOptions = agentConnectionOptions
+    }
+
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {
@@ -48,27 +62,64 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e"
     }
 
+    struct BuiltApp: Sendable {
+        let name: String
+    }
+
     func run() async throws {
         try await withErrorTracking {
-            let currentPath = FileManager.default.currentDirectoryPath
-            let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
-            let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
+            try await withContainer(
+                restartPolicy: .with { $0.mode = .no }
+            ) { _, _, _ in
+                cliOutput.success("Build complete! Run 'wendy run' to start the app.")
+            }
+        }
+    }
 
-            for item in directory where isDockerfile(item) {
-                try await buildDockerfileApp()
+    func withContainer(
+        restartPolicy: RestartPolicy,
+        perform:
+            @Sendable @escaping (
+                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+            ) async throws -> Void
+    ) async throws {
+        let currentPath = FileManager.default.currentDirectoryPath
+        let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
+        let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
+
+        for item in directory where isDockerfile(item) {
+            try await withBuiltDockerfileApp(
+                restartPolicy: restartPolicy,
+                perform: perform
+            )
+            return
+        }
+
+        if isSwiftPackage {
+            try await withBuiltSwiftApp(
+                restartPolicy: restartPolicy,
+                perform: perform
+            )
+        } else if isPythonProject(directory: directory) {
+            // Python project without Dockerfile - offer to generate one
+            try await generatePythonDockerfileAndBuild()
+
+            // After attempting generation, verify a Dockerfile now exists
+            let updatedDirectory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
+            let hasDockerfile = updatedDirectory.contains { isDockerfile($0) }
+            guard hasDockerfile else {
+                // User may have declined generation or generation failed gracefully
                 return
             }
-
-            if isSwiftPackage {
-                try await buildSwiftApp()
-            } else if isPythonProject(directory: directory) {
-                // Python project without Dockerfile - offer to generate one
-                try await generatePythonDockerfileAndBuild()
-            } else {
-                Noora().error(
-                    "Directory is not a Swift Package, nor can it be built as a docker container"
-                )
-            }
+            // Now build as a Dockerfile app
+            try await withBuiltDockerfileApp(
+                restartPolicy: restartPolicy,
+                perform: perform
+            )
+        } else {
+            cliOutput.error(
+                "Directory is not a Swift Package, nor can it be built as a docker container"
+            )
         }
     }
 
@@ -115,7 +166,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         if let detected = generator.detectEntryPoint() {
             cliOutput.info("Detected entry point: \(detected)")
             entryPoint = detected
-        } else if let selected = generator.promptForEntryPoint(autoAccept: shouldAutoAccept) {
+        } else if let selected = try await generator.promptForEntryPoint(
+            autoAccept: shouldAutoAccept
+        ) {
             entryPoint = selected
         } else {
             cliOutput.error(
@@ -143,8 +196,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Confirm generation
         if !shouldAutoAccept {
             guard
-                Noora().yesOrNoChoicePrompt(
-                    question: "Generate Dockerfile and continue?"
+                try await cliOutput.yesOrNoPrompt(
+                    question: "Generate Dockerfile and continue?",
+                    defaultAnswer: true
                 )
             else {
                 return
@@ -154,12 +208,15 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Generate and write Dockerfile
         try generator.writeDockerfile(entryPoint: entryPoint)
         cliOutput.success("Generated Dockerfile")
-
-        // Now build as a Dockerfile app
-        try await buildDockerfileApp()
     }
 
-    func buildDockerfileApp() async throws {
+    func withBuiltDockerfileApp(
+        restartPolicy: RestartPolicy,
+        perform:
+            @Sendable @escaping (
+                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+            ) async throws -> Void
+    ) async throws {
         try await AppBuildHelpers.checkDockerIsRunning(shouldAutoAccept: shouldAutoAccept)
 
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -168,10 +225,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let docker = DockerCLI()
         let dockerContext = await docker.currentContext()
 
-        let title = TerminalText(stringLiteral: "Which device do you want to build this app for?")
         try await withAgentGRPCClientAndEndpoint(
             agentConnectionOptions,
-            title: title
+            title: "Which device do you want to build this app for?"
         ) { [name, dockerContext] client, endpoint in
             // Build additional properties for analytics
             var buildPhaseProperties: [String: String] = [:]
@@ -182,16 +238,14 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             // Create buildx builder with insecure registry support
             try await AppBuildHelpers.executePhase(
                 phase: "builder_setup",
-                runtime: "dockerfile",
                 commandName: "wendy build",
                 additionalProperties: buildPhaseProperties
             ) {
-                try await Noora().progressStep(
+                try await cliOutput.withProgress(
                     message: "Preparing builder",
                     successMessage: "Builder ready",
-                    errorMessage: "Failed to create builder",
-                    showSpinner: true
-                ) { _ in
+                    errorMessage: "Failed to create builder"
+                ) {
                     try await docker.prepareBuildxBuilder(
                         registryHostname: endpoint.host,
                         registryPort: 5000
@@ -202,7 +256,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             // Build and push in a single operation for better performance
             try await AppBuildHelpers.executePhase(
                 phase: "build_upload",
-                runtime: "dockerfile",
                 commandName: "wendy build",
                 additionalProperties: buildPhaseProperties
             ) {
@@ -216,27 +269,36 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
 
             try await AppBuildHelpers.executePhase(
                 phase: "prepare_container",
-                runtime: "dockerfile",
                 commandName: "wendy build"
             ) {
-                try await cliOutput.withProgressBar(
+                try await cliOutput.withLabeledProgressBar(
                     message: "Unpacking image on device"
                 ) { updateProgress in
                     try await AppBuildHelpers.createContainerdContainer(
                         appName: name,
                         client: client,
-                        restartPolicy: .with { $0.mode = .no },
+                        restartPolicy: restartPolicy,
                         progress: updateProgress
                     )
                 }
                 cliOutput.success("App ready")
             }
 
-            cliOutput.success("Build complete! Run 'wendy run' to start the app.")
+            try await perform(
+                BuiltApp(name: name),
+                client,
+                endpoint
+            )
         }
     }
 
-    func buildSwiftApp() async throws {
+    func withBuiltSwiftApp(
+        restartPolicy: RestartPolicy,
+        perform:
+            @Sendable @escaping (
+                BuiltApp, GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint
+            ) async throws -> Void
+    ) async throws {
         try await AppBuildHelpers.checkSwiftRequirements(
             swiftVersion: swiftVersion,
             swiftSDK: swiftSDK,
@@ -246,46 +308,87 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         )
 
         let swiftPM = SwiftPM()
-        let package = try await cliOutput.withProgress(
-            message: "Analyzing package structure",
-            successMessage: "Package structure analyzed",
-            errorMessage: "Failed to analyze package"
-        ) {
-            try await swiftPM.showDependencies()
+        let projectPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cache = PackageCache(projectPath: projectPath)
+
+        // Try to use cached data for executables and plugin status
+        let allExecutables: [SwiftPM.Executable]
+        let packageIdentity: String
+        var hasContainerPlugin: Bool
+
+        if let cached = cache.getValidCache() {
+            // Cache hit - use cached data
+            allExecutables = cached.executables
+            packageIdentity = cached.packageIdentity
+            hasContainerPlugin = cached.hasContainerPlugin
+        } else {
+            // Cache miss - fetch fresh data
+            let package = try await cliOutput.withProgress(
+                message: "Analyzing package structure",
+                successMessage: "Package structure analyzed",
+                errorMessage: "Failed to analyze package"
+            ) {
+                try await swiftPM.showDependencies()
+            }
+
+            let executables = try await cliOutput.withProgress(
+                message: "Finding executables",
+                successMessage: "Found executables",
+                errorMessage: "Failed to find executables"
+            ) {
+                try await swiftPM.showExecutables()
+            }
+
+            allExecutables = executables
+            packageIdentity = package.identity
+            hasContainerPlugin = package.dependencies.contains {
+                $0.url.hasSuffix("swift-container-plugin")
+                    || $0.url.hasSuffix("swift-container-plugin.git")
+            }
+
+            // Write to cache
+            if let hash = try? cache.computePackageSwiftHash() {
+                try? cache.write(
+                    PackageCache.CachedPackageInfo(
+                        packageSwiftHash: hash,
+                        packageIdentity: packageIdentity,
+                        executables: allExecutables,
+                        hasContainerPlugin: hasContainerPlugin
+                    )
+                )
+            }
         }
 
-        if !package.dependencies.contains(where: {
-            $0.url.hasSuffix("swift-container-plugin")
-                || $0.url.hasSuffix("swift-container-plugin.git")
-        }) {
-            Noora().info("Container plugin is not installed. Do you want to install it?")
+        if !hasContainerPlugin {
+            cliOutput.info(
+                "Container plugin is not installed. Do you want to install it?"
+            )
 
-            guard
-                shouldAutoAccept
-                    || Noora().yesOrNoChoicePrompt(question: "Do you want to install it?")
-            else {
-                Noora().error(
+            let accepted: Bool
+            if shouldAutoAccept {
+                accepted = true
+            } else {
+                accepted = try await cliOutput.yesOrNoPrompt(
+                    question: "Do you want to install it?",
+                    defaultAnswer: true
+                )
+            }
+
+            guard accepted else {
+                cliOutput.error(
                     "Container plugin is required to build Swift packages. Please install it manually."
                 )
                 return
             }
 
             try await swiftPM.addDependency(
-                url: "https://github.com/apple/swift-container-plugin",
-                from: "1.0.0"
+                url: "https://github.com/apple/swift-container-plugin.git",
+                from: "1.3.0"
             )
         }
 
-        // Get all executable targets
-        let allExecutables = try await cliOutput.withProgress(
-            message: "Finding executables",
-            successMessage: "Found executables",
-            errorMessage: "Failed to find executables"
-        ) {
-            try await swiftPM.showExecutables()
-        }
         let executableTargets = allExecutables.filter {
-            $0.package == package.identity || $0.package == nil
+            $0.package == packageIdentity || $0.package == nil
         }
 
         // Use specified executable or handle multiple executable targets
@@ -303,7 +406,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 ).print()
                 return
             }
-            Noora().error("No executable targets found in package")
+            cliOutput.error("No executable targets found in package")
             return
         } else if executableTargets.count == 1 {
             executableTarget = executableTargets[0]
@@ -315,11 +418,12 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     "Multiple executable targets available: \(executableTargets.map(\.name).joined(separator: ", ")). Provide the target name as an argument."
             )
         } else {
-            executableTarget = Noora().singleChoicePrompt(
+            let selectedName = try await cliOutput.singleChoicePrompt(
                 title: "Select executable target to build",
                 question: "Which executable target do you want to build?",
-                options: executableTargets
+                options: executableTargets.map(\.name)
             )
+            executableTarget = executableTargets.first(where: { $0.name == selectedName })!
         }
 
         // Use the executable target name for image naming to match what swift container plugin uses
@@ -332,7 +436,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         ) { client, endpoint in
             try await AppBuildHelpers.executePhase(
                 phase: "build_swift_app",
-                runtime: "swift",
                 commandName: "wendy build"
             ) {
                 var resources: [(source: String, destination: String)] = []
@@ -399,23 +502,26 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
 
             try await AppBuildHelpers.executePhase(
                 phase: "create_container",
-                runtime: "swift",
                 commandName: "wendy build"
             ) {
-                try await cliOutput.withProgressBar(
+                try await cliOutput.withLabeledProgressBar(
                     message: "Unpacking image on device"
                 ) { updateProgress in
                     try await AppBuildHelpers.createContainerdContainer(
                         appName: appName,
                         client: client,
-                        restartPolicy: .with { $0.mode = .no },
+                        restartPolicy: restartPolicy,
                         progress: updateProgress
                     )
                 }
                 cliOutput.success("Container created")
             }
 
-            cliOutput.success("Build complete! Run 'wendy run' to start the app.")
+            try await perform(
+                BuiltApp(name: appName),
+                client,
+                endpoint
+            )
         }
     }
 }

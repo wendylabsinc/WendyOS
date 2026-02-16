@@ -1,11 +1,11 @@
 import Analytics
 import AppConfig
 import ArgumentParser
+import CLIOutput
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
-import Noora
 import WendyAgentGRPC
 
 #if os(macOS)
@@ -13,80 +13,85 @@ import WendyAgentGRPC
 #endif
 
 private struct SendableProgressUpdater: @unchecked Sendable {
-    let call: (Double) -> Void
+    let call: (ProgressBarUpdate) -> Void
 
-    init(_ call: @escaping (Double) -> Void) {
+    init(_ call: @escaping (ProgressBarUpdate) -> Void) {
         self.call = call
     }
 
     @MainActor
-    func update(_ value: Double) {
-        self.call(value)
+    func update(_ value: Double, detail: String? = nil) {
+        self.call(ProgressBarUpdate(progress: value, detail: detail))
     }
 }
 
 private actor UnpackProgressTracker {
-    private var totalBytes: Int64?
+    private var totalBytes: Int64 = 0
     private var totalLayers: Int = 0
     private var completedBytes: Int64 = 0
-    private var seenLayerIndices: Set<Int> = []
-    private var layerSizes: [Int: Int64] = [:]
+    private var completedLayers: Int = 0
 
+    /// Returns a tuple of (progress value, detail string) for the given update.
+    /// The detail string describes the current phase (e.g., "Layer 3/7").
     func progressValue(
         for update: Wendy_Agent_Services_V1_CreateContainerProgress
-    ) -> Double? {
+    ) -> (value: Double, detail: String?)? {
         switch update.phase {
         case .unpacking:
+            // Start phase: capture total layers and total bytes
             if update.totalLayers > 0 {
                 totalLayers = Int(update.totalLayers)
             }
             if update.layerSize > 0 {
-                if totalBytes == nil {
-                    totalBytes = update.layerSize
-                    recomputeCompletedBytes()
-                } else {
-                    totalBytes = update.layerSize
-                }
+                // In the start phase, layerSize contains the total image size
+                totalBytes = update.layerSize
             }
-            return 0
+            return (0, "Preparing")
+
         case .applyingLayer:
+            // Layer completion: track progress
             if totalLayers == 0 && update.totalLayers > 0 {
                 totalLayers = Int(update.totalLayers)
             }
-            let index = Int(update.layerIndex)
-            if index > 0 {
-                if update.layerSize > 0 {
-                    layerSizes[index] = update.layerSize
-                }
-                if !seenLayerIndices.contains(index) {
-                    seenLayerIndices.insert(index)
-                    if totalBytes != nil {
-                        completedBytes += layerSizes[index] ?? 0
-                    }
-                }
+
+            let layerIndex = Int(update.layerIndex)
+            let layerSize = update.layerSize
+
+            // Only count each layer once (layerIndex is 1-based)
+            if layerIndex > completedLayers {
+                completedLayers = layerIndex
+                completedBytes += layerSize
             }
 
-            if let totalBytes, totalBytes > 0 {
+            let detail =
+                totalLayers > 0
+                ? "Layer \(layerIndex)/\(totalLayers)"
+                : "Applying layers"
+
+            // Prefer byte-based progress for accuracy (layers vary in size)
+            if totalBytes > 0 {
                 let value = Double(completedBytes) / Double(totalBytes)
-                return min(max(value, 0), 1)
+                // Cap at 95% to leave room for finalization.
+                return (min(max(value, 0), 0.95), detail)
             }
 
+            // Fallback to layer-based progress
             if totalLayers > 0 {
-                let value = Double(update.layerIndex) / Double(totalLayers)
-                return min(max(value, 0), 1)
+                // Cap at 95% to leave room for finalization.
+                let value = Double(layerIndex) / Double(totalLayers) * 0.95
+                return (min(max(value, 0), 0.95), detail)
             }
 
-            return nil
-        case .creatingContainer, .complete:
-            return 1
+            return (0, detail)
+
+        case .creatingContainer:
+            return (0.98, "Finalizing")
+
+        case .complete:
+            return (1, nil)
+
         case .unspecified, .UNRECOGNIZED:
             return nil
-        }
-    }
-
-    private func recomputeCompletedBytes() {
-        completedBytes = seenLayerIndices.reduce(Int64(0)) { total, index in
-            total + (layerSizes[index] ?? 0)
         }
     }
 }
@@ -145,18 +150,19 @@ enum AppBuildHelpers {
                     if let url = NSWorkspace.shared.urlForApplication(
                         withBundleIdentifier: "com.docker.docker"
                     ) {
-                        Noora().info("Docker Desktop is installed")
+                        cliOutput.info("Docker Desktop is installed")
 
                         guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open Docker Desktop?"
+                            try await cliOutput.yesOrNoPrompt(
+                                question: "Do you want to open Docker Desktop?",
+                                defaultAnswer: true
                             )
                         else {
                             return
                         }
 
                         if NSWorkspace.shared.open(url) {
-                            Noora().info("Opening Docker.app")
+                            cliOutput.info("Opening Docker.app")
                             while true {
                                 do {
                                     _ = try await docker.getServerVersion()
@@ -166,7 +172,7 @@ enum AppBuildHelpers {
                                 }
                             }
                         } else {
-                            Noora().info(
+                            cliOutput.info(
                                 "Failed to open Docker Desktop automatically, please open it manually"
                             )
                         }
@@ -174,18 +180,19 @@ enum AppBuildHelpers {
                     } else if let url = NSWorkspace.shared.urlForApplication(
                         withBundleIdentifier: "com.orbstack.orbstack"
                     ) {
-                        Noora().info("OrbStack.app is installed")
+                        cliOutput.info("OrbStack.app is installed")
 
                         guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open OrbStack?"
+                            try await cliOutput.yesOrNoPrompt(
+                                question: "Do you want to open OrbStack?",
+                                defaultAnswer: true
                             )
                         else {
                             return
                         }
 
                         if NSWorkspace.shared.open(url) {
-                            Noora().info("Opening OrbStack")
+                            cliOutput.info("Opening OrbStack")
                             while true {
                                 do {
                                     _ = try await docker.getServerVersion()
@@ -195,7 +202,7 @@ enum AppBuildHelpers {
                                 }
                             }
                         } else {
-                            Noora().info(
+                            cliOutput.info(
                                 "Failed to open OrbStack automatically, please open it manually"
                             )
                         }
@@ -203,8 +210,9 @@ enum AppBuildHelpers {
                     } else {
                         cliOutput.warning("Docker.app or OrbStack.app is not installed")
                         guard
-                            Noora().yesOrNoChoicePrompt(
-                                question: "Do you want to open the installation guide?"
+                            try await cliOutput.yesOrNoPrompt(
+                                question: "Do you want to open the installation guide?",
+                                defaultAnswer: true
                             )
                         else {
                             return
@@ -213,9 +221,9 @@ enum AppBuildHelpers {
                         if NSWorkspace.shared.open(
                             URL(string: "https://docs.docker.com/get-docker/")!
                         ) {
-                            Noora().info("Opening Docker documentation")
+                            cliOutput.info("Opening Docker documentation")
                         } else {
-                            Noora().error("Failed to open Docker documentation")
+                            cliOutput.error("Failed to open Docker documentation")
                         }
                     }
                 #endif
@@ -242,7 +250,7 @@ enum AppBuildHelpers {
                         "Install swiftly by running: curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash"
                 ).print()
             } else {
-                Noora().error(
+                cliOutput.error(
                     """
                     Swiftly is not installed on your system.
 
@@ -280,8 +288,9 @@ enum AppBuildHelpers {
             if shouldAutoAccept {
                 installSDK = true
             } else {
-                installSDK = Noora().yesOrNoChoicePrompt(
-                    question: "Do you want to install/update the WendyOS Swift SDK?"
+                installSDK = try await cliOutput.yesOrNoPrompt(
+                    question: "Do you want to install/update the WendyOS Swift SDK?",
+                    defaultAnswer: true
                 )
             }
 
@@ -305,13 +314,10 @@ enum AppBuildHelpers {
             if shouldAutoAccept {
                 installSwift = true
             } else {
-                installSwift = Noora().yesOrNoChoicePrompt(
-                    title: "Swift \(swiftVersion) version is not installed yet",
-                    question: "Do you want to install Swift \(swiftVersion)?",
-                    description: """
-                        WendyOS development is tied to a specific Swift toolchain.
-                        We update this version from time to time to ensure compatibility with the latest features.
-                        """
+                installSwift = try await cliOutput.yesOrNoPrompt(
+                    question:
+                        "Swift \(swiftVersion) is not installed yet. Do you want to install it?",
+                    defaultAnswer: true
                 )
             }
 
@@ -335,7 +341,7 @@ enum AppBuildHelpers {
         appName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>,
         restartPolicy: RestartPolicy,
-        progress: ((Double) -> Void)? = nil
+        progress: ((ProgressBarUpdate) -> Void)? = nil
     ) async throws {
         let logger = Logger(label: "sh.wendy.cli.build.containerd.create")
         let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
@@ -363,10 +369,10 @@ enum AppBuildHelpers {
                     case .message(let message):
                         switch message.responseType {
                         case .progress(let progressUpdate):
-                            if let value = await progressTracker.progressValue(
+                            if let result = await progressTracker.progressValue(
                                 for: progressUpdate
                             ) {
-                                await progressHandler.update(value)
+                                await progressHandler.update(result.value, detail: result.detail)
                             }
                         case .completed:
                             await progressHandler.update(1)
@@ -399,7 +405,7 @@ enum AppBuildHelpers {
             return appConfigData
         } catch {
             logger.debug("Failed to decode app config", metadata: ["error": .string("\(error)")])
-            Noora().info("No valid wendy.json was found. Using default settings.")
+            cliOutput.info("No valid wendy.json was found. Using default settings.")
             return Data()
         }
     }
@@ -436,7 +442,6 @@ enum AppBuildHelpers {
     /// Execute a phase with failure tracking
     static func executePhase<T: Sendable>(
         phase: String,
-        runtime: String,
         commandName: String,
         additionalProperties: [String: String] = [:],
         operation: @Sendable () async throws -> T
@@ -446,7 +451,7 @@ enum AppBuildHelpers {
         } catch {
             await trackPhaseFailure(
                 phase: phase,
-                runtime: runtime,
+                runtime: "containerd",
                 commandName: commandName,
                 error: error,
                 additionalProperties: additionalProperties

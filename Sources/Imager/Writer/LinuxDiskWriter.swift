@@ -4,7 +4,7 @@ import Subprocess
 
 #if os(Linux)
     /// A disk writer implementation for Linux that uses the `dd` command.
-    public class LinuxDiskWriter: DiskWriter {
+    public final class LinuxDiskWriter: DiskWriter {
         private let logger = Logger(label: "wendy.imager.linux-disk-writer")
 
         public init() {}
@@ -96,7 +96,7 @@ import Subprocess
             // unzip -p extracts to stdout, dd reads from stdin
             // We use pv (pipe viewer) if available for progress, otherwise estimate
             let script = """
-                /usr/bin/unzip -p '\(zipPath)' '\(imageInfo.entryName)' | dd of='\(drive.id)' bs=1M conv=fsync 2>&1
+                /usr/bin/unzip -p '\(zipPath)' '\(imageInfo.entryName)' | dd of='\(drive.id)' bs=4m conv=fsync 2>&1
                 """
 
             let localProgressHandler = progressHandler
@@ -296,7 +296,7 @@ import Subprocess
     }
 #else
     // Empty implementation for non-Linux platforms
-    public class LinuxDiskWriter: DiskWriter {
+    public final class LinuxDiskWriter: DiskWriter {
         public init() {}
 
         public func write(

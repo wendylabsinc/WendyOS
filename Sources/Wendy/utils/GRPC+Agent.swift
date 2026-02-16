@@ -1,9 +1,9 @@
+import CLIOutput
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
 import NIOCore
 import NIOSSL
-import Noora
 import Synchronization
 import WendyAgentGRPC
 import WendyCloudGRPC
@@ -63,7 +63,7 @@ func withCloudGRPCClient<R: Sendable>(
 }
 
 func withCloudGRPCClient<R: Sendable>(
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (CloudGRPCClient) async throws -> R
 ) async throws -> R {
     return try await withAuth(title: title) { auth -> R in
@@ -80,7 +80,7 @@ private enum ProvisioningResult<R: Sendable>: Sendable {
 
 func withAgentGRPCClient<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     return try await withAgentGRPCClientAndEndpoint(connectionOptions, title: title) { client, _ in
@@ -90,7 +90,7 @@ func withAgentGRPCClient<R: Sendable>(
 
 func withAgentGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
-    title: TerminalText,
+    title: String,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
     return try await _withAgentGRPCClient(endpoint, title: title) { client, _ in
@@ -100,7 +100,7 @@ func withAgentGRPCClient<R: Sendable>(
 
 func withAgentGRPCClientAndEndpoint<R: Sendable>(
     _ connectionOptions: AgentConnectionOptions,
-    title: TerminalText,
+    title: String,
     _ body:
         @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
         async throws -> R
@@ -152,7 +152,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
 
 func _withAgentGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
-    title: TerminalText,
+    title: String,
     _ body:
         @escaping @Sendable (GRPCClient<GRPCTransport>, AgentConnectionOptions.Endpoint)
         async throws -> R
@@ -245,5 +245,83 @@ func _withAgentGRPCClient<R: Sendable>(
             ]
         )
         throw error
+    }
+}
+
+/// Execute a gRPC operation with automatic handling of unimplemented API errors.
+/// If the device returns an unimplemented error, prompts the user to update their device.
+func withAgentGRPCClientHandlingUpdates<R: Sendable>(
+    _ connectionOptions: AgentConnectionOptions,
+    title: String,
+    _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
+) async throws -> R {
+    do {
+        return try await withAgentGRPCClientAndEndpoint(connectionOptions, title: title) {
+            client,
+            _ in
+            try await body(client)
+        }
+    } catch let error as RPCError where error.code == .unimplemented {
+        // Get the endpoint for potential update
+        let selectedDevice = try await connectionOptions.read(
+            title: title,
+            includeBluetooth: false
+        )
+
+        guard case .lan(let host, let port, let defaultDevice) = selectedDevice else {
+            throw error
+        }
+
+        let endpoint = AgentConnectionOptions.Endpoint(
+            host: host,
+            port: port,
+            defaultDevice: defaultDevice
+        )
+
+        // Prompt user to update - if they decline or update fails, re-throw original error
+        let didUpdate = await promptDeviceUpdateIfUnimplemented(error: error, endpoint: endpoint)
+        if !didUpdate {
+            throw error
+        }
+
+        // User updated successfully - they need to retry the command
+        throw CancellationError()
+    }
+}
+
+/// Wait for the gRPC socket to come back up after a device restart
+func waitForDeviceRestart(endpoint: AgentConnectionOptions.Endpoint) async throws {
+    try await cliOutput.withProgress(
+        message: "Waiting for device to restart...",
+        successMessage: "Device restarted successfully",
+        errorMessage: "Device failed to restart"
+    ) {
+        let maxRetries = 90  // Wait up to 90 seconds
+        let retryDelay: UInt64 = 1_000_000_000  // 1 second in nanoseconds
+
+        // Initial wait for the device to go down
+        try await Task.sleep(nanoseconds: 3 * retryDelay)
+
+        // Now try to reconnect
+        for attempt in 1...maxRetries {
+            _ = attempt  // Used for retry counting
+            do {
+                // Try to connect and verify the agent is responsive
+                try await withAgentGRPCClient(endpoint, title: "") { client in
+                    let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
+                        wrapping: client
+                    )
+                    _ = try await agent.getAgentVersion(request: .init(message: .init()))
+                }
+                // Connection succeeded, device is back up
+                return
+            } catch {
+                // Connection failed, wait and retry
+                try await Task.sleep(nanoseconds: retryDelay)
+                continue
+            }
+        }
+
+        throw RPCError(code: .unavailable, message: "Device did not come back up after update")
     }
 }

@@ -26,7 +26,7 @@ public struct WendyAnalyticsConfig: Codable, Sendable {
 public actor AnalyticsService {
     @TaskLocal public static var current: AnalyticsService?
 
-    private let client: PostHogClient?
+    private let client: GA4Client?
     private let consentManager: ConsentManager
     private let logger = Logger(label: "sh.wendy.analytics")
     private var sessionId = UUID()
@@ -46,9 +46,13 @@ public actor AnalyticsService {
         self.anonymousId = config.anonymousId
         self.isInternalUser = config.isInternal
 
-        // Create PostHog client
-        // This key is safe to embed, it is a public facing key with write-only access
-        self.client = PostHogClient(apiKey: "phc_DCgbsvbGPdGhU6GW3CQnEwGCsNNrAHYwMhj4HkhjU4f")
+        // Create GA4 client
+        // These are safe to embed, the api_secret has write-only access
+        // and the measurement_id is a public identifier
+        self.client = GA4Client(
+            apiSecret: "PoyQfvLoSlqSQrT4ezPtHA",
+            measurementId: "G-1MCX77F1SD"
+        )
     }
 
     /// The user type for analytics events

@@ -1,8 +1,17 @@
 import Analytics
 import ArgumentParser
+import CLIOutput
 import Foundation
 import Logging
 import WendyShared
+
+#if canImport(Darwin)
+    import Darwin
+#elseif canImport(Glibc)
+    @preconcurrency import Glibc
+#elseif canImport(Musl)
+    @preconcurrency import Musl
+#endif
 
 @main
 struct WendyCLI {
@@ -17,10 +26,14 @@ struct WendyCLI {
             return logger
         }
 
-        // Check for global --json flag in arguments
+        // Check for global --json flag in arguments or non-interactive shell
         let jsonMode =
             ProcessInfo.processInfo.arguments.contains("--json")
             || ProcessInfo.processInfo.arguments.contains("-j")
+            || isatty(STDOUT_FILENO) == 0
+
+        // Check for CLI updates (runs once per day, non-blocking)
+        await UpdateChecker.checkForUpdatesIfNeeded()
 
         // Track command execution with analytics
         if let analytics = try? AnalyticsService(config: getConfig().analytics) {
@@ -72,6 +85,8 @@ struct WendyCommand: AsyncParsableCommand {
                     HelperCommand.self,
                     AnalyticsCommand.self,
                     CacheCommand.self,
+                    UpdateCommand.self,
+                    InfoCommand.self,
                 ]
             ),
         ]

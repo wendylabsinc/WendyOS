@@ -39,3 +39,23 @@ actor LocalOTelMetricsReceiver: Opentelemetry_Proto_Collector_Metrics_V1_Metrics
         return Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceResponse()
     }
 }
+
+/// Local OTel traces receiver that broadcasts to CLI clients without requiring cloud enrollment.
+actor LocalOTelTracesReceiver: Opentelemetry_Proto_Collector_Trace_V1_TraceService
+        .SimpleServiceProtocol
+{
+    let broadcaster: TelemetryBroadcaster
+    let logger = Logger(label: "sh.wendy.agent.local-otel-traces")
+
+    init(broadcaster: TelemetryBroadcaster) {
+        self.broadcaster = broadcaster
+    }
+
+    func export(
+        request: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest,
+        context: ServerContext
+    ) async throws -> Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceResponse {
+        await broadcaster.broadcastTraces(request)
+        return Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceResponse()
+    }
+}

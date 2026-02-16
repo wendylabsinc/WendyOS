@@ -37,7 +37,6 @@ let package = Package(
         .executable(name: "wendy-network-daemon", targets: ["wendy-network-daemon"]),
     ],
     dependencies: packageDependencies + [
-        .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3"),
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.2.1"),
@@ -47,13 +46,13 @@ let package = Package(
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.2"),
         .package(
-            url: "https://github.com/tuist/Noora.git",
-            from: "0.52.0"
+            url: "https://github.com/wendylabsinc/Noora.git",
+            branch: "main-wendy"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-subprocess.git",
             exact: "0.2.1",
-            traits: [.trait(name: "SubprocessSpan")]
+            traits: []
         ),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.4.0"),
         .package(url: "https://github.com/apple/swift-async-dns-resolver.git", from: "0.4.0"),
@@ -62,6 +61,7 @@ let package = Package(
         .package(url: "https://github.com/wendylabsinc/bluetooth.git", from: "0.1.1"),
         .package(url: "https://github.com/wendylabsinc/dbus.git", from: "0.3.0"),
         .package(url: "https://github.com/wendylabsinc/TOMLKit.git", from: "0.7.0"),
+        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.0.0"),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
@@ -77,7 +77,7 @@ let package = Package(
                     name: "Hummingbird",
                     package: "hummingbird"
                 ),
-                .product(name: "Noora", package: "Noora"),
+                .target(name: "CLIOutput"),
                 .product(name: "DNSClient", package: "DNSClient"),
                 .product(name: "Bluetooth", package: "bluetooth"),
                 .target(name: "WendyAgentGRPC"),
@@ -131,6 +131,7 @@ let package = Package(
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "Tracing", package: "swift-distributed-tracing"),
                 .target(name: "WendyCloudGRPC"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "ContainerdGRPC"),
@@ -235,13 +236,22 @@ let package = Package(
             ]
         ),
 
+        /// CLI output abstraction layer (owns the Noora TUI dependency)
+        .target(
+            name: "CLIOutput",
+            dependencies: [
+                .product(name: "Noora", package: "Noora"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOFoundationCompat", package: "swift-nio"),
+            ]
+        ),
+
         /// Analytics module for privacy-first usage tracking
         .target(
             name: "Analytics",
             dependencies: [
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Noora", package: "Noora"),
                 .target(name: "WendyShared"),
             ]
         ),

@@ -1,7 +1,7 @@
 import ArgumentParser
+import CLIOutput
 import Foundation
 import Logging
-import Noora
 
 struct WiFiCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -31,12 +31,11 @@ struct WiFiCommand: AsyncParsableCommand {
                 if JSONMode.isEnabled {
                     return try await client.listWiFiNetworks()
                 } else {
-                    return try await Noora().progressStep(
+                    return try await cliOutput.withProgress(
                         message: "Listing available WiFi networks",
-                        successMessage: nil,
-                        errorMessage: nil,
-                        showSpinner: true
-                    ) { _ in
+                        successMessage: "",
+                        errorMessage: ""
+                    ) {
                         try await client.listWiFiNetworks()
                     }
                 }
@@ -46,13 +45,13 @@ struct WiFiCommand: AsyncParsableCommand {
                 if JSONMode.isEnabled {
                     print("[]")
                 } else {
-                    Noora().info("No WiFi networks found.")
+                    cliOutput.info("No WiFi networks found.")
                 }
             } else if JSONMode.isEnabled {
                 let networksJSON = try formatNetworksAsJSON(networks)
                 print(networksJSON)
             } else {
-                Noora().info("Available WiFi networks:")
+                cliOutput.info("Available WiFi networks:")
                 formatNetworksAsText(networks)
             }
         }
@@ -125,7 +124,7 @@ struct WiFiCommand: AsyncParsableCommand {
                 } else if JSONMode.isEnabled {
                     password = ""
                 } else {
-                    password = try secureTextPrompt(
+                    password = try cliOutput.secureTextPrompt(
                         title: "Enter the password for '\(ssid)'",
                         prompt: "Password"
                     )
@@ -152,12 +151,11 @@ struct WiFiCommand: AsyncParsableCommand {
                     )
                     print(String(data: responseJSON, encoding: .utf8)!)
                 } else {
-                    _ = try await Noora().progressStep(
+                    _ = try await cliOutput.withProgress(
                         message: "Connecting to WiFi network: \(ssid)...",
                         successMessage: "Connected to \(ssid)",
-                        errorMessage: "Failed to connect to \(ssid)",
-                        showSpinner: true
-                    ) { _ in
+                        errorMessage: "Failed to connect to \(ssid)"
+                    ) {
                         let response = try await client.connectToWiFi(
                             ssid: ssid,
                             password: password
@@ -221,9 +219,6 @@ struct WiFiCommand: AsyncParsableCommand {
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         func run() async throws {
-            let logger = Logger(label: "sh.wendy.cli.wifi.status")
-            logger.info("Checking WiFi connection status")
-
             try await withAgentClient(
                 agentConnectionOptions,
                 title: "For which device do you want to check the wifi status?"
@@ -291,18 +286,17 @@ struct WiFiCommand: AsyncParsableCommand {
                 agentConnectionOptions,
                 title: "Which device do you want to disconnect from wifi?"
             ) { client in
-                let result = try await Noora().progressStep(
+                let result = try await cliOutput.withProgress(
                     message: "Disconnecting from WiFi network...",
                     successMessage: "Disconnected from WiFi network",
-                    errorMessage: "Failed to disconnect from WiFi network",
-                    showSpinner: true
-                ) { _ in
+                    errorMessage: "Failed to disconnect from WiFi network"
+                ) {
                     try await client.disconnectWiFi()
                 }
 
                 if !result.success {
                     let errorMessage = result.errorMessage ?? "Unknown error"
-                    Noora().warning("Disconnect reported failure: \(errorMessage)")
+                    cliOutput.warning("Disconnect reported failure: \(errorMessage)")
                 }
             }
         }

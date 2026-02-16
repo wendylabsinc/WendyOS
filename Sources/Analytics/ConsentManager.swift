@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import Noora
 
 /// Protocol for providing environment variables (for testability)
 public protocol EnvironmentProvider: Sendable {
