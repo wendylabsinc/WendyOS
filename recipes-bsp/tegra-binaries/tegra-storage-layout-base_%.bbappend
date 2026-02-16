@@ -80,9 +80,18 @@ do_install:append() {
     # Create a temporary file in tmpdir (managed by BitBake with proper pseudo context)
     local tmpfile="${layout_path}.tmp"
 
-    # 1. Remove the "reserved" partition (between UDA and APP)
-    #    This partition blocks expansion and is not needed
-    nvflashxmlparse --remove --partitions-to-remove reserved \
+    # 1. Remove blocking partitions
+    #    - "reserved": blocks expansion and is not needed
+    #    - "permanet_user_storage": NVIDIA's data partition (only exists on T264/Thor)
+    #       We'll replace it with our own mender_data partition
+    local partitions_to_remove="reserved"
+
+    # T264 (Thor) has "permanet_user_storage" partition that we need to remove
+    if [ "${MACHINE}" = "jetson-agx-thor-devkit-nvme-wendyos" ]; then
+        partitions_to_remove="reserved permanet_user_storage"
+    fi
+
+    nvflashxmlparse --remove --partitions-to-remove ${partitions_to_remove} \
         --output "${tmpfile}" \
         "${layout_path}"
 
