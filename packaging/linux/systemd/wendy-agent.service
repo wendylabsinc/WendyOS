@@ -1,0 +1,18 @@
+[Unit]
+Description=Wendy Agent
+After=network-online.target dbus.service containerd.service
+Wants=network-online.target
+Requires=containerd.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/wendy-agent
+Environment=WENDY_SYSTEMD_SERVICE_NAME=wendy-agent
+WorkingDirectory=/var/lib/wendy-agent
+ExecStart=/usr/bin/wendy-agent
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

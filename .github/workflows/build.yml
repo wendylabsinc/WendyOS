@@ -581,6 +581,8 @@ jobs:
             artifact-suffix: aarch64
             rpm-arch: aarch64
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install FPM dependencies
         run: |
           sudo apt-get update
@@ -604,8 +606,34 @@ jobs:
           tar -xzf wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
           ls -la
 
+      - name: Prepare package roots
+        run: |
+          set -euo pipefail
+
+          mkdir -p pkgroot/wendy/usr/bin
+          mkdir -p pkgroot/wendy-agent/usr/bin
+          mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
+          mkdir -p pkgroot/wendy-agent/etc/default
+          mkdir -p pkgroot/wendy-agent/etc/wendy-agent
+          mkdir -p pkgroot/wendy-agent/var/lib/wendy-agent/storage
+
+          install -m755 ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy \
+            pkgroot/wendy/usr/bin/wendy
+          install -m755 ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent \
+            pkgroot/wendy-agent/usr/bin/wendy-agent
+
+          install -m644 packaging/linux/systemd/wendy-agent.service \
+            pkgroot/wendy-agent/usr/lib/systemd/system/wendy-agent.service
+          install -m644 packaging/linux/default/wendy-agent \
+            pkgroot/wendy-agent/etc/default/wendy-agent
+
+          # Placeholder config created at install time by package manager.
+          printf "{}\n" > pkgroot/wendy-agent/etc/wendy-agent/config.json
+          chmod 600 pkgroot/wendy-agent/etc/wendy-agent/config.json
+
       - name: Build .deb packages
         run: |
+          set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
 
           # Build wendy-cli .deb
@@ -619,7 +647,10 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "devel" \
-            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+            --depends "usbutils" \
+            --depends "ca-certificates" \
+            -C pkgroot/wendy \
+            .
 
           # Build wendy-agent .deb
           fpm -s dir -t deb \
@@ -632,12 +663,24 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "devel" \
-            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+            --depends "containerd" \
+            --depends "dbus" \
+            --depends "systemd" \
+            --depends "ca-certificates" \
+            --deb-recommends "network-manager | connman" \
+            --deb-recommends "bluez" \
+            --config-files /etc/default/wendy-agent \
+            --config-files /etc/wendy-agent/config.json \
+            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
+            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            -C pkgroot/wendy-agent \
+            .
 
           ls -la *.deb
 
       - name: Build .rpm packages
         run: |
+          set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
           # RPM doesn't allow hyphens in version, replace with underscores
           RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
@@ -653,7 +696,10 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "Development/Tools" \
-            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+            --depends "usbutils" \
+            --depends "ca-certificates" \
+            -C pkgroot/wendy \
+            .
 
           # Build wendy-agent .rpm
           fpm -s dir -t rpm \
@@ -666,9 +712,39 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "Development/Tools" \
-            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+            --depends "containerd" \
+            --depends "dbus" \
+            --depends "systemd" \
+            --depends "ca-certificates" \
+            --config-files /etc/default/wendy-agent \
+            --config-files /etc/wendy-agent/config.json \
+            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
+            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            -C pkgroot/wendy-agent \
+            .
 
           ls -la *.rpm
+
+      - name: Validate package metadata
+        run: |
+          set -euo pipefail
+
+          WENDY_DEB=$(ls -1 wendy_*_${{ matrix.arch }}.deb | head -1)
+          WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
+          WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
+          WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
+
+          dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep -q "usr/lib/systemd/system/wendy-agent.service"
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep -q "etc/default/wendy-agent"
+
+          rpm -qp --requires "$WENDY_RPM" | grep -q "^usbutils"
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^containerd"
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^dbus"
+          rpm -qpl "$WENDY_AGENT_RPM" | grep -q "/usr/lib/systemd/system/wendy-agent.service"
+          rpm -qpl "$WENDY_AGENT_RPM" | grep -q "/etc/default/wendy-agent"
 
       - name: Upload .deb packages
         uses: actions/upload-artifact@v4
