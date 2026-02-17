@@ -26,12 +26,36 @@ struct AppsCommand: AsyncParsableCommand {
         var all: Bool = false
 
         func resolve(client: AgentClient) async throws -> [String] {
+            if all && appName != nil {
+                if JSONMode.isEnabled {
+                    JSONErrorResponse(
+                        error: "invalid_arguments",
+                        reason: "Cannot specify both an application name and --all in --json mode",
+                        suggestion: "Provide either an app name argument or --all, but not both"
+                    ).print()
+                    _Exit(1)
+                }
+
+                throw ValidationError(
+                    "Cannot specify both an application name and --all. Please choose exactly one."
+                )
+            }
+
             if all {
                 return try await client.listApps().map(\.name)
             } else if let appName {
                 return [appName]
             } else {
-                return []
+                if JSONMode.isEnabled {
+                    JSONErrorResponse(
+                        error: "missing_required_argument",
+                        reason: "Either an application name or --all is required when using --json mode",
+                        suggestion: "Provide an app name argument or pass --all"
+                    ).print()
+                    _Exit(1)
+                }
+
+                throw ValidationError("Specify an application name or --all.")
             }
         }
     }
@@ -48,6 +72,9 @@ struct AppsCommand: AsyncParsableCommand {
         )
         var purgeImage: Bool = false
 
+        @Flag(name: .long, help: "Skip confirmation prompts")
+        var force: Bool = false
+
         @OptionGroup var agentConnectionOptions: AgentConnectionOptions
 
         @OptionGroup var apps: Apps
@@ -60,6 +87,45 @@ struct AppsCommand: AsyncParsableCommand {
                 let appsToRemove = try await apps.resolve(client: client)
                 guard !appsToRemove.isEmpty else {
                     cliOutput.info("No applications to remove on \(hostname)")
+                    return
+                }
+
+                if apps.all && !force && !JSONMode.isEnabled {
+                    let confirmed = Noora().yesOrNoChoicePrompt(
+                        question: "Remove all applications on \(hostname)?",
+                        defaultAnswer: false
+                    )
+                    guard confirmed else {
+                        cliOutput.info("Aborted.")
+                        return
+                    }
+                }
+
+                if apps.all {
+                    var failures: [(name: String, error: String)] = []
+
+                    for name in appsToRemove {
+                        do {
+                            try await client.removeApp(name: name, purgeImage: purgeImage)
+                            if purgeImage {
+                                cliOutput.success("Removed app \(name) and its image on \(hostname)")
+                            } else {
+                                cliOutput.success("Removed app \(name) on \(hostname)")
+                            }
+                        } catch {
+                            failures.append((name: name, error: error.localizedDescription))
+                            cliOutput.error(
+                                "Failed to remove app \(name) on \(hostname): \(error.localizedDescription)"
+                            )
+                        }
+                    }
+
+                    guard failures.isEmpty else {
+                        let failedNames = failures.map(\.name).joined(separator: ", ")
+                        throw ValidationError(
+                            "Failed to remove \(failures.count) of \(appsToRemove.count) applications on \(hostname): \(failedNames)."
+                        )
+                    }
                     return
                 }
 
@@ -95,6 +161,30 @@ struct AppsCommand: AsyncParsableCommand {
                     return
                 }
 
+                if apps.all {
+                    var failures: [(name: String, error: String)] = []
+
+                    for name in appsToStart {
+                        do {
+                            try await client.startApp(name: name)
+                            cliOutput.success("Started app \(name) on \(hostname)")
+                        } catch {
+                            failures.append((name: name, error: error.localizedDescription))
+                            cliOutput.error(
+                                "Failed to start app \(name) on \(hostname): \(error.localizedDescription)"
+                            )
+                        }
+                    }
+
+                    guard failures.isEmpty else {
+                        let failedNames = failures.map(\.name).joined(separator: ", ")
+                        throw ValidationError(
+                            "Failed to start \(failures.count) of \(appsToStart.count) applications on \(hostname): \(failedNames)."
+                        )
+                    }
+                    return
+                }
+
                 for name in appsToStart {
                     try await client.startApp(name: name)
                     cliOutput.success("Started app \(name) on \(hostname)")
@@ -120,6 +210,30 @@ struct AppsCommand: AsyncParsableCommand {
                 let appsToStop = try await apps.resolve(client: client)
                 guard !appsToStop.isEmpty else {
                     cliOutput.info("No applications to stop on \(hostname)")
+                    return
+                }
+
+                if apps.all {
+                    var failures: [(name: String, error: String)] = []
+
+                    for name in appsToStop {
+                        do {
+                            try await client.stopApp(name: name)
+                            cliOutput.success("Stopped app \(name) on \(hostname)")
+                        } catch {
+                            failures.append((name: name, error: error.localizedDescription))
+                            cliOutput.error(
+                                "Failed to stop app \(name) on \(hostname): \(error.localizedDescription)"
+                            )
+                        }
+                    }
+
+                    guard failures.isEmpty else {
+                        let failedNames = failures.map(\.name).joined(separator: ", ")
+                        throw ValidationError(
+                            "Failed to stop \(failures.count) of \(appsToStop.count) applications on \(hostname): \(failedNames)."
+                        )
+                    }
                     return
                 }
 
