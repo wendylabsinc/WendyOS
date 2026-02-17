@@ -49,7 +49,8 @@ struct AppsCommand: AsyncParsableCommand {
                 if JSONMode.isEnabled {
                     JSONErrorResponse(
                         error: "missing_required_argument",
-                        reason: "Either an application name or --all is required when using --json mode",
+                        reason:
+                            "Either an application name or --all is required when using --json mode",
                         suggestion: "Provide an app name argument or pass --all"
                     ).print()
                     _Exit(1)
@@ -108,7 +109,9 @@ struct AppsCommand: AsyncParsableCommand {
                         do {
                             try await client.removeApp(name: name, purgeImage: purgeImage)
                             if purgeImage {
-                                cliOutput.success("Removed app \(name) and its image on \(hostname)")
+                                cliOutput.success(
+                                    "Removed app \(name) and its image on \(hostname)"
+                                )
                             } else {
                                 cliOutput.success("Removed app \(name) on \(hostname)")
                             }
