@@ -47,17 +47,43 @@ struct AppsCommand: AsyncParsableCommand {
                 return [appName]
             } else {
                 if JSONMode.isEnabled {
-                    JSONErrorResponse(
-                        error: "missing_required_argument",
-                        reason:
-                            "Either an application name or --all is required when using --json mode",
-                        suggestion: "Provide an app name argument or pass --all"
-                    ).print()
-                    _Exit(1)
+                    jsonModeRequiresArgument(
+                        argument: "app-name",
+                        description: "Provide an app name argument or pass --all"
+                    )
                 }
 
                 throw ValidationError("Specify an application name or --all.")
             }
+        }
+    }
+
+    private static func runBulkOperation(
+        appNames: [String],
+        hostname: String,
+        operationVerb: String,
+        perform: (String) async throws -> Void,
+        successMessage: (String) -> String
+    ) async throws {
+        var failedAppNames: [String] = []
+
+        for name in appNames {
+            do {
+                try await perform(name)
+                cliOutput.success(successMessage(name))
+            } catch {
+                failedAppNames.append(name)
+                cliOutput.error(
+                    "Failed to \(operationVerb) app \(name) on \(hostname): \(error.localizedDescription)"
+                )
+            }
+        }
+
+        guard failedAppNames.isEmpty else {
+            let failedNames = failedAppNames.joined(separator: ", ")
+            throw ValidationError(
+                "Failed to \(operationVerb) \(failedAppNames.count) of \(appNames.count) applications on \(hostname): \(failedNames)."
+            )
         }
     }
 
@@ -103,32 +129,20 @@ struct AppsCommand: AsyncParsableCommand {
                 }
 
                 if apps.all {
-                    var failures: [(name: String, error: String)] = []
-
-                    for name in appsToRemove {
-                        do {
+                    try await AppsCommand.runBulkOperation(
+                        appNames: appsToRemove,
+                        hostname: hostname,
+                        operationVerb: "remove",
+                        perform: { name in
                             try await client.removeApp(name: name, purgeImage: purgeImage)
+                        },
+                        successMessage: { name in
                             if purgeImage {
-                                cliOutput.success(
-                                    "Removed app \(name) and its image on \(hostname)"
-                                )
-                            } else {
-                                cliOutput.success("Removed app \(name) on \(hostname)")
+                                return "Removed app \(name) and its image on \(hostname)"
                             }
-                        } catch {
-                            failures.append((name: name, error: error.localizedDescription))
-                            cliOutput.error(
-                                "Failed to remove app \(name) on \(hostname): \(error.localizedDescription)"
-                            )
+                            return "Removed app \(name) on \(hostname)"
                         }
-                    }
-
-                    guard failures.isEmpty else {
-                        let failedNames = failures.map(\.name).joined(separator: ", ")
-                        throw ValidationError(
-                            "Failed to remove \(failures.count) of \(appsToRemove.count) applications on \(hostname): \(failedNames)."
-                        )
-                    }
+                    )
                     return
                 }
 
@@ -165,26 +179,17 @@ struct AppsCommand: AsyncParsableCommand {
                 }
 
                 if apps.all {
-                    var failures: [(name: String, error: String)] = []
-
-                    for name in appsToStart {
-                        do {
+                    try await AppsCommand.runBulkOperation(
+                        appNames: appsToStart,
+                        hostname: hostname,
+                        operationVerb: "start",
+                        perform: { name in
                             try await client.startApp(name: name)
-                            cliOutput.success("Started app \(name) on \(hostname)")
-                        } catch {
-                            failures.append((name: name, error: error.localizedDescription))
-                            cliOutput.error(
-                                "Failed to start app \(name) on \(hostname): \(error.localizedDescription)"
-                            )
+                        },
+                        successMessage: { name in
+                            "Started app \(name) on \(hostname)"
                         }
-                    }
-
-                    guard failures.isEmpty else {
-                        let failedNames = failures.map(\.name).joined(separator: ", ")
-                        throw ValidationError(
-                            "Failed to start \(failures.count) of \(appsToStart.count) applications on \(hostname): \(failedNames)."
-                        )
-                    }
+                    )
                     return
                 }
 
@@ -217,26 +222,17 @@ struct AppsCommand: AsyncParsableCommand {
                 }
 
                 if apps.all {
-                    var failures: [(name: String, error: String)] = []
-
-                    for name in appsToStop {
-                        do {
+                    try await AppsCommand.runBulkOperation(
+                        appNames: appsToStop,
+                        hostname: hostname,
+                        operationVerb: "stop",
+                        perform: { name in
                             try await client.stopApp(name: name)
-                            cliOutput.success("Stopped app \(name) on \(hostname)")
-                        } catch {
-                            failures.append((name: name, error: error.localizedDescription))
-                            cliOutput.error(
-                                "Failed to stop app \(name) on \(hostname): \(error.localizedDescription)"
-                            )
+                        },
+                        successMessage: { name in
+                            "Stopped app \(name) on \(hostname)"
                         }
-                    }
-
-                    guard failures.isEmpty else {
-                        let failedNames = failures.map(\.name).joined(separator: ", ")
-                        throw ValidationError(
-                            "Failed to stop \(failures.count) of \(appsToStop.count) applications on \(hostname): \(failedNames)."
-                        )
-                    }
+                    )
                     return
                 }
 
