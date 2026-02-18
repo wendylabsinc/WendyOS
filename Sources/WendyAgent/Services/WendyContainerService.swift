@@ -405,14 +405,12 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     // `docker run image arg1 arg2` uses ENTRYPOINT + [arg1, arg2])
                     if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
                         finalArgs = entrypoint + request.userArgs
-                    } else {
+                    } else if  cmd = imageConfig.config?.Cmd, let executable = cmd.first {
                         // No entrypoint, prefix user args with Cmd[0] (the executable)
                         // so we don't lose the binary path
-                        if let cmd = imageConfig.config?.Cmd, let executable = cmd.first {
-                            finalArgs = [executable] + request.userArgs
-                        } else {
-                            finalArgs = request.userArgs
-                        }
+                        finalArgs = [executable] + request.userArgs
+                    } else {
+                        finalArgs = request.userArgs
                     }
                 } else {
                     // No user args, use image entrypoint + cmd as-is
