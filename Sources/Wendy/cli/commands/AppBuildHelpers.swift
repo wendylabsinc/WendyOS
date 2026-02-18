@@ -341,14 +341,22 @@ enum AppBuildHelpers {
         appName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>,
         restartPolicy: RestartPolicy,
-        progress: ((ProgressBarUpdate) -> Void)? = nil
+        progress: ((ProgressBarUpdate) -> Void)? = nil,
+        appConfigDataOverride: Data? = nil,
+        containerCommand: [String]? = nil,
+        containerWorkingDir: String? = nil
     ) async throws {
         let logger = Logger(label: "sh.wendy.cli.build.containerd.create")
         let agentContainers = Wendy_Agent_Services_V1_WendyContainerService.Client(
             wrapping: client
         )
 
-        let appConfigData = try await readAppConfigData(logger: logger)
+        let appConfigData: Data
+        if let appConfigDataOverride {
+            appConfigData = appConfigDataOverride
+        } else {
+            appConfigData = try await readAppConfigData(logger: logger)
+        }
         let request = Wendy_Agent_Services_V1_CreateContainerRequest.with {
             // The image is pushed to the device's local registry as just "appName"
             // The host.docker.internal:port prefix is only for routing during push
@@ -356,6 +364,12 @@ enum AppBuildHelpers {
             $0.appName = appName
             $0.appConfig = appConfigData
             $0.restartPolicy = restartPolicy
+            if let containerCommand, !containerCommand.isEmpty {
+                $0.cmd = encodeContainerCommand(containerCommand)
+            }
+            if let containerWorkingDir, !containerWorkingDir.isEmpty {
+                $0.workingDir = containerWorkingDir
+            }
         }
 
         let progressHandler = SendableProgressUpdater(progress ?? { _ in })
@@ -387,6 +401,15 @@ enum AppBuildHelpers {
                 throw error
             }
         }
+    }
+
+    private static func encodeContainerCommand(_ command: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(command),
+            let encoded = String(data: data, encoding: .utf8)
+        else {
+            return command.joined(separator: " ")
+        }
+        return encoded
     }
 
     /// Read app configuration from wendy.json if present

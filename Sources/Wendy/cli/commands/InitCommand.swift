@@ -25,7 +25,7 @@ struct InitCommand: AsyncParsableCommand {
 
     @Option(
         name: .customLong("language"),
-        help: "Programming language for the project (swift or python)"
+        help: "Programming language for the project (swift, python, rust, or cpp)"
     )
     var language: ProjectLanguage = .swift
 
@@ -60,6 +60,10 @@ struct InitCommand: AsyncParsableCommand {
             try await initializeSwiftProject()
         case .python:
             try await initializePythonProject()
+        case .rust:
+            try initializeRustProject()
+        case .cpp:
+            try initializeCppProject()
         }
 
         // Create wendy directory inside the project path
@@ -332,6 +336,131 @@ struct InitCommand: AsyncParsableCommand {
         }
     }
 
+    private func initializeRustProject() throws {
+        let fileManager = FileManager.default
+
+        let cargoTomlPath =
+            projectPath.hasSuffix("/") ? "\(projectPath)Cargo.toml" : "\(projectPath)/Cargo.toml"
+        if fileManager.fileExists(atPath: cargoTomlPath) {
+            logger.debug("Cargo.toml already exists, skipping initialization")
+            return
+        }
+
+        let srcDirectoryPath =
+            projectPath.hasSuffix("/") ? "\(projectPath)src" : "\(projectPath)/src"
+        let mainRsPath =
+            projectPath.hasSuffix("/") ? "\(projectPath)src/main.rs" : "\(projectPath)/src/main.rs"
+
+        let packageName = sanitizedRustPackageName()
+        let cargoTomlContent = """
+            [package]
+            name = "\(packageName)"
+            version = "0.1.0"
+            edition = "2021"
+
+            [dependencies]
+            """
+
+        let mainRsContent = """
+            fn main() {
+                println!("Hello, world!");
+            }
+            """
+
+        do {
+            try fileManager.createDirectory(
+                atPath: srcDirectoryPath,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            throw CLIError.directoryCreationFailed(
+                path: srcDirectoryPath,
+                reason: error.localizedDescription
+            )
+        }
+
+        do {
+            try cargoTomlContent.write(
+                to: URL(fileURLWithPath: cargoTomlPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw CLIError.fileCreationFailed(
+                path: cargoTomlPath,
+                reason: error.localizedDescription
+            )
+        }
+
+        do {
+            try mainRsContent.write(
+                to: URL(fileURLWithPath: mainRsPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw CLIError.fileCreationFailed(path: mainRsPath, reason: error.localizedDescription)
+        }
+    }
+
+    private func initializeCppProject() throws {
+        let fileManager = FileManager.default
+        let cmakeListsPath =
+            projectPath.hasSuffix("/")
+            ? "\(projectPath)CMakeLists.txt" : "\(projectPath)/CMakeLists.txt"
+
+        if fileManager.fileExists(atPath: cmakeListsPath) {
+            logger.debug("CMakeLists.txt already exists, skipping initialization")
+            return
+        }
+
+        let mainCppPath =
+            projectPath.hasSuffix("/") ? "\(projectPath)main.cpp" : "\(projectPath)/main.cpp"
+        let cppProjectName = sanitizedCppProjectName()
+
+        let cmakeListsContent = """
+            cmake_minimum_required(VERSION 3.16)
+            project(\(cppProjectName) VERSION 0.1.0 LANGUAGES CXX)
+
+            set(CMAKE_CXX_STANDARD 17)
+            set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+            add_executable(wendy_app main.cpp)
+            """
+
+        let mainCppContent = """
+            #include <iostream>
+
+            int main() {
+                std::cout << "Hello, world!" << std::endl;
+                return 0;
+            }
+            """
+
+        do {
+            try cmakeListsContent.write(
+                to: URL(fileURLWithPath: cmakeListsPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw CLIError.fileCreationFailed(
+                path: cmakeListsPath,
+                reason: error.localizedDescription
+            )
+        }
+
+        do {
+            try mainCppContent.write(
+                to: URL(fileURLWithPath: mainCppPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw CLIError.fileCreationFailed(path: mainCppPath, reason: error.localizedDescription)
+        }
+    }
+
     private func createDefaultWendyJson(
         in projectPath: String,
         language: ProjectLanguage
@@ -356,6 +485,7 @@ struct InitCommand: AsyncParsableCommand {
             appId: appId,
             version: "0.0.1",
             language: language.rawValue,
+            defaultProfile: "local-dev",
             entitlements: [
                 .audio,
                 .bluetooth(.init(mode: .bluez)),
@@ -363,12 +493,12 @@ struct InitCommand: AsyncParsableCommand {
                 .video(.init(mode: .all)),
                 .persist(.init(name: "app-\(appId)", path: "/mnt/app")),
                 .persist(.init(name: "wendy-shared", path: "/mnt/shared")),
-            ]
+            ],
+            profiles: defaultProfiles(for: language)
         )
 
         if language == .python {
             defaultConfig.python = .init(sourceRoot: "/app")
-            defaultConfig.entitlements.append(.network(.init(mode: .host)))
             // Shared cache for Hugging Face models (transformers, datasets, etc.)
             // Using a well-known name allows multiple apps to share downloaded models
             defaultConfig.entitlements.append(
@@ -395,9 +525,76 @@ struct InitCommand: AsyncParsableCommand {
             )
         }
     }
+
+    private var derivedProjectName: String {
+        let projectName = URL(fileURLWithPath: projectPath).lastPathComponent.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return projectName.isEmpty ? "wendy-app" : projectName
+    }
+
+    private func sanitizedRustPackageName() -> String {
+        let parts = derivedProjectName.lowercased().split { !$0.isLetter && !$0.isNumber }
+        var packageName = parts.map(String.init).joined(separator: "-")
+
+        if packageName.isEmpty {
+            packageName = "wendy-rust-app"
+        }
+
+        if let firstCharacter = packageName.first, firstCharacter.isNumber {
+            packageName = "app-\(packageName)"
+        }
+
+        return packageName
+    }
+
+    private func sanitizedCppProjectName() -> String {
+        let parts = derivedProjectName.split { !$0.isLetter && !$0.isNumber }
+        var projectName = parts.map(String.init).joined(separator: "_")
+
+        if projectName.isEmpty {
+            projectName = "wendy_cpp_app"
+        }
+
+        if let firstCharacter = projectName.first, firstCharacter.isNumber {
+            projectName = "app_\(projectName)"
+        }
+
+        return projectName
+    }
+
+    private func defaultProfiles(for language: ProjectLanguage) -> [AppConfig.Profile] {
+        let localRunCommand: String
+        switch language {
+        case .swift:
+            localRunCommand = "swift run"
+        case .python:
+            localRunCommand = "uv run --with-requirements requirements.txt app.py"
+        case .rust:
+            localRunCommand = "cargo run"
+        case .cpp:
+            localRunCommand = "cmake -S . -B build && cmake --build build && ./build/wendy_app"
+        }
+
+        return [
+            .init(
+                id: "local-dev",
+                when: .init(target: .local),
+                run: .init(type: .host, command: localRunCommand)
+            ),
+            .init(
+                id: "device-default",
+                when: .init(target: .device),
+                build: .init(type: .docker),
+                run: .init(type: .container)
+            ),
+        ]
+    }
 }
 
 enum ProjectLanguage: String, ExpressibleByArgument, CaseIterable {
     case swift
     case python
+    case rust
+    case cpp
 }

@@ -351,12 +351,8 @@ struct AddCommand: ModifyProjectCommand {
             }
         }
 
-        // Add to configuration
-        config = AppConfig(
-            appId: config.appId,
-            version: config.version,
-            entitlements: config.entitlements + [newEntitlement]
-        )
+        // Add to configuration while preserving all other top-level fields.
+        config.entitlements.append(newEntitlement)
 
         // Save configuration
         try saveConfig(config, to: wendyJsonPath)
@@ -487,12 +483,8 @@ struct RemoveCommand: ModifyProjectCommand {
             removedEntitlementType = config.entitlements[index].type
         }
 
-        // Remove entitlement
-        config = AppConfig(
-            appId: config.appId,
-            version: config.version,
-            entitlements: config.entitlements.filter { $0.type != removedEntitlementType }
-        )
+        // Remove entitlement while preserving all other top-level fields.
+        config.entitlements.removeAll { $0.type == removedEntitlementType }
 
         // Save configuration
         try saveConfig(config, to: wendyJsonPath)

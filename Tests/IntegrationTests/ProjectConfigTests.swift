@@ -18,15 +18,20 @@ struct ProjectConfigTests {
         try json.write(to: url.appending(path: "wendy.json"))
     }
 
-    func createEmptyProject() async throws -> URL {
+    func initializeProject(language: ProjectLanguage) async throws -> URL {
         let projectDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
 
         var initCommand = InitCommand()
         initCommand.projectPath = projectDir.path()
-        initCommand.language = .swift
+        initCommand.language = language
 
         try await initCommand.run()
+        return projectDir
+    }
+
+    func createEmptyProject() async throws -> URL {
+        let projectDir = try await initializeProject(language: .swift)
 
         var config = try loadConfig(at: projectDir)
         config.entitlements = []
@@ -35,15 +40,7 @@ struct ProjectConfigTests {
     }
 
     func createProject() async throws -> URL {
-        let projectDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
-
-        var initCommand = InitCommand()
-        initCommand.projectPath = projectDir.path()
-        initCommand.language = .swift
-
-        try await initCommand.run()
-
+        let projectDir = try await initializeProject(language: .swift)
         let config = try loadConfig(at: projectDir)
 
         #expect(config.entitlements.contains(.audio))
@@ -98,6 +95,10 @@ struct ProjectConfigTests {
     ) async throws {
         var command = AddCommand()
         command.project = projectDir.path()
+        // Initialize optional wrappers explicitly for direct command invocation in tests.
+        command.mode = nil
+        command.name = nil
+        command.path = nil
 
         switch entitlement {
         case .persist(let persistenceEntitlements):
@@ -127,6 +128,65 @@ struct ProjectConfigTests {
 
     @Test func canCreateProject() async throws {
         _ = try await createEmptyProject()
+    }
+
+    @Test
+    func rustProjectInitCreatesLocalProfile() async throws {
+        let projectDir = try await initializeProject(language: .rust)
+        let config = try loadConfig(at: projectDir)
+        let localProfile = try #require(config.profile(withID: "local-dev"))
+
+        #expect(config.language == "rust")
+        #expect(config.defaultProfile == "local-dev")
+        #expect(localProfile.when.target == .local)
+        #expect(localProfile.run?.command == "cargo run")
+        #expect(
+            FileManager.default.fileExists(atPath: projectDir.appending(path: "Cargo.toml").path())
+        )
+        #expect(
+            FileManager.default.fileExists(atPath: projectDir.appending(path: "src/main.rs").path())
+        )
+    }
+
+    @Test
+    func cppProjectInitCreatesLocalProfile() async throws {
+        let projectDir = try await initializeProject(language: .cpp)
+        let config = try loadConfig(at: projectDir)
+        let localProfile = try #require(config.profile(withID: "local-dev"))
+
+        #expect(config.language == "cpp")
+        #expect(config.defaultProfile == "local-dev")
+        #expect(localProfile.when.target == .local)
+        #expect(
+            localProfile.run?.command
+                == "cmake -S . -B build && cmake --build build && ./build/wendy_app"
+        )
+        #expect(
+            FileManager.default.fileExists(
+                atPath: projectDir.appending(path: "CMakeLists.txt").path()
+            )
+        )
+        #expect(
+            FileManager.default.fileExists(atPath: projectDir.appending(path: "main.cpp").path())
+        )
+    }
+
+    @Test
+    func addAndRemoveEntitlementPreserveTopLevelConfigFields() async throws {
+        let projectDir = try await initializeProject(language: .python)
+        let baseline = try loadConfig(at: projectDir)
+
+        try await addEntitlement(.gpu(GPUEntitlements()), to: projectDir)
+        try await removeEntitlement(.gpu(GPUEntitlements()), from: projectDir)
+
+        let updated = try loadConfig(at: projectDir)
+
+        #expect(updated.appId == baseline.appId)
+        #expect(updated.version == baseline.version)
+        #expect(updated.language == baseline.language)
+        #expect(updated.defaultProfile == baseline.defaultProfile)
+        #expect(updated.profiles == baseline.profiles)
+        #expect(updated.python == baseline.python)
     }
 
     @Test(

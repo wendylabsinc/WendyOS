@@ -320,7 +320,11 @@ public struct DockerCLI: Sendable {
         directory: String = ".",
         registryHostname: String = "host.docker.internal",
         registryPort: Int = 5000,
-        compression: ImageCompressionMode = .zstd
+        compression: ImageCompressionMode = .zstd,
+        platform: String = "linux/arm64",
+        dockerfile: String? = nil,
+        buildArgs: [String: String] = [:],
+        environment: [String: String]? = nil
     ) async throws {
         #if os(Windows) && (arch(x86_64) || arch(i386))
             try await fixX86_64QEMU()
@@ -340,20 +344,38 @@ public struct DockerCLI: Sendable {
                 outputFlag = "type=image,push=true,compression=uncompressed,oci-mediatypes=true"
             }
 
-            let arguments = [
+            var arguments = [
                 "buildx", "build",
                 "--builder", self.defaultBuilderName,
-                "--platform", "linux/arm64",
+                "--platform", platform,
                 "--provenance=false",
                 "--sbom=false",
                 "--output", outputFlag,
+            ]
+            if let dockerfile, !dockerfile.isEmpty {
+                arguments.append(contentsOf: ["-f", dockerfile])
+            }
+            for key in buildArgs.keys.sorted() {
+                guard let value = buildArgs[key] else { continue }
+                arguments.append(contentsOf: ["--build-arg", "\(key)=\(value)"])
+            }
+            arguments.append(contentsOf: [
                 "-t", "\(registryHostname):\(registryPort)/\(name):latest",
                 directory,
-            ]
+            ])
 
             _ = try await Subprocess.run(
                 .name(self.command),
                 arguments: Subprocess.Arguments(arguments),
+                environment: environment == nil
+                    ? .inherit
+                    : .inherit.updating(
+                        Dictionary(
+                            uniqueKeysWithValues: (environment ?? [:]).map { key, value in
+                                (Subprocess.Environment.Key(stringLiteral: key), Optional(value))
+                            }
+                        )
+                    ),
                 output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
                 error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
             )
@@ -626,6 +648,7 @@ public struct DockerCLI: Sendable {
 
         let stderr =
             result.standardError?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        let stderrLower = stderr.lowercased()
 
         guard result.terminationStatus.isSuccess else {
             let exitCode: Int
@@ -635,13 +658,16 @@ public struct DockerCLI: Sendable {
             }
 
             // Parse stderr to determine the specific error type
-            if stderr.contains("No such object") || stderr.contains("not found") {
+            if stderrLower.contains("no such object")
+                || stderrLower.contains("no such container")
+                || stderrLower.contains("not found")
+            {
                 logger.debug(
                     "Container not found",
                     metadata: ["container": "\(containerName)"]
                 )
                 throw DockerError.containerNotFound(containerName: containerName)
-            } else if stderr.contains("permission denied") || stderr.contains("Permission denied") {
+            } else if stderrLower.contains("permission denied") {
                 logger.warning(
                     "Permission denied accessing Docker",
                     metadata: [
@@ -652,8 +678,8 @@ public struct DockerCLI: Sendable {
                 throw DockerError.permissionDenied(
                     operation: "inspect container '\(containerName)'"
                 )
-            } else if stderr.contains("Cannot connect to the Docker daemon")
-                || stderr.contains("Is the docker daemon running")
+            } else if stderrLower.contains("cannot connect to the docker daemon")
+                || stderrLower.contains("is the docker daemon running")
             {
                 logger.error(
                     "Docker daemon unavailable",
@@ -719,6 +745,7 @@ public struct DockerCLI: Sendable {
 
         let stderr =
             result.standardError?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        let stderrLower = stderr.lowercased()
 
         guard result.terminationStatus.isSuccess else {
             let exitCode: Int
@@ -728,7 +755,10 @@ public struct DockerCLI: Sendable {
             }
 
             // Parse stderr to determine the specific error type
-            if stderr.contains("No such container") || stderr.contains("not found") {
+            if stderrLower.contains("no such object")
+                || stderrLower.contains("no such container")
+                || stderrLower.contains("not found")
+            {
                 logger.debug(
                     "Container not found for file read",
                     metadata: [
@@ -737,7 +767,7 @@ public struct DockerCLI: Sendable {
                     ]
                 )
                 throw DockerError.containerNotFound(containerName: containerName)
-            } else if stderr.contains("is not running") {
+            } else if stderrLower.contains("is not running") {
                 logger.debug(
                     "Container not running for file read",
                     metadata: [
@@ -746,7 +776,7 @@ public struct DockerCLI: Sendable {
                     ]
                 )
                 throw DockerError.containerNotRunning(containerName: containerName)
-            } else if stderr.contains("No such file or directory") {
+            } else if stderrLower.contains("no such file or directory") {
                 logger.debug(
                     "File not found in container",
                     metadata: [
@@ -755,7 +785,7 @@ public struct DockerCLI: Sendable {
                     ]
                 )
                 throw DockerError.fileNotFound(containerName: containerName, filePath: filePath)
-            } else if stderr.contains("permission denied") || stderr.contains("Permission denied") {
+            } else if stderrLower.contains("permission denied") {
                 logger.warning(
                     "Permission denied reading file from container",
                     metadata: [
@@ -767,8 +797,8 @@ public struct DockerCLI: Sendable {
                 throw DockerError.permissionDenied(
                     operation: "read file '\(filePath)' from container '\(containerName)'"
                 )
-            } else if stderr.contains("Cannot connect to the Docker daemon")
-                || stderr.contains("Is the docker daemon running")
+            } else if stderrLower.contains("cannot connect to the docker daemon")
+                || stderrLower.contains("is the docker daemon running")
             {
                 logger.error(
                     "Docker daemon unavailable",

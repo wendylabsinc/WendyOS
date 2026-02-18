@@ -142,7 +142,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                                 architecture: "arm64",
                                 os: "linux",
                                 config: ImageConfigurationConfig(
-                                    Cmd: request.cmd.split(separator: " ").map(String.init),
+                                    Cmd: Self.parseContainerCommand(request.cmd),
                                     StopSignal: "SIGTERM"
                                 ),
                                 rootfs: ImageConfigurationRootFS(
@@ -407,7 +407,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         args = []
                     }
                 } else {
-                    args = request.cmd.split(separator: " ").map(String.init)
+                    args = Self.parseContainerCommand(request.cmd)
                 }
 
                 // Set up workingDir
@@ -751,6 +751,18 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
             span.setStatus(.init(code: .ok))
             return ServerResponse(message: .init())
         }
+    }
+
+    static func parseContainerCommand(_ raw: String) -> [String] {
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        if let data = raw.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode([String].self, from: data)
+        {
+            return decoded
+        }
+        return raw.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
 }

@@ -2,6 +2,12 @@ import NIOCore
 import NIOPosix
 import Subprocess
 
+#if canImport(System)
+    import System
+#else
+    import SystemPackage
+#endif
+
 #if canImport(Darwin)
     import Darwin
 #elseif canImport(Glibc)
@@ -14,13 +20,27 @@ import Subprocess
 public func run(
     executable: Executable,
     arguments: Arguments,
+    workingDirectory: FilePath? = nil,
+    environment: [String: String]? = nil,
     onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
 ) async throws {
+    let subprocessEnvironment: Subprocess.Environment = {
+        guard let environment else { return .inherit }
+        let updates = Dictionary(
+            uniqueKeysWithValues: environment.map { key, value in
+                (Subprocess.Environment.Key(stringLiteral: key), Optional(value))
+            }
+        )
+        return Subprocess.Environment.inherit.updating(updates)
+    }()
+
     #if os(Windows)
         // Windows doesn't support PTY, fall back to regular pipes (block buffered)
         let result = try await Subprocess.run(
             executable,
             arguments: arguments,
+            environment: subprocessEnvironment,
+            workingDirectory: workingDirectory
         ) { _, stdin, stdout, stderr in
             try await stdin.finish()
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -97,6 +117,8 @@ public func run(
                 let result = try await Subprocess.run(
                     executable,
                     arguments: arguments,
+                    environment: subprocessEnvironment,
+                    workingDirectory: workingDirectory,
                     output: .fileDescriptor(
                         .init(rawValue: slaveFD),
                         closeAfterSpawningProcess: true
