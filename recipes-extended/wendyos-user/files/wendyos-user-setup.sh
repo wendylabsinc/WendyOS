@@ -47,14 +47,7 @@ if [ ! -d "$WENDY_HOME" ]; then
 # WendyOS User Environment
 # System defaults are in /etc/profile.d/ and update via OTA
 # Add your personal customizations below
-
-# Source global profile if available
-if [ -f /etc/profile ]; then
-    . /etc/profile
-fi
-
-# User's personal customizations below this line
-# These will persist across OTA updates
+# (Login shells already source /etc/profile; no need to re-source here)
 
 EOF
     chmod 0644 "$WENDY_HOME/.bashrc"

@@ -32,9 +32,10 @@ EOF
     # Configure PAM to run update-motd on login (via profile.d)
     install -d ${D}${sysconfdir}/profile.d
     cat > ${D}${sysconfdir}/profile.d/motd.sh << 'EOF'
-# Display dynamic MOTD on login
-if [ -x /usr/bin/update-motd ] && [ -t 0 ]; then
+# Display dynamic MOTD on login (guard against double-sourcing)
+if [ -x /usr/bin/update-motd ] && [ -t 0 ] && [ -z "$_WENDYOS_MOTD_SHOWN" ]; then
     /usr/bin/update-motd
+    export _WENDYOS_MOTD_SHOWN=1
 fi
 EOF
     chmod 0644 ${D}${sysconfdir}/profile.d/motd.sh
