@@ -22,12 +22,16 @@ struct ProjectConfigTests {
         let projectDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
 
+        try await initializeProject(language: language, at: projectDir)
+        return projectDir
+    }
+
+    func initializeProject(language: ProjectLanguage, at projectDir: URL) async throws {
         var initCommand = InitCommand()
         initCommand.projectPath = projectDir.path()
         initCommand.language = language
 
         try await initCommand.run()
-        return projectDir
     }
 
     func createEmptyProject() async throws -> URL {
@@ -169,6 +173,20 @@ struct ProjectConfigTests {
         #expect(
             FileManager.default.fileExists(atPath: projectDir.appending(path: "main.cpp").path())
         )
+    }
+
+    @Test
+    func cppProjectInitSanitizesReservedProjectName() async throws {
+        let rootDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let projectDir = rootDir.appending(path: "class")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try await initializeProject(language: .cpp, at: projectDir)
+
+        let cmakeContents = try String(
+            contentsOf: projectDir.appending(path: "CMakeLists.txt"),
+            encoding: .utf8
+        )
+        #expect(cmakeContents.contains("project(app_class VERSION 0.1.0 LANGUAGES CXX)"))
     }
 
     @Test

@@ -224,6 +224,32 @@ struct RunProfilesTests {
         }
     }
 
+    @Test("Profile decoding rejects duplicate profile IDs")
+    func profileRejectsDuplicateIDs() throws {
+        let json = """
+            {
+              "appId": "com.example.test",
+              "version": "1.0.0",
+              "profiles": [
+                {
+                  "id": "local-dev",
+                  "when": { "target": "local" },
+                  "run": { "type": "host", "command": "echo one" }
+                },
+                {
+                  "id": "local-dev",
+                  "when": { "target": "local", "os": "linux" },
+                  "run": { "type": "host", "command": "echo two" }
+                }
+              ]
+            }
+            """
+
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        }
+    }
+
     @Test("Profile decoding supports build env and lifecycle hooks")
     func profileDecodesBuildEnvAndHooks() throws {
         let json = """

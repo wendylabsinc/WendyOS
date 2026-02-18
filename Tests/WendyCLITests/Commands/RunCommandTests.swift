@@ -218,4 +218,52 @@ struct RunCommandTests {
             }
         }
     }
+
+    @Suite("Shell Helpers")
+    struct ShellHelpersTests {
+        @Test("shellInvocationArguments uses fish-compatible flags")
+        func shellInvocationArgumentsUsesFishFlags() {
+            let args = RunCommand.shellInvocationArguments(
+                shell: "/opt/homebrew/bin/fish",
+                command: "echo hi"
+            )
+            #expect(args == ["-c", "echo hi"])
+        }
+
+        @Test("shellInvocationArguments uses platform-specific shell variants")
+        func shellInvocationArgumentsSupportsKnownShells() {
+            #expect(
+                RunCommand.shellInvocationArguments(shell: "pwsh", command: "echo hi") == [
+                    "-Command", "echo hi",
+                ]
+            )
+            #expect(
+                RunCommand.shellInvocationArguments(shell: "cmd.exe", command: "echo hi") == [
+                    "/C", "echo hi",
+                ]
+            )
+            #expect(
+                RunCommand.shellInvocationArguments(shell: "/bin/zsh", command: "echo hi") == [
+                    "-lc", "echo hi",
+                ]
+            )
+        }
+
+        @Test("shellEscape handles empty input and quoting safely")
+        func shellEscapeHandlesEmptyAndQuotedValues() {
+            #if os(Windows)
+                #expect(RunCommand.shellEscape("", shell: "cmd.exe") == "\"\"")
+                #expect(
+                    RunCommand.shellEscape("A&B", shell: "cmd.exe") == "\"A^&B\""
+                )
+                #expect(
+                    RunCommand.shellEscape("it's", shell: "pwsh") == "'it''s'"
+                )
+            #else
+                #expect(RunCommand.shellEscape("", shell: "/bin/zsh") == "''")
+                #expect(RunCommand.shellEscape("hello world", shell: "/bin/zsh") == "'hello world'")
+                #expect(RunCommand.shellEscape("it's", shell: "/bin/zsh") == "'it'\\''s'")
+            #endif
+        }
+    }
 }

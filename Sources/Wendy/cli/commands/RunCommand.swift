@@ -886,8 +886,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     ) throws -> HostExecutionPlan {
         if let command, !command.isEmpty {
             let shell = shell ?? defaultShellExecutableName()
-            let commandWithArgs = appendArguments(command: command, args: args)
-            let shellArgs = shellInvocationArguments(shell: shell, command: commandWithArgs)
+            let commandWithArgs = appendArguments(command: command, args: args, shell: shell)
+            let shellArgs = Self.shellInvocationArguments(shell: shell, command: commandWithArgs)
             return HostExecutionPlan(
                 executable: .name(shell),
                 arguments: Arguments(shellArgs),
@@ -1321,7 +1321,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             merged[key] = value
         }
 
-        if profile.otel?.enabled ?? true {
+        let otelEnabled = profile.otel?.enabled ?? true
+        if otelEnabled {
             if merged["OTEL_SERVICE_NAME"] == nil {
                 merged["OTEL_SERVICE_NAME"] = profile.otel?.serviceName ?? appConfig.appId
             }
@@ -1353,32 +1354,46 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         return FilePath(cwd)
     }
 
-    private func appendArguments(command: String, args: [String]?) -> String {
+    private func appendArguments(command: String, args: [String]?, shell: String) -> String {
         guard let args, !args.isEmpty else {
             return command
         }
-        return command + " " + args.map(shellEscape).joined(separator: " ")
+        return command + " "
+            + args.map { Self.shellEscape($0, shell: shell) }.joined(separator: " ")
     }
 
-    private func shellEscape(_ argument: String) -> String {
+    static func shellEscape(_ argument: String, shell: String? = nil) -> String {
         #if os(Windows)
-            if argument.contains(" ") {
-                return "\"\(argument.replacingOccurrences(of: "\"", with: "\\\""))\""
+            let lower = (shell ?? "").lowercased()
+            if lower.contains("powershell") || lower == "pwsh" || lower == "pwsh.exe" {
+                return "'\(argument.replacingOccurrences(of: "'", with: "''"))'"
             }
-            return argument
+            let cmdSpecials = CharacterSet(charactersIn: "^&|<>()%!\"")
+            let requiresQuotes =
+                argument.isEmpty
+                || argument.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+                || argument.rangeOfCharacter(from: cmdSpecials) != nil
+            var escaped = argument
+            for special in ["^", "&", "|", "<", ">", "(", ")", "%", "!", "\""] {
+                escaped = escaped.replacingOccurrences(of: special, with: "^\(special)")
+            }
+            return requiresQuotes ? "\"\(escaped)\"" : escaped
         #else
             let escaped = argument.replacingOccurrences(of: "'", with: "'\\''")
             return "'\(escaped)'"
         #endif
     }
 
-    private func shellInvocationArguments(shell: String, command: String) -> [String] {
+    static func shellInvocationArguments(shell: String, command: String) -> [String] {
         let lower = shell.lowercased()
         if lower.contains("powershell") || lower == "pwsh" {
             return ["-Command", command]
         }
         if lower == "cmd" || lower == "cmd.exe" {
             return ["/C", command]
+        }
+        if lower.contains("fish") {
+            return ["-c", command]
         }
         return ["-lc", command]
     }

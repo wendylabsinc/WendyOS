@@ -119,6 +119,27 @@ public struct AppConfig: Codable, Sendable {
             try container.decodeIfPresent([Entitlement].self, forKey: .entitlements) ?? []
         self.python = try container.decodeIfPresent(PythonConfig.self, forKey: .python)
         self.profiles = try container.decodeIfPresent([Profile].self, forKey: .profiles)
+
+        if let profiles, !profiles.isEmpty {
+            var seen = Set<String>()
+            var duplicates = Set<String>()
+
+            for profile in profiles {
+                if !seen.insert(profile.id).inserted {
+                    duplicates.insert(profile.id)
+                }
+            }
+
+            if !duplicates.isEmpty {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .profiles,
+                    in: container,
+                    debugDescription:
+                        "Duplicate profile id(s): \(duplicates.sorted().joined(separator: ", ")). "
+                        + "Profile ids must be unique."
+                )
+            }
+        }
     }
 
     /// A conditional build/run strategy selected by destination and environment.
@@ -136,6 +157,9 @@ public struct AppConfig: Codable, Sendable {
         /// Optional run plan for this profile.
         public var run: Run?
         /// Optional entitlement overrides applied for this profile.
+        ///
+        /// - Note: When set, this value replaces top-level `entitlements` for
+        ///   this profile. It does not merge with them.
         public var entitlements: [Entitlement]?
         /// Optional prerequisite labels for tooling/UX.
         public var requires: [String]?
@@ -162,7 +186,7 @@ public struct AppConfig: Codable, Sendable {
 
         /// Creates a profile.
         ///
-        /// - Note: At least one of `build` or `run` should be provided.
+        /// - Note: At least one of `build` or `run` must be provided.
         public init(
             id: String,
             when: When,
@@ -175,6 +199,10 @@ public struct AppConfig: Codable, Sendable {
             otel: OTel? = nil,
             hooks: Hooks? = nil
         ) {
+            precondition(
+                build != nil || run != nil,
+                "Profile '\(id)' must define at least one of 'build' or 'run'."
+            )
             self.id = id
             self.when = when
             self.priority = priority
@@ -207,11 +235,12 @@ public struct AppConfig: Codable, Sendable {
             self.hooks = try container.decodeIfPresent(Hooks.self, forKey: .hooks)
 
             if build == nil && run == nil {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .run,
-                    in: container,
-                    debugDescription:
-                        "Profile '\(id)' must define at least one of 'build' or 'run'."
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: container.codingPath,
+                        debugDescription:
+                            "Profile '\(id)' must define at least one of 'build' or 'run'."
+                    )
                 )
             }
         }
@@ -512,6 +541,8 @@ public struct AppConfig: Codable, Sendable {
         /// OpenTelemetry settings applied for this profile.
         public struct OTel: Codable, Sendable, Hashable {
             /// Enables or disables OpenTelemetry wiring.
+            ///
+            /// When omitted, this defaults to `true` to preserve existing behavior.
             public var enabled: Bool?
             /// Collector endpoint URL.
             public var endpoint: String?

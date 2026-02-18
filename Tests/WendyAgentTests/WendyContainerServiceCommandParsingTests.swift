@@ -22,6 +22,22 @@ struct WendyContainerServiceCommandParsingTests {
         #expect(parsed == ["python", "app.py", "--port", "8000"])
     }
 
+    @Test("Parses quoted shell-style commands in fallback mode")
+    func parsesQuotedShellStyleCommands() {
+        let parsed = WendyContainerService.parseContainerCommand(
+            "python app.py --name \"hello world\" --path '/tmp/my dir'"
+        )
+
+        #expect(parsed == ["python", "app.py", "--name", "hello world", "--path", "/tmp/my dir"])
+    }
+
+    @Test("Handles unmatched quotes gracefully in fallback mode")
+    func handlesUnmatchedQuotesGracefully() {
+        let parsed = WendyContainerService.parseContainerCommand("python app.py --name \"hello")
+
+        #expect(parsed == ["python", "app.py", "--name", "hello"])
+    }
+
     @Test("Returns empty command for blank input")
     func returnsEmptyForBlankInput() {
         #expect(WendyContainerService.parseContainerCommand("").isEmpty)

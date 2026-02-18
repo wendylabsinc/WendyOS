@@ -533,6 +533,17 @@ struct InitCommand: AsyncParsableCommand {
         return projectName.isEmpty ? "wendy-app" : projectName
     }
 
+    private static let disallowedCppProjectNames: Set<String> = [
+        "alignas", "alignof", "and", "asm", "auto", "bool", "break", "case", "catch", "char",
+        "class", "concept", "const", "constexpr", "continue", "decltype", "default", "delete",
+        "do", "double", "else", "enum", "explicit", "export", "extern", "false", "float", "for",
+        "friend", "goto", "if", "inline", "int", "long", "main", "mutable", "namespace", "new",
+        "noexcept", "nullptr", "operator", "private", "protected", "public", "register",
+        "requires", "return", "short", "signed", "sizeof", "static", "std", "struct", "switch",
+        "template", "this", "throw", "true", "try", "typedef", "typename", "union", "unsigned",
+        "using", "virtual", "void", "volatile", "while",
+    ]
+
     private func sanitizedRustPackageName() -> String {
         let parts = derivedProjectName.lowercased().split { !$0.isLetter && !$0.isNumber }
         var packageName = parts.map(String.init).joined(separator: "-")
@@ -557,6 +568,10 @@ struct InitCommand: AsyncParsableCommand {
         }
 
         if let firstCharacter = projectName.first, firstCharacter.isNumber {
+            projectName = "app_\(projectName)"
+        }
+
+        if Self.disallowedCppProjectNames.contains(projectName.lowercased()) {
             projectName = "app_\(projectName)"
         }
 

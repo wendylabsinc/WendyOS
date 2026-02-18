@@ -762,7 +762,58 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
         {
             return decoded
         }
-        return raw.split(whereSeparator: \.isWhitespace).map(String.init)
+        return tokenizeShellStyleCommand(raw)
+    }
+
+    private static func tokenizeShellStyleCommand(_ raw: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inSingleQuote = false
+        var inDoubleQuote = false
+        var escaping = false
+
+        for char in raw {
+            if escaping {
+                current.append(char)
+                escaping = false
+                continue
+            }
+
+            if char == "\\", !inSingleQuote {
+                escaping = true
+                continue
+            }
+
+            if char == "\"", !inSingleQuote {
+                inDoubleQuote.toggle()
+                continue
+            }
+
+            if char == "'", !inDoubleQuote {
+                inSingleQuote.toggle()
+                continue
+            }
+
+            if char.isWhitespace, !inSingleQuote, !inDoubleQuote {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current.removeAll(keepingCapacity: true)
+                }
+                continue
+            }
+
+            current.append(char)
+        }
+
+        if escaping {
+            current.append("\\")
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+
+        return tokens
     }
 
 }
