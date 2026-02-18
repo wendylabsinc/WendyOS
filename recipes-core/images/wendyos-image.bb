@@ -11,9 +11,8 @@ DISTRO_FEATURES:append = " systemd"
 VIRTUAL-RUNTIME_init_manager = "systemd"
 
 # Image format types for Tegra platforms
-# Use package-specific override to avoid affecting other images
-# Note: dataimg removed for NVMe-only platforms (Thor) - ext4 + mender provide complete flash images
-IMAGE_FSTYPES = "tegraflash.tar mender ext4"
+# dataimg creates the Mender data partition filesystem (mounted at /data)
+IMAGE_FSTYPES = "tegraflash.tar mender ext4 dataimg"
 
 # Release-style naming for this image:
 # - IMAGE_VERSION_SUFFIX is a common pattern to carry a release tag.
@@ -39,6 +38,7 @@ IMAGE_FEATURES += " \
     ssh-server-openssh \
     empty-root-password \
     allow-root-login \
+    allow-empty-password \
     package-management \
     "
 

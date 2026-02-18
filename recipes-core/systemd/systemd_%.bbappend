@@ -8,3 +8,7 @@
 
 PACKAGECONFIG:remove = "polkit"
 
+# Note: systemd-networkd-wait-online.service is masked via
+# ROOTFS_POSTPROCESS_COMMAND in wendyos-image.bbappend (must run after
+# pkg_postinst scriptlets to avoid "unit is masked" errors)
+

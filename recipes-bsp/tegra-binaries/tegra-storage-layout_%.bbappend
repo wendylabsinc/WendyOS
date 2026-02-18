@@ -69,14 +69,14 @@ do_install:append() {
         "${external_flash}"
 
     # 2. Use NVIDIA's official "permanet_user_storage" partition (T264/Thor only)
-    #    - Remove filename tag (no pre-flashed content needed)
+    #    - Set filename to DATAFILE placeholder (replaced by tegra-flash-helper.sh at flash time)
     #    - Rename to "mender_data" for clarity
     #    - Increase size from 400MB to 512MB
     #    - Adjust allocation_attribute for proper expansion
     if [ "${MACHINE}" = "jetson-agx-thor-devkit-nvme-wendyos" ]; then
-        # Remove filename tag from permanet_user_storage
+        # Replace filename with DATAFILE placeholder for flash helper substitution
         sed -i '/<partition name="permanet_user_storage"/,/<\/partition>/ {
-            /<filename>/d
+            s|<filename>.*</filename>|<filename> DATAFILE </filename>|
         }' "${tmpfile}"
 
         # Rename to mender_data
