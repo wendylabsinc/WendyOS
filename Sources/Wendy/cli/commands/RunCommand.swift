@@ -1016,7 +1016,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
         let targetKind: String
         let targetOS: String
         let targetArch: String
-        let deviceHost: String
+        let deviceHostTemplate: String
+        let deviceHostEnvironment: String
         let devicePort: String
         let devicePlatform: String
 
@@ -1025,14 +1026,16 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             targetKind = "local"
             targetOS = hostOS
             targetArch = hostArch
-            deviceHost = ""
+            deviceHostTemplate = ""
+            deviceHostEnvironment = ""
             devicePort = ""
             devicePlatform = ""
         case .device(let endpoint):
             targetKind = "device"
             targetOS = "linux"
             targetArch = inferDeviceArchitecture(fromHostname: endpoint.host)
-            deviceHost = endpoint.host
+            deviceHostTemplate = Self.sanitizeTemplateDeviceHost(endpoint.host)
+            deviceHostEnvironment = endpoint.host
             devicePort = String(endpoint.port)
             devicePlatform = inferDevicePlatform(fromHostname: endpoint.host) ?? "generic-linux"
         }
@@ -1046,7 +1049,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             "target.os": targetOS,
             "target.arch": targetArch,
             "target.platform": targetPlatform,
-            "device.host": deviceHost,
+            "device.host": deviceHostTemplate,
             "device.port": devicePort,
             "device.platform": devicePlatform,
         ]
@@ -1059,12 +1062,40 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             "WENDY_TARGET_OS": targetOS,
             "WENDY_TARGET_ARCH": targetArch,
             "WENDY_TARGET_PLATFORM": targetPlatform,
-            "WENDY_DEVICE_HOST": deviceHost,
+            "WENDY_DEVICE_HOST": deviceHostEnvironment,
             "WENDY_DEVICE_PORT": devicePort,
             "WENDY_DEVICE_PLATFORM": devicePlatform,
         ]
 
         return ProfileRuntimeContext(values: values, environment: environment)
+    }
+
+    static func sanitizeTemplateDeviceHost(_ rawHost: String) -> String {
+        let trimmed = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+        )
+        var scalarView = String.UnicodeScalarView()
+        scalarView.reserveCapacity(trimmed.unicodeScalars.count)
+        var previousWasDash = false
+
+        for scalar in trimmed.unicodeScalars {
+            if allowed.contains(scalar) {
+                scalarView.append(scalar)
+                previousWasDash = scalar == "-"
+                continue
+            }
+
+            if !previousWasDash {
+                scalarView.append("-")
+                previousWasDash = true
+            }
+        }
+
+        let sanitized = String(scalarView).trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+        return sanitized.isEmpty ? "unknown-device" : sanitized
     }
 
     private func interpolateString(_ value: String, context: [String: String]) -> String {

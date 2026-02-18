@@ -265,5 +265,15 @@ struct RunCommandTests {
                 #expect(RunCommand.shellEscape("it's", shell: "/bin/zsh") == "'it'\\''s'")
             #endif
         }
+
+        @Test("sanitizeTemplateDeviceHost strips unsafe characters")
+        func sanitizeTemplateDeviceHostStripsUnsafeCharacters() {
+            #expect(
+                RunCommand.sanitizeTemplateDeviceHost("jetson.local; rm -rf /")
+                    == "jetson.local-rm-rf"
+            )
+            #expect(RunCommand.sanitizeTemplateDeviceHost("    ") == "")
+            #expect(RunCommand.sanitizeTemplateDeviceHost("!!!") == "unknown-device")
+        }
     }
 }

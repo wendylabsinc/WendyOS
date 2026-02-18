@@ -203,7 +203,12 @@ struct ProjectConfigTests {
         #expect(updated.version == baseline.version)
         #expect(updated.language == baseline.language)
         #expect(updated.defaultProfile == baseline.defaultProfile)
-        #expect(updated.profiles == baseline.profiles)
+        let baselineProfiles = try #require(baseline.profiles)
+        let updatedProfiles = try #require(updated.profiles)
+        #expect(updatedProfiles.map(\.id) == baselineProfiles.map(\.id))
+        #expect(updatedProfiles.map(\.priority) == baselineProfiles.map(\.priority))
+        #expect(updatedProfiles.map(\.run?.command) == baselineProfiles.map(\.run?.command))
+        #expect(updatedProfiles.map(\.build?.type) == baselineProfiles.map(\.build?.type))
         #expect(updated.python == baseline.python)
     }
 

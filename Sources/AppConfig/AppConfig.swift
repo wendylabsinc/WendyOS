@@ -471,12 +471,15 @@ public struct AppConfig: Codable, Sendable {
         /// - `{{host.os}}`, `{{host.arch}}`
         /// - `{{target.kind}}`, `{{target.os}}`, `{{target.arch}}`, `{{target.platform}}`
         /// - `{{device.host}}`, `{{device.port}}`, `{{device.platform}}`
+        ///   (`device.host` is sanitized to hostname-safe characters for template use)
         ///
         /// The same values are also available as environment variables:
         /// `WENDY_PROFILE_ID`, `WENDY_HOST_OS`, `WENDY_HOST_ARCH`,
         /// `WENDY_TARGET_KIND`, `WENDY_TARGET_OS`, `WENDY_TARGET_ARCH`,
         /// `WENDY_TARGET_PLATFORM`, `WENDY_DEVICE_HOST`, `WENDY_DEVICE_PORT`,
         /// `WENDY_DEVICE_PLATFORM`.
+        ///
+        /// `WENDY_DEVICE_HOST` preserves the raw discovered host value.
         public struct Hook: Codable, Sendable, Hashable {
             /// Optional display name shown in CLI output.
             public var name: String?
