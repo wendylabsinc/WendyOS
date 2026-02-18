@@ -299,6 +299,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     private func runWithProfiles(appConfig: AppConfig) async throws {
         let requestedProfile = try resolveRequestedProfile(appConfig: appConfig)
+        try validateRequestedProfileSelectionConflicts(requestedProfile)
         let destination = try await resolveRunDestination(requestedProfile: requestedProfile)
 
         let context = profileResolutionContext(for: destination)
@@ -332,6 +333,33 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 appConfig: appConfig,
                 endpoint: endpoint,
                 runtimeContext: runtimeContext
+            )
+        }
+    }
+
+    private func validateRequestedProfileSelectionConflicts(
+        _ requestedProfile: AppConfig.Profile?
+    ) throws {
+        guard let requestedProfile else { return }
+
+        if local, requestedProfile.when.target != .local {
+            throw CLIError.invalidArgument(
+                name: "profile",
+                value: requestedProfile.id,
+                reason:
+                    "--local cannot be used with profile '\(requestedProfile.id)' because it targets '\(requestedProfile.when.target.rawValue)'. Use a local profile or remove --local."
+            )
+        }
+
+        let hasExplicitDeviceEndpoint =
+            agentConnectionOptions.device != nil
+            || ProcessInfo.processInfo.environment["WENDY_AGENT"] != nil
+        if hasExplicitDeviceEndpoint, requestedProfile.when.target != .device {
+            throw CLIError.invalidArgument(
+                name: "profile",
+                value: requestedProfile.id,
+                reason:
+                    "--device/WENDY_AGENT cannot be used with profile '\(requestedProfile.id)' because it targets '\(requestedProfile.when.target.rawValue)'. Use a device profile or remove the explicit device endpoint."
             )
         }
     }

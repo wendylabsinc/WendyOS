@@ -186,7 +186,8 @@ public struct AppConfig: Codable, Sendable {
 
         /// Creates a profile.
         ///
-        /// - Note: At least one of `build` or `run` must be provided.
+        /// - Note: At least one of `build` or `run` should be provided.
+        ///   A debug assertion is raised when both are missing.
         public init(
             id: String,
             when: When,
@@ -199,10 +200,9 @@ public struct AppConfig: Codable, Sendable {
             otel: OTel? = nil,
             hooks: Hooks? = nil
         ) {
-            precondition(
-                build != nil || run != nil,
-                "Profile '\(id)' must define at least one of 'build' or 'run'."
-            )
+            if build == nil && run == nil {
+                assertionFailure("Profile '\(id)' must define at least one of 'build' or 'run'.")
+            }
             self.id = id
             self.when = when
             self.priority = priority
