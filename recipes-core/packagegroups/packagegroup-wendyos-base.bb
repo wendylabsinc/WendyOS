@@ -34,6 +34,7 @@ RDEPENDS:${PN} = " \
     systemd-mount-containerd \
     swapfile-setup \
     containerd-config \
+    wendyos-containerd-registry \
     tegra-tools-tegrastats \
     "
 

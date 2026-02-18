@@ -13,8 +13,6 @@ SRC_URI = "git://github.com/mihai-chiorean/containerd-registry.git;protocol=http
 # Use latest commit on main branch (update SRCREV as needed)
 SRCREV = "${AUTOREV}"
 
-S = "${UNPACKDIR}/git"
-
 # We don't build the Go binary - it's provided in the container image
 # This recipe only installs systemd services and management scripts
 inherit systemd
