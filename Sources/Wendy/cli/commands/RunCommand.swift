@@ -1083,6 +1083,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
         for scalar in trimmed.unicodeScalars {
             if allowed.contains(scalar) {
+                if scalar == "-", previousWasDash {
+                    continue
+                }
                 scalarView.append(scalar)
                 previousWasDash = scalar == "-"
                 continue
