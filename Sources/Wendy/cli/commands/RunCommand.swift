@@ -54,19 +54,6 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     /// Whether prompts should be auto-accepted (either explicit -y or JSON mode)
     var shouldAutoAccept: Bool { autoAccept || JSONMode.isEnabled }
 
-    // Docker restart policy flags (mutually exclusive). Only applies to docker runtime.
-    @Flag(name: .customLong("no-restart"), help: "Do not restart the container")
-    var noRestart: Bool = false
-
-    @Flag(name: .customLong("restart-unless-stopped"), help: "Restart unless stopped")
-    var restartUnlessStoppedFlag: Bool = false
-
-    @Option(
-        name: .customLong("restart-on-failure"),
-        help: "Restart on failure up to N times"
-    )
-    var restartOnFailureRetries: Int?
-
     @Option(
         name: .shortAndLong,
         help: "The executable to run. Required when a package has multiple executable targets."
@@ -97,7 +84,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     }
 
     // Deploy mode should always run detached
-    fileprivate var isDetached: Bool { detach || deploy }
+    var isDetached: Bool { detach || deploy }
 
     /// Validate that flags are not conflicting
     func validate() throws {

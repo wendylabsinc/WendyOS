@@ -393,12 +393,12 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                 $0.version = Version.current
                 if let osVersion {
                     $0.osVersion = osVersion
-                    $0.os = os
-                    if let arch {
-                        $0.cpuArchitecture = arch
-                    }
-                    $0.featureset = featueset.map { $0.rawValue }
                 }
+                $0.os = os
+                if let arch {
+                    $0.cpuArchitecture = arch
+                }
+                $0.featureset = featueset.map { $0.rawValue }
             }
         )
     }

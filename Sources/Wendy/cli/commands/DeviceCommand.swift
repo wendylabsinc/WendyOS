@@ -215,7 +215,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     ).path
                 }
 
-                let host = try await withAgentGRPCClientAndEndpoint(
+                let endpoint = try await withAgentGRPCClientAndEndpoint(
                     target,
                     title: "Which device do you want to update?"
                 ) { client, endpoint in
@@ -230,9 +230,12 @@ struct DeviceCommand: AsyncParsableCommand {
                 }
 
                 // Wait for the gRPC socket to come back up after the device restarts
+                guard case .grpc(let host, let port) = endpoint.remote else {
+                    throw CLIError.invalidEndpoint("Cannot wait for restart on non-gRPC endpoint")
+                }
                 try await waitForDeviceRestart(
                     host: host,
-                    port: 50051
+                    port: port
                 )
 
                 cliOutput.success("Agent updated successfully")

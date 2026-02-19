@@ -27,7 +27,7 @@ protocol DeviceProvider: Sendable {
     func build(
         for device: ExternalDevice,
         projectPath: URL,
-        executable: String,
+        product: String,
         debug: Bool
     ) async throws -> ProviderBuiltApp
 

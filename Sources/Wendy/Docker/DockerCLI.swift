@@ -811,7 +811,11 @@ public struct DockerCLI: Sendable {
         name: String,
         detach: Bool
     ) async throws {
-        let arguments = ["run", "--rm", name]
+        var arguments = ["run", "--rm"]
+        if detach {
+            arguments.append("-d")
+        }
+        arguments.append(name)
         _ = try await Subprocess.run(
             Subprocess.Executable.name(self.command),
             arguments: Subprocess.Arguments(arguments),

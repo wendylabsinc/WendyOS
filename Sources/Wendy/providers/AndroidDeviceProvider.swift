@@ -155,7 +155,7 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
     func build(
         for device: ExternalDevice,
         projectPath: URL,
-        executable: String,
+        product: String,
         debug: Bool
     ) async throws -> ProviderBuiltApp {
         guard let serial = device.connectionInfo["serial"] else {
@@ -167,7 +167,7 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
         }
 
         // Build APK using swift-package bundle-apk plugin
-        let apkFilename = "\(executable).apk"
+        let apkFilename = "\(product).apk"
         let result = try await Subprocess.run(
             .name("swiftly"),
             arguments: Arguments([
@@ -179,7 +179,7 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 "--disable-sandbox",
                 "--allow-writing-to-package-directory",
                 "bundle-apk",
-                "--product", executable,
+                "--product", product,
                 apkFilename,
             ]),
             workingDirectory: FilePath(projectPath.path),
@@ -211,12 +211,12 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
             serialNumber: serial
         )
 
-        cliOutput.success("Built \(executable) for Android")
+        cliOutput.success("Built \(product) for Android")
 
         return ProviderBuiltApp(
             provider: self,
             device: device,
-            appName: executable,
+            appName: product,
             context: context
         )
     }

@@ -55,21 +55,21 @@ struct LocalDeviceProvider: DeviceProvider, Sendable {
     func build(
         for device: ExternalDevice,
         projectPath: URL,
-        executable: String,
+        product: String,
         debug: Bool
     ) async throws -> ProviderBuiltApp {
         let swiftPM = SwiftPM()
-        try await swiftPM.build(.product(executable))
+        try await swiftPM.build(.product(product))
 
         let executablePath =
             projectPath
-            .appendingPathComponent(".build/debug/\(executable)")
+            .appendingPathComponent(".build/debug/\(product)")
             .path
 
         return ProviderBuiltApp(
             provider: self,
             device: device,
-            appName: executable,
+            appName: product,
             context: LocalBuildContext(executablePath: executablePath)
         )
     }

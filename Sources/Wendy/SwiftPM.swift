@@ -414,7 +414,7 @@ public struct SwiftPM: Sendable {
         if result.terminationStatus.isSuccess, let output = result.standardOutput {
             return try JSONDecoder().decode(
                 Serialization.Package.self,
-                from: ByteBuffer(string: output)
+                from: Data(output.utf8)
             )
         } else {
             let exitCode: Int

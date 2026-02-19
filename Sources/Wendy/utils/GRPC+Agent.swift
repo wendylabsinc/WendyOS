@@ -101,7 +101,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
     _ connectionOptions: TargetOptions,
     title: String,
     _ body:
-        @escaping @Sendable (GRPCClient<GRPCTransport>, String)
+        @escaping @Sendable (GRPCClient<GRPCTransport>, TargetOptions.Endpoint)
         async throws -> R
 ) async throws -> R {
     func fallback() async throws -> R {
@@ -112,7 +112,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
         ) {
         case .lan(let host, let port, _):
             return try await withAgentGRPCClient(host: host, port: port, title: title) { client in
-                return try await body(client, host)
+                return try await body(client, TargetOptions.Endpoint(host: host, port: port))
             }
         case .bluetooth, .external:
             throw CancellationError()
@@ -125,7 +125,7 @@ func withAgentGRPCClientAndEndpoint<R: Sendable>(
         do {
             return try await withAgentGRPCClient(host: host, port: port, title: title) { client in
                 connectionSucceeded.withLock { $0 = true }
-                return try await body(client, host)
+                return try await body(client, TargetOptions.Endpoint(host: host, port: port))
             }
         } catch {
             // Only retry with device selection if we never successfully connected

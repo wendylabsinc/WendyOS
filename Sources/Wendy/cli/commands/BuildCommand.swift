@@ -273,7 +273,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             let builtApp = try await provider.build(
                 for: device,
                 projectPath: url,
-                executable: name,
+                product: name,
                 debug: debug
             )
 
@@ -541,7 +541,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             let builtApp = try await provider.build(
                 for: device,
                 projectPath: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-                executable: target.name,
+                product: target.name,
                 debug: debug
             )
 

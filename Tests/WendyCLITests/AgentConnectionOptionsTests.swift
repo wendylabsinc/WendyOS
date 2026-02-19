@@ -45,7 +45,7 @@ struct AgentConnectionOptionsTests {
     @Test("Endpoint init with IPv4 address")
     func testEndpointInitWithIPv4() {
         let endpoint = TargetOptions.Endpoint(argument: "127.0.0.1:5000")
-        #expect(endpoint?.remote == .grpc(host: "127.0.0.1", port: 50051))
+        #expect(endpoint?.remote == .grpc(host: "127.0.0.1", port: 5000))
     }
 
     @Test("Endpoint init with IPv6 address")
