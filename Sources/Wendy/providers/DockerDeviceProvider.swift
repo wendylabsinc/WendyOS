@@ -57,7 +57,8 @@ struct DockerDeviceProvider: DeviceProvider, Sendable {
     // MARK: - Build
 
     func canBuild(projectPath: URL) async -> Bool {
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: projectPath.path)) ?? []
+        let contents =
+            (try? FileManager.default.contentsOfDirectory(atPath: projectPath.path)) ?? []
         return contents.contains { filename in
             let lowercased = filename.lowercased()
             return lowercased == "dockerfile"

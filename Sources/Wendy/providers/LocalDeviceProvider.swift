@@ -61,7 +61,8 @@ struct LocalDeviceProvider: DeviceProvider, Sendable {
         let swiftPM = SwiftPM()
         try await swiftPM.build(.product(executable))
 
-        let executablePath = projectPath
+        let executablePath =
+            projectPath
             .appendingPathComponent(".build/debug/\(executable)")
             .path
 

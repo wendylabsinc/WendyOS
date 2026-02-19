@@ -41,26 +41,33 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     )
     var executable: String?
 
+    @OptionGroup
+    var target: TargetOptions
+
     @Argument(parsing: .captureForPassthrough)
     var passthroughArgs: [String] = []
 
-    @OptionGroup
-    var target: TargetOptions
+    /// CLI args after `--`, with the separator itself filtered out.
+    var userPassthroughArgs: [String] {
+        passthroughArgs.filter { $0 != "--" }
+    }
 
     init() {}
 
     init(
         debug: Bool,
         autoAccept: Bool,
+        product: String?,
         executable: String?,
         passthroughArgs: [String] = [],
-        agentConnectionOptions: AgentConnectionOptions
+        target: TargetOptions
     ) {
         self.debug = debug
         self.autoAccept = autoAccept
+        self.product = product
         self.executable = executable
         self.passthroughArgs = passthroughArgs
-        self.agentConnectionOptions = agentConnectionOptions
+        self.target = target
     }
 
     var swiftVersion: String { "6.2.3" }
@@ -94,7 +101,6 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
 
     func withContainer(
         restartPolicy: RestartPolicy,
-        userArgs: [String] = [],
         perform:
             @Sendable @escaping (
                 BuiltAppContext
@@ -107,7 +113,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         for item in directory where isDockerfile(item) {
             try await withBuiltDockerfileApp(
                 restartPolicy: restartPolicy,
-                userArgs: userArgs,
+                userArgs: userPassthroughArgs,
                 perform: perform
             )
             return
@@ -116,7 +122,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         if isSwiftPackage {
             try await withBuiltSwiftApp(
                 restartPolicy: restartPolicy,
-                userArgs: userArgs,
+                userArgs: userPassthroughArgs,
                 perform: perform
             )
         } else if isPythonProject(directory: directory) {
@@ -133,7 +139,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             // Now build as a Dockerfile app
             try await withBuiltDockerfileApp(
                 restartPolicy: restartPolicy,
-                userArgs: userArgs,
+                userArgs: userPassthroughArgs,
                 perform: perform
             )
         } else {
@@ -377,13 +383,13 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Try to use cached data for executables and plugin status
         let allProducts: [Serialization.Product]
         let packageIdentity: String
-        var containerPluginVersion: String? = nil
+        var hasContainerPlugin: Bool
 
         if let cached = cache.getValidCache() {
             // Cache hit - use cached data
             allProducts = cached.products
             packageIdentity = cached.packageIdentity
-            containerPluginVersion = cached.containerPluginVersion
+            hasContainerPlugin = cached.hasContainerPlugin
         } else {
             // Cache miss - fetch fresh data
             let package = try await cliOutput.withProgress(
@@ -405,6 +411,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             allProducts = dump.products
             packageIdentity = package.identity
             let containerPlugin = package.findDependency(urlSuffix: "swift-container-plugin")
+            hasContainerPlugin = containerPlugin != nil
 
             // Write to cache
             if let hash = try? cache.computePackageSwiftHash() {
@@ -452,22 +459,26 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         // Use specified executable or handle multiple executable targets
         let target: Serialization.Product
         if let executableName = executable {
-            guard let product = allProducts.first(where: { product in
-                if product.name == executableName, case .executable = product.type {
-                    return true
-                }
-                return false
-            }) else {
+            guard
+                let product = allProducts.first(where: { product in
+                    if product.name == executableName, case .executable = product.type {
+                        return true
+                    }
+                    return false
+                })
+            else {
                 throw AppBuildHelpers.Error.invalidExecutableTarget(executableName)
             }
             target = product
         } else if let productName = self.product {
-            guard let product = allProducts.first(where: { product in
-                if product.name == productName {
-                    return true
-                }
-                return false
-            }) else {
+            guard
+                let product = allProducts.first(where: { product in
+                    if product.name == productName {
+                        return true
+                    }
+                    return false
+                })
+            else {
                 throw AppBuildHelpers.Error.invalidProduct(productName)
             }
             target = product
@@ -559,6 +570,51 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                         "/\(url.lastPathComponent)",
                     ]
                     var arguments: [String] = []
+                    var additionalEnv: [String] = []
+                    var hasBacktrace = false
+
+                    // Add swift-backtrace binaries for crash reporting
+                    findBacktrace: for binaryName in [
+                        "swift-backtrace-static-linux-arm64",
+                        "swift-backtrace-linux-arm64",
+                    ] {
+                        let destination = "/swift-backtrace"
+                        if let backtraceUrl = Bundle.module.url(
+                            forResource: binaryName,
+                            withExtension: nil
+                        ) {
+                            hasBacktrace = true
+                            resources.append(
+                                (source: backtraceUrl.path(), destination: destination)
+                            )
+                            break findBacktrace
+                        }
+                        let backtraceUrl = URL(fileURLWithPath: CommandLine.arguments[0])
+                            .deletingLastPathComponent()
+                            .appending(path: "wendy-agent_wendy.bundle")
+                            .appending(path: "Contents")
+                            .appending(path: "Resources")
+                            .appending(path: "Resources")
+                            .appending(component: binaryName)
+
+                        if FileManager.default.fileExists(atPath: backtraceUrl.path()) {
+                            hasBacktrace = true
+                            resources.append(
+                                (source: backtraceUrl.path(), destination: destination)
+                            )
+                            break findBacktrace
+                        }
+                    }
+
+                    if hasBacktrace {
+                        additionalEnv.append(
+                            "SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=/swift-backtrace"
+                        )
+                    } else {
+                        cliOutput.warning(
+                            "swift-backtrace binary not found. Crash backtraces will not be available."
+                        )
+                    }
 
                     if debug {
                         let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
@@ -599,12 +655,13 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     try await cliOutput.withStreamingOutputBox(
                         title: "Building Swift app",
                         maxLines: 20
-                    ) { emit in
+                    ) { [additionalEnv] emit in
                         try await swiftPM.buildAndPushContainer(
                             swiftSDK: swiftSDK,
                             product: target,
                             device: host,
                             entrypoint: finalEntrypoint,
+                            additionalEnv: additionalEnv,
                             arguments: finalArguments,
                             resources: finalResources,
                             onOutput: emit

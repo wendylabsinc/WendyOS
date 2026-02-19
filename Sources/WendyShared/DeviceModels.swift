@@ -115,11 +115,23 @@ public struct DevicesCollection: Encodable, Sendable {
         public let interfaces: [InterfaceInfo]
 
         public var isLocalhost: Bool {
-            interfaces.contains { if case .external(let d) = $0 { return d.providerKey == "local" } else { return false } }
+            interfaces.contains {
+                if case .external(let d) = $0 {
+                    return d.providerKey == "local"
+                } else {
+                    return false
+                }
+            }
         }
 
         public var isDocker: Bool {
-            interfaces.contains { if case .external(let d) = $0 { return d.providerKey == "docker" } else { return false } }
+            interfaces.contains {
+                if case .external(let d) = $0 {
+                    return d.providerKey == "docker"
+                } else {
+                    return false
+                }
+            }
         }
 
         public var description: String {

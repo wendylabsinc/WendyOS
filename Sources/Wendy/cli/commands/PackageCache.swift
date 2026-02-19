@@ -43,7 +43,10 @@ struct PackageCache: Sendable {
     /// Write package info to cache
     func write(_ info: CachedPackageInfo) throws {
         if !FileManager.default.fileExists(atPath: cacheDirectory.path) {
-            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: cacheDirectory,
+                withIntermediateDirectories: true
+            )
         }
 
         let data = try JSONEncoder().encode(info)
@@ -68,7 +71,7 @@ struct PackageCache: Sendable {
         if cached.packageSwiftHash == currentHash {
             return cached
         }
-        
+
         return nil
     }
 }

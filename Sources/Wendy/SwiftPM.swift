@@ -225,7 +225,9 @@ public struct SwiftPM: Sendable {
 
     /// Build the Swift package.
     public func buildWithOutput(_ options: BuildOption...) async throws -> String {
-        let allArgs = arguments(["build", "--force-resolved-versions"] + options.flatMap(\.arguments))
+        let allArgs = arguments(
+            ["build", "--force-resolved-versions"] + options.flatMap(\.arguments)
+        )
 
         let result = try await Subprocess.run(
             .name(executableName),
@@ -256,7 +258,7 @@ public struct SwiftPM: Sendable {
         let allArgs = arguments(
             [
                 "build",
-                "--force-resolved-versions"
+                "--force-resolved-versions",
             ] + options.flatMap(\.arguments)
         )
 
@@ -367,9 +369,11 @@ public struct SwiftPM: Sendable {
     }
 
     public func showDependencies() async throws -> Dependency {
-        let args = arguments(["package", 
+        let args = arguments([
+            "package",
             "--force-resolved-versions",
-            "show-dependencies", "--format", "json"])
+            "show-dependencies", "--format", "json",
+        ])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,
@@ -395,9 +399,11 @@ public struct SwiftPM: Sendable {
     }
 
     func describe() async throws -> Serialization.Package {
-        let args = arguments(["package", 
+        let args = arguments([
+            "package",
             "--force-resolved-versions",
-            "describe", "--type", "json"])
+            "describe", "--type", "json",
+        ])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,
@@ -406,7 +412,10 @@ public struct SwiftPM: Sendable {
         )
 
         if result.terminationStatus.isSuccess, let output = result.standardOutput {
-            return try JSONDecoder().decode(Serialization.Package.self, from: ByteBuffer(string: output))
+            return try JSONDecoder().decode(
+                Serialization.Package.self,
+                from: ByteBuffer(string: output)
+            )
         } else {
             let exitCode: Int
             switch result.terminationStatus {
@@ -423,9 +432,11 @@ public struct SwiftPM: Sendable {
     }
 
     public func showExecutables() async throws -> [Executable] {
-        let args = arguments(["package", 
+        let args = arguments([
+            "package",
             "--force-resolved-versions",
-            "show-executables", "--format", "json"])
+            "show-executables", "--format", "json",
+        ])
         let result = try await Subprocess.run(
             Subprocess.Executable.name(executableName),
             arguments: args,

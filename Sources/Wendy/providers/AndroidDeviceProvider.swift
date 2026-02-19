@@ -103,7 +103,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 }
             }
 
-            let model = properties["model"]?.replacingOccurrences(of: "_", with: " ")
+            let model =
+                properties["model"]?.replacingOccurrences(of: "_", with: " ")
                 ?? serial
             let product = properties["product"] ?? "unknown"
 
@@ -179,7 +180,7 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 "--allow-writing-to-package-directory",
                 "bundle-apk",
                 "--product", executable,
-                apkFilename
+                apkFilename,
             ]),
             workingDirectory: FilePath(projectPath.path),
             output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
@@ -195,7 +196,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
         }
 
         // Locate the built APK
-        let apkPath = projectPath
+        let apkPath =
+            projectPath
             .appendingPathComponent(".build-apk")
             .appendingPathComponent(apkFilename)
             .path
@@ -301,7 +303,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
         let fm = FileManager.default
 
         // Check ANDROID_HOME or ANDROID_SDK_ROOT
-        let sdkRoot = ProcessInfo.processInfo.environment["ANDROID_HOME"]
+        let sdkRoot =
+            ProcessInfo.processInfo.environment["ANDROID_HOME"]
             ?? ProcessInfo.processInfo.environment["ANDROID_SDK_ROOT"]
 
         if let sdkRoot {
@@ -314,7 +317,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 .reversed()
             {
                 for version in versions {
-                    let aapt2 = buildToolsDir
+                    let aapt2 =
+                        buildToolsDir
                         .appendingPathComponent(version)
                         .appendingPathComponent("aapt2")
                         .path
@@ -340,7 +344,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 .reversed()
             {
                 for version in versions {
-                    let aapt2 = buildToolsDir
+                    let aapt2 =
+                        buildToolsDir
                         .appendingPathComponent(version)
                         .appendingPathComponent("aapt2")
                         .path
@@ -355,7 +360,9 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
     }
 
     /// Extract the package name and launchable activity from an APK using aapt2.
-    private func extractLaunchInfo(from apkPath: String) async throws -> (packageName: String, activity: String) {
+    private func extractLaunchInfo(
+        from apkPath: String
+    ) async throws -> (packageName: String, activity: String) {
         guard let aapt2Path = findAapt2() else {
             throw CLIError.serviceNotInstalled(
                 name: "aapt2 (Android build-tools). Set ANDROID_HOME to your SDK path"
@@ -383,13 +390,13 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
         for line in output.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("package:"),
-               let nameStart = trimmed.range(of: "name='"),
-               let nameEnd = trimmed[nameStart.upperBound...].range(of: "'")
+                let nameStart = trimmed.range(of: "name='"),
+                let nameEnd = trimmed[nameStart.upperBound...].range(of: "'")
             {
                 packageName = String(trimmed[nameStart.upperBound..<nameEnd.lowerBound])
             } else if trimmed.hasPrefix("launchable-activity:"),
-                      let nameStart = trimmed.range(of: "name='"),
-                      let nameEnd = trimmed[nameStart.upperBound...].range(of: "'")
+                let nameStart = trimmed.range(of: "name='"),
+                let nameEnd = trimmed[nameStart.upperBound...].range(of: "'")
             {
                 activity = String(trimmed[nameStart.upperBound..<nameEnd.lowerBound])
             }
@@ -409,8 +416,8 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
 
 // MARK: - Helpers
 
-private extension TerminationStatus {
-    var exitCode: Int {
+extension TerminationStatus {
+    fileprivate var exitCode: Int {
         switch self {
         case .exited(let code), .unhandledException(let code):
             return Int(code)

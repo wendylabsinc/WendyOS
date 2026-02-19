@@ -123,7 +123,11 @@ enum Serialization {
 
         enum Kind: Codable {
             case fileSystem(name: String?, path: String)
-            case sourceControl(name: String?, location: String, requirement: SourceControlRequirement)
+            case sourceControl(
+                name: String?,
+                location: String,
+                requirement: SourceControlRequirement
+            )
             case registry(id: String, requirement: RegistryRequirement)
         }
 
@@ -152,7 +156,12 @@ enum Serialization {
         }
 
         case target(name: String, condition: Condition?)
-        case product(name: String, package: String?, moduleAliases: [String: String]?, condition: Condition?)
+        case product(
+            name: String,
+            package: String?,
+            moduleAliases: [String: String]?,
+            condition: Condition?
+        )
         case byName(name: String, condition: Condition?)
     }
 
@@ -284,7 +293,12 @@ enum Serialization {
                 } else if container.contains(.plugin) {
                     self = .plugin
                 } else {
-                    throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unable to decode ProductType"))
+                    throw DecodingError.dataCorrupted(
+                        DecodingError.Context(
+                            codingPath: decoder.codingPath,
+                            debugDescription: "Unable to decode ProductType"
+                        )
+                    )
                 }
             }
         }
@@ -294,7 +308,7 @@ enum Serialization {
         let type: ProductType
 
         #if ENABLE_APPLE_PRODUCT_TYPES
-        let settings: [ProductSetting]
+            let settings: [ProductSetting]
         #endif
     }
 

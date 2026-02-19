@@ -14,17 +14,21 @@ enum SelectedDevice: Sendable {
     init(endpoint: TargetOptions.Endpoint) {
         switch endpoint.remote {
         case .local:
-            self = .external(ExternalDevice(
-                id: "local",
-                displayName: "Local (This Device)",
-                providerKey: "local"
-            ))
+            self = .external(
+                ExternalDevice(
+                    id: "local",
+                    displayName: "Local (This Device)",
+                    providerKey: "local"
+                )
+            )
         case .docker:
-            self = .external(ExternalDevice(
-                id: "docker",
-                displayName: "Docker Desktop",
-                providerKey: "docker"
-            ))
+            self = .external(
+                ExternalDevice(
+                    id: "docker",
+                    displayName: "Docker Desktop",
+                    providerKey: "docker"
+                )
+            )
         case .grpc(let host, let port):
             self = .lan(host: host, port: port, defaultDevice: endpoint.defaultDevice)
         case .bluetooth(let uuid):

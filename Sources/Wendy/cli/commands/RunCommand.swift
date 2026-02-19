@@ -84,6 +84,9 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     @OptionGroup
     var target: TargetOptions
 
+    @Argument(parsing: .captureForPassthrough)
+    var passthroughArgs: [String] = []
+
     var swiftVersion: String { "6.2.3" }
     var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
     var sdkDownloadURL: String {
@@ -94,12 +97,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     }
 
     // Deploy mode should always run detached
-    var isDetached: Bool { detach || deploy }
-
-    /// CLI args after `--`, with the separator itself filtered out.
-    var userPassthroughArgs: [String] {
-        passthroughArgs.filter { $0 != "--" }
-    }
+    fileprivate var isDetached: Bool { detach || deploy }
 
     /// Validate that flags are not conflicting
     func validate() throws {
@@ -169,14 +167,15 @@ struct RunCommand: AsyncParsableCommand, Sendable {
             // Validate flags before proceeding
             try validate()
 
-            var command = BuildCommand()
-            command.autoAccept = shouldAutoAccept
-            command.target = target
-            command.executable = executable
-            command.product = product
-            command.target = target
-            command.debug = debug
-            
+            let command = BuildCommand(
+                debug: debug,
+                autoAccept: shouldAutoAccept,
+                product: product,
+                executable: executable,
+                passthroughArgs: passthroughArgs,
+                target: target
+            )
+
             try await command.withContainer(
                 restartPolicy: buildRestartPolicy()
             ) { builtApp in

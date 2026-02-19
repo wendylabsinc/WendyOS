@@ -3,9 +3,9 @@ import Foundation
 /// A device discovered by a DeviceProvider plugin (e.g. Android via ADB, ESP32, AWS).
 /// Lives in WendyShared so GroupedDevice and InterfaceInfo can reference it.
 public struct ExternalDevice: Device, Encodable, Sendable, Hashable {
-    public let id: String              // e.g. "adb:HVA12345"
-    public let displayName: String     // e.g. "Pixel 4"
-    public let providerKey: String     // e.g. "android"
+    public let id: String  // e.g. "adb:HVA12345"
+    public let displayName: String  // e.g. "Pixel 4"
+    public let providerKey: String  // e.g. "android"
     public let connectionInfo: [String: String]
     public let isWendyDevice: Bool
     public var agentVersion: String?
