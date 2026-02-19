@@ -1,9 +1,8 @@
 [Unit]
 Description=WendyOS Development Container Registry
 Documentation=https://github.com/mihai-chiorean/containerd-registry
-After=containerd.service network-online.target
+After=containerd.service
 Requires=containerd.service
-Wants=network-online.target
 
 [Service]
 Type=oneshot
