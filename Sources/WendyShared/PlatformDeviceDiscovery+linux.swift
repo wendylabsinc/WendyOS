@@ -226,11 +226,22 @@
                     continue
                 }
 
-                let id = txt?.resource.values.values.first ?? "WendyOS Device"
+                let txtValues = txt?.resource.values ?? [:]
+
+                // Prefer "id" (new OS uses UUID here), fall back to "wendyosdevice" (old OS)
+                let id =
+                    txtValues["id"].flatMap({ UUID(uuidString: $0) != nil ? $0 : nil })
+                    ?? txtValues["wendyosdevice"]
+                    ?? txtValues["id"]
+                    ?? "WendyOS Device"
+                let displayName =
+                    txtValues["displayname"]
+                    ?? txtValues["name"]
+                    ?? id
 
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: id,
+                    displayName: displayName,
                     hostname: srv.resource.domainName.string,
                     port: Int(srv.resource.port),
                     interfaceType: "LAN",

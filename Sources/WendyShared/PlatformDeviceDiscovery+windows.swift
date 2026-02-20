@@ -362,9 +362,15 @@
             guard let host = hostname, let p = port else { return nil }
 
             // Extract device info from TXT records
-            let deviceId =
-                txtRecords["id"] ?? txtRecords["uuid"] ?? txtRecords["identifier"] ?? host
-            let displayName = txtRecords["name"] ?? txtRecords["displayName"] ?? deviceId
+            // Prefer "id" when it contains a UUID (new OS), fall back to
+            // "wendyosdevice" (old OS), then raw "id" value
+            let deviceId: String = {
+                if let id = txtRecords["id"], UUID(uuidString: id) != nil { return id }
+                if let id = txtRecords["wendyosdevice"] { return id }
+                return txtRecords["id"] ?? host
+            }()
+            let displayName =
+                txtRecords["displayname"] ?? txtRecords["name"] ?? deviceId
 
             return LANDevice(
                 id: deviceId,

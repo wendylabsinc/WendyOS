@@ -188,8 +188,27 @@
                     continue
                 }
 
-                let txt = try? await resolver.queryTXT(name: name).first
-                let id = txt?.txt.split(separator: "=").last.map(String.init) ?? ""
+                // Parse all TXT records into key=value pairs
+                let txtRecords = try? await resolver.queryTXT(name: name)
+                var txtValues: [String: String] = [:]
+                for record in txtRecords ?? [] {
+                    let parts = record.txt.split(separator: "=", maxSplits: 1)
+                    if parts.count == 2 {
+                        txtValues[String(parts[0]).lowercased()] = String(parts[1])
+                    }
+                }
+
+                // Prefer "id" when it contains a UUID (new OS), fall back to
+                // "wendyosdevice" (old OS), then raw "id" value
+                let id =
+                    txtValues["id"].flatMap({ UUID(uuidString: $0) != nil ? $0 : nil })
+                    ?? txtValues["wendyosdevice"]
+                    ?? txtValues["id"]
+                    ?? srv.host
+                let displayName =
+                    txtValues["displayname"]
+                    ?? txtValues["name"]
+                    ?? id
 
                 let key = "\(id)-\(srv.host)"
                 guard !seenDevices.contains(key) else { continue }
@@ -197,7 +216,7 @@
 
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: id,
+                    displayName: displayName,
                     hostname: srv.host,
                     port: Int(srv.port),
                     interfaceType: "LAN",
