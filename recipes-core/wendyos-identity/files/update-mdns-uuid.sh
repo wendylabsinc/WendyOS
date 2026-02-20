@@ -38,10 +38,15 @@ DEVICE_NAME=$(cat "$DEVICE_NAME_FILE" 2>/dev/null || echo "unknown-device")
 # Generate display name (Title Case with spaces)
 DISPLAY_NAME=$(echo "$DEVICE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
 
-# Replace device ID placeholder with UUID
-sed -i "s/DEVICE_ID_PLACEHOLDER/$UUID/g" "$SERVICE_FILE"
+# Default domain for unprovisioned devices
+DEFAULT_DOMAIN="sh.wendy"
 
-# Replace device name placeholders
+# Build FQDN: <domain>.<device-name> (e.g. sh.wendy.warm-pepper)
+FQDN="${DEFAULT_DOMAIN}.${DEVICE_NAME}"
+
+# Replace placeholders in service file
+sed -i "s/DEVICE_ID_PLACEHOLDER/$UUID/g" "$SERVICE_FILE"
+sed -i "s/DEVICE_FQDN_PLACEHOLDER/$FQDN/g" "$SERVICE_FILE"
 sed -i "s/DEVICE_NAME_PLACEHOLDER/$DEVICE_NAME/g" "$SERVICE_FILE"
 sed -i "s/DEVICE_DISPLAYNAME_PLACEHOLDER/$DISPLAY_NAME/g" "$SERVICE_FILE"
 
