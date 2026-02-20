@@ -404,6 +404,46 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
     public let isWendyDevice: Bool
     public var agentVersion: String?
 
+    /// Extract device ID and display name from mDNS TXT record key-value pairs.
+    ///
+    /// Handles both old OS format (UUID in `wendyosdevice`, display string in `id`)
+    /// and new OS format (UUID in `id`, `wendyosdevice` removed).
+    /// Keys are matched case-insensitively.
+    ///
+    /// - Parameters:
+    ///   - txtValues: Dictionary of TXT record key-value pairs
+    ///   - fallbackId: Value to use if no ID can be extracted (e.g., hostname)
+    /// - Returns: Tuple of (id, displayName)
+    public static func extractIdentity(
+        from txtValues: [String: String],
+        fallbackId: String = "WendyOS Device"
+    ) -> (id: String, displayName: String) {
+        // Normalize keys to lowercase for case-insensitive matching
+        let normalized = Dictionary(
+            txtValues.map { (key: $0.key.lowercased(), value: $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        // Prefer "id" when it contains a valid UUID (new OS), then "wendyosdevice"
+        // (old OS where UUID was stored there), then raw "id" (old OS display string),
+        // then fallback
+        let id: String
+        if let idValue = normalized["id"], UUID(uuidString: idValue) != nil {
+            id = idValue
+        } else if let deviceUUID = normalized["wendyosdevice"] {
+            id = deviceUUID
+        } else {
+            id = normalized["id"] ?? fallbackId
+        }
+
+        let displayName =
+            normalized["displayname"]
+            ?? normalized["name"]
+            ?? id
+
+        return (id: id, displayName: displayName)
+    }
+
     public init(
         id: String,
         displayName: String,

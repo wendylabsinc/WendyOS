@@ -362,19 +362,14 @@
             guard let host = hostname, let p = port else { return nil }
 
             // Extract device info from TXT records
-            // Prefer "id" when it contains a UUID (new OS), fall back to
-            // "wendyosdevice" (old OS), then raw "id" value
-            let deviceId: String = {
-                if let id = txtRecords["id"], UUID(uuidString: id) != nil { return id }
-                if let id = txtRecords["wendyosdevice"] { return id }
-                return txtRecords["id"] ?? host
-            }()
-            let displayName =
-                txtRecords["displayname"] ?? txtRecords["name"] ?? deviceId
+            let identity = LANDevice.extractIdentity(
+                from: txtRecords,
+                fallbackId: host
+            )
 
             return LANDevice(
-                id: deviceId,
-                displayName: displayName,
+                id: identity.id,
+                displayName: identity.displayName,
                 hostname: host,
                 port: p,
                 interfaceType: "LAN",

@@ -194,29 +194,22 @@
                 for record in txtRecords ?? [] {
                     let parts = record.txt.split(separator: "=", maxSplits: 1)
                     if parts.count == 2 {
-                        txtValues[String(parts[0]).lowercased()] = String(parts[1])
+                        txtValues[String(parts[0])] = String(parts[1])
                     }
                 }
 
-                // Prefer "id" when it contains a UUID (new OS), fall back to
-                // "wendyosdevice" (old OS), then raw "id" value
-                let id =
-                    txtValues["id"].flatMap({ UUID(uuidString: $0) != nil ? $0 : nil })
-                    ?? txtValues["wendyosdevice"]
-                    ?? txtValues["id"]
-                    ?? srv.host
-                let displayName =
-                    txtValues["displayname"]
-                    ?? txtValues["name"]
-                    ?? id
+                let identity = LANDevice.extractIdentity(
+                    from: txtValues,
+                    fallbackId: srv.host
+                )
 
-                let key = "\(id)-\(srv.host)"
+                let key = "\(identity.id)-\(srv.host)"
                 guard !seenDevices.contains(key) else { continue }
                 seenDevices.insert(key)
 
                 let lanDevice = LANDevice(
-                    id: id,
-                    displayName: displayName,
+                    id: identity.id,
+                    displayName: identity.displayName,
                     hostname: srv.host,
                     port: Int(srv.port),
                     interfaceType: "LAN",
