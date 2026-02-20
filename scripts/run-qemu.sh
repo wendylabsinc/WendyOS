@@ -361,8 +361,12 @@ main() {
     debug "Workspace: ${workspace_dir}"
     debug "Build directory: ${BUILD_DIR}"
 
-    # Set up paths
-    deploy_dir="${BUILD_DIR}/tmp/deploy/images/${MACHINE}"
+    # Set up paths - check tmp-qemu first, then tmp
+    if [[ -d "${BUILD_DIR}/tmp-qemu/deploy/images/${MACHINE}" ]]; then
+        deploy_dir="${BUILD_DIR}/tmp-qemu/deploy/images/${MACHINE}"
+    else
+        deploy_dir="${BUILD_DIR}/tmp/deploy/images/${MACHINE}"
+    fi
     image="wendyos-image-${MACHINE}.rootfs.ext4"
     kernel="Image"
 
