@@ -215,6 +215,7 @@ let package = Package(
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .target(name: "DownloadSupport"),
+                .target(name: "CLIOutput"),
             ]
         ),
         .target(

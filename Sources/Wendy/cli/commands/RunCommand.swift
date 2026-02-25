@@ -1,5 +1,4 @@
 import Analytics
-import AppConfig
 import ArgumentParser
 import CLIOutput
 import ContainerRegistry
@@ -50,10 +49,14 @@ struct RunCommand: AsyncParsableCommand, Sendable {
     )
     var restartOnFailureRetries: Int?
 
-    @Argument(
+    @Option(
+        name: .shortAndLong,
         help: "The executable to run. Required when a package has multiple executable targets."
     )
     var executable: String?
+
+    @Argument(parsing: .captureForPassthrough)
+    var passthroughArgs: [String] = []
 
     @OptionGroup
     var agentConnectionOptions: AgentConnectionOptions
@@ -69,6 +72,11 @@ struct RunCommand: AsyncParsableCommand, Sendable {
 
     // Deploy mode should always run detached
     var isDetached: Bool { detach || deploy }
+
+    /// CLI args after `--`, with the separator itself filtered out.
+    var userPassthroughArgs: [String] {
+        passthroughArgs.filter { $0 != "--" }
+    }
 
     /// Validate that flags are not conflicting
     func validate() throws {
@@ -144,7 +152,8 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 executable: executable,
                 agentConnectionOptions: agentConnectionOptions
             ).withContainer(
-                restartPolicy: buildRestartPolicy()
+                restartPolicy: buildRestartPolicy(),
+                userArgs: userPassthroughArgs
             ) { appName, client, endpoint in
                 cliOutput.info("Starting container on \(endpoint.host)")
                 try await AppBuildHelpers.executePhase(

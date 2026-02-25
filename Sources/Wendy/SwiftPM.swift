@@ -294,6 +294,7 @@ public struct SwiftPM: Sendable {
         product: Executable,
         device: String,
         entrypoint: String?,
+        additionalEnv: [String],
         arguments entrypointArguments: [String],
         resources: [(source: String, destination: String)],
         onOutput: @escaping @Sendable (ByteBuffer) async throws -> Void
@@ -312,6 +313,7 @@ public struct SwiftPM: Sendable {
         ]
 
         flags += resources.map { "--resources=\($0.source):\($0.destination)" }
+        flags += additionalEnv.map { "--env=\($0)" }
 
         if let entrypoint {
             flags.append("--entrypoint=\(entrypoint)")
@@ -422,5 +424,75 @@ public struct SwiftPM: Sendable {
         public var version: String
         public var path: String
         public var dependencies: [Dependency]
+
+        /// Find a dependency by checking if its URL ends with the given suffix
+        public func findDependency(urlSuffix: String) -> Dependency? {
+            if url.hasSuffix(urlSuffix) || url.hasSuffix("\(urlSuffix).git") {
+                return self
+            }
+            for dep in dependencies {
+                if let found = dep.findDependency(urlSuffix: urlSuffix) {
+                    return found
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Compares two semantic version strings. Returns true if version1 >= version2.
+    ///
+    /// The comparison:
+    /// - Strips any pre-release (`-...`) or build (`+...`) metadata.
+    /// - Requires a full `major.minor.patch` numeric form.
+    /// - Treats parse failures as "not at least" (returns `false`).
+    public static func isVersion(_ version1: String, atLeast version2: String) -> Bool {
+        guard
+            let v1 = parseSemVer(version1),
+            let v2 = parseSemVer(version2)
+        else {
+            // If either version cannot be parsed as a full SemVer, conservatively
+            // treat it as not satisfying the "at least" requirement.
+            return false
+        }
+
+        if v1.major != v2.major {
+            return v1.major > v2.major
+        }
+        if v1.minor != v2.minor {
+            return v1.minor > v2.minor
+        }
+        if v1.patch != v2.patch {
+            return v1.patch > v2.patch
+        }
+        // versions are equal
+        return true
+    }
+
+    /// Parses a semantic version string in the form `major.minor.patch`,
+    /// ignoring any pre-release (`-...`) or build (`+...`) metadata.
+    /// Returns `nil` if the string is not a valid full numeric SemVer.
+    private static func parseSemVer(_ version: String) -> (major: Int, minor: Int, patch: Int)? {
+        // Strip pre-release and build metadata.
+        let withoutPrerelease = version.split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )[0]
+        let coreVersion = String(withoutPrerelease).split(
+            separator: "+",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )[0]
+
+        let components = coreVersion.split(separator: ".")
+        guard components.count == 3,
+            let major = Int(components[0]),
+            let minor = Int(components[1]),
+            let patch = Int(components[2])
+        else {
+            return nil
+        }
+
+        return (major: major, minor: minor, patch: patch)
     }
 }

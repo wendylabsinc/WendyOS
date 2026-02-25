@@ -144,7 +144,6 @@ struct BluetoothLengthPrefixedFramingTests {
     func incrementalDataArrival() throws {
         // Simulate BLE data arriving in chunks
         var buffer = ByteBuffer()
-        var receivedMessages: [[UInt8]] = []
 
         // Prepare a complete message to send in chunks
         var messageBuffer = ByteBuffer()

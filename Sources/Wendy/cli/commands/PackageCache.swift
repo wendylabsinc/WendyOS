@@ -8,7 +8,19 @@ struct PackageCache: Sendable {
         let packageSwiftHash: String
         let packageIdentity: String
         let executables: [SwiftPM.Executable]
-        let hasContainerPlugin: Bool
+        let containerPluginVersion: String?
+
+        init(
+            packageSwiftHash: String,
+            packageIdentity: String,
+            executables: [SwiftPM.Executable],
+            containerPluginVersion: String? = nil
+        ) {
+            self.packageSwiftHash = packageSwiftHash
+            self.packageIdentity = packageIdentity
+            self.executables = executables
+            self.containerPluginVersion = containerPluginVersion
+        }
     }
 
     let projectPath: URL
