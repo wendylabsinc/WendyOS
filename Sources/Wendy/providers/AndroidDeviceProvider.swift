@@ -25,6 +25,9 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
 
     private let logger = Logger(label: "sh.wendy.provider.android")
 
+    /// Swift toolchain version required for Android APK bundling
+    private let swiftToolchain = "main-snapshot"
+
     // MARK: - Availability
 
     func isAvailable() async -> Bool {
@@ -58,6 +61,81 @@ struct AndroidDeviceProvider: DeviceProvider, Sendable {
                 """
             )
             throw CLIError.serviceNotInstalled(name: "adb")
+        }
+
+        // Verify swiftly is available for toolchain management
+        guard await SwiftPM.isSwiftlyAvailable() else {
+            cliOutput.error(
+                """
+                swiftly is not installed. It is needed to manage Swift toolchains for Android.
+
+                Install it from: https://swiftlang.github.io/swiftly/
+                """
+            )
+            throw CLIError.serviceNotInstalled(name: "swiftly")
+        }
+
+        // Check that the required Swift toolchain is installed
+        let swiftPM = SwiftPM()
+        let installedVersions = try await cliOutput.withProgress(
+            message: "Checking Swift requirements for Android",
+            successMessage: "Swift environment ready",
+            errorMessage: "Failed to check Swift requirements"
+        ) {
+            try await swiftPM.listSwiftVersions()
+        }
+
+        if !installedVersions.contains(where: { $0.version.name == swiftToolchain }) {
+            let install: Bool
+
+            if shouldAutoAccept {
+                install = true
+            } else {
+                install = try await cliOutput.yesOrNoPrompt(
+                    question:
+                        "Swift \(swiftToolchain) is required for Android builds. Do you want to install it?",
+                    defaultAnswer: true
+                )
+            }
+
+            if install {
+                cliOutput.info("Installing Swift \(swiftToolchain)...")
+                let result = try await Subprocess.run(
+                    .name("swiftly"),
+                    arguments: ["install", swiftToolchain],
+                    output: .fileDescriptor(.standardOutput, closeAfterSpawningProcess: false),
+                    error: .fileDescriptor(.standardError, closeAfterSpawningProcess: false)
+                )
+
+                guard result.terminationStatus.isSuccess else {
+                    throw CLIError.commandFailed(
+                        command: "swiftly install \(swiftToolchain)",
+                        exitCode: Int32(result.terminationStatus.exitCode),
+                        output: "Failed to install Swift \(swiftToolchain)"
+                    )
+                }
+                cliOutput.success("Swift \(swiftToolchain) installed")
+            } else {
+                throw CLIError.serviceNotInstalled(
+                    name: "Swift \(swiftToolchain) (required for Android)"
+                )
+            }
+        }
+
+        // Check for the Swift Android SDK
+        let installedSDKs = try await swiftPM.listSDKs()
+        let hasAndroidSDK = installedSDKs.contains { $0.contains("android") }
+
+        if !hasAndroidSDK {
+            cliOutput.error(
+                """
+                No Swift Android SDK found. Install one using:
+                  swift sdk install <android-sdk-url>
+
+                For more information: https://github.com/nicklama/swift-android-sdk
+                """
+            )
+            throw CLIError.serviceNotInstalled(name: "Swift Android SDK")
         }
     }
 

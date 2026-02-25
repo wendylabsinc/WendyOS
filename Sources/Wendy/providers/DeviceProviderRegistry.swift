@@ -9,6 +9,7 @@ enum DeviceProviderRegistry {
         LocalDeviceProvider(),
         DockerDeviceProvider(),
         AndroidDeviceProvider(),
+        MicroWendyDeviceProvider(),
     ]
 
     /// Providers that passed the `isAvailable()` check at startup.
