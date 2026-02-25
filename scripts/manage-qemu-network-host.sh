@@ -436,6 +436,29 @@ start_dnsmasq() {
     fi
 }
 
+# Disable bridge multicast snooping to allow mDNS traffic
+# By default, Linux bridges have multicast snooping enabled. Without an IGMP
+# querier, the bridge will not forward mDNS multicast (224.0.0.251) from the
+# QEMU guest to the host, so avahi-resolve and other mDNS tools will not work.
+disable_bridge_multicast_snooping() {
+    local snooping_file="/sys/class/net/${BRIDGE}/bridge/multicast_snooping"
+
+    if [[ ! -f "${snooping_file}" ]] && [[ "${DRY_RUN}" == "false" ]]
+    then
+        warning "Cannot find ${snooping_file} - multicast snooping not disabled"
+        return 1
+    fi
+
+    debug "Disabling multicast snooping on ${BRIDGE} for mDNS support"
+    if ! execute "echo 0 | sudo tee '${snooping_file}' > /dev/null"
+    then
+        warning "Failed to disable bridge multicast snooping (mDNS may not work)"
+        return 1
+    fi
+
+    return 0
+}
+
 # Enable NAT
 enable_nat() {
     # Check if rule already exists
@@ -848,6 +871,8 @@ setup_network() {
     then
         success "✓ QEMU network already configured"
         echo ""
+        # Ensure multicast snooping is disabled even on pre-existing bridges
+        disable_bridge_multicast_snooping > /dev/null 2>&1 || true
         show_status
         return 0
     fi
@@ -869,6 +894,15 @@ setup_network() {
         error "Failed to create bridge"
         failed_component="Bridge"
         setup_failed=true
+    fi
+
+    # Disable bridge multicast snooping so mDNS traffic from QEMU reaches the host
+    if [[ "${setup_failed}" == "false" ]]
+    then
+        if ! disable_bridge_multicast_snooping
+        then
+            warning "Failed to disable multicast snooping (avahi-resolve / mDNS may not work)"
+        fi
     fi
 
     # Enable forwarding (warn but continue if this fails)
