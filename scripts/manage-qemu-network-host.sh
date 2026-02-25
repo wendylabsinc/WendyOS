@@ -21,8 +21,11 @@ DRY_RUN=false
 # Network configuration
 TAP="tap-wendyos"
 BRIDGE="br-wendyos"
-HOST_IP="10.42.0.1/24"
-DHCP_RANGE="10.42.0.10,10.42.0.250"
+HOST_IP="10.43.0.1/24"
+DHCP_RANGE="10.43.0.10,10.43.0.250"
+HOST_IP_ADDR="${HOST_IP%%/*}"               # e.g. 10.43.0.1
+SUBNET_NET="${HOST_IP_ADDR%.*}.0"           # e.g. 10.43.0.0
+SUBNET="${SUBNET_NET}/${HOST_IP##*/}"       # e.g. 10.43.0.0/24
 DNSMASQ_PID="/var/run/dnsmasq-wendyos.pid"
 STATE_FILE="/var/run/wendyos-qemu-network.state"
 
@@ -373,8 +376,8 @@ start_dnsmasq() {
         --interface='${BRIDGE}' \
         --bind-interfaces \
         --dhcp-range='${DHCP_RANGE},12h' \
-        --dhcp-option=3,10.42.0.1 \
-        --dhcp-option=6,10.42.0.1 \
+        --dhcp-option=3,${HOST_IP_ADDR} \
+        --dhcp-option=6,${HOST_IP_ADDR} \
         --pid-file='${DNSMASQ_PID}' \
         --log-queries \
         --log-dhcp"
@@ -462,14 +465,14 @@ disable_bridge_multicast_snooping() {
 # Enable NAT
 enable_nat() {
     # Check if rule already exists
-    if sudo iptables -t nat -C POSTROUTING -s 10.42.0.0/24 -j MASQUERADE 2>/dev/null
+    if sudo iptables -t nat -C POSTROUTING -s "${SUBNET}" -j MASQUERADE 2>/dev/null
     then
         debug "NAT rule already exists"
         return 0
     fi
 
     info "Setting up NAT for internet access"
-    if ! execute "sudo iptables -t nat -A POSTROUTING -s 10.42.0.0/24 -j MASQUERADE"
+    if ! execute "sudo iptables -t nat -A POSTROUTING -s '${SUBNET}' -j MASQUERADE"
     then
         error "Failed to add NAT rule"
         return 1
@@ -597,7 +600,7 @@ show_status() {
     fi
 
     # Check NAT
-    if sudo iptables -t nat -C POSTROUTING -s 10.42.0.0/24 -j MASQUERADE 2>/dev/null
+    if sudo iptables -t nat -C POSTROUTING -s "${SUBNET}" -j MASQUERADE 2>/dev/null
     then
         info "  NAT:          ${GREEN}${BOLD}Enabled${NC}"
     else
@@ -746,10 +749,10 @@ cleanup_network() {
     fi
 
     # Remove NAT rule
-    if sudo iptables -t nat -C POSTROUTING -s 10.42.0.0/24 -j MASQUERADE 2>/dev/null
+    if sudo iptables -t nat -C POSTROUTING -s "${SUBNET}" -j MASQUERADE 2>/dev/null
     then
         info "Removing NAT rule"
-        if ! execute "sudo iptables -t nat -D POSTROUTING -s 10.42.0.0/24 -j MASQUERADE"
+        if ! execute "sudo iptables -t nat -D POSTROUTING -s '${SUBNET}' -j MASQUERADE"
         then
             warning "Failed to remove NAT rule"
             cleanup_errors=$((cleanup_errors + 1))
@@ -823,14 +826,14 @@ cleanup_network() {
 check_conflicts() {
     local conflicts_found=false
 
-    # Check if 10.42.0.0/24 is already in use on another interface
-    local existing_10_42
-    existing_10_42=$(ip addr show | grep "inet 10.42.0" | grep -v "${BRIDGE}" || echo "")
+    # Check if the configured subnet is already in use on another interface
+    local existing_subnet
+    existing_subnet=$(ip addr show | grep "inet ${SUBNET_NET}" | grep -v "${BRIDGE}" || echo "")
 
-    if [[ -n "${existing_10_42}" ]]
+    if [[ -n "${existing_subnet}" ]]
     then
-        warning "IP range 10.42.0.0/24 is already in use on your system:"
-        echo "${existing_10_42}" | sed 's/^/  /'
+        warning "IP range ${SUBNET} is already in use on your system:"
+        echo "${existing_subnet}" | sed 's/^/  /'
         echo ""
         warning "This may cause routing conflicts with QEMU networking"
         echo ""
@@ -954,11 +957,11 @@ setup_network() {
         success "✓ QEMU network setup complete!"
         echo ""
         echo "Configuration:"
-        echo "  Bridge:     ${BRIDGE} at 10.42.0.1"
+        echo "  Bridge:     ${BRIDGE} at ${HOST_IP_ADDR}"
         echo "  DHCP range: ${DHCP_RANGE}"
         echo "  TAP:        ${TAP}"
         echo ""
-        echo "QEMU guests will receive IPs from 10.42.0.10-250"
+        echo "QEMU guests will receive IPs from ${DHCP_RANGE}"
         return 0
     else
         error "Network setup verification failed"
