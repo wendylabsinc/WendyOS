@@ -190,9 +190,9 @@ launch_qemu() {
     info "  ${BOLD}Machine:${NC}    virt (ARM64 Cortex-A57)"
     info "  ${BOLD}Memory:${NC}     4096 MB"
     info "  ${BOLD}CPUs:${NC}       4"
-    info "  ${BOLD}Network:${NC}    ${TAP} -> ${BRIDGE} (10.42.0.1)"
+    info "  ${BOLD}Network:${NC}    ${TAP} -> ${BRIDGE}"
     echo ""
-    info "Guest will receive IP via DHCP (10.42.0.x)"
+    info "Guest will receive IP via DHCP"
     echo ""
 
     if [[ "${DRY_RUN}" != "true" ]]
@@ -286,8 +286,8 @@ Examples:
 
 Notes:
     - This script automatically sets up the network if needed
-    - The guest will get an IP from 10.42.0.10-250 via DHCP
-    - The host is accessible at 10.42.0.1 from the guest
+    - The guest will get an IP via DHCP from the host bridge
+    - Run manage-qemu-network-host.sh status to see the host IP
     - Use Ctrl-A, then X to exit QEMU
     - USB devices require proper host permissions (see docs/qemu-usb.md)
 
