@@ -105,6 +105,113 @@ struct AgentConnectionOptionsTests {
         #expect(endpoint?.description == "example.com:8080")
     }
 
+    // MARK: - IPv6 Link-Local with Scope ID
+
+    @Test("Endpoint init with bracketed IPv6 link-local and scope ID")
+    func testEndpointInitWithBracketedIPv6LinkLocalScopeID() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "[fe80::1%eth0]:9000")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::1%eth0")
+        #expect(endpoint?.port == 9000)
+    }
+
+    @Test("Endpoint init with bracketed IPv6 link-local, scope ID, default port")
+    func testEndpointInitWithBracketedIPv6LinkLocalScopeIDDefaultPort() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "[fe80::1%usb0]")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::1%usb0")
+        #expect(endpoint?.port == 50051)
+    }
+
+    @Test("Endpoint init with URL-encoded scope ID (%25)")
+    func testEndpointInitWithURLEncodedScopeID() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "[fe80::1%25eth0]:8080")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::1%eth0")
+        #expect(endpoint?.port == 8080)
+    }
+
+    @Test("Endpoint init with bare IPv6 link-local and scope ID")
+    func testEndpointInitWithBareIPv6LinkLocalScopeID() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "fe80::dead:beef%usb0")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::dead:beef%usb0")
+        #expect(endpoint?.port == 50051)
+    }
+
+    @Test("Endpoint init with bare IPv6 link-local, URL-encoded scope ID")
+    func testEndpointInitWithBareIPv6URLEncodedScopeID() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "fe80::1%25enp0s3")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::1%enp0s3")
+        #expect(endpoint?.port == 50051)
+    }
+
+    @Test("Endpoint init with wendy scheme and IPv6 link-local scope ID")
+    func testEndpointInitWithWendySchemeIPv6ScopeID() {
+        let endpoint = AgentConnectionOptions.Endpoint(argument: "wendy://[fe80::1%eth0]:9000")
+        #expect(endpoint != nil)
+        #expect(endpoint?.host == "fe80::1%eth0")
+        #expect(endpoint?.port == 9000)
+    }
+
+    // MARK: - Endpoint Computed Properties
+
+    @Test("isIPv6LinkLocal returns true for fe80:: addresses")
+    func testIsIPv6LinkLocal() {
+        let linkLocal = AgentConnectionOptions.Endpoint(host: "fe80::1%eth0", port: 50051)
+        #expect(linkLocal.isIPv6LinkLocal)
+
+        let linkLocalNoScope = AgentConnectionOptions.Endpoint(host: "fe80::dead:beef", port: 50051)
+        #expect(linkLocalNoScope.isIPv6LinkLocal)
+
+        // Case insensitive
+        let upperCase = AgentConnectionOptions.Endpoint(host: "FE80::1", port: 50051)
+        #expect(upperCase.isIPv6LinkLocal)
+    }
+
+    @Test("isIPv6LinkLocal returns false for non-link-local addresses")
+    func testIsIPv6LinkLocalFalse() {
+        let globalIPv6 = AgentConnectionOptions.Endpoint(host: "2001:db8::1", port: 50051)
+        #expect(!globalIPv6.isIPv6LinkLocal)
+
+        let ipv4 = AgentConnectionOptions.Endpoint(host: "192.168.1.1", port: 50051)
+        #expect(!ipv4.isIPv6LinkLocal)
+
+        let hostname = AgentConnectionOptions.Endpoint(host: "device.local", port: 50051)
+        #expect(!hostname.isIPv6LinkLocal)
+    }
+
+    @Test("scopeID extracts interface name from scoped address")
+    func testScopeID() {
+        let scoped = AgentConnectionOptions.Endpoint(host: "fe80::1%eth0", port: 50051)
+        #expect(scoped.scopeID == "eth0")
+
+        let longInterface = AgentConnectionOptions.Endpoint(host: "fe80::1%enp0s31f6", port: 50051)
+        #expect(longInterface.scopeID == "enp0s31f6")
+    }
+
+    @Test("scopeID returns nil when no scope present")
+    func testScopeIDNil() {
+        let noScope = AgentConnectionOptions.Endpoint(host: "fe80::1", port: 50051)
+        #expect(noScope.scopeID == nil)
+
+        let ipv4 = AgentConnectionOptions.Endpoint(host: "192.168.1.1", port: 50051)
+        #expect(ipv4.scopeID == nil)
+    }
+
+    @Test("hostWithoutScope strips the scope ID suffix")
+    func testHostWithoutScope() {
+        let scoped = AgentConnectionOptions.Endpoint(host: "fe80::1%eth0", port: 50051)
+        #expect(scoped.hostWithoutScope == "fe80::1")
+
+        let noScope = AgentConnectionOptions.Endpoint(host: "fe80::1", port: 50051)
+        #expect(noScope.hostWithoutScope == "fe80::1")
+
+        let ipv4 = AgentConnectionOptions.Endpoint(host: "192.168.1.1", port: 50051)
+        #expect(ipv4.hostWithoutScope == "192.168.1.1")
+    }
+
     @Test("AgentConnectionOptions parsing with --device")
     func testAgentConnectionOptionsParsingWithDevice() throws {
         struct TestCommand: ParsableCommand {
@@ -119,6 +226,24 @@ struct AgentConnectionOptionsTests {
 
         #expect(command.agentConnectionOptions.device?.host == "test.server.com")
         #expect(command.agentConnectionOptions.device?.port == 9000)
+    }
+
+    @Test("AgentConnectionOptions parsing with --device IPv6 link-local")
+    func testAgentConnectionOptionsParsingWithDeviceIPv6LinkLocal() throws {
+        struct TestCommand: ParsableCommand {
+            @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+            mutating func run() {}
+        }
+
+        let command = try TestCommand.parse([
+            "--device", "[fe80::1%eth0]:9000",
+        ])
+
+        #expect(command.agentConnectionOptions.device?.host == "fe80::1%eth0")
+        #expect(command.agentConnectionOptions.device?.port == 9000)
+        #expect(command.agentConnectionOptions.device?.isIPv6LinkLocal == true)
+        #expect(command.agentConnectionOptions.device?.scopeID == "eth0")
     }
 
 }

@@ -372,7 +372,7 @@
                     guard iface == interfaceName, scope == "20" else { continue } // 20 = link scope
                     // Convert compact hex to IPv6 format
                     let hex = String(parts[0])
-                    if let formatted = Self.formatIPv6FromHex(hex) {
+                    if let formatted = formatIPv6FromHex(hex) {
                         ownAddresses.insert(formatted)
                     }
                 }
@@ -412,51 +412,7 @@
             return peerAddresses
         }
 
-        /// Convert a 32-char hex string from /proc/net/if_inet6 to canonical IPv6 notation.
-        /// Produces compressed form (e.g., `fe80::1`) matching `ip neigh` output.
-        private static func formatIPv6FromHex(_ hex: String) -> String? {
-            guard hex.count == 32 else { return nil }
-            var groups: [UInt16] = []
-            var index = hex.startIndex
-            for _ in 0..<8 {
-                let end = hex.index(index, offsetBy: 4)
-                guard let value = UInt16(hex[index..<end], radix: 16) else { return nil }
-                groups.append(value)
-                index = end
-            }
-
-            // Find the longest run of consecutive zero groups for :: compression
-            var bestStart = -1, bestLen = 0
-            var curStart = -1, curLen = 0
-            for i in 0..<8 {
-                if groups[i] == 0 {
-                    if curStart < 0 { curStart = i }
-                    curLen += 1
-                    if curLen > bestLen {
-                        bestStart = curStart
-                        bestLen = curLen
-                    }
-                } else {
-                    curStart = -1
-                    curLen = 0
-                }
-            }
-
-            // Build the string with :: for the longest zero run (must be >= 2 groups)
-            var parts: [String] = []
-            var i = 0
-            while i < 8 {
-                if i == bestStart && bestLen >= 2 {
-                    parts.append(i == 0 ? ":" : "")
-                    i += bestLen
-                    if i == 8 { parts.append("") }
-                } else {
-                    parts.append(String(groups[i], radix: 16))
-                    i += 1
-                }
-            }
-            return parts.joined(separator: ":")
-        }
+        // formatIPv6FromHex is defined in IPv6Utils.swift as a package-level function.
 
         public func findBluetoothDevices(
             resolveAgentVersion: Bool = false

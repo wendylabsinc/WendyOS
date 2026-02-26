@@ -7,6 +7,7 @@ import NIOSSL
 import Synchronization
 import WendyAgentGRPC
 import WendyCloudGRPC
+import WendyShared
 
 typealias GRPCTransport = HTTP2ClientTransport.Posix
 
