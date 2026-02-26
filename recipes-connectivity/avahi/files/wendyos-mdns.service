@@ -48,7 +48,7 @@
     <type>_wendyos._udp</type>
     <port>50051</port>
     <txt-record>id=DEVICE_ID_PLACEHOLDER</txt-record>
-    <txt-record>wendyosdevice=SOME_DEVICE_ID</txt-record>
+    <txt-record>fqdn=DEVICE_FQDN_PLACEHOLDER</txt-record>
     <txt-record>name=DEVICE_NAME_PLACEHOLDER</txt-record>
     <txt-record>displayname=DEVICE_DISPLAYNAME_PLACEHOLDER</txt-record>
   </service>
