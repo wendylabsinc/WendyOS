@@ -15,6 +15,7 @@
         private let ioServiceProvider: IOServiceProvider
         private let networkInterfaceProvider: NetworkInterfaceProvider
         private let logger: Logger
+        package var timeout: NIOCore.TimeAmount = .seconds(5)
 
         public init(
             ioServiceProvider: IOServiceProvider = DefaultIOServiceProvider(),

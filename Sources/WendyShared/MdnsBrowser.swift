@@ -40,7 +40,8 @@
             var clients: [(MulticastDNSClient, String)] = []
             for device in devices {
                 if let client = try? await DNSClient.connectMulticast(
-                    on: group, interface: device
+                    on: group,
+                    interface: device
                 ).get() {
                     clients.append((client, device.name))
                 }
@@ -55,18 +56,26 @@
             // Send A and AAAA queries on all clients concurrently
             var futures: [(EventLoopFuture<[Message]>, String)] = []
             for (client, ifName) in clients {
-                futures.append((
-                    client.sendMulticastQuery(
-                        forHost: queryName, type: .a, timeout: timeAmount
-                    ),
-                    ifName
-                ))
-                futures.append((
-                    client.sendMulticastQuery(
-                        forHost: queryName, type: .aaaa, timeout: timeAmount
-                    ),
-                    ifName
-                ))
+                futures.append(
+                    (
+                        client.sendMulticastQuery(
+                            forHost: queryName,
+                            type: .a,
+                            timeout: timeAmount
+                        ),
+                        ifName
+                    )
+                )
+                futures.append(
+                    (
+                        client.sendMulticastQuery(
+                            forHost: queryName,
+                            type: .aaaa,
+                            timeout: timeAmount
+                        ),
+                        ifName
+                    )
+                )
             }
 
             var addresses: [String] = []
@@ -151,7 +160,8 @@
             for device in devices {
                 do {
                     let client = try await DNSClient.connectMulticast(
-                        on: group, interface: device
+                        on: group,
+                        interface: device
                     ).get()
                     clients.append((client, device.name))
                 } catch {
@@ -171,18 +181,23 @@
             let timeAmount = durationToTimeAmount(timeout)
 
             // Normalize service type: remove trailing dot for comparison
-            let svcType = serviceType.hasSuffix(".")
+            let svcType =
+                serviceType.hasSuffix(".")
                 ? String(serviceType.dropLast()) : serviceType
 
             // Send PTR queries on all interfaces concurrently
             var futures: [(EventLoopFuture<[Message]>, String)] = []
             for (client, ifName) in clients {
-                futures.append((
-                    client.sendMulticastQuery(
-                        forHost: serviceType, type: .ptr, timeout: timeAmount
-                    ),
-                    ifName
-                ))
+                futures.append(
+                    (
+                        client.sendMulticastQuery(
+                            forHost: serviceType,
+                            type: .ptr,
+                            timeout: timeAmount
+                        ),
+                        ifName
+                    )
+                )
             }
 
             var seen = Set<String>()
@@ -192,7 +207,10 @@
                 do {
                     messages = try await future.get()
                 } catch {
-                    logger.warning("Query failed", metadata: ["interface": "\(ifName)", "error": "\(error)"])
+                    logger.warning(
+                        "Query failed",
+                        metadata: ["interface": "\(ifName)", "error": "\(error)"]
+                    )
                     continue
                 }
                 guard !messages.isEmpty else { continue }
@@ -205,9 +223,12 @@
                     for record in allRecords {
                         if case .ptr(let rr) = record {
                             let fqdn = rr.resource.domainName.string
-                            guard let range = fqdn.range(
-                                of: ".\(svcType)", options: .caseInsensitive
-                            ) else { continue }
+                            guard
+                                let range = fqdn.range(
+                                    of: ".\(svcType)",
+                                    options: .caseInsensitive
+                                )
+                            else { continue }
                             let shortName = String(fqdn[..<range.lowerBound])
                             instances[fqdn] = shortName
                         }
@@ -294,14 +315,15 @@
             return devices.filter { device in
                 guard device.multicastSupported,
                     let addr = device.address,
-                    (addr.protocol.rawValue == PF_INET || addr.protocol.rawValue == PF_INET6)
+                    addr.protocol.rawValue == PF_INET || addr.protocol.rawValue == PF_INET6
                 else { return false }
 
                 // Skip loopback IPv6 (::1)
                 if case .v6(let v6) = addr {
                     let a = v6.address.sin6_addr
                     let bytes = withUnsafeBytes(of: a) { Array($0) }
-                    let isLoopback = bytes.dropFirst().dropLast().allSatisfy({ $0 == 0 })
+                    let isLoopback =
+                        bytes.dropFirst().dropLast().allSatisfy({ $0 == 0 })
                         && bytes.first == 0 && bytes.last == 1
                     if isLoopback { return false }
                 }

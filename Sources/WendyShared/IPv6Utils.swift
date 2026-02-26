@@ -15,8 +15,10 @@ package func formatIPv6FromHex(_ hex: String) -> String? {
     }
 
     // Find the longest run of consecutive zero groups for :: compression
-    var bestStart = -1, bestLen = 0
-    var curStart = -1, curLen = 0
+    var bestStart = -1
+    var bestLen = 0
+    var curStart = -1
+    var curLen = 0
     for i in 0..<8 {
         if groups[i] == 0 {
             if curStart < 0 { curStart = i }

@@ -41,26 +41,33 @@
             for entry in entries {
                 let devicePath = "\(sysPath)/\(entry)"
 
-                let manufacturer = (try? String(
-                    contentsOfFile: "\(devicePath)/manufacturer", encoding: .utf8
-                ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let product = (try? String(
-                    contentsOfFile: "\(devicePath)/product", encoding: .utf8
-                ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let manufacturer =
+                    (try? String(
+                        contentsOfFile: "\(devicePath)/manufacturer",
+                        encoding: .utf8
+                    ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let product =
+                    (try? String(
+                        contentsOfFile: "\(devicePath)/product",
+                        encoding: .utf8
+                    ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
                 let combined = "\(manufacturer) \(product)"
-                guard combined.localizedCaseInsensitiveContains("Wendy")
-                    || combined.localizedCaseInsensitiveContains("WendyOS")
+                guard
+                    combined.localizedCaseInsensitiveContains("Wendy")
+                        || combined.localizedCaseInsensitiveContains("WendyOS")
                 else {
                     continue
                 }
 
                 guard
                     let vidStr = try? String(
-                        contentsOfFile: "\(devicePath)/idVendor", encoding: .utf8
+                        contentsOfFile: "\(devicePath)/idVendor",
+                        encoding: .utf8
                     ).trimmingCharacters(in: .whitespacesAndNewlines),
                     let pidStr = try? String(
-                        contentsOfFile: "\(devicePath)/idProduct", encoding: .utf8
+                        contentsOfFile: "\(devicePath)/idProduct",
+                        encoding: .utf8
                     ).trimmingCharacters(in: .whitespacesAndNewlines),
                     let vendorId = Int(vidStr, radix: 16),
                     let productId = Int(pidStr, radix: 16)
@@ -68,13 +75,17 @@
                     continue
                 }
 
-                let serialNumber = (try? String(
-                    contentsOfFile: "\(devicePath)/serial", encoding: .utf8
-                ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let serialNumber =
+                    (try? String(
+                        contentsOfFile: "\(devicePath)/serial",
+                        encoding: .utf8
+                    ))?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                let bcdUSB = (try? String(
-                    contentsOfFile: "\(devicePath)/version", encoding: .utf8
-                ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let bcdUSB =
+                    (try? String(
+                        contentsOfFile: "\(devicePath)/version",
+                        encoding: .utf8
+                    ))?.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 var usbVersion: String? = nil
                 if let bcd = bcdUSB {
@@ -86,15 +97,17 @@
                     }
                 }
 
-                devices.append(SysfsUSBDevice(
-                    sysfsEntry: entry,
-                    manufacturer: manufacturer,
-                    product: product,
-                    vendorId: vendorId,
-                    productId: productId,
-                    serialNumber: serialNumber,
-                    usbVersion: usbVersion
-                ))
+                devices.append(
+                    SysfsUSBDevice(
+                        sysfsEntry: entry,
+                        manufacturer: manufacturer,
+                        product: product,
+                        vendorId: vendorId,
+                        productId: productId,
+                        serialNumber: serialNumber,
+                        usbVersion: usbVersion
+                    )
+                )
             }
             return devices
         }
@@ -164,7 +177,8 @@
                     }
 
                     // Check if this is a Wendy interface: either by name or USB device association
-                    let isWendy = interfaceName.contains("Wendy")
+                    let isWendy =
+                        interfaceName.contains("Wendy")
                         || wendyNetInterfaces.keys.contains(interfaceName)
                     guard isWendy else {
                         continue
@@ -369,7 +383,8 @@
                     guard parts.count >= 6 else { continue }
                     let iface = String(parts[5])
                     let scope = String(parts[3])
-                    guard iface == interfaceName, scope == "20" else { continue } // 20 = link scope
+                    // scope 20 = link-local
+                    guard iface == interfaceName, scope == "20" else { continue }
                     // Convert compact hex to IPv6 format
                     let hex = String(parts[0])
                     if let formatted = formatIPv6FromHex(hex) {
@@ -400,7 +415,9 @@
                             continue
                         }
                         // Only include link-local addresses (fe80::) that aren't ours
-                        if addrStr.lowercased().hasPrefix("fe80:") && !ownAddresses.contains(addrStr) {
+                        if addrStr.lowercased().hasPrefix("fe80:")
+                            && !ownAddresses.contains(addrStr)
+                        {
                             peerAddresses.append(addrStr)
                         }
                     }
