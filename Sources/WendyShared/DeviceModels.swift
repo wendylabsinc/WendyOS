@@ -403,9 +403,6 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
     public let interfaceType: String
     public let isWendyDevice: Bool
     public var agentVersion: String?
-    /// Resolved IP address (may include IPv6 scope ID, e.g. "fe80::1%eth0").
-    /// When set, used for connection instead of hostname.
-    public let address: String?
 
     public init(
         id: String,
@@ -414,8 +411,7 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         port: Int,
         interfaceType: String,
         isWendyDevice: Bool,
-        agentVersion: String? = nil,
-        address: String? = nil
+        agentVersion: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -424,7 +420,6 @@ public struct LANDevice: Device, Encodable, Sendable, CustomStringConvertible {
         self.interfaceType = interfaceType
         self.isWendyDevice = isWendyDevice
         self.agentVersion = agentVersion
-        self.address = address
     }
 
     public func toJSON() throws -> String {

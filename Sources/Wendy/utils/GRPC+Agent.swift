@@ -127,7 +127,7 @@ func withGRPCClient<R: Sendable>(
         // since .dns() re-resolves and strips the scope ID.
         let target: any ResolvableTarget
         if host.contains(":") {
-            target = .ipv6(host: host, port: endpoint.port)
+            target = .ipv6(address: host, port: endpoint.port)
         } else if host.contains(".") && host.first?.isNumber == true {
             target = .ipv4(address: host, port: endpoint.port)
         } else {

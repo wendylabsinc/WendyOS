@@ -106,7 +106,7 @@ struct AgentConnectionOptions: ParsableArguments {
             }
 
             // Fall back to URLComponents for everything else (hostnames, IPv4, global IPv6)
-            var urlString = "wendy://" + input
+            let urlString = "wendy://" + input
             guard let components = URLComponents(string: urlString),
                 let host = components.host, !host.isEmpty
             else {

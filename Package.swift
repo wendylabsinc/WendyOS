@@ -84,7 +84,11 @@ let package = Package(
                     package: "hummingbird"
                 ),
                 .target(name: "CLIOutput"),
-                .product(name: "DNSClient", package: "DNSClient"),
+                .product(
+                    name: "DNSClient",
+                    package: "DNSClient",
+                    condition: .when(platforms: [.linux])
+                ),
                 .product(name: "Bluetooth", package: "bluetooth"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
