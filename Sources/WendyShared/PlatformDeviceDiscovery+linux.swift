@@ -23,64 +23,82 @@
                 var devices: [USBDevice] = []
 
                 do {
-                    let result = try await Subprocess.run(
-                        Subprocess.Executable.path("/usr/bin/lsusb"),
-                        arguments: Subprocess.Arguments([String]()),
-                        output: .string(limit: .max)
-                    )
-                    let output = result.standardOutput ?? ""
+                    let sysPath = "/sys/bus/usb/devices"
+                    let entries = try FileManager.default.contentsOfDirectory(atPath: sysPath)
 
-                    for line in output.split(separator: "\n") {
-                        let deviceInfo = String(line)
-                        logger.debug("Found USB device: \(deviceInfo)")
+                    for entry in entries {
+                        let devicePath = "\(sysPath)/\(entry)"
 
-                        // Parse the lsusb output format: "Bus XXX Device XXX: ID VVVV:PPPP Manufacturer Device"
-                        if deviceInfo.contains("Wendy") {
-                            // Extract vendor and product IDs
-                            if let idRange = deviceInfo.range(
-                                of: "ID \\S+",
-                                options: String.CompareOptions.regularExpression
-                            ) {
-                                let idStr = deviceInfo[idRange].dropFirst(3)  // Drop "ID "
-                                let parts = idStr.split(separator: ":")
+                        // Read manufacturer and product strings from sysfs
+                        let manufacturer = (try? String(
+                            contentsOfFile: "\(devicePath)/manufacturer", encoding: .utf8
+                        ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let product = (try? String(
+                            contentsOfFile: "\(devicePath)/product", encoding: .utf8
+                        ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-                                if parts.count == 2,
-                                    let vendorId = Int(parts[0], radix: 16),
-                                    let productId = Int(parts[1], radix: 16)
-                                {
+                        // Check if this is a Wendy device by manufacturer or product string
+                        let combined = "\(manufacturer) \(product)"
+                        guard combined.localizedCaseInsensitiveContains("Wendy")
+                            || combined.localizedCaseInsensitiveContains("WendyOS")
+                        else {
+                            continue
+                        }
 
-                                    // Extract name - everything after the ID part
-                                    let nameStartIndex = deviceInfo.index(
-                                        idRange.upperBound,
-                                        offsetBy: 1
-                                    )
-                                    if nameStartIndex < deviceInfo.endIndex {
-                                        let name = String(deviceInfo[nameStartIndex...])
-                                            .trimmingCharacters(in: .whitespaces)
+                        // Read vendor and product IDs
+                        guard
+                            let vidStr = try? String(
+                                contentsOfFile: "\(devicePath)/idVendor", encoding: .utf8
+                            ).trimmingCharacters(in: .whitespacesAndNewlines),
+                            let pidStr = try? String(
+                                contentsOfFile: "\(devicePath)/idProduct", encoding: .utf8
+                            ).trimmingCharacters(in: .whitespacesAndNewlines),
+                            let vendorId = Int(vidStr, radix: 16),
+                            let productId = Int(pidStr, radix: 16)
+                        else {
+                            continue
+                        }
 
-                                        devices.append(
-                                            USBDevice(
-                                                name: name,
-                                                vendorId: vendorId,
-                                                productId: productId
-                                            )
-                                        )
+                        // Read optional fields
+                        let serialNumber = (try? String(
+                            contentsOfFile: "\(devicePath)/serial", encoding: .utf8
+                        ))?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                                        logger.info(
-                                            "Found Wendy USB device: \(name)",
-                                            metadata: [
-                                                "vendorId": .string(
-                                                    String(format: "0x%04X", vendorId)
-                                                ),
-                                                "productId": .string(
-                                                    String(format: "0x%04X", productId)
-                                                ),
-                                            ]
-                                        )
-                                    }
-                                }
+                        let bcdUSB = (try? String(
+                            contentsOfFile: "\(devicePath)/version", encoding: .utf8
+                        ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                        var usbVersion: String? = nil
+                        if let bcd = bcdUSB {
+                            let trimmed = bcd.trimmingCharacters(in: .whitespaces)
+                            if trimmed.hasPrefix("3.") {
+                                usbVersion = "USB 3"
+                            } else if trimmed.hasPrefix("2.") {
+                                usbVersion = "USB 2"
                             }
                         }
+
+                        let name = product.isEmpty ? manufacturer : product
+
+                        devices.append(
+                            USBDevice(
+                                name: name,
+                                vendorId: vendorId,
+                                productId: productId,
+                                usbVersion: usbVersion,
+                                serialNumber: serialNumber
+                            )
+                        )
+
+                        logger.info(
+                            "Found Wendy USB device: \(name)",
+                            metadata: [
+                                "vendorId": .string(String(format: "0x%04X", vendorId)),
+                                "productId": .string(String(format: "0x%04X", productId)),
+                                "manufacturer": .string(manufacturer),
+                                "sysfs": .string(entry),
+                            ]
+                        )
                     }
                 } catch {
                     logger.error("Failed to list USB devices: \(error)")
@@ -101,6 +119,9 @@
             #if os(Linux)
                 logger.info("Listing Ethernet interfaces on Linux")
                 var interfaces: [EthernetInterface] = []
+
+                // First, find network interfaces belonging to Wendy USB devices via sysfs
+                let wendyNetInterfaces = findWendyUSBNetInterfaces()
 
                 do {
                     // Read interface list from /sys/class/net
@@ -126,6 +147,13 @@
                             continue
                         }
 
+                        // Check if this is a Wendy interface: either by name or USB device association
+                        let isWendy = interfaceName.contains("Wendy")
+                            || wendyNetInterfaces.keys.contains(interfaceName)
+                        guard isWendy else {
+                            continue
+                        }
+
                         // Read MAC address
                         let addressPath = "/sys/class/net/\(interfaceName)/address"
                         let macAddress = try? String(contentsOfFile: addressPath, encoding: .utf8)
@@ -138,7 +166,6 @@
                             .trimmingCharacters(in: .whitespacesAndNewlines),
                             let speed = Int(speedStr), speed > 0
                         {
-                            // Format speed as human-readable string
                             if speed >= 1000 {
                                 let gbps = Double(speed) / 1000.0
                                 if gbps == floor(gbps) {
@@ -151,14 +178,12 @@
                             }
                         }
 
-                        // Only collect interfaces containing "Wendy" in their name
-                        if !interfaceName.contains("Wendy") {
-                            continue
-                        }
+                        // Use the Wendy device product name as display name if available
+                        let displayName = wendyNetInterfaces[interfaceName] ?? interfaceName
 
                         let ethernetInterface = EthernetInterface(
                             name: interfaceName,
-                            displayName: interfaceName,
+                            displayName: displayName,
                             interfaceType: "Ethernet",
                             macAddress: macAddress,
                             linkSpeed: linkSpeed
@@ -168,7 +193,8 @@
                         logger.debug(
                             "Found Wendy Ethernet interface: \(interfaceName)",
                             metadata: [
-                                "speed": .string(linkSpeed ?? "unknown")
+                                "displayName": .string(displayName),
+                                "speed": .string(linkSpeed ?? "unknown"),
                             ]
                         )
                     }
@@ -185,6 +211,65 @@
                 logger.warning("Ethernet interface listing is not yet supported on Windows")
                 return []
             #endif
+        }
+
+        /// Find network interfaces that belong to Wendy USB devices by walking sysfs.
+        /// Returns a dictionary mapping interface name to the USB device's product name.
+        private func findWendyUSBNetInterfaces() -> [String: String] {
+            var result: [String: String] = [:]
+            let sysPath = "/sys/bus/usb/devices"
+
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: sysPath) else {
+                return result
+            }
+
+            for entry in entries {
+                let devicePath = "\(sysPath)/\(entry)"
+
+                // Read manufacturer and product to identify Wendy devices
+                let manufacturer = (try? String(
+                    contentsOfFile: "\(devicePath)/manufacturer", encoding: .utf8
+                ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let product = (try? String(
+                    contentsOfFile: "\(devicePath)/product", encoding: .utf8
+                ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                let combined = "\(manufacturer) \(product)"
+                guard combined.localizedCaseInsensitiveContains("Wendy")
+                    || combined.localizedCaseInsensitiveContains("WendyOS")
+                else {
+                    continue
+                }
+
+                // Walk child interfaces (e.g., 7-1:1.0, 7-1:1.1) looking for net/ subdirectory
+                guard
+                    let children = try? FileManager.default.contentsOfDirectory(atPath: devicePath)
+                else {
+                    continue
+                }
+
+                for child in children where child.hasPrefix(entry) {
+                    let netPath = "\(devicePath)/\(child)/net"
+                    if let netInterfaces = try? FileManager.default.contentsOfDirectory(
+                        atPath: netPath
+                    ) {
+                        for iface in netInterfaces {
+                            let displayName = product.isEmpty ? manufacturer : product
+                            result[iface] = displayName
+                            logger.debug(
+                                "Mapped Wendy USB net interface",
+                                metadata: [
+                                    "interface": .string(iface),
+                                    "usbDevice": .string(entry),
+                                    "product": .string(product),
+                                ]
+                            )
+                        }
+                    }
+                }
+            }
+
+            return result
         }
 
         public func findLANDevices() async throws -> [LANDevice] {
@@ -246,6 +331,133 @@
 
             return interfaces
         }
+
+        /// Discover LAN devices reachable via Wendy USB network interfaces.
+        /// Uses IPv6 NDP to find peer link-local addresses on USB-connected devices,
+        /// then probes the agent port to create connectable LANDevice entries.
+        public func findUSBLANDevices() async -> [LANDevice] {
+            #if os(Linux)
+                let wendyNetInterfaces = findWendyUSBNetInterfaces()
+                guard !wendyNetInterfaces.isEmpty else { return [] }
+
+                var devices: [LANDevice] = []
+
+                for (interfaceName, productName) in wendyNetInterfaces {
+                    // Discover peer IPv6 link-local addresses via NDP.
+                    // Send an ICMPv6 multicast ping to ff02::1 (all-nodes) on this interface,
+                    // then read the neighbor table for link-local addresses.
+                    let peerAddresses = await discoverPeerLinkLocal(on: interfaceName)
+
+                    for peerAddr in peerAddresses {
+                        // Use the address with scope ID so gRPC can route to it
+                        let scopedAddress = "\(peerAddr)%\(interfaceName)"
+                        let device = LANDevice(
+                            id: productName,
+                            displayName: productName,
+                            hostname: scopedAddress,
+                            port: 50051,
+                            interfaceType: "USB",
+                            isWendyDevice: true
+                        )
+                        devices.append(device)
+                        logger.info(
+                            "Found Wendy device via USB interface",
+                            metadata: [
+                                "interface": .string(interfaceName),
+                                "address": .string(scopedAddress),
+                            ]
+                        )
+                    }
+                }
+
+                return devices
+            #else
+                return []
+            #endif
+        }
+
+        #if os(Linux)
+        /// Discover peer IPv6 link-local addresses on a network interface via NDP.
+        private func discoverPeerLinkLocal(on interfaceName: String) async -> [String] {
+            // First, trigger NDP by pinging the all-nodes multicast address
+            do {
+                let pingResult = try await Subprocess.run(
+                    .name("ping"),
+                    arguments: ["-6", "-c", "1", "-W", "1", "-I", interfaceName, "ff02::1"],
+                    output: .discarded,
+                    error: .discarded
+                )
+                _ = pingResult  // We don't care about the result, just triggering NDP
+            } catch {
+                logger.debug("NDP ping failed on \(interfaceName): \(error)")
+            }
+
+            // Brief wait for NDP to complete
+            try? await Task.sleep(for: .milliseconds(500))
+
+            // Read our own link-local address to exclude it
+            var ownAddresses = Set<String>()
+            if let ifinet6 = try? String(contentsOfFile: "/proc/net/if_inet6", encoding: .utf8) {
+                for line in ifinet6.split(separator: "\n") {
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                    // Format: addr device_number prefix_length scope flags iface_name
+                    guard parts.count >= 6 else { continue }
+                    let iface = String(parts[5])
+                    let scope = String(parts[3])
+                    guard iface == interfaceName, scope == "20" else { continue } // 20 = link scope
+                    // Convert compact hex to IPv6 format
+                    let hex = String(parts[0])
+                    if let formatted = Self.formatIPv6FromHex(hex) {
+                        ownAddresses.insert(formatted)
+                    }
+                }
+            }
+
+            // Read the IPv6 neighbor table to find peer addresses
+            var peerAddresses: [String] = []
+            do {
+                let result = try await Subprocess.run(
+                    .name("ip"),
+                    arguments: ["-6", "neigh", "show", "dev", interfaceName],
+                    output: .string(limit: 10_000),
+                    error: .discarded
+                )
+                if let output = result.standardOutput {
+                    for line in output.split(separator: "\n") {
+                        let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                        guard let addr = parts.first else { continue }
+                        let addrStr = String(addr)
+                        // Only include link-local addresses (fe80::) that aren't ours
+                        if addrStr.lowercased().hasPrefix("fe80:") && !ownAddresses.contains(addrStr) {
+                            peerAddresses.append(addrStr)
+                        }
+                    }
+                }
+            } catch {
+                logger.debug("Failed to read IPv6 neighbor table for \(interfaceName): \(error)")
+            }
+
+            return peerAddresses
+        }
+
+        /// Convert a 32-char hex string from /proc/net/if_inet6 to standard IPv6 notation.
+        private static func formatIPv6FromHex(_ hex: String) -> String? {
+            guard hex.count == 32 else { return nil }
+            var groups: [String] = []
+            var index = hex.startIndex
+            for _ in 0..<8 {
+                let end = hex.index(index, offsetBy: 4)
+                let group = String(hex[index..<end])
+                // Remove leading zeros for compact representation
+                let trimmed = group.replacingOccurrences(
+                    of: "^0+", with: "", options: .regularExpression
+                )
+                groups.append(trimmed.isEmpty ? "0" : trimmed)
+                index = end
+            }
+            return groups.joined(separator: ":")
+        }
+        #endif
 
         public func findBluetoothDevices(
             resolveAgentVersion: Bool = false

@@ -16,12 +16,14 @@ import PackageDescription
     let packageDependencies: [Package.Dependency] = [
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.25.2"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.2"),
-        .package(url: "https://github.com/orlandos-nl/DNSClient.git", from: "2.6.1"),
         .package(
-            url: "https://github.com/grpc/grpc-swift-nio-transport.git",
-            from: "2.3.0"
+            url: "https://github.com/wendylabsinc/grpc-swift-nio-transport.git",
+            branch: "fix/ipv6-scope-id"
         ),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0"),
+        .package(
+            url: "https://github.com/wendylabsinc/swift-nio.git",
+            branch: "fix/ipv6-scoped-address-parsing"
+        ),
     ]
 #endif
 
@@ -62,6 +64,10 @@ let package = Package(
         .package(url: "https://github.com/wendylabsinc/dbus.git", from: "0.3.0"),
         .package(url: "https://github.com/wendylabsinc/TOMLKit.git", from: "0.7.0"),
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.0.0"),
+        .package(
+            url: "https://github.com/wendylabsinc/DNSClient.git",
+            branch: "fix/multicast-interface-binding"
+        ),
     ],
     targets: [
         /// The main executable provided by wendy-cli.
@@ -165,9 +171,18 @@ let package = Package(
                     condition: .when(platforms: [.macOS])
                 ),
                 .product(name: "Subprocess", package: "swift-subprocess"),
-                .product(name: "DNSClient", package: "DNSClient"),
+                .product(
+                    name: "DNSClient",
+                    package: "DNSClient",
+                    condition: .when(platforms: [.linux])
+                ),
                 .product(name: "Bluetooth", package: "bluetooth"),
                 .product(name: "NIOCore", package: "swift-nio"),
+                .product(
+                    name: "NIOPosix",
+                    package: "swift-nio",
+                    condition: .when(platforms: [.linux])
+                ),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .target(name: "WendyAgentGRPC"),
             ]

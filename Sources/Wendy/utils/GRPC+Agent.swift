@@ -10,18 +10,135 @@ import WendyCloudGRPC
 
 typealias GRPCTransport = HTTP2ClientTransport.Posix
 
+/// Resolve a `.local` hostname to an IP address.
+///
+/// On Linux, gRPC uses c-ares for DNS which cannot resolve mDNS `.local` names,
+/// and our statically-linked musl binary can't use nss-mdns via getaddrinfo either.
+/// Uses DNSClient multicast queries to send A/AAAA queries directly.
+///
+/// On macOS, getaddrinfo resolves `.local` natively via mDNSResponder, but gRPC's
+/// DNS resolver doesn't preserve IPv6 scope IDs (sin6_scope_id). Without the scope
+/// ID, connect() to link-local fe80:: addresses fails with EHOSTUNREACH. We resolve
+/// manually and format with `%interface` suffix.
+private func resolveLocalHostname(_ host: String) async -> String {
+    guard host.hasSuffix(".local") || host.hasSuffix(".local.") else {
+        return host
+    }
+
+    #if os(Linux)
+        let logger = Logger(label: "sh.wendy.mdns.resolve")
+        let addresses = await MdnsBrowser.resolveHostname(host, logger: logger)
+
+        // Prefer non-link-local IPv4, then any IPv4, then any address
+        return addresses.first(where: { $0.contains(".") && !$0.hasPrefix("169.254.") })
+            ?? addresses.first(where: { $0.contains(".") })
+            ?? addresses.first
+            ?? host
+    #elseif canImport(Darwin)
+        // Use getaddrinfo which resolves .local via mDNSResponder.
+        // This preserves sin6_scope_id for IPv6 link-local addresses.
+        var hints = addrinfo()
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_family = AF_UNSPEC
+        var result: UnsafeMutablePointer<addrinfo>?
+
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let result else {
+            return host
+        }
+        defer { freeaddrinfo(result) }
+
+        // Collect all resolved addresses, preferring IPv4 non-link-local
+        var ipv4Addresses: [String] = []
+        var ipv6Addresses: [String] = []
+
+        var current: UnsafeMutablePointer<addrinfo>? = result
+        while let info = current {
+            defer { current = info.pointee.ai_next }
+
+            if info.pointee.ai_family == AF_INET {
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin in
+                    var addr = sin.pointee.sin_addr
+                    inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN))
+                }
+                let ip = String(cString: buf)
+                if !ip.isEmpty && !ipv4Addresses.contains(ip) {
+                    ipv4Addresses.append(ip)
+                }
+            } else if info.pointee.ai_family == AF_INET6 {
+                var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { sin6 in
+                    var addr = sin6.pointee.sin6_addr
+                    inet_ntop(AF_INET6, &addr, &buf, socklen_t(INET6_ADDRSTRLEN))
+                    var ip = String(cString: buf)
+                    // Append scope ID for link-local so connect() knows which interface
+                    let scopeId = sin6.pointee.sin6_scope_id
+                    if ip.hasPrefix("fe80:") && scopeId != 0 {
+                        var ifname = [CChar](repeating: 0, count: Int(IFNAMSIZ))
+                        if if_indextoname(scopeId, &ifname) != nil {
+                            ip = "\(ip)%\(String(cString: ifname))"
+                        }
+                    }
+                    if !ip.isEmpty && !ipv6Addresses.contains(ip) {
+                        ipv6Addresses.append(ip)
+                    }
+                }
+            }
+        }
+
+        // Prefer non-link-local IPv4, then any IPv4, then IPv6 (with scope)
+        return ipv4Addresses.first(where: { !$0.hasPrefix("169.254.") })
+            ?? ipv4Addresses.first
+            ?? ipv6Addresses.first
+            ?? host
+    #else
+        return host
+    #endif
+}
+
 func withGRPCClient<R: Sendable>(
     _ endpoint: AgentConnectionOptions.Endpoint,
     security: GRPCTransport.TransportSecurity,
     _ body: @escaping @Sendable (GRPCClient<GRPCTransport>) async throws -> R
 ) async throws -> R {
-    let transport = try GRPCTransport(
-        target: .dns(
-            host: endpoint.host,
-            port: endpoint.port
-        ),
-        transportSecurity: security
-    )
+    let transport: GRPCTransport
+
+    if endpoint.isIPv6LinkLocal, let scopeID = endpoint.scopeID {
+        // IPv6 link-local addresses require scope ID for routing.
+        // Use getaddrinfo (via .dns) with the scope-qualified address,
+        // which properly sets sin6_scope_id in the resulting sockaddr_in6.
+        transport = try GRPCTransport(
+            target: .dns(
+                host: "\(endpoint.hostWithoutScope)%\(scopeID)",
+                port: endpoint.port
+            ),
+            transportSecurity: security
+        )
+    } else if endpoint.isIPv6LinkLocal {
+        // IPv6 link-local without scope ID - use .ipv6 target directly
+        transport = try GRPCTransport(
+            target: .ipv6(address: endpoint.host, port: endpoint.port),
+            transportSecurity: security
+        )
+    } else {
+        let host = await resolveLocalHostname(endpoint.host)
+
+        // Use .ipv6 target for IPv6 addresses (especially link-local with scope ID),
+        // since .dns() re-resolves and strips the scope ID.
+        let target: any ResolvableTarget
+        if host.contains(":") {
+            target = .ipv6(host: host, port: endpoint.port)
+        } else if host.contains(".") && host.first?.isNumber == true {
+            target = .ipv4(address: host, port: endpoint.port)
+        } else {
+            target = .dns(host: host, port: endpoint.port)
+        }
+
+        transport = try GRPCTransport(
+            target: target,
+            transportSecurity: security
+        )
+    }
 
     return try await withGRPCClient(transport: transport) { client in
         try await body(client)

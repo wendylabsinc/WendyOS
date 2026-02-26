@@ -58,7 +58,9 @@ struct DiscoverCommand: AsyncParsableCommand {
 
                     if type == .lan || type == .all {
                         group.addTask {
-                            let discovery = PlatformDeviceDiscovery(logger: logger)
+                            var discovery = PlatformDeviceDiscovery(logger: logger)
+                            // mDNS browse must finish before the command timeout cancels us
+                            discovery.timeout = .seconds(Int64(max(1, self.timeout - 2)))
                             while !Task.isCancelled {
                                 try await discovery.withLANDeviceDiscovery { device in
                                     await deviceCache.updateFastDevices(
@@ -76,8 +78,11 @@ struct DiscoverCommand: AsyncParsableCommand {
                             while !Task.isCancelled {
                                 let usb = await discovery.findUSBDevices()
                                 let ethernet = await discovery.findEthernetInterfaces()
+                                let usbLAN = await discovery.findUSBLANDevices()
                                 await deviceCache.updateFastDevices(
-                                    with: DevicesCollection(usb: usb, ethernet: ethernet)
+                                    with: DevicesCollection(
+                                        usb: usb, ethernet: ethernet, lan: usbLAN
+                                    )
                                 )
                                 try await Task.sleep(for: .seconds(2))
                             }
@@ -216,16 +221,17 @@ struct DiscoverCommand: AsyncParsableCommand {
                 while !Task.isCancelled {
                     async let usbDevices = discovery.findUSBDevices()
                     async let ethernetDevices = discovery.findEthernetInterfaces()
+                    async let usbLANDevices = discovery.findUSBLANDevices()
 
                     let usb = await usbDevices
                     let ethernet = await ethernetDevices
+                    let usbLAN = await usbLANDevices
 
-                    if !usb.isEmpty {
-                        await deviceCache.updateFastDevices(with: DevicesCollection(usb: usb))
-                    }
-                    if !ethernet.isEmpty {
+                    if !usb.isEmpty || !ethernet.isEmpty || !usbLAN.isEmpty {
                         await deviceCache.updateFastDevices(
-                            with: DevicesCollection(ethernet: ethernet)
+                            with: DevicesCollection(
+                                usb: usb, ethernet: ethernet, lan: usbLAN
+                            )
                         )
                     }
 

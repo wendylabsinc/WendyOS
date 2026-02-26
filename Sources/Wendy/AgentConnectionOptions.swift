@@ -34,6 +34,26 @@ struct AgentConnectionOptions: ParsableArguments {
         var port: Int
         var defaultDevice: Bool
 
+        /// Returns true if the host is an IPv6 link-local address (fe80::).
+        var isIPv6LinkLocal: Bool {
+            host.lowercased().hasPrefix("fe80:")
+        }
+
+        /// The IPv6 scope ID (interface name) if present, e.g. "eth0" from "fe80::1%eth0".
+        var scopeID: String? {
+            guard let percentIndex = host.firstIndex(of: "%") else { return nil }
+            let scope = String(host[host.index(after: percentIndex)...])
+            return scope.isEmpty ? nil : scope
+        }
+
+        /// The host address without the scope ID suffix.
+        var hostWithoutScope: String {
+            if let percentIndex = host.firstIndex(of: "%") {
+                return String(host[..<percentIndex])
+            }
+            return host
+        }
+
         init(host: String, port: Int, defaultDevice: Bool = false) {
             self.host = host
             self.port = port
@@ -41,19 +61,52 @@ struct AgentConnectionOptions: ParsableArguments {
         }
 
         init?(argument: String) {
-            // Create a dummy URL to use URLComponents parsing capabilities
-            var urlString = argument
-            let hasScheme = urlString.contains("://")
+            // Handle IPv6 link-local with scope ID before URL parsing,
+            // since URLComponents mangles the %interface suffix.
+            // Formats: [fe80::1%eth0]:port, fe80::1%eth0, [fe80::1%25eth0]:port
+            var input = argument
 
-            // Only allow wendy:// scheme or no scheme
-            if hasScheme {
-                if !urlString.starts(with: "wendy://") {
-                    return nil
-                }
-            } else {
-                urlString = "wendy://" + urlString
+            // Strip wendy:// scheme if present
+            if input.hasPrefix("wendy://") {
+                input = String(input.dropFirst("wendy://".count))
+            } else if input.contains("://") {
+                return nil  // Unknown scheme
             }
 
+            // Check for bracketed IPv6 with scope ID: [fe80::1%eth0]:port or [fe80::1%25eth0]:port
+            if input.hasPrefix("[") {
+                guard let closeBracket = input.firstIndex(of: "]") else { return nil }
+                var ipv6Part = String(input[input.index(after: input.startIndex)..<closeBracket])
+                let afterBracket = String(input[input.index(after: closeBracket)...])
+
+                // Decode %25 -> % (URL-encoded scope ID)
+                ipv6Part = ipv6Part.replacingOccurrences(of: "%25", with: "%")
+
+                let port: Int
+                if afterBracket.hasPrefix(":"), let p = Int(afterBracket.dropFirst()) {
+                    port = p
+                } else {
+                    port = 50051
+                }
+
+                self.host = ipv6Part
+                self.port = port
+                self.defaultDevice = false
+                return
+            }
+
+            // Check for bare IPv6 link-local with scope ID: fe80::1%eth0
+            if input.lowercased().hasPrefix("fe80:") && input.contains("%") {
+                // Decode %25 -> % if URL-encoded
+                input = input.replacingOccurrences(of: "%25", with: "%")
+                self.host = input
+                self.port = 50051
+                self.defaultDevice = false
+                return
+            }
+
+            // Fall back to URLComponents for everything else (hostnames, IPv4, global IPv6)
+            var urlString = "wendy://" + input
             guard let components = URLComponents(string: urlString),
                 let host = components.host, !host.isEmpty
             else {

@@ -16,6 +16,10 @@ public protocol DeviceDiscovery: Sendable {
     func findLANDevices() async throws -> [LANDevice]
     func findBluetoothDevices(resolveAgentVersion: Bool) async throws -> [BluetoothDevice]
 
+    /// Discover LAN devices reachable via Wendy USB network interfaces.
+    /// Uses IPv6 NDP to find peer link-local addresses on USB-connected devices.
+    func findUSBLANDevices() async -> [LANDevice]
+
     /// Discover LAN devices and call the handler for each one as it's found
     func withLANDeviceDiscovery(_ handler: (LANDevice) async throws -> Void) async throws
 }
@@ -24,6 +28,11 @@ extension DeviceDiscovery {
     /// Convenience method that calls findBluetoothDevices with resolveAgentVersion: false
     public func findBluetoothDevices() async throws -> [BluetoothDevice] {
         try await findBluetoothDevices(resolveAgentVersion: false)
+    }
+
+    /// Default implementation returns empty (platforms without USB gadget networking)
+    public func findUSBLANDevices() async -> [LANDevice] {
+        return []
     }
 
     /// Default implementation that wraps findLANDevices
@@ -47,23 +56,27 @@ extension DeviceDiscovery {
             async let usbDevices = findUSBDevices()
             async let ethernetDevices = findEthernetInterfaces()
             async let lanDevices = findLANDevices()
+            async let usbLANDevices = findUSBLANDevices()
             async let bluetoothDevices = findBluetoothDevices()
 
+            let lan = try await lanDevices + usbLANDevices
             return try await DevicesCollection(
                 usb: usbDevices,
                 ethernet: ethernetDevices,
-                lan: lanDevices,
+                lan: lan,
                 bluetooth: bluetoothDevices
             )
         } else {
             async let usbDevices = findUSBDevices()
             async let ethernetDevices = findEthernetInterfaces()
             async let lanDevices = findLANDevices()
+            async let usbLANDevices = findUSBLANDevices()
 
+            let lan = try await lanDevices + usbLANDevices
             return try await DevicesCollection(
                 usb: usbDevices,
                 ethernet: ethernetDevices,
-                lan: lanDevices,
+                lan: lan,
                 bluetooth: []
             )
         }
