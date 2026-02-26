@@ -81,7 +81,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                                 let usbLAN = await discovery.findUSBLANDevices()
                                 await deviceCache.updateFastDevices(
                                     with: DevicesCollection(
-                                        usb: usb, ethernet: ethernet, lan: usbLAN
+                                        usb: usb,
+                                        ethernet: ethernet,
+                                        lan: usbLAN
                                     )
                                 )
                                 try await Task.sleep(for: .seconds(2))
@@ -230,7 +232,9 @@ struct DiscoverCommand: AsyncParsableCommand {
                     if !usb.isEmpty || !ethernet.isEmpty || !usbLAN.isEmpty {
                         await deviceCache.updateFastDevices(
                             with: DevicesCollection(
-                                usb: usb, ethernet: ethernet, lan: usbLAN
+                                usb: usb,
+                                ethernet: ethernet,
+                                lan: usbLAN
                             )
                         )
                     }
