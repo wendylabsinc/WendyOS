@@ -707,7 +707,6 @@ jobs:
             --depends "systemd" \
             --depends "ca-certificates" \
             --depends "avahi-daemon" \
-            --depends "nerdctl" \
             --deb-recommends "network-manager | connman" \
             --deb-recommends "bluez" \
             --config-files /etc/default/wendy-agent \
@@ -759,7 +758,6 @@ jobs:
             --depends "systemd" \
             --depends "ca-certificates" \
             --depends "avahi" \
-            --depends "nerdctl" \
             --config-files /etc/default/wendy-agent \
             --config-files /etc/wendy-agent/config.json \
             --config-files /etc/avahi/services/wendy-agent.service \
@@ -793,7 +791,6 @@ jobs:
           dpkg-deb -c "$WENDY_AGENT_DEB" | grep -q "etc/default/wendy-agent"
           dpkg-deb -c "$WENDY_AGENT_DEB" | grep -q "etc/avahi/services/wendy-agent.service"
           dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*avahi-daemon"
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*nerdctl"
 
           rpm -qp --requires "$WENDY_RPM" | grep -q "^usbutils"
           rpm -qp --requires "$WENDY_RPM" | grep -q "^ca-certificates"
@@ -802,7 +799,6 @@ jobs:
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^systemd"
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^ca-certificates"
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^avahi"
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep -q "^nerdctl"
           rpm -qpl "$WENDY_AGENT_RPM" | grep -q "/usr/lib/systemd/system/wendy-agent.service"
           rpm -qpl "$WENDY_AGENT_RPM" | grep -q "/usr/lib/systemd/system/wendyos-dev-registry.service"
           rpm -qpl "$WENDY_AGENT_RPM" | grep -q "/usr/lib/systemd/system/wendyos-dev-registry-import.service"
