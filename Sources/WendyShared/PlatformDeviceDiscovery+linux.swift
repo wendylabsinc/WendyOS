@@ -291,27 +291,32 @@
             let duration = Duration.seconds(Int64(timeout.nanoseconds / 1_000_000_000))
             var seen = Set<String>()
 
-            for await entry in MdnsBrowser.browse(
+            var devices: [LANDevice] = []
+
+            await MdnsBrowser.browse(
                 serviceType: "_wendyos._udp.local.",
                 timeout: duration,
                 logger: logger
-            ) {
-                try Task.checkCancellation()
+            ) { entry in
                 let id = entry.text.values.first ?? entry.name
                 let hostname = entry.hostname
 
                 // Deduplicate by hostname
-                guard !seen.contains(hostname) else { continue }
+                guard !seen.contains(hostname) else { return }
                 seen.insert(hostname)
 
-                let device = LANDevice(
+                devices.append(LANDevice(
                     id: id,
                     displayName: id,
                     hostname: hostname,
                     port: Int(entry.port),
                     interfaceType: "LAN",
                     isWendyDevice: true
-                )
+                ))
+            }
+
+            for device in devices {
+                try Task.checkCancellation()
                 try await handler(device)
             }
         }
