@@ -145,7 +145,7 @@ public struct Config: Sendable, Codable {
 
 extension Config.Auth.Certificates {
     /// Returns true if the certificate is expired or will expire within the buffer period
-    func needsRefresh(buffer: TimeInterval = 86400) -> Bool {
+    func needsRefresh(buffer: TimeInterval = 259_200) -> Bool {
         guard let leafPEM = certificateChainPEM.first else { return true }
         do {
             let cert = try Certificate(pemEncoded: leafPEM)
