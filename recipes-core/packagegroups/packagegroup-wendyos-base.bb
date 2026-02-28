@@ -46,16 +46,6 @@ RDEPENDS:${PN}:append = " \
         )} \
     "
 
-# Remove data partition dependent services for QEMU
-# QEMU uses single-partition layout without separate /data
-RDEPENDS:${PN}:remove:qemuall = " \
-    wendyos-user \
-    wendyos-etc-binds \
-    swapfile-setup \
-    systemd-mount-containerd \
-    systemd-mount-home \
-    "
-
 # Include hardware-specific packagegroup configuration
 require ${@bb.utils.contains('MACHINEOVERRIDES', 'qemuall', 'qemu-packagegroup-base.inc', '', d)}
 require ${@bb.utils.contains('MACHINEOVERRIDES', 'tegra', 'tegra-packagegroup-base.inc', '', d)}
