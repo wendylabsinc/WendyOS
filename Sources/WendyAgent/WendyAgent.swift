@@ -185,6 +185,7 @@ struct WendyAgent: AsyncParsableCommand {
                 logger.info("Shutting down server")
                 continuation.yield()
             }),
+            WendyAudioService(),
             provisioning,
             TelemetryStreamingService(broadcaster: telemetryBroadcaster),
         ]

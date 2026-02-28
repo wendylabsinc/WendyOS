@@ -878,7 +878,7 @@ public struct Containerd: Sendable {
         }
 
         logger.info(
-            "Image unpacked successfully",
+            "Image unpacked",
             metadata: [
                 "image": .stringConvertible(imageName),
                 "total-layers": .stringConvertible(totalLayers),
@@ -1305,7 +1305,7 @@ public struct Containerd: Sendable {
                     .with { $0.containerID = runningTask.id }
                 )
                 logger.debug(
-                    "Task deleted successfully",
+                    "Task deleted",
                     metadata: ["task-id": .stringConvertible(runningTask.id)]
                 )
             } catch let error as RPCError where error.code == .notFound {

@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package wendy.agent.services.v1;
+
+service WendyAudioService {
+    // List all available audio devices (microphones and speakers)
+    rpc ListAudioDevices(ListAudioDevicesRequest) returns (ListAudioDevicesResponse);
+
+    // Set the default audio input or output device
+    rpc SetDefaultAudioDevice(SetDefaultAudioDeviceRequest) returns (SetDefaultAudioDeviceResponse);
+
+    // Stream real-time audio levels for visualization (VU meter)
+    rpc StreamAudioLevels(StreamAudioLevelsRequest) returns (stream AudioLevelUpdate);
+
+    // Stream raw PCM audio data from a microphone
+    rpc StreamAudio(StreamAudioRequest) returns (stream AudioChunk);
+}
+
+// Request to list audio devices
+message ListAudioDevicesRequest {
+    // Optional filter by device type
+    optional AudioDeviceType type_filter = 1;
+}
+
+// Response containing available audio devices
+message ListAudioDevicesResponse {
+    repeated AudioDevice devices = 1;
+}
+
+// Information about an audio device
+message AudioDevice {
+    // PipeWire/WirePlumber node ID
+    uint32 id = 1;
+
+    // Short name of the device
+    string name = 2;
+
+    // Human-readable description
+    string description = 3;
+
+    // Device type (input or output)
+    AudioDeviceType type = 4;
+
+    // Whether this is the default device for its type
+    bool is_default = 5;
+}
+
+// Type of audio device
+enum AudioDeviceType {
+    AUDIO_DEVICE_TYPE_UNSPECIFIED = 0;
+    AUDIO_DEVICE_TYPE_INPUT = 1;   // Microphone/capture device
+    AUDIO_DEVICE_TYPE_OUTPUT = 2;  // Speaker/playback device
+}
+
+// Request to set default audio device
+message SetDefaultAudioDeviceRequest {
+    // Device ID to set as default
+    uint32 device_id = 1;
+}
+
+// Response for setting default device
+message SetDefaultAudioDeviceResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// Request to stream audio levels
+message StreamAudioLevelsRequest {
+    // Optional: specific device ID, or 0 for default input
+    uint32 device_id = 1;
+
+    // Update rate in Hz (default: 20, range: 1-60)
+    uint32 update_rate_hz = 2;
+}
+
+// Real-time audio level update
+message AudioLevelUpdate {
+    // Peak level in dB (0 = max, negative values below max)
+    float peak_db = 1;
+
+    // RMS level in dB
+    float rms_db = 2;
+
+    // Timestamp in nanoseconds
+    uint64 timestamp_ns = 3;
+}
+
+// Request to stream raw audio
+message StreamAudioRequest {
+    // Optional: specific device ID, or 0 for default input
+    uint32 device_id = 1;
+
+    // Sample rate in Hz (default: 48000)
+    uint32 sample_rate = 2;
+
+    // Number of channels (default: 1 for mono, 2 for stereo)
+    uint32 channels = 3;
+}
+
+// Raw PCM audio chunk
+message AudioChunk {
+    // Raw PCM data in s16le (signed 16-bit little-endian) format
+    bytes pcm_data = 1;
+
+    // Timestamp in nanoseconds for timing/sync
+    uint64 timestamp_ns = 2;
+
+    // Sample rate of this chunk
+    uint32 sample_rate = 3;
+
+    // Number of channels in this chunk
+    uint32 channels = 4;
+}

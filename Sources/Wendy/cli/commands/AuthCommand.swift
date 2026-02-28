@@ -139,7 +139,7 @@ struct LogoutCommand: AsyncParsableCommand {
                 let success: Bool
                 let message: String
             }
-            let response = SuccessResponse(success: true, message: "Logged out successfully")
+            let response = SuccessResponse(success: true, message: "Logged out")
             let responseData = try JSONEncoder().encode(response)
             print(String(data: responseData, encoding: .utf8)!)
         }

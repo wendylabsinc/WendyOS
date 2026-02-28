@@ -247,7 +247,9 @@ struct OSCommand: AsyncParsableCommand {
             print("Press Ctrl+C to cancel\n")
 
             try await cliOutput.withProgressBar(
-                message: "Writing image to \(drive.name) (\(drive.id))"
+                message: "Writing image to \(drive.name) (\(drive.id))",
+                successMessage: "Image written",
+                errorMessage: "Failed to write image"
             ) { [diskWriter, imagePath] updateProgress in
                 let progressUpdater = SendableProgressUpdater(updateProgress)
                 let monotonic = Monotonic()
@@ -545,7 +547,9 @@ struct OSCommand: AsyncParsableCommand {
                 }
                 // Download archive to cache
                 zipPath = try await cliOutput.withProgressBar(
-                    message: "Downloading image for \(selectedDeviceName)"
+                    message: "Downloading image for \(selectedDeviceName)",
+                    successMessage: "Image downloaded",
+                    errorMessage: "Failed to download image"
                 ) { [imageDownloader, imageUrl] updateProgress in
                     let progressUpdater = SendableProgressUpdater(updateProgress)
                     let monotonic = Monotonic()
@@ -587,7 +591,9 @@ struct OSCommand: AsyncParsableCommand {
             let diskWriter = DiskWriterFactory.createDiskWriter()
 
             try await cliOutput.withProgressBar(
-                message: "Writing image to \(selectedDrive.name) (\(selectedDrive.id))"
+                message: "Writing image to \(selectedDrive.name) (\(selectedDrive.id))",
+                successMessage: "Image written",
+                errorMessage: "Failed to write image"
             ) { [diskWriter, zipPath] updateProgress in
                 let progressUpdater = SendableProgressUpdater(updateProgress)
                 let monotonic = Monotonic()

@@ -218,7 +218,7 @@ struct RunCommand: AsyncParsableCommand, Sendable {
                 try await group.next()
                 group.cancelAll()
             }
-            logger.info("Container stopped successfully")
+            logger.info("Container stopped")
         } catch is CancellationError {
             logger.warning(
                 "Stop container operation timed out after \(timeout)s",

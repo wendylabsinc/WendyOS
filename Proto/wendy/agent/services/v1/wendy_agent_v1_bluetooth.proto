@@ -14,6 +14,10 @@ message BluetoothCommand {
         AppsRemoveCommand apps_remove = 7;
         AgentVersionCommand agent_version = 8;
         HardwareListCommand hardware_list = 9;
+        BluetoothListCommand bluetooth_list = 10;
+        BluetoothConnectCommand bluetooth_connect = 11;
+        BluetoothDisconnectCommand bluetooth_disconnect = 12;
+        BluetoothForgetCommand bluetooth_forget = 13;
     }
 }
 
@@ -24,6 +28,23 @@ message WifiDisconnectCommand {}
 message AppsListCommand {}
 message AgentVersionCommand {}
 message HardwareListCommand {}
+
+// Bluetooth device commands
+message BluetoothListCommand {
+    bool paired_only = 1;
+}
+
+message BluetoothConnectCommand {
+    string address = 1;
+}
+
+message BluetoothDisconnectCommand {
+    string address = 1;
+}
+
+message BluetoothForgetCommand {
+    string address = 1;
+}
 
 // Commands with parameters
 message WifiConnectCommand {
@@ -53,6 +74,10 @@ message BluetoothResponse {
         AgentVersionResponse agent_version = 8;
         HardwareListResponse hardware_list = 9;
         ErrorResponse error = 10;
+        BluetoothListResponse bluetooth_list = 11;
+        BluetoothConnectResponse bluetooth_connect = 12;
+        BluetoothDisconnectResponse bluetooth_disconnect = 13;
+        BluetoothForgetResponse bluetooth_forget = 14;
     }
 }
 
@@ -109,6 +134,26 @@ message ErrorResponse {
     string message = 1;
 }
 
+// Bluetooth device responses
+message BluetoothListResponse {
+    repeated BluetoothDeviceInfo devices = 1;
+}
+
+message BluetoothConnectResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message BluetoothDisconnectResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message BluetoothForgetResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
 // Shared types
 message WifiNetworkInfo {
     string ssid = 1;
@@ -126,4 +171,16 @@ message HardwareInfo {
     string type = 1;
     string name = 2;
     bool available = 3;
+}
+
+// Information about a Bluetooth device
+message BluetoothDeviceInfo {
+    string name = 1;
+    string address = 2;
+    optional int32 rssi = 3;
+    bool paired = 4;
+    bool connected = 5;
+    bool trusted = 6;
+    string device_type = 7;
+    optional string icon = 8;
 }

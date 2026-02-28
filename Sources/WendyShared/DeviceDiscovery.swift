@@ -82,10 +82,6 @@ extension DeviceDiscovery {
 
         logger.debug("Bluetooth is ready, starting scan...")
 
-        var discoveredDevices: [String: (BluetoothDevice, Peripheral)] = [:]
-        let scanDuration: Duration = .seconds(5)
-        let scanStartTime = ContinuousClock.now
-
         // Create BluetoothUUID for filtering
         guard let foundationUUID = UUID(uuidString: WendyBluetoothUUIDs.serviceUUID) else {
             logger.warning("Invalid Wendy service UUID configuration")
@@ -93,115 +89,45 @@ extension DeviceDiscovery {
         }
         let wendyServiceUUID = BluetoothUUID.bit128(foundationUUID)
 
-        do {
-            // Start scanning for devices advertising the Wendy service UUID
-            let scanFilter = ScanFilter(serviceUUIDs: [wendyServiceUUID])
-            let discoveries = try await centralManager.scan(filter: scanFilter)
+        // Start scanning for devices advertising the Wendy service UUID
+        let scanFilter = ScanFilter(serviceUUIDs: [wendyServiceUUID])
+        var wendyDevices = try await centralManager.scanAll(
+            scanFilter: scanFilter
+        )
+        .filter(\.0.isWendyDevice)
 
-            for try await discovery in discoveries {
-                let elapsed = ContinuousClock.now - scanStartTime
-                if elapsed > scanDuration {
-                    break
+        // Resolve agent versions if requested
+        if resolveAgentVersion {
+            await withTaskGroup(of: (String, Wendy_Agent_Services_V1_AgentVersionResponse?).self) { group in
+                for (wendyDevice, peripheral) in wendyDevices {
+                    group.addTask {
+                        do {
+                            let version = try await self.resolveBluetoothAgentVersion(
+                                peripheral: peripheral,
+                                centralManager: centralManager
+                            )
+                            return (wendyDevice.id, version)
+                        } catch {
+                            return (wendyDevice.id, nil)
+                        }
+                    }
                 }
 
-                // Check if this is a Wendy device by checking for our service UUID
-                let advertisedServiceUUIDs = discovery.advertisementData.serviceUUIDs
-                let isWendyDevice = advertisedServiceUUIDs.contains(wendyServiceUUID)
-
-                if isWendyDevice {
-                    let localName =
-                        discovery.advertisementData.localName ?? discovery.peripheral.name ?? ""
-                    let deviceId = discovery.peripheral.id.rawValue
-                    let displayName =
-                        localName.isEmpty ? "WendyOS Device" : localName
-
-                    let rssi = discovery.rssi
-
-                    // Get the Bluetooth address (on macOS, we use the peripheral identifier)
-                    let address = deviceId
-
-                    let device = BluetoothDevice(
-                        id: deviceId,
-                        displayName: displayName,
-                        address: address,
-                        rssi: rssi,
-                        isWendyDevice: true,
-                        agentVersion: nil,
-                        os: nil,
-                        osVersion: nil,
-                        cpuArchitecture: nil,
-                        featureset: [],
-                        l2capPSM: WendyBluetoothUUIDs.l2capPSM
-                    )
-
-                    // Store peripheral for version resolution
-                    let peripheral = discovery.peripheral
-
-                    // Only add if not already discovered (keep the one with better RSSI)
-                    if let existing = discoveredDevices[deviceId] {
-                        if rssi > existing.0.rssi {
-                            discoveredDevices[deviceId] = (device, peripheral)
-                        }
-                    } else {
-                        discoveredDevices[deviceId] = (device, peripheral)
-                        logger.debug(
-                            "Discovered Wendy Bluetooth device",
-                            metadata: [
-                                "name": "\(displayName)",
-                                "rssi": "\(rssi)",
-                            ]
-                        )
+                for await (deviceId, version) in group {
+                    if let version,
+                        let index = wendyDevices.firstIndex(where: { $0.0.id == deviceId })
+                    {
+                        wendyDevices[index].0.agentVersion = version.version
+                        wendyDevices[index].0.os = version.os
+                        wendyDevices[index].0.osVersion = version.osVersion
+                        wendyDevices[index].0.cpuArchitecture = version.cpuArchitecture
+                        wendyDevices[index].0.featureset = Set(version.featureset)
                     }
                 }
             }
-
-            try await centralManager.stopScan()
-
-            // Resolve agent versions if requested
-            if resolveAgentVersion {
-                await withTaskGroup(
-                    of: (String, Wendy_Agent_Services_V1_AgentVersionResponse?).self
-                ) { group in
-                    for (deviceId, (_, peripheral)) in discoveredDevices {
-                        group.addTask {
-                            do {
-                                let version = try await self.resolveBluetoothAgentVersion(
-                                    peripheral: peripheral,
-                                    centralManager: centralManager
-                                )
-                                return (deviceId, version)
-                            } catch {
-                                return (deviceId, nil)
-                            }
-                        }
-                    }
-
-                    for await (deviceId, version) in group {
-                        if let version,
-                            var entry = discoveredDevices[deviceId]
-                        {
-                            entry.0.agentVersion = version.version
-                            entry.0.os = version.os
-                            entry.0.osVersion = version.osVersion
-                            entry.0.cpuArchitecture = version.cpuArchitecture
-                            entry.0.featureset = Set(version.featureset)
-                            discoveredDevices[deviceId] = entry
-                        }
-                    }
-                }
-            }
-        } catch {
-            logger.warning(
-                "Bluetooth scan failed",
-                metadata: ["error": "\(error)"]
-            )
-            return []
         }
 
-        let devices = Array(discoveredDevices.values).map(\.0).sorted { $0.rssi > $1.rssi }
-        logger.debug("Bluetooth scan complete", metadata: ["deviceCount": "\(devices.count)"])
-
-        return devices
+        return wendyDevices.map(\.0).sorted { $0.rssi > $1.rssi }
     }
 
     private func resolveBluetoothAgentVersion(
@@ -359,5 +285,76 @@ extension CentralManager {
                 }
             }
         }
+    }
+
+    public func scanAll(
+        scanFilter: ScanFilter,
+        scanDuration: Duration = .seconds(5)
+    ) async throws -> [(BluetoothDevice, Peripheral)] {
+        let logger = Logger(label: "sh.wendy.bluetooth.scanning")
+        var discoveredDevices: [String: (BluetoothDevice, Peripheral)] = [:]
+        let scanStartTime = ContinuousClock.now
+
+        do {
+            // Start scanning for devices advertising the Wendy service UUID
+            let discoveries = try await scan(filter: scanFilter)
+
+            for try await discovery in discoveries {
+                let elapsed = ContinuousClock.now - scanStartTime
+                if elapsed > scanDuration {
+                    break
+                }
+
+                let localName =
+                    discovery.advertisementData.localName ?? discovery.peripheral.name ?? ""
+                let deviceId = discovery.peripheral.id.rawValue
+                let displayName =
+                    localName.isEmpty ? "WendyOS Device" : localName
+
+                let rssi = discovery.rssi
+
+                // Get the Bluetooth address (on macOS, we use the peripheral identifier)
+                let address = deviceId
+
+                let device = BluetoothDevice(
+                    id: deviceId,
+                    displayName: displayName,
+                    address: address,
+                    rssi: rssi,
+                    isWendyDevice: true,
+                    agentVersion: nil,
+                    l2capPSM: WendyBluetoothUUIDs.l2capPSM
+                )
+
+                // Store peripheral for version resolution
+                let peripheral = discovery.peripheral
+
+                // Only add if not already discovered (keep the one with better RSSI)
+                if let existing = discoveredDevices[deviceId] {
+                    if rssi > existing.0.rssi {
+                        discoveredDevices[deviceId] = (device, peripheral)
+                    }
+                } else {
+                    discoveredDevices[deviceId] = (device, peripheral)
+                    logger.debug(
+                        "Discovered Bluetooth device",
+                        metadata: [
+                            "name": "\(displayName)",
+                            "rssi": "\(rssi)",
+                        ]
+                    )
+                }
+            }
+
+            try await stopScan()
+        } catch {
+            logger.warning(
+                "Bluetooth scan failed",
+                metadata: ["error": "\(error)"]
+            )
+            return []
+        }
+
+        return discoveredDevices.values.sorted { $0.0.rssi > $1.0.rssi }
     }
 }

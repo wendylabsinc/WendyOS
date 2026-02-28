@@ -28,8 +28,11 @@ public func withErrorTracking(
                 reason: error.localizedDescription
             ).print()
         } else {
-            cliOutput.error("An unexpected error occurred: \(error.localizedDescription)")
-            cliOutput.info("Join our Discord for support: https://discord.gg/xYeUxq9TXv")
+            cliOutput.error(
+                "An unexpected error occurred: \(error.localizedDescription)",
+                suggestion:
+                    "Join our Discord for support: \("https://discord.gg/xYeUxq9TXv".underline)"
+            )
         }
         throw error
     }
@@ -94,8 +97,11 @@ func promptDeviceUpdateIfUnimplemented(
                 title: "Updating device"
             ) { client in
                 let agent = Agent(client: client)
-                _ = try await cliOutput.withProgressBar(message: "Updating Device") {
-                    updateProgress in
+                _ = try await cliOutput.withProgressBar(
+                    message: "Updating Device",
+                    successMessage: "Device updated",
+                    errorMessage: "Device update failed"
+                ) { updateProgress in
                     try await agent.update(fromBinary: binary, onProgress: updateProgress)
                 }
             }
@@ -170,10 +176,10 @@ private func deviceUnreachable(source: DeviceSource) async throws {
         }
     case .defaultConfig(let value):
         cliOutput.error(
-            """
-            Device is unreachable: \(value)
-            The hostname was set as a default in the CLI configuration.
-            """
+            "Device is unreachable: \(value.underline)\nThe hostname was set as a default in the CLI configuration.",
+            suggestion: ([
+                "Remove the default by running: \("wendy device unset-default".underline)"
+            ] + takeaways).joined(separator: "\n")
         )
         cliOutput.info("Remove the default by running: wendy device unset-default")
         for takeaway in takeaways {

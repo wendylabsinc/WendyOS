@@ -121,6 +121,108 @@ private func executeWithDeviceAndHostname<R: Sendable>(
 // MARK: - WiFi Commands
 
 extension AgentClient {
+    func withBluetoothPeripherals(
+        _ perform:
+            @escaping @Sendable ([Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral])
+            async throws -> Void
+    ) async throws {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            _ = try await agent.scanBluetoothPeripherals(
+                request: .init(producer: { _ in })
+            ) { response in
+                // Use dictionary keyed by address to deduplicate and prevent unbounded growth
+                var peripherals:
+                    [String: (Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral, Date)] = [:]
+
+                for try await message in response.messages {
+                    // Update or insert devices, replacing old entries
+                    for peripheral in message.discoveredDevices {
+                        peripherals[peripheral.address] = (peripheral, Date())
+                    }
+
+                    try await perform(
+                        peripherals.values
+                            .map(\.0)
+                            .sorted { bluetoothDevice1, bluetoothDevice2 in
+                                // Sort by: paired first, then by RSSI
+                                if bluetoothDevice1.paired != bluetoothDevice2.paired {
+                                    return bluetoothDevice1.paired
+                                }
+                                return bluetoothDevice1.rssi > bluetoothDevice2.rssi
+                            }
+                    )
+                }
+                return Array(peripherals.values)
+            }
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "This feature is unavailable over the Bluetooth Agent Connection"
+            )
+        }
+    }
+
+    func connectBluetoothPeripheral(
+        address: String,
+        pair: Bool,
+        trust: Bool
+    ) async throws {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            _ = try await agent.connectBluetoothPeripheral(
+                .with {
+                    $0.address = address
+                    $0.pair = pair
+                    $0.trust = trust
+                }
+            )
+
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "This feature is unavailable over the Bluetooth Agent Connection"
+            )
+        }
+    }
+
+    func disconnectBluetoothPeripheral(
+        address: String
+    ) async throws {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            _ = try await agent.disconnectBluetoothPeripheral(
+                .with {
+                    $0.address = address
+                }
+            )
+
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "This feature is unavailable over the Bluetooth Agent Connection"
+            )
+        }
+    }
+
+    func forgetBluetoothPeripheral(
+        address: String
+    ) async throws {
+        switch self {
+        case .grpc(let client):
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            _ = try await agent.forgetBluetoothPeripheral(
+                .with {
+                    $0.address = address
+                }
+            )
+
+        case .bluetooth:
+            throw CLIError.unsupportedPlatform(
+                reason: "This feature is unavailable over the Bluetooth Agent Connection"
+            )
+        }
+    }
 
     func discoverSSID() async throws -> String {
         let source = self

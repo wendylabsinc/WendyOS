@@ -25,15 +25,22 @@ struct DeviceCommand: AsyncParsableCommand {
                 subcommands: [
                     SetupCommand.self,
                     HardwareCommand.self,
-                    WiFiCommand.self,
                     AppsCommand.self,
                 ]
             ),
             CommandGroup(
-                name: "Observability",
+                name: "Connectivity",
+                subcommands: [
+                    WiFiCommand.self,
+                    BluetoothCommand.self,
+                ]
+            ),
+            CommandGroup(
+                name: "Debug Tools",
                 subcommands: [
                     LogsCommand.self,
                     DashboardCommand.self,
+                    AudioCommand.self,
                     TelemetryStreamCommand.self,
                 ]
             ),
@@ -234,7 +241,9 @@ struct DeviceCommand: AsyncParsableCommand {
                 ) { client, endpoint in
                     let agent = Agent(client: client)
                     _ = try await cliOutput.withProgressBar(
-                        message: "Updating Device"
+                        message: "Updating Device",
+                        successMessage: "Device updated",
+                        errorMessage: "Device update failed"
                     ) {
                         updateProgress in
                         try await agent.update(fromBinary: binary, onProgress: updateProgress)
@@ -251,7 +260,7 @@ struct DeviceCommand: AsyncParsableCommand {
                     port: port
                 )
 
-                cliOutput.success("Agent updated successfully")
+                try await waitForDeviceRestart(endpoint: endpoint)
             #endif
         }
     }
@@ -378,7 +387,9 @@ struct DeviceCommand: AsyncParsableCommand {
                     let devicePlatform = try Platform.linuxPlatform(forArchitecture: versionInfo.cpuArchitecture)
                     let binary = try await downloadLatestRelease(platform: devicePlatform).path
                     _ = try await cliOutput.withProgressBar(
-                        message: "Updating Device"
+                        message: "Updating Device",
+                        successMessage: "Device updated",
+                        errorMessage: "Device update failed"
                     ) {
                         updateProgress in
                         try await Agent(client: client).update(
@@ -407,8 +418,6 @@ struct DeviceCommand: AsyncParsableCommand {
                         port: port
                     )
                 }
-
-                cliOutput.success("Agent updated successfully")
             }
         }
     }

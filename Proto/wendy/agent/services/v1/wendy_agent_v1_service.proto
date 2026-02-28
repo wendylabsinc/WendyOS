@@ -28,6 +28,12 @@ service WendyAgentService {
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
 
+    rpc ScanBluetoothPeripherals(stream ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
+
+    rpc ConnectBluetoothPeripheral(ConnectBluetoothPeripheralRequest) returns (ConnectBluetoothPeripheralResponse);
+    rpc DisconnectBluetoothPeripheral(DisconnectBluetoothPeripheralRequest) returns (DisconnectBluetoothPeripheralResponse);
+    rpc ForgetBluetoothPeripheral(ForgetBluetoothPeripheralRequest) returns (ForgetBluetoothPeripheralResponse);
+
     // Update the operating system using a Mender artifact
     rpc UpdateOS(UpdateOSRequest) returns (stream UpdateOSResponse);
 }
@@ -245,6 +251,39 @@ message ListHardwareCapabilitiesResponse {
         map<string, string> properties = 4;
     }
 }
+
+message ScanBluetoothPeripheralsRequest {}
+
+message DiscoveredBluetoothPeripheral {
+    string name = 1;
+    string address = 2;
+    int32 rssi = 3;
+    string deviceType = 4;
+    bool paired = 5;
+    bool connected = 6;
+    bool trusted = 7;
+}
+
+message ScanBluetoothPeripheralsResponse {
+    repeated DiscoveredBluetoothPeripheral discovered_devices = 1;
+}
+
+message ConnectBluetoothPeripheralRequest {
+    string address = 1;
+    bool pair = 2;
+    bool trust = 3;
+}
+message ConnectBluetoothPeripheralResponse {}
+
+message DisconnectBluetoothPeripheralRequest {
+    string address = 1;
+}
+message DisconnectBluetoothPeripheralResponse {}
+
+message ForgetBluetoothPeripheralRequest {
+    string address = 1;
+}
+message ForgetBluetoothPeripheralResponse {}
 
 // Request message for updating the OS
 message UpdateOSRequest {

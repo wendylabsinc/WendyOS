@@ -136,7 +136,7 @@ struct RegistryContainerService: Service {
                             try await Task.sleep(for: .seconds(2))
                             let newState = try await systemctl.getState(serviceName)
                             if newState == "active" {
-                                logger.info("Registry service restarted successfully")
+                                logger.info("Registry service restarted")
                             } else {
                                 logger.warning(
                                     "Registry service restarted but in '\(newState)' state"

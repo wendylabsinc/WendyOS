@@ -116,8 +116,56 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
                 method: "ListHardwareCapabilities"
             )
         }
+        /// Namespace for "ScanBluetoothPeripherals" metadata.
+        public enum ScanBluetoothPeripherals: Sendable {
+            /// Request type for "ScanBluetoothPeripherals".
+            public typealias Input = Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest
+            /// Response type for "ScanBluetoothPeripherals".
+            public typealias Output = Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse
+            /// Descriptor for "ScanBluetoothPeripherals".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ScanBluetoothPeripherals"
+            )
+        }
+        /// Namespace for "ConnectBluetoothPeripheral" metadata.
+        public enum ConnectBluetoothPeripheral: Sendable {
+            /// Request type for "ConnectBluetoothPeripheral".
+            public typealias Input = Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest
+            /// Response type for "ConnectBluetoothPeripheral".
+            public typealias Output = Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse
+            /// Descriptor for "ConnectBluetoothPeripheral".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ConnectBluetoothPeripheral"
+            )
+        }
+        /// Namespace for "DisconnectBluetoothPeripheral" metadata.
+        public enum DisconnectBluetoothPeripheral: Sendable {
+            /// Request type for "DisconnectBluetoothPeripheral".
+            public typealias Input = Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest
+            /// Response type for "DisconnectBluetoothPeripheral".
+            public typealias Output = Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse
+            /// Descriptor for "DisconnectBluetoothPeripheral".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "DisconnectBluetoothPeripheral"
+            )
+        }
+        /// Namespace for "ForgetBluetoothPeripheral" metadata.
+        public enum ForgetBluetoothPeripheral: Sendable {
+            /// Request type for "ForgetBluetoothPeripheral".
+            public typealias Input = Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest
+            /// Response type for "ForgetBluetoothPeripheral".
+            public typealias Output = Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse
+            /// Descriptor for "ForgetBluetoothPeripheral".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ForgetBluetoothPeripheral"
+            )
+        }
         /// Namespace for "UpdateOS" metadata.
-        public enum UpdateOS {
+        public enum UpdateOS: Sendable {
             /// Request type for "UpdateOS".
             public typealias Input = Wendy_Agent_Services_V1_UpdateOSRequest
             /// Response type for "UpdateOS".
@@ -138,6 +186,10 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             GetWiFiStatus.descriptor,
             DisconnectWiFi.descriptor,
             ListHardwareCapabilities.descriptor,
+            ScanBluetoothPeripherals.descriptor,
+            ConnectBluetoothPeripheral.descriptor,
+            DisconnectBluetoothPeripheral.descriptor,
+            ForgetBluetoothPeripheral.descriptor,
             UpdateOS.descriptor
         ]
     }
@@ -300,6 +352,62 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>
+
+        /// Handle the "ScanBluetoothPeripherals" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
+        func scanBluetoothPeripherals(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>
+
+        /// Handle the "ConnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` messages.
+        func connectBluetoothPeripheral(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>
+
+        /// Handle the "DisconnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` messages.
+        func disconnectBluetoothPeripheral(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>
+
+        /// Handle the "ForgetBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` messages.
+        func forgetBluetoothPeripheral(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>
 
         /// Handle the "UpdateOS" method.
         ///
@@ -465,6 +573,62 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>
 
+        /// Handle the "ScanBluetoothPeripherals" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
+        func scanBluetoothPeripherals(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>
+
+        /// Handle the "ConnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` message.
+        func connectBluetoothPeripheral(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>
+
+        /// Handle the "DisconnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` message.
+        func disconnectBluetoothPeripheral(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>
+
+        /// Handle the "ForgetBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` message.
+        func forgetBluetoothPeripheral(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>
+
         /// Handle the "UpdateOS" method.
         ///
         /// > Source IDL Documentation:
@@ -629,6 +793,63 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse
 
+        /// Handle the "ScanBluetoothPeripherals" method.
+        ///
+        /// - Parameters:
+        ///   - request: A stream of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - response: A response stream of `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        func scanBluetoothPeripherals(
+            request: GRPCCore.RPCAsyncSequence<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest, any Swift.Error>,
+            response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>,
+            context: GRPCCore.ServerContext
+        ) async throws
+
+        /// Handle the "ConnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` to respond with.
+        func connectBluetoothPeripheral(
+            request: Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse
+
+        /// Handle the "DisconnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` to respond with.
+        func disconnectBluetoothPeripheral(
+            request: Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse
+
+        /// Handle the "ForgetBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` to respond with.
+        func forgetBluetoothPeripheral(
+            request: Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse
+
         /// Handle the "UpdateOS" method.
         ///
         /// > Source IDL Documentation:
@@ -743,6 +964,50 @@ extension Wendy_Agent_Services_V1_WendyAgentService.StreamingServiceProtocol {
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ScanBluetoothPeripherals.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>(),
+            handler: { request, context in
+                try await self.scanBluetoothPeripherals(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ConnectBluetoothPeripheral.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>(),
+            handler: { request, context in
+                try await self.connectBluetoothPeripheral(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.DisconnectBluetoothPeripheral.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>(),
+            handler: { request, context in
+                try await self.disconnectBluetoothPeripheral(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ForgetBluetoothPeripheral.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>(),
+            handler: { request, context in
+                try await self.forgetBluetoothPeripheral(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.UpdateOS.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_UpdateOSRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_UpdateOSResponse>(),
@@ -819,6 +1084,39 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse> {
         let response = try await self.listHardwareCapabilities(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func connectBluetoothPeripheral(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse> {
+        let response = try await self.connectBluetoothPeripheral(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func disconnectBluetoothPeripheral(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse> {
+        let response = try await self.disconnectBluetoothPeripheral(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func forgetBluetoothPeripheral(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse> {
+        let response = try await self.forgetBluetoothPeripheral(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -945,6 +1243,62 @@ extension Wendy_Agent_Services_V1_WendyAgentService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>(
             message: try await self.listHardwareCapabilities(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func scanBluetoothPeripherals(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse> {
+        return GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>(
+            metadata: [:],
+            producer: { writer in
+                try await self.scanBluetoothPeripherals(
+                    request: request.messages,
+                    response: writer,
+                    context: context
+                )
+                return [:]
+            }
+        )
+    }
+
+    public func connectBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>(
+            message: try await self.connectBluetoothPeripheral(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func disconnectBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>(
+            message: try await self.disconnectBluetoothPeripheral(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func forgetBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>(
+            message: try await self.forgetBluetoothPeripheral(
                 request: request.message,
                 context: context
             ),
@@ -1154,6 +1508,82 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ScanBluetoothPeripherals" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func scanBluetoothPeripherals<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ConnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func connectBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "DisconnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func disconnectBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ForgetBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func forgetBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
         /// Call the "UpdateOS" method.
@@ -1457,6 +1887,124 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             )
         }
 
+        /// Call the "ScanBluetoothPeripherals" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func scanBluetoothPeripherals<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.bidirectionalStreaming(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ScanBluetoothPeripherals.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ConnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func connectBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ConnectBluetoothPeripheral.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "DisconnectBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func disconnectBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.DisconnectBluetoothPeripheral.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ForgetBluetoothPeripheral" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func forgetBluetoothPeripheral<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ForgetBluetoothPeripheral.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
         /// Call the "UpdateOS" method.
         ///
         /// > Source IDL Documentation:
@@ -1710,6 +2258,104 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ScanBluetoothPeripherals" method.
+    ///
+    /// - Parameters:
+    ///   - request: A streaming request producing `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func scanBluetoothPeripherals<Result>(
+        request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        try await self.scanBluetoothPeripherals(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ConnectBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func connectBluetoothPeripheral<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.connectBluetoothPeripheral(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DisconnectBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func disconnectBluetoothPeripheral<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.disconnectBluetoothPeripheral(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ForgetBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func forgetBluetoothPeripheral<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.forgetBluetoothPeripheral(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -1995,6 +2641,121 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             metadata: metadata
         )
         return try await self.listHardwareCapabilities(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ScanBluetoothPeripherals" method.
+    ///
+    /// - Parameters:
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func scanBluetoothPeripherals<Result>(
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        requestProducer producer: @Sendable @escaping (GRPCCore.RPCWriter<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>) async throws -> Void,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>(
+            metadata: metadata,
+            producer: producer
+        )
+        return try await self.scanBluetoothPeripherals(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ConnectBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func connectBluetoothPeripheral<Result>(
+        _ message: Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.connectBluetoothPeripheral(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DisconnectBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func disconnectBluetoothPeripheral<Result>(
+        _ message: Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.disconnectBluetoothPeripheral(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ForgetBluetoothPeripheral" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func forgetBluetoothPeripheral<Result>(
+        _ message: Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.forgetBluetoothPeripheral(
             request: request,
             options: options,
             onResponse: handleResponse

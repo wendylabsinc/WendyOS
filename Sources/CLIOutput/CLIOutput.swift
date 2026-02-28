@@ -44,11 +44,11 @@ public protocol CLIOutput: Sendable {
     /// Display a streaming table that updates in real-time.
     /// In interactive mode, shows a live-updating table.
     /// In JSON mode, emits each update as a JSON line.
-    func streamingTable<T: Encodable & Sendable>(
+    func streamingTable<T: Encodable & Sendable, E: Error>(
         initial: T,
-        updates: AsyncStream<T>,
+        updates: some AsyncSequence<T, E> & Sendable,
         renderTable: @escaping @Sendable (T) -> (headers: [String], rows: [[String]])
-    ) async
+    ) async throws
 
     /// Select an item from a table interactively. Returns the index of the selected row.
     /// In JSON mode, this throws an error requiring explicit selection via CLI args.
@@ -61,9 +61,9 @@ public protocol CLIOutput: Sendable {
 
     /// Select an item from a streaming table that updates in real-time.
     /// Returns the selected element.
-    func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
+    func selectFromStreamingTable<S: BidirectionalCollection & Sendable, E: Error>(
         initial: S,
-        updates: some AsyncSequence<S, Never> & Sendable,
+        updates: some AsyncSequence<S, E> & Sendable,
         pageSize: Int,
         renderTable: @escaping @Sendable ([S.Element]) -> (headers: [String], rows: [[String]])
     ) async throws -> S.Element where S.Index == Int, S.Element: Sendable & Comparable
@@ -90,7 +90,9 @@ public protocol CLIOutput: Sendable {
     /// In interactive mode, shows a progress bar. In JSON mode, runs silently.
     func withProgressBar<T: Sendable>(
         message: String,
-        operation: @escaping @Sendable (@escaping (Double) -> Void) async throws -> T
+        successMessage: String,
+        errorMessage: String,
+        operation: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// Execute an async operation with progress bar indication and label updates.
@@ -130,17 +132,20 @@ public protocol CLIOutput: Sendable {
     func yesOrNoPrompt(question: String, defaultAnswer: Bool) async throws -> Bool
 
     /// Single choice from a list of options
-    func singleChoicePrompt(
+    func singleChoicePrompt<Option: CustomStringConvertible & Equatable>(
         title: String?,
         question: String,
-        options: [String]
-    ) async throws -> String
+        options: [Option]
+    ) async throws -> Option
 
     /// Free-text input prompt
     func textPrompt(title: String?, prompt: String) async throws -> String
 
     /// Multiple choice selection from a list of options
-    func multipleChoicePrompt(question: String, options: [String]) async throws -> [String]
+    func multipleChoicePrompt<Option: CustomStringConvertible & Equatable>(
+        question: String,
+        options: [Option]
+    ) async throws -> [Option]
 
     /// Secure password input prompt
     func secureTextPrompt(title: String, prompt: String) throws -> String
@@ -185,9 +190,9 @@ extension CLIOutput {
         )
     }
 
-    public func selectFromStreamingTable<S: BidirectionalCollection & Sendable>(
+    public func selectFromStreamingTable<S: BidirectionalCollection & Sendable, E: Error>(
         initial: S,
-        updates: some AsyncSequence<S, Never> & Sendable,
+        updates: some AsyncSequence<S, E> & Sendable,
         pageSize: Int,
         renderTable: @escaping @Sendable ([S.Element]) -> (headers: [String], rows: [[String]])
     ) async throws -> S.Element where S.Index == Int, S.Element: Sendable & Comparable {
@@ -209,7 +214,9 @@ extension CLIOutput {
 
     public func withProgressBar<T: Sendable>(
         message: String,
-        operation: @Sendable (@escaping (Double) -> Void) async throws -> T
+        successMessage: String,
+        errorMessage: String,
+        operation: @Sendable @escaping (@escaping @Sendable (Double) -> Void) async throws -> T
     ) async throws -> T {
         // Default: just run the operation with no-op progress callback
         try await operation({ _ in })
@@ -223,11 +230,11 @@ extension CLIOutput {
         try await operation({ _ in })
     }
 
-    public func streamingTable<T: Encodable & Sendable>(
+    public func streamingTable<T: Encodable & Sendable, E: Error>(
         initial: T,
-        updates: AsyncStream<T>,
+        updates: some AsyncSequence<T, E> & Sendable,
         renderTable: @Sendable (T) -> (headers: [String], rows: [[String]])
-    ) async {
+    ) async throws {
         // Default: print each update as JSON
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -239,7 +246,7 @@ extension CLIOutput {
         } else {
             assertionFailure("Failed to serialize result to JSON")
         }
-        for await update in updates {
+        for try await update in updates {
             if let data = try? encoder.encode(update),
                 let string = String(data: data, encoding: .utf8)
             {
@@ -258,11 +265,11 @@ extension CLIOutput {
         )
     }
 
-    public func singleChoicePrompt(
+    public func singleChoicePrompt<Option: CustomStringConvertible & Equatable>(
         title: String?,
         question: String,
-        options: [String]
-    ) async throws -> String {
+        options: [Option]
+    ) async throws -> Option {
         throw InteractiveSelectionRequiredError(
             argument: "choice",
             description: "Provide the choice via CLI arguments"
@@ -276,7 +283,10 @@ extension CLIOutput {
         )
     }
 
-    public func multipleChoicePrompt(question: String, options: [String]) async throws -> [String] {
+    public func multipleChoicePrompt<Option: CustomStringConvertible & Equatable>(
+        question: String,
+        options: [Option]
+    ) async throws -> [Option] {
         throw InteractiveSelectionRequiredError(
             argument: "choices",
             description: "Provide the choices via CLI arguments"
@@ -350,7 +360,7 @@ public var isJSONOutputMode: Bool {
 // MARK: - Default output (fallback)
 
 /// Default CLI output that writes to stdout. Used as fallback when no context is set.
-internal struct DefaultCLIOutput: CLIOutput, @unchecked Sendable {
+internal struct DefaultCLIOutput: CLIOutput, Sendable {
     static let shared = DefaultCLIOutput()
 
     func success(_ message: String) {

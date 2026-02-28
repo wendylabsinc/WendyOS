@@ -120,7 +120,7 @@ struct DiscoverCommand: AsyncParsableCommand {
             )
 
             let initial = await deviceCache.currentCollection()
-            await cliOutput.streamingTable(initial: initial, updates: updates) { collection in
+            try await cliOutput.streamingTable(initial: initial, updates: updates) { collection in
                 // Merge devices by name and render as table
                 let grouped = collection.groupedDevices()
                 let headers = ["Name", "Connection", "Interfaces", "Version"]

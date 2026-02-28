@@ -264,7 +264,7 @@ public struct SwiftPM: Sendable {
 
         let result = try await cliOutput.withProgress(
             message: "Building Swift package",
-            successMessage: "Swift package built successfully",
+            successMessage: "Swift package built",
             errorMessage: "Failed to build Swift package"
         ) {
             try await Subprocess.run(

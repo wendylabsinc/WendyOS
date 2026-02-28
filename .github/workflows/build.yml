@@ -477,7 +477,7 @@ jobs:
             fi
 
             if swift sdk install "$install_target" --checksum "$sdk_checksum"; then
-              echo "SDK installed successfully"
+              echo "SDK installed"
               exit 0
             fi
             echo "Attempt $attempt failed, retrying in 5 seconds..."

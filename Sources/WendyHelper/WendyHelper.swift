@@ -203,7 +203,7 @@ actor WendyHelperDaemon {
         }
 
         isRunning = true
-        logger.info("Wendy Helper Daemon started successfully")
+        logger.info("Wendy Helper Daemon started")
     }
 
     func stop() async {

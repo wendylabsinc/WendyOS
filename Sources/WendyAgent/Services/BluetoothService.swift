@@ -27,12 +27,14 @@ actor BluetoothService: Service {
     private let logger = Logger(label: "BluetoothService")
     private let networkManagerFactory: NetworkConnectionManagerFactory
     private let configuration: WendyAgentConfiguration
+    private let bluetoothManager: BluetoothManager
     private var peripheralManager: PeripheralManager?
 
     init() {
         let uid = String(getuid())
         self.networkManagerFactory = NetworkConnectionManagerFactory(uid: uid)
         self.configuration = WendyAgentConfiguration.fromEnvironment()
+        self.bluetoothManager = BluetoothManager(logger: Logger(label: "BluetoothManager"))
     }
 
     func run() async throws {
@@ -50,7 +52,7 @@ actor BluetoothService: Service {
             logger.debug("Creating PeripheralManager...")
             let manager = PeripheralManager()
             self.peripheralManager = manager
-            logger.debug("PeripheralManager created successfully")
+            logger.debug("PeripheralManager created")
 
             // Wait for Bluetooth to be ready
             currentPhase = .waitingForReady
@@ -268,7 +270,7 @@ actor BluetoothService: Service {
                 scanResponseData: nil,
                 parameters: AdvertisingParameters()
             )
-            logger.debug("Bluetooth advertising started successfully")
+            logger.debug("Bluetooth advertising started")
         } catch {
             logger.error(
                 "Failed to start advertising",
@@ -292,7 +294,7 @@ actor BluetoothService: Service {
                 parameters: L2CAPChannelParameters(requiresEncryption: false)
             )
             logger.debug(
-                "L2CAP channel published successfully",
+                "L2CAP channel published",
                 metadata: ["psm": "\(psm.rawValue)"]
             )
         } catch {
@@ -509,6 +511,16 @@ actor BluetoothService: Service {
                 #endif
             case .hardwareList:
                 response.hardwareList = try await handleHardwareList()
+            case .bluetoothList(let cmd):
+                response.bluetoothList = try await handleBluetoothList(pairedOnly: cmd.pairedOnly)
+            case .bluetoothConnect(let cmd):
+                response.bluetoothConnect = try await handleBluetoothConnect(address: cmd.address)
+            case .bluetoothDisconnect(let cmd):
+                response.bluetoothDisconnect = try await handleBluetoothDisconnect(
+                    address: cmd.address
+                )
+            case .bluetoothForget(let cmd):
+                response.bluetoothForget = try await handleBluetoothForget(address: cmd.address)
             case .none:
                 response.error = Wendy_Agent_Services_V1_ErrorResponse()
                 response.error.message = "Unknown command"
@@ -742,6 +754,90 @@ actor BluetoothService: Service {
             info.name = cap.description
             info.available = true
             return info
+        }
+
+        return response
+    }
+
+    // MARK: - Bluetooth Device Handlers
+
+    private func handleBluetoothList(
+        pairedOnly: Bool
+    ) async throws -> Wendy_Agent_Services_V1_BluetoothListResponse {
+        logger.debug("Bluetooth: Listing devices", metadata: ["pairedOnly": "\(pairedOnly)"])
+
+        let devices = try await bluetoothManager.listDevices(pairedOnly: pairedOnly)
+
+        var response = Wendy_Agent_Services_V1_BluetoothListResponse()
+        response.devices = devices.map { device in
+            var info = Wendy_Agent_Services_V1_BluetoothDeviceInfo()
+            info.name = device.name
+            info.address = device.address
+            if let rssi = device.rssi {
+                info.rssi = Int32(rssi)
+            }
+            info.paired = device.paired
+            info.connected = device.connected
+            info.trusted = device.trusted
+            info.deviceType = device.deviceType
+            if let icon = device.icon {
+                info.icon = icon
+            }
+            return info
+        }
+
+        return response
+    }
+
+    private func handleBluetoothConnect(
+        address: String
+    ) async throws -> Wendy_Agent_Services_V1_BluetoothConnectResponse {
+        logger.debug("Bluetooth: Connecting to device", metadata: ["address": "\(address)"])
+
+        var response = Wendy_Agent_Services_V1_BluetoothConnectResponse()
+
+        do {
+            try await bluetoothManager.connect(address: address)
+            response.success = true
+        } catch {
+            response.success = false
+            response.errorMessage = error.localizedDescription
+        }
+
+        return response
+    }
+
+    private func handleBluetoothDisconnect(
+        address: String
+    ) async throws -> Wendy_Agent_Services_V1_BluetoothDisconnectResponse {
+        logger.debug("Bluetooth: Disconnecting from device", metadata: ["address": "\(address)"])
+
+        var response = Wendy_Agent_Services_V1_BluetoothDisconnectResponse()
+
+        do {
+            try await bluetoothManager.disconnect(address: address)
+            response.success = true
+        } catch {
+            response.success = false
+            response.errorMessage = error.localizedDescription
+        }
+
+        return response
+    }
+
+    private func handleBluetoothForget(
+        address: String
+    ) async throws -> Wendy_Agent_Services_V1_BluetoothForgetResponse {
+        logger.debug("Bluetooth: Forgetting device", metadata: ["address": "\(address)"])
+
+        var response = Wendy_Agent_Services_V1_BluetoothForgetResponse()
+
+        do {
+            try await bluetoothManager.forget(address: address)
+            response.success = true
+        } catch {
+            response.success = false
+            response.errorMessage = error.localizedDescription
         }
 
         return response

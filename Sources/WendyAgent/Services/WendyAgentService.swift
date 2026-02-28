@@ -1,3 +1,4 @@
+import Bluetooth
 import Crypto
 import Foundation
 import Logging
@@ -28,14 +29,17 @@ actor UpdateCoordinator {
 }
 
 struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
-    let logger = Logger(label: "WendyAgentService")
+    let logger: Logger
     let shouldRestart: @Sendable () async throws -> Void
     let currentUID: String
     let networkManagerFactory: NetworkConnectionManagerFactory
     let configuration: WendyAgentConfiguration
-    let updateCoordinator = UpdateCoordinator()
+    let bluetooth = BluetoothManager(logger: Logger(label: "sh.wendy.agent.grpc.bluetooth"))
+    let updateCoordinator: UpdateCoordinator = UpdateCoordinator()
 
     init(shouldRestart: @escaping @Sendable () async throws -> Void) {
+        let logger = Logger(label: "WendyAgentService")
+        self.logger = logger
         self.shouldRestart = shouldRestart
         self.currentUID = String(getuid())
         self.networkManagerFactory = NetworkConnectionManagerFactory(uid: currentUID)
@@ -106,6 +110,175 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
             // Lock will be released after restart succeeds (process exits)
             // or in the error handler above if update fails
             return Metadata()
+        }
+    }
+
+    func scanBluetoothPeripherals(
+        request: GRPCCore.StreamingServerRequest<
+            Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest
+        >,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.StreamingServerResponse<
+            Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse
+        >
+    {
+        return StreamingServerResponse(metadata: [:]) { writer in
+            var lastDevices: [BluetoothManager.BluetoothDeviceInfo] = []
+
+            while !Task.isCancelled && !Task.isShuttingDownGracefully {
+                let devices = try await bluetooth.listDevices(pairedOnly: false)
+
+                // Only emit when device list changes
+                if devices != lastDevices {
+                    let response = Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse.with {
+                        $0.discoveredDevices = devices.map { device in
+                            .with {
+                                $0.name = device.name
+                                $0.address = device.address
+                                if let rssi = device.rssi {
+                                    $0.rssi = Int32(rssi)
+                                }
+                                $0.paired = device.paired
+                                $0.connected = device.connected
+                                $0.trusted = device.trusted
+                                $0.deviceType = device.deviceType
+                            }
+                        }
+                    }
+                    try await writer.write(response)
+                    lastDevices = devices
+                }
+
+                // Add delay to prevent CPU spam
+                try await Task.sleep(for: .seconds(1))
+            }
+
+            return [:]
+        }
+    }
+
+    func connectBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse>
+    {
+        let address = request.message.address
+        let shouldPair = request.message.pair
+        let shouldTrust = request.message.trust
+
+        logger.info(
+            "Connecting to Bluetooth device",
+            metadata: [
+                "address": "\(address)",
+                "pair": "\(shouldPair)",
+                "trust": "\(shouldTrust)",
+            ]
+        )
+
+        do {
+            // Pair if requested
+            if shouldPair {
+                try await bluetooth.pair(address: address)
+                logger.info(
+                    "Successfully paired with Bluetooth device",
+                    metadata: ["address": "\(address)"]
+                )
+            }
+
+            // Trust if requested
+            if shouldTrust {
+                try await bluetooth.trust(address: address)
+                logger.info(
+                    "Successfully trusted Bluetooth device",
+                    metadata: ["address": "\(address)"]
+                )
+            }
+
+            // Connect
+            try await bluetooth.connect(address: address)
+            logger.info(
+                "Successfully connected to Bluetooth device",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(message: .init())
+        } catch {
+            logger.error(
+                "Failed to connect to Bluetooth device",
+                metadata: ["address": "\(address)", "error": "\(error)"]
+            )
+            throw RPCError(
+                code: .internalError,
+                message: "Failed to connect to Bluetooth device: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    func disconnectBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<
+            Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest
+        >,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>
+    {
+        let address = request.message.address
+
+        logger.info(
+            "Disconnecting from Bluetooth device",
+            metadata: [
+                "address": "\(address)"
+            ]
+        )
+
+        do {
+            try await bluetooth.disconnect(address: address)
+            logger.info(
+                "Successfully disconnected from Bluetooth device",
+                metadata: ["address": "\(address)"]
+            )
+            return ServerResponse(message: .init())
+        } catch {
+            logger.error(
+                "Failed to disconnect from Bluetooth device",
+                metadata: ["address": "\(address)", "error": "\(error)"]
+            )
+            throw RPCError(
+                code: .internalError,
+                message: "Failed to disconnect from Bluetooth device: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    func forgetBluetoothPeripheral(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws
+        -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse>
+    {
+        let address = request.message.address
+
+        logger.info(
+            "Forgetting Bluetooth device",
+            metadata: [
+                "address": "\(address)"
+            ]
+        )
+
+        do {
+            try await bluetooth.forget(address: address)
+            logger.info("Successfully forgot Bluetooth device", metadata: ["address": "\(address)"])
+            return ServerResponse(message: .init())
+        } catch {
+            logger.error(
+                "Failed to forget Bluetooth device",
+                metadata: ["address": "\(address)", "error": "\(error)"]
+            )
+            throw RPCError(
+                code: .internalError,
+                message: "Failed to forget Bluetooth device: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -461,7 +634,9 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                     metadata: ["ssid": "\(connection.ssid)"]
                 )
                 return ServerResponse(
-                    message: .with { $0.success = true }
+                    message: .with {
+                        $0.success = true
+                    }
                 )
             } else {
                 logger.warning("Failed to connect to WiFi network", metadata: ["ssid": "\(ssid)"])
@@ -559,7 +734,9 @@ struct WendyAgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProto
                         metadata: ["ssid": "\(connectionInfo.ssid)"]
                     )
                     return ServerResponse(
-                        message: .with { $0.success = true }
+                        message: .with {
+                            $0.success = true
+                        }
                     )
                 } else {
                     logger.warning(

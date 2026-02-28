@@ -222,7 +222,7 @@ actor ContainerMonitor: Service {
                 containerStates[appName] = state
 
                 logger.info(
-                    "Container restarted successfully",
+                    "Container restarted",
                     metadata: ["container": "\(appName)"]
                 )
             } catch {

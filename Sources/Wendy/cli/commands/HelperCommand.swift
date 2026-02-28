@@ -45,13 +45,13 @@ extension HelperCommand {
             // Load the service
             try await loadService()
 
-            logger.info("✅ Wendy Helper Daemon installed and started successfully")
+            logger.info("✅ Wendy Helper Daemon installed and started")
 
             // Install the network daemon using SMAppService
             logger.info("Installing Wendy Network Daemon...")
             try await installNetworkDaemon()
 
-            logger.info("✅ Wendy Network Daemon installed successfully")
+            logger.info("✅ Wendy Network Daemon installed")
             logger.info("Both daemons will automatically start on system boot.")
         }
 
@@ -152,13 +152,13 @@ extension HelperCommand {
                 print("🗑️  Removed launchd plist: \(plistPath)")
             }
 
-            logger.info("✅ Wendy Helper Daemon uninstalled successfully")
+            logger.info("✅ Wendy Helper Daemon uninstalled")
 
             // Uninstall the network daemon
             logger.info("Uninstalling Wendy Network Daemon...")
             try await uninstallNetworkDaemon()
 
-            logger.info("✅ Wendy Network Daemon uninstalled successfully")
+            logger.info("✅ Wendy Network Daemon uninstalled")
         }
 
         private func unloadService() async throws {

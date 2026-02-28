@@ -159,7 +159,7 @@ extension AnalyticsCommand {
             // Display the status
             print(config.analytics.enabled ? "✅ Analytics is enabled" : "❌ Analytics is disabled")
             if let optOutDate = config.analytics.optOutDate {
-                cliOutput.info("Opt Out Date: \(optOutDate.formatted())")
+                cliOutput.info("Opt Out Date: \(optOutDate.formatted().underline)")
             }
 
             if verbose {
