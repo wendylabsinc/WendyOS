@@ -29,7 +29,8 @@ func withGRPCClient<R: Sendable>(
     }
 }
 
-func withCloudGRPCClient<R: Sendable>(
+/// Establishes a cloud gRPC connection using the provided auth without checking cert expiry.
+func _withCloudGRPCClient<R: Sendable>(
     auth: Config.Auth,
     _ body: @escaping @Sendable (CloudGRPCClient) async throws -> R
 ) async throws -> R {
@@ -58,6 +59,15 @@ func withCloudGRPCClient<R: Sendable>(
         )
         return try await body(client)
     }
+}
+
+func withCloudGRPCClient<R: Sendable>(
+    auth: Config.Auth,
+    _ body: @escaping @Sendable (CloudGRPCClient) async throws -> R
+) async throws -> R {
+    var auth = auth
+    _ = try await refreshCertificateIfNeeded(auth: &auth, certIndex: 0)
+    return try await _withCloudGRPCClient(auth: auth, body)
 }
 
 func withCloudGRPCClient<R: Sendable>(

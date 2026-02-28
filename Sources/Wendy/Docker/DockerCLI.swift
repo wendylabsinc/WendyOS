@@ -254,10 +254,11 @@ public struct DockerCLI: Sendable {
     public func buildx(
         name: String,
         directory: String = ".",
-        port: Int = 5000
+        port: Int = 5000,
+        platform: String = "linux/arm64"
     ) async throws {
         let arguments = [
-            "buildx", "build", "--platform", "linux/arm64", "-t",
+            "buildx", "build", "--platform", platform, "-t",
             "localhost:\(port)/\(name):latest", directory,
         ]
         let result = try await Subprocess.run(
@@ -320,7 +321,8 @@ public struct DockerCLI: Sendable {
         directory: String = ".",
         registryHostname: String = "host.docker.internal",
         registryPort: Int = 5000,
-        compression: ImageCompressionMode = .zstd
+        compression: ImageCompressionMode = .zstd,
+        platform: String = "linux/arm64"
     ) async throws {
         #if os(Windows) && (arch(x86_64) || arch(i386))
             try await fixX86_64QEMU()
@@ -343,7 +345,7 @@ public struct DockerCLI: Sendable {
             let arguments = [
                 "buildx", "build",
                 "--builder", self.defaultBuilderName,
-                "--platform", "linux/arm64",
+                "--platform", platform,
                 "--provenance=false",
                 "--sbom=false",
                 "--output", outputFlag,

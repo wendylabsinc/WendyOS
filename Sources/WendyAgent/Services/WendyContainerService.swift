@@ -141,8 +141,16 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                             let cmdArgs =
                                 request.cmd.split(separator: " ").map(String.init)
                                 + request.userArgs
+                            #if arch(x86_64)
+                            let runtimeArchitecture = "amd64"
+                            #elseif arch(arm64)
+                            let runtimeArchitecture = "arm64"
+                            #else
+                            let runtimeArchitecture = "arm64"
+                            #endif
+
                             let config = ImageConfiguration(
-                                architecture: "arm64",
+                                architecture: runtimeArchitecture,
                                 os: "linux",
                                 config: ImageConfigurationConfig(
                                     Cmd: cmdArgs,
