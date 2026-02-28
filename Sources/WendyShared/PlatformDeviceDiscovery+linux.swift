@@ -239,7 +239,7 @@
                 )
 
                 // Prevent duplicates
-                if !interfaces.contains(where: { $0.id == id || $0.hostname == lanDevice.hostname })
+                if !interfaces.contains(where: { $0.id == identity.id || $0.hostname == lanDevice.hostname })
                 {
                     interfaces.append(lanDevice)
                 }
