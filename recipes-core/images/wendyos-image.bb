@@ -60,11 +60,6 @@ IMAGE_INSTALL:append = " \
     ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'python3-pip-jetson-config'} \
     "
 
-# # Jetson-specific packages (not for QEMU)
-# IMAGE_INSTALL:append = " \
-#     ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'python3-pip-jetson-config'} \
-#     "
-
 # Enable USB peripheral (gadget) support for real hardware
 # Controlled by WENDYOS_USB_GADGET variable (not needed for QEMU)
 IMAGE_INSTALL:append = " \

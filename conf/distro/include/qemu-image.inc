@@ -8,9 +8,9 @@ unset MENDER_FEATURES_ENABLE
 MENDER_CONNECT_ENABLE = "0"
 
 # QEMU rootfs size configuration (in KB)
-# Default: 2GB (2097152 KB) - generous size for development/testing
-# Override in local.conf: QEMU_ROOTFS_SIZE = "4194304"  # 4GB
 # Override in local.conf: QEMU_ROOTFS_SIZE = "1048576"  # 1GB
+# Override in local.conf: QEMU_ROOTFS_SIZE = "2097152"  # 2GB
+# Override in local.conf: QEMU_ROOTFS_SIZE = "4194304"  # 4GB
 QEMU_ROOTFS_SIZE ??= "4194304"
 IMAGE_ROOTFS_SIZE:qemuall = "${QEMU_ROOTFS_SIZE}"
 IMAGE_ROOTFS_EXTRA_SPACE:qemuall = "0"

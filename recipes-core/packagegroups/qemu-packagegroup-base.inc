@@ -8,5 +8,4 @@ RDEPENDS:${PN}:remove = " \
     wendyos-etc-binds \
     swapfile-setup \
     systemd-mount-containerd \
-    systemd-mount-home \
     "
