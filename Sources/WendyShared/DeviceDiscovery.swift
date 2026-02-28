@@ -98,7 +98,7 @@ extension DeviceDiscovery {
 
         // Resolve agent versions if requested
         if resolveAgentVersion {
-            await withTaskGroup(of: (String, String?).self) { group in
+            await withTaskGroup(of: (String, Wendy_Agent_Services_V1_AgentVersionResponse?).self) { group in
                 for (wendyDevice, peripheral) in wendyDevices {
                     group.addTask {
                         do {
@@ -117,7 +117,11 @@ extension DeviceDiscovery {
                     if let version,
                         let index = wendyDevices.firstIndex(where: { $0.0.id == deviceId })
                     {
-                        wendyDevices[index].0.agentVersion = version
+                        wendyDevices[index].0.agentVersion = version.version
+                        wendyDevices[index].0.os = version.os
+                        wendyDevices[index].0.osVersion = version.osVersion
+                        wendyDevices[index].0.cpuArchitecture = version.cpuArchitecture
+                        wendyDevices[index].0.featureset = Set(version.featureset)
                     }
                 }
             }
@@ -129,7 +133,7 @@ extension DeviceDiscovery {
     private func resolveBluetoothAgentVersion(
         peripheral: Peripheral,
         centralManager: CentralManager
-    ) async throws -> String {
+    ) async throws -> Wendy_Agent_Services_V1_AgentVersionResponse {
         let logger = Logger(label: "sh.wendy.bluetooth.version-resolution")
         // Connect to peripheral
         let connection = try await centralManager.connect(to: peripheral)
@@ -204,7 +208,7 @@ extension DeviceDiscovery {
                 )
 
                 if case .agentVersion(let agentVersion) = bluetoothRespone.response {
-                    return agentVersion.version
+                    return agentVersion
                 }
                 throw BluetoothVersionResolutionError.unexpectedResponse
             }

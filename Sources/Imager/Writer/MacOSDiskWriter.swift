@@ -295,13 +295,13 @@
 
                         while true {
                             try Task.checkCancellation()
-                            let chunk = try await reader.read(.bytes(4 * 1024 * 1024))  // 4 MiB
+                            var chunk = try await reader.read(.bytes(4 * 1024 * 1024))  // 4 MiB
                             if chunk.readableBytes == 0 {
                                 return execution
                             }
 
                             totalWritten += try await Int64(
-                                stdinWriter.write(chunk.readableBytesSpan)
+                                stdinWriter.write(chunk.readBytes(length: chunk.readableBytes)!)
                             )
                             if let totalBytes, totalBytes > 0 {
                                 progressHandler(

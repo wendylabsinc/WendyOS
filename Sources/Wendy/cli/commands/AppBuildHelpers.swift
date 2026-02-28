@@ -341,6 +341,7 @@ enum AppBuildHelpers {
         appName: String,
         client: GRPCClient<HTTP2ClientTransport.Posix>,
         restartPolicy: RestartPolicy,
+        userArgs: [String] = [],
         progress: ((ProgressBarUpdate) -> Void)? = nil
     ) async throws {
         let logger = Logger(label: "sh.wendy.cli.build.containerd.create")
@@ -356,6 +357,7 @@ enum AppBuildHelpers {
             $0.appName = appName
             $0.appConfig = appConfigData
             $0.restartPolicy = restartPolicy
+            $0.userArgs = userArgs
         }
 
         let progressHandler = SendableProgressUpdater(progress ?? { _ in })
@@ -442,7 +444,6 @@ enum AppBuildHelpers {
     /// Execute a phase with failure tracking
     static func executePhase<T: Sendable>(
         phase: String,
-        runtime: String,
         commandName: String,
         additionalProperties: [String: String] = [:],
         operation: @Sendable () async throws -> T
@@ -452,7 +453,7 @@ enum AppBuildHelpers {
         } catch {
             await trackPhaseFailure(
                 phase: phase,
-                runtime: runtime,
+                runtime: "containerd",
                 commandName: commandName,
                 error: error,
                 additionalProperties: additionalProperties

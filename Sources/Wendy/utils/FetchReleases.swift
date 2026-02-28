@@ -65,6 +65,18 @@ enum Platform: String {
     case linuxX86_64 = "linux-static-musl-x86_64"
     case macosArm64 = "macos-arm64"
 
+    /// Maps a device-reported CPU architecture string to a Linux platform
+    static func linuxPlatform(forArchitecture arch: String) throws -> Platform {
+        switch arch.lowercased() {
+        case "aarch64", "arm64":
+            return .linuxAarch64
+        case "x86_64", "amd64":
+            return .linuxX86_64
+        default:
+            throw ReleasesError.unsupportedPlatform("Unsupported device architecture: \(arch)")
+        }
+    }
+
     /// Detects the current platform
     static func current() throws -> Platform {
         #if os(macOS)
@@ -139,12 +151,12 @@ enum Platform: String {
     }
 #endif
 
-func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throws -> [Release] {
+func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor(), timeout: TimeAmount = .seconds(60)) async throws -> [Release] {
     let githubReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-agent/releases"
 
     // Fetch releases JSON
     let logger = Logger(label: "sh.wendy.utils.fetchReleases")
-    logger.info("Fetching all releases...")
+    logger.debug("Fetching all releases...")
 
     var request = HTTPClientRequest(url: githubReleasesURL)
     request.headers.add(name: "Accept", value: "application/vnd.github+json")
@@ -152,7 +164,7 @@ func fetchReleases(httpClient: HTTPExecutor = DefaultHTTPExecutor()) async throw
     request.headers.add(name: "User-Agent", value: "wendy-agent")
     let response = try await httpClient.execute(
         request,
-        deadline: NIODeadline.now() + .seconds(60)
+        deadline: NIODeadline.now() + timeout
     )
 
     // Check for successful response

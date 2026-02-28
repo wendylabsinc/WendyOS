@@ -1,9 +1,16 @@
 import ArgumentParser
 import CLIOutput
+import Crypto
 import Foundation
+import GRPCCore
+import Hummingbird
 import Imager
 import Logging
+import NIOCore
+import NIOFoundationCompat
 import Subprocess
+import WendyAgentGRPC
+import _NIOFileSystem
 
 #if os(macOS)
     import Darwin
@@ -101,7 +108,9 @@ struct OSCommand: AsyncParsableCommand {
         commandName: "os",
         abstract: "Download and install WendyOS",
         subcommands: [
-            OSInstallCommand.self
+            OSInstallCommand.self,
+            OSUpdateCommand.self,
+            CacheCommand.self,
         ],
         groupedSubcommands: [
             CommandGroup(
@@ -617,12 +626,270 @@ struct OSCommand: AsyncParsableCommand {
             cliOutput.success("🎉 Device \(selectedDeviceName) successfully imaged!")
         }
     }
+
+    struct OSUpdateCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "update",
+            abstract: "Update WendyOS on a device using a Mender artifact."
+        )
+
+        @Argument(help: "Path to a Mender artifact file (.mender.xz) or directory containing one")
+        var artifactPath: String
+
+        @OptionGroup var agentConnectionOptions: AgentConnectionOptions
+
+        func run() async throws {
+            let logger = Logger(label: "wendy.os.update")
+
+            // Resolve the artifact file path
+            let fileManager = FileManager.default
+            var absolutePath =
+                artifactPath.hasPrefix("/")
+                ? artifactPath
+                : FileManager.default.currentDirectoryPath + "/" + artifactPath
+
+            guard fileManager.fileExists(atPath: absolutePath) else {
+                cliOutput.error("Mender artifact not found: \(absolutePath)")
+                throw ExitCode.failure
+            }
+
+            // Check if the path is a directory - if so, find the .mender file inside
+            var isDirectory: ObjCBool = false
+            fileManager.fileExists(atPath: absolutePath, isDirectory: &isDirectory)
+
+            if isDirectory.boolValue {
+                // Look for a .mender.xz file in the directory
+                let contents = try fileManager.contentsOfDirectory(atPath: absolutePath)
+                guard let menderFile = contents.first(where: { $0.hasSuffix(".mender.xz") }) else {
+                    cliOutput.error("No .mender.xz file found in directory: \(absolutePath)")
+                    throw ExitCode.failure
+                }
+                absolutePath = absolutePath + "/" + menderFile
+                cliOutput.info("Found Mender artifact: \(menderFile)")
+            }
+
+            let artifactURL = URL(fileURLWithPath: absolutePath)
+            let fileName = artifactURL.lastPathComponent
+
+            cliOutput.info("Preparing to serve Mender artifact: \(fileName)")
+
+            // Compute file hash for the URL path
+            let fileHash = try await computeFileHash(path: absolutePath)
+
+            // Get the local IP address
+            guard let localIP = getLocalIPAddress() else {
+                cliOutput.error("Could not determine local IP address")
+                throw ExitCode.failure
+            }
+
+            // Use a continuation to pass the artifact URL from the server callback
+            let artifactUrlStream = AsyncStream<String>.makeStream()
+
+            // Track download completion
+            let downloadComplete = AsyncStream<Void>.makeStream()
+
+            // Get file size for Content-Length header
+            let artifactFilePath = FilePath(absolutePath)
+            let fileInfo = try await FileSystem.shared.info(forFileAt: artifactFilePath)
+            guard let fileSize = fileInfo?.size else {
+                cliOutput.error("Could not get file size")
+                throw ExitCode.failure
+            }
+
+            // Start the Hummingbird webserver that serves the file
+            let router = Router().get("\(fileHash)/:filename") { request, context in
+                let body = ResponseBody(contentLength: Int(fileSize)) { writer in
+                    do {
+                        try await FileSystem.shared.withFileHandle(
+                            forReadingAt: artifactFilePath
+                        ) { handle in
+                            var bytesWritten: Int64 = 0
+                            for try await chunk in handle.readChunks(
+                                in: 0...,
+                                chunkLength: .mebibytes(1)
+                            ) {
+                                try await writer.write(chunk)
+                                bytesWritten += Int64(chunk.readableBytes)
+                            }
+
+                            logger.info("Download complete: \(bytesWritten) bytes served")
+                        }
+                    } catch {
+                        logger.error("Download failed: \(error)")
+                    }
+
+                    // Always signal completion (success or failure)
+                    downloadComplete.continuation.yield()
+                    downloadComplete.continuation.finish()
+                }
+
+                return Response(
+                    status: .ok,
+                    headers: [
+                        .contentType: "application/octet-stream",
+                        .contentDisposition: "attachment; filename=\"\(fileName)\"",
+                    ],
+                    body: body
+                )
+            }
+
+            var server = Application(
+                router: router,
+                configuration: .init(
+                    address: .hostname("0.0.0.0", port: 0)
+                ),
+                onServerRunning: { channel in
+                    let port = channel.localAddress!.port!
+                    let url = "http://\(localIP):\(port)/\(fileHash)/\(fileName)"
+                    artifactUrlStream.continuation.yield(url)
+                    artifactUrlStream.continuation.finish()
+                }
+            )
+            server.logger.logLevel = .warning
+
+            await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { [server] in
+                    try await server.runService()
+                }
+
+                // Wait for the server to start and get the URL
+                var artifactDownloadUrl: String?
+                for await url in artifactUrlStream.stream {
+                    artifactDownloadUrl = url
+                }
+
+                guard let artifactDownloadUrl else {
+                    cliOutput.error("Failed to start file server")
+                    group.cancelAll()
+                    return
+                }
+
+                cliOutput.info("Serving artifact at: \(artifactDownloadUrl)")
+                cliOutput.info("Sending update command to device...")
+
+                // Send the gRPC command to the device (don't throw - let download complete)
+                group.addTask {
+                    do {
+                        try await withAgentGRPCClient(
+                            agentConnectionOptions,
+                            title: "Which device do you want to update?"
+                        ) { client in
+                            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
+                                wrapping: client
+                            )
+
+                            try await agent.updateOS(
+                                .with {
+                                    $0.artifactURL = artifactDownloadUrl
+                                }
+                            ) { response in
+                                for try await update in response.messages {
+                                    switch update.responseType {
+                                    case .progress(let progress):
+                                        cliOutput.info(
+                                            "[\(progress.phase)] \(progress.percent)%"
+                                        )
+                                    case .completed(let completed):
+                                        cliOutput.success("OS update completed!")
+                                        if completed.rebootRequired {
+                                            cliOutput.warning(
+                                                "A reboot is required to complete the update."
+                                            )
+                                        }
+                                    case .failed(let failed):
+                                        cliOutput.error("OS update failed: \(failed.errorMessage)")
+                                    case .none:
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    } catch is CancellationError {
+                        // Ignore cancellation - download may still be in progress
+                    } catch {
+                        cliOutput.error("Failed to send update command: \(error)")
+                    }
+                }
+
+                // Wait for download to complete before shutting down server
+                for await _ in downloadComplete.stream {}
+
+                group.cancelAll()
+            }
+        }
+    }
 }
 
 // MARK: - Helpers
 
-/// Ensure the user has active admin credentials before attempting privileged disk operations.
-/// This warms up sudo on macOS/Linux or validates admin rights on Windows.
+/// Compute SHA256 hash of a file
+private func computeFileHash(path: String) async throws -> String {
+    let fileHandle = try await FileSystem.shared.openFile(forReadingAt: FilePath(path))
+    defer { Task { try? await fileHandle.close() } }
+
+    var hasher = SHA256()
+    for try await chunk in fileHandle.readChunks() {
+        hasher.update(data: chunk.readableBytesView)
+    }
+
+    let digest = hasher.finalize()
+    return digest.map { String(format: "%02x", $0) }.joined().prefix(16).lowercased()
+}
+
+/// Get the local IP address of this machine
+private func getLocalIPAddress() -> String? {
+    #if os(macOS) || os(Linux)
+        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
+
+        guard getifaddrs(&ifaddrs) == 0 else {
+            return nil
+        }
+
+        defer { freeifaddrs(ifaddrs) }
+
+        var current = ifaddrs
+        while current != nil {
+            let addr = current!.pointee
+
+            if let ifaAddr = addr.ifa_addr,
+                ifaAddr.pointee.sa_family == AF_INET
+            {
+                // Get interface name
+                let interfaceName = String(cString: addr.ifa_name)
+
+                // Skip loopback
+                guard interfaceName != "lo0" && interfaceName != "lo" else {
+                    current = addr.ifa_next
+                    continue
+                }
+
+                // Prefer en0 (primary Ethernet/WiFi on macOS) or eth0/wlan0 on Linux
+                let sockaddr = ifaAddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    $0.pointee
+                }
+
+                var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                var sinAddr = sockaddr.sin_addr
+                inet_ntop(AF_INET, &sinAddr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
+                // Convert CChar array to String, truncating at null terminator
+                let ipString = ipBuffer.withUnsafeBufferPointer { buffer in
+                    String(cString: buffer.baseAddress!)
+                }
+
+                // Skip localhost and link-local addresses
+                if !ipString.hasPrefix("127.") && !ipString.hasPrefix("169.254.") {
+                    return ipString
+                }
+            }
+
+            current = addr.ifa_next
+        }
+    #endif
+    return nil
+}
+
+/// Ensure the user has active sudo credentials before attempting privileged disk operations.
+/// This warms up sudo so subsequent calls (diskutil/dd) won't fail due to missing TTY prompts.
 private func ensureAdminPrivileges() async throws {
     #if os(Windows)
         // Check if running as administrator

@@ -227,11 +227,15 @@
                 }
 
                 let id = txt?.resource.values.values.first ?? "WendyOS Device"
+                let hostname = srv.resource.domainName.string
+
+                // Derive display name from hostname if id is a generic fallback
+                let displayName = (id == "WendyOS Device") ? String(hostname.replacingOccurrences(of: ".local", with: "")) : id
 
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: id,
-                    hostname: srv.resource.domainName.string,
+                    displayName: displayName,
+                    hostname: hostname,
                     port: Int(srv.resource.port),
                     interfaceType: "LAN",
                     isWendyDevice: true

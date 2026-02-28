@@ -120,6 +120,10 @@ message AppsRemoveResponse {
 // Other responses
 message AgentVersionResponse {
     string version = 1;
+    optional string os = 2;
+    optional string os_version = 3;
+    optional string cpu_architecture = 4;
+    repeated string featureset = 5;
 }
 
 message HardwareListResponse {

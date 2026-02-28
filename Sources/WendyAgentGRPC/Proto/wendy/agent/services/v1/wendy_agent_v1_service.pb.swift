@@ -409,11 +409,27 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {self._osVersion = nil}
 
+  public var os: String = String()
+
+  public var cpuArchitecture: String = String()
+
+  public var publicKey: String {
+    get {return _publicKey ?? String()}
+    set {_publicKey = newValue}
+  }
+  /// Returns true if `publicKey` has been explicitly set.
+  public var hasPublicKey: Bool {return self._publicKey != nil}
+  /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
+  public mutating func clearPublicKey() {self._publicKey = nil}
+
+  public var featureset: [String] = []
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
   fileprivate var _osVersion: String? = nil
+  fileprivate var _publicKey: String? = nil
 }
 
 /// Request message for listing WiFi networks
@@ -767,6 +783,106 @@ public struct Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse: Sendabl
   // methods supported on all messages.
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Request message for updating the OS
+public struct Wendy_Agent_Services_V1_UpdateOSRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// URL to download the Mender artifact from
+  public var artifactURL: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Response message for OS update progress
+public struct Wendy_Agent_Services_V1_UpdateOSResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var responseType: Wendy_Agent_Services_V1_UpdateOSResponse.OneOf_ResponseType? = nil
+
+  public var progress: Wendy_Agent_Services_V1_UpdateOSResponse.Progress {
+    get {
+      if case .progress(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_UpdateOSResponse.Progress()
+    }
+    set {responseType = .progress(newValue)}
+  }
+
+  public var completed: Wendy_Agent_Services_V1_UpdateOSResponse.Completed {
+    get {
+      if case .completed(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_UpdateOSResponse.Completed()
+    }
+    set {responseType = .completed(newValue)}
+  }
+
+  public var failed: Wendy_Agent_Services_V1_UpdateOSResponse.Failed {
+    get {
+      if case .failed(let v)? = responseType {return v}
+      return Wendy_Agent_Services_V1_UpdateOSResponse.Failed()
+    }
+    set {responseType = .failed(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_ResponseType: Equatable, Sendable {
+    case progress(Wendy_Agent_Services_V1_UpdateOSResponse.Progress)
+    case completed(Wendy_Agent_Services_V1_UpdateOSResponse.Completed)
+    case failed(Wendy_Agent_Services_V1_UpdateOSResponse.Failed)
+
+  }
+
+  public struct Progress: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// Current phase of the update (downloading, installing, etc.)
+    public var phase: String = String()
+
+    /// Progress percentage (0-100)
+    public var percent: Int32 = 0
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
+
+  public struct Completed: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// Whether a reboot is required to complete the update
+    public var rebootRequired: Bool = false
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
+
+  public struct Failed: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// Error message describing the failure
+    public var errorMessage: String = String()
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
 
   public init() {}
 }
@@ -1493,7 +1609,7 @@ extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProtobuf.Message,
 
 extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1503,6 +1619,10 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.version) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self._osVersion) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.os) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.cpuArchitecture) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._publicKey) }()
+      case 6: try { try decoder.decodeRepeatedStringField(value: &self.featureset) }()
       default: break
       }
     }
@@ -1519,12 +1639,28 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
     try { if let v = self._osVersion {
       try visitor.visitSingularStringField(value: v, fieldNumber: 2)
     } }()
+    if !self.os.isEmpty {
+      try visitor.visitSingularStringField(value: self.os, fieldNumber: 3)
+    }
+    if !self.cpuArchitecture.isEmpty {
+      try visitor.visitSingularStringField(value: self.cpuArchitecture, fieldNumber: 4)
+    }
+    try { if let v = self._publicKey {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+    } }()
+    if !self.featureset.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.featureset, fieldNumber: 6)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_GetAgentVersionResponse, rhs: Wendy_Agent_Services_V1_GetAgentVersionResponse) -> Bool {
     if lhs.version != rhs.version {return false}
     if lhs._osVersion != rhs._osVersion {return false}
+    if lhs.os != rhs.os {return false}
+    if lhs.cpuArchitecture != rhs.cpuArchitecture {return false}
+    if lhs._publicKey != rhs._publicKey {return false}
+    if lhs.featureset != rhs.featureset {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2183,6 +2319,215 @@ extension Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse: SwiftProtob
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse, rhs: Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_UpdateOSRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".UpdateOSRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}artifact_url\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.artifactURL) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.artifactURL.isEmpty {
+      try visitor.visitSingularStringField(value: self.artifactURL, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_UpdateOSRequest, rhs: Wendy_Agent_Services_V1_UpdateOSRequest) -> Bool {
+    if lhs.artifactURL != rhs.artifactURL {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_UpdateOSResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".UpdateOSResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}progress\0\u{1}completed\0\u{1}failed\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try {
+        var v: Wendy_Agent_Services_V1_UpdateOSResponse.Progress?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .progress(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .progress(v)
+        }
+      }()
+      case 2: try {
+        var v: Wendy_Agent_Services_V1_UpdateOSResponse.Completed?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .completed(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .completed(v)
+        }
+      }()
+      case 3: try {
+        var v: Wendy_Agent_Services_V1_UpdateOSResponse.Failed?
+        var hadOneofValue = false
+        if let current = self.responseType {
+          hadOneofValue = true
+          if case .failed(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.responseType = .failed(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    switch self.responseType {
+    case .progress?: try {
+      guard case .progress(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    }()
+    case .completed?: try {
+      guard case .completed(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case .failed?: try {
+      guard case .failed(let v)? = self.responseType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_UpdateOSResponse, rhs: Wendy_Agent_Services_V1_UpdateOSResponse) -> Bool {
+    if lhs.responseType != rhs.responseType {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_UpdateOSResponse.Progress: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Wendy_Agent_Services_V1_UpdateOSResponse.protoMessageName + ".Progress"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}phase\0\u{1}percent\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.phase) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.percent) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.phase.isEmpty {
+      try visitor.visitSingularStringField(value: self.phase, fieldNumber: 1)
+    }
+    if self.percent != 0 {
+      try visitor.visitSingularInt32Field(value: self.percent, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_UpdateOSResponse.Progress, rhs: Wendy_Agent_Services_V1_UpdateOSResponse.Progress) -> Bool {
+    if lhs.phase != rhs.phase {return false}
+    if lhs.percent != rhs.percent {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_UpdateOSResponse.Completed: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Wendy_Agent_Services_V1_UpdateOSResponse.protoMessageName + ".Completed"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}reboot_required\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.rebootRequired) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.rebootRequired != false {
+      try visitor.visitSingularBoolField(value: self.rebootRequired, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_UpdateOSResponse.Completed, rhs: Wendy_Agent_Services_V1_UpdateOSResponse.Completed) -> Bool {
+    if lhs.rebootRequired != rhs.rebootRequired {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_UpdateOSResponse.Failed: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Wendy_Agent_Services_V1_UpdateOSResponse.protoMessageName + ".Failed"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}error_message\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.errorMessage.isEmpty {
+      try visitor.visitSingularStringField(value: self.errorMessage, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_UpdateOSResponse.Failed, rhs: Wendy_Agent_Services_V1_UpdateOSResponse.Failed) -> Bool {
+    if lhs.errorMessage != rhs.errorMessage {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

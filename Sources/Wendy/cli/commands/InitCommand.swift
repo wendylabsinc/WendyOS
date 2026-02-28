@@ -358,9 +358,9 @@ struct InitCommand: AsyncParsableCommand {
             language: language.rawValue,
             entitlements: [
                 .audio,
-                .bluetooth(.init(mode: .bluez)),
+                .bluetooth(.init()),
                 .network(.init(mode: .host)),
-                .video(.init(mode: .all)),
+                .video(.init()),
                 .persist(.init(name: "app-\(appId)", path: "/mnt/app")),
                 .persist(.init(name: "wendy-shared", path: "/mnt/shared")),
             ]

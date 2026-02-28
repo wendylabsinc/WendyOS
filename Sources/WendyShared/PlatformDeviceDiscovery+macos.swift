@@ -195,9 +195,12 @@
                 guard !seenDevices.contains(key) else { continue }
                 seenDevices.insert(key)
 
+                // Derive display name from hostname if TXT record id is empty
+                let displayName = id.isEmpty ? String(srv.host.replacingOccurrences(of: ".local", with: "")) : id
+
                 let lanDevice = LANDevice(
                     id: id,
-                    displayName: id,
+                    displayName: displayName,
                     hostname: srv.host,
                     port: Int(srv.port),
                     interfaceType: "LAN",

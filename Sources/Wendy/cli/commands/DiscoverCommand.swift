@@ -286,6 +286,9 @@ extension DevicesCollection {
                             )
                             var device = device
                             device.agentVersion = version.version
+                            device.os = version.os
+                            device.osVersion = version.osVersion
+                            device.cpuArchitecture = version.cpuArchitecture
                             return device
                         }
                     } catch {

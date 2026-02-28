@@ -199,7 +199,7 @@ struct WendyAgent: AsyncParsableCommand {
             servers.append(
                 GRPCServer(
                     transport: HTTP2ServerTransport.Posix(
-                        address: .ipv4(host: "0.0.0.0", port: port + 1),
+                        address: .ipv6(host: "::", port: port + 1),
                         transportSecurity: mTLS
                     ),
                     services: authenticatedServices,
@@ -213,7 +213,7 @@ struct WendyAgent: AsyncParsableCommand {
         servers.append(
             GRPCServer(
                 transport: HTTP2ServerTransport.Posix(
-                    address: .ipv4(host: "0.0.0.0", port: port),
+                    address: .ipv6(host: "::", port: port),
                     transportSecurity: .plaintext
                 ),
                 services: plaintextServices,

@@ -138,11 +138,22 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                         let (configHash, configSize) = try await withSpan("uploadImageConfig") {
                             innerSpan in
                             logger.info("Creating container config.json")
+                            let cmdArgs =
+                                request.cmd.split(separator: " ").map(String.init)
+                                + request.userArgs
+                            #if arch(x86_64)
+                            let runtimeArchitecture = "amd64"
+                            #elseif arch(arm64)
+                            let runtimeArchitecture = "arm64"
+                            #else
+                            let runtimeArchitecture = "arm64"
+                            #endif
+
                             let config = ImageConfiguration(
-                                architecture: "arm64",
+                                architecture: runtimeArchitecture,
                                 os: "linux",
                                 config: ImageConfigurationConfig(
-                                    Cmd: request.cmd.split(separator: " ").map(String.init),
+                                    Cmd: cmdArgs,
                                     StopSignal: "SIGTERM"
                                 ),
                                 rootfs: ImageConfigurationRootFS(
@@ -224,6 +235,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                                         $0.appConfig = request.appConfig
                                         $0.workingDir = request.workingDir
                                         $0.restartPolicy = request.restartPolicy
+                                        $0.userArgs = request.userArgs
                                     }
                                 ),
                                 context: context
@@ -371,7 +383,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 // Build base environment variables
                 // Note: GPU-related env vars (NVIDIA_VISIBLE_DEVICES, etc.) are now
                 // handled by CDI and added during applyCDIDevice()
-                let env = [
+                let wendyEnv = [
                     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "WENDY_HOSTNAME=\(hostname).local",
                 ]
@@ -387,27 +399,56 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                     from: configData
                 )
 
+                // Merge image env with Wendy's env, letting Wendy's values take precedence.
+                var envDict = [String: String]()
+                for entry in imageConfig.config?.Env ?? [] {
+                    guard let separatorIndex = entry.firstIndex(of: "=") else { continue }
+                    envDict[String(entry[..<separatorIndex])] = String(
+                        entry[entry.index(after: separatorIndex)...]
+                    )
+                }
+                for entry in wendyEnv {
+                    guard let separatorIndex = entry.firstIndex(of: "=") else { continue }
+                    envDict[String(entry[..<separatorIndex])] = String(
+                        entry[entry.index(after: separatorIndex)...]
+                    )
+                }
+                let env = envDict.map { "\($0.key)=\($0.value)" }
+
                 // Set up command
                 let requestCmdIsEmpty = request.cmd.trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty
-                let args: [String]
-                if requestCmdIsEmpty {
-                    // Compose from config.entrypoint + config.cmd if they exist
-                    // (following Docker convention)
+                let hasUserArgs = !request.userArgs.isEmpty
+
+                let finalArgs: [String]
+                if !requestCmdIsEmpty {
+                    finalArgs =
+                        request.cmd.split(separator: " ").map(String.init) + request.userArgs
+                } else if hasUserArgs {
+                    // User args replace image CMD (Docker convention:
+                    // `docker run image arg1 arg2` uses ENTRYPOINT + [arg1, arg2])
                     if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
-                        if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
-                            args = entrypoint + extraCmd
-                        } else {
-                            args = entrypoint
-                        }
-                    } else if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
-                        args = extraCmd
+                        finalArgs = entrypoint + request.userArgs
+                    } else if let cmd = imageConfig.config?.Cmd, let executable = cmd.first {
+                        // No entrypoint, prefix user args with Cmd[0] (the executable)
+                        // so we don't lose the binary path
+                        finalArgs = [executable] + request.userArgs
                     } else {
-                        // Fallback: try suggest something reasonable (e.g., "/bin/sh"?)
-                        args = []
+                        finalArgs = request.userArgs
                     }
                 } else {
-                    args = request.cmd.split(separator: " ").map(String.init)
+                    // No user args, use image entrypoint + cmd as-is
+                    if let entrypoint = imageConfig.config?.Entrypoint, !entrypoint.isEmpty {
+                        if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
+                            finalArgs = entrypoint + extraCmd
+                        } else {
+                            finalArgs = entrypoint
+                        }
+                    } else if let extraCmd = imageConfig.config?.Cmd, !extraCmd.isEmpty {
+                        finalArgs = extraCmd
+                    } else {
+                        finalArgs = []
+                    }
                 }
 
                 // Set up workingDir
@@ -423,7 +464,7 @@ struct WendyContainerService: Wendy_Agent_Services_V1_WendyContainerService.Serv
                 }
 
                 var spec = OCI(
-                    args: args,
+                    args: finalArgs,
                     env: env,
                     workingDir: workingDir,
                     appName: request.appName

@@ -1,9 +1,9 @@
 import AsyncHTTPClient
+import CLIOutput
 import DownloadSupport
 import Foundation
 import Logging
 import NIOCore
-import Noora
 
 #if os(macOS)
     import Darwin
@@ -452,15 +452,15 @@ public final class ImageDownloader: ImageDownloading {
 
         if redownload || isValidCache {
             let extractionPath = try await redownloadImage()
-            Noora().info("Downloaded new image for \(deviceName)")
+            cliOutput.info("Downloaded new image for \(deviceName)")
             return (extractionPath, cached: false)
         } else {
-            Noora().info("Using cached image for \(deviceName)")
+            cliOutput.info("Using cached image for \(deviceName)")
 
             do {
                 return (try await validateImage(at: extractionDirectoryURL.path), cached: true)
             } catch {
-                Noora().warning("Invalid image found in cache, redownloading...")
+                cliOutput.warning("Invalid image found in cache, redownloading...")
 
                 return (try await redownloadImage(), cached: false)
             }

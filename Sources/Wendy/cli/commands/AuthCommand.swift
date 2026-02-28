@@ -1,11 +1,6 @@
 import ArgumentParser
 import CLIOutput
-import Crypto
 import Foundation
-import SwiftASN1
-import WendyCloudGRPC
-import WendySDK
-import X509
 
 struct AuthCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -56,46 +51,19 @@ struct RefreshCertsCommand: AsyncParsableCommand {
 
     func run() async throws {
         try await withAuth(title: "Refresh certificates") { auth in
-            try await withCloudGRPCClient(auth: auth) { client in
-                let certs = Wendycloud_V1_CertificateService.Client(wrapping: client.grpc)
-
-                var auth = auth
-                for (index, cert) in auth.certificates.enumerated() {
-                    let privateKey = Certificate.PrivateKey(P256.Signing.PrivateKey())
-                    let issued = try await withCSR(
-                        userId: cert.userID,
-                        forOrganizationId: cert.organizationID,
-                        privateKey: privateKey
-                    ) { csr in
-                        try await certs.refreshCertificate(
-                            .with {
-                                $0.pemCsr = try csr.serializeAsPEM().pemString
-                            }
-                        )
-                    }
-                    let newCert = try Certificate(pemEncoded: issued.certificate.pemCertificate)
-                    let newCertificateChainPEM = try PEMDocument.parseMultiple(
-                        pemString: issued.certificate.pemCertificateChain
-                    )
-                    let newCertificateChain =
-                        try [newCert]
-                        + newCertificateChainPEM.map { pem in
-                            return try Certificate(pemDocument: pem)
-                        }
-
-                    auth.certificates[index] = try Config.Auth.Certificates(
-                        organizationID: cert.organizationID,
-                        userID: cert.userID,
-                        privateKeyPEM: privateKey.serializeAsPEM().pemString,
-                        certificateChainPEM: newCertificateChain.map {
-                            try $0.serializeAsPEM().pemString
-                        }
-                    )
+            var auth = auth
+            var refreshed = false
+            for index in auth.certificates.indices {
+                if try await refreshCertificateIfNeeded(
+                    auth: &auth,
+                    certIndex: index,
+                    force: true
+                ) {
+                    refreshed = true
                 }
-                var config = getConfig()
-                config.addAuth(auth)
-                try config.save()
-                cliOutput.success("Refreshed certificates")
+            }
+            if !refreshed {
+                cliOutput.success("All certificates are up to date")
             }
         }
     }

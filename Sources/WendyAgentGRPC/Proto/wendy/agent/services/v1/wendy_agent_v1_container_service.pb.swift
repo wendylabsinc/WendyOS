@@ -132,6 +132,9 @@ public struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sendable {
 
   public var workingDir: String = String()
 
+  /// User-provided runtime arguments to append to the container entrypoint.
+  public var userArgs: [String] = []
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -162,6 +165,8 @@ public struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendable {
   public var hasRestartPolicy: Bool {return self._restartPolicy != nil}
   /// Clears the value of `restartPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearRestartPolicy() {self._restartPolicy = nil}
+
+  public var userArgs: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -591,7 +596,7 @@ extension Wendy_Agent_Services_V1_LayerHeader: SwiftProtobuf.Message, SwiftProto
 
 extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunContainerLayersRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{1}layers\0\u{3}app_config\0\u{3}restart_policy\0\u{3}working_dir\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{1}layers\0\u{3}app_config\0\u{3}restart_policy\0\u{3}working_dir\0\u{3}user_args\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -606,6 +611,7 @@ extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Messa
       case 5: try { try decoder.decodeSingularBytesField(value: &self.appConfig) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._restartPolicy) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self.workingDir) }()
+      case 8: try { try decoder.decodeRepeatedStringField(value: &self.userArgs) }()
       default: break
       }
     }
@@ -637,6 +643,9 @@ extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Messa
     if !self.workingDir.isEmpty {
       try visitor.visitSingularStringField(value: self.workingDir, fieldNumber: 7)
     }
+    if !self.userArgs.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.userArgs, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -648,6 +657,7 @@ extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Messa
     if lhs.appConfig != rhs.appConfig {return false}
     if lhs._restartPolicy != rhs._restartPolicy {return false}
     if lhs.workingDir != rhs.workingDir {return false}
+    if lhs.userArgs != rhs.userArgs {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -655,7 +665,7 @@ extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Messa
 
 extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".CreateContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{3}app_config\0\u{3}working_dir\0\u{3}restart_policy\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{3}app_config\0\u{3}working_dir\0\u{3}restart_policy\0\u{3}user_args\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -669,6 +679,7 @@ extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message,
       case 4: try { try decoder.decodeSingularBytesField(value: &self.appConfig) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self.workingDir) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._restartPolicy) }()
+      case 7: try { try decoder.decodeRepeatedStringField(value: &self.userArgs) }()
       default: break
       }
     }
@@ -697,6 +708,9 @@ extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message,
     try { if let v = self._restartPolicy {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
+    if !self.userArgs.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.userArgs, fieldNumber: 7)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -707,6 +721,7 @@ extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message,
     if lhs.appConfig != rhs.appConfig {return false}
     if lhs.workingDir != rhs.workingDir {return false}
     if lhs._restartPolicy != rhs._restartPolicy {return false}
+    if lhs.userArgs != rhs.userArgs {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

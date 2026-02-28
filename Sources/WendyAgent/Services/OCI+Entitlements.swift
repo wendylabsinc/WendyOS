@@ -47,9 +47,20 @@ extension OCI {
             self.linux.resources?.devices = []
         }
 
-        // Configure cgroup path and mode for device controller delegation
+        // Configure cgroup path and mode for device controller delegation.
+        // Keep "edge-agent" as the default for backward compatibility on legacy images,
+        // but allow packaged installs to override to "wendy-agent" via environment.
         let path = appName.replacingOccurrences(of: "-", with: "_")
-        self.linux.cgroupsPath = "system.slice:edge-agent:\(path)"
+        let serviceName =
+            ProcessInfo.processInfo.environment["WENDY_SYSTEMD_SERVICE_NAME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cgroupServiceName =
+            if let serviceName, !serviceName.isEmpty {
+                serviceName
+            } else {
+                "edge-agent"
+            }
+        self.linux.cgroupsPath = "system.slice:\(cgroupServiceName):\(path)"
         self.linux.namespaces.append(.init(type: "cgroup"))
 
         // Apply resources to container, these are applies in order
@@ -183,106 +194,26 @@ extension OCI {
                 case .none:
                     self.linux.namespaces.append(.init(type: "network"))
                 }
-            case .bluetooth(let bluetooth):
-                switch bluetooth.mode {
-                case .bluez:
-                    // Mount D-Bus for BlueZ daemon communication
-                    self.mounts.append(
-                        .init(
-                            destination: "/run/dbus",
-                            type: "bind",
-                            source: "/run/dbus",
-                            options: ["rbind", "nosuid", "noexec"]
-                        )
+            case .bluetooth(_):
+                // Mount D-Bus for BlueZ daemon communication
+                self.mounts.append(
+                    .init(
+                        destination: "/run/dbus",
+                        type: "bind",
+                        source: "/run/dbus",
+                        options: ["rbind", "nosuid", "noexec"]
                     )
+                )
 
-                    // Also mount /var/run/dbus as some systems use this path
-                    self.mounts.append(
-                        .init(
-                            destination: "/var/run/dbus",
-                            type: "bind",
-                            source: "/var/run/dbus",
-                            options: ["rbind", "nosuid", "noexec"]
-                        )
+                // Also mount /var/run/dbus as some systems use this path
+                self.mounts.append(
+                    .init(
+                        destination: "/var/run/dbus",
+                        type: "bind",
+                        source: "/var/run/dbus",
+                        options: ["rbind", "nosuid", "noexec"]
                     )
-                case .kernel:
-                    for entitlement in entitlements {
-                        if case .network(let networkEntitlements) = entitlement,
-                            networkEntitlements.mode == .none
-                        {
-                            // TODO: Throw error
-                        }
-                    }
-
-                    // These already exist
-                    //                    self.linux.namespaces.append(.init(type: "pid"))
-                    //                    self.linux.namespaces.append(.init(type: "ipc"))
-                    //                    self.linux.namespaces.append(.init(type: "uts"))
-
-                    let deviceCapabilities = [
-                        "CAP_NET_ADMIN",
-                        "CAP_NET_RAW",
-                    ]
-                    self.linux.capabilities.bounding.formUnion(deviceCapabilities)
-                    self.linux.capabilities.effective.formUnion(deviceCapabilities)
-                    self.linux.capabilities.inheritable.formUnion(deviceCapabilities)
-                    self.linux.capabilities.permitted.formUnion(deviceCapabilities)
-
-                    self.linux.seccomp = .init(
-                        defaultAction: "SCMP_ACT_ERRNO",
-                        architectures: [
-                            "SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64", "SCMP_ARCH_X86",
-                            "SCMP_ARCH_ARM",
-                        ],
-                        syscalls: [
-                            Syscall(
-                                names: ["socket"],
-                                action: "SCMP_ACT_ALLOW",
-                                args: [
-                                    .init(
-                                        index: 0,
-                                        value: 31,  // AF_BLUETOOTH
-                                        valueTwo: nil,
-                                        op: .EQ
-                                    )
-                                ]
-                            ),
-                            Syscall(
-                                names: ["socket"],
-                                action: "SCMP_ACT_ALLOW",
-                                args: [
-                                    .init(
-                                        index: 0,
-                                        value: 16,  // AF_NETLINK
-                                        valueTwo: nil,
-                                        op: .EQ
-                                    )
-                                ]
-                            ),
-                            Syscall(
-                                names: [
-                                    "bind", "connect", "getsockopt", "setsockopt", "ioctl",
-                                    "sendmsg", "recvmsg", "sendto", "recvfrom",
-                                ],
-                                action: "SCMP_ACT_ALLOW"
-                            ),
-                            Syscall(
-                                names: [
-                                    "poll", "ppoll", "epoll_create1", "epoll_ctl", "epoll_wait",
-                                ],
-                                action: "SCMP_ACT_ALLOW"
-                            ),
-                            Syscall(
-                                names: [
-                                    "read", "write", "close", "futex", "nanosleep", "clock_gettime",
-                                    "getrandom", "eventfd2", "timerfd_create", "timerfd_settime",
-                                    "signalfd4", "mmap", "mprotect", "munmap",
-                                ],
-                                action: "SCMP_ACT_ALLOW"
-                            ),
-                        ]
-                    )
-                }
+                )
             case .audio:
                 logger.info("Audio entitlement detected - adding audio group")
                 // Add audio group (gid 29) for access to ALSA devices
@@ -323,23 +254,10 @@ extension OCI {
                     didSetDeviceCapabilities = true
                     self.setDeviceCapabilities(appName: appName)
                 }
-            case .video(let video):
+            case .video(_):
                 // Find all video devices in /dev
                 let videoDevices = availableDevices.devices.filter { device in
-                    guard device.path.hasPrefix("/dev/video") else {
-                        return false
-                    }
-
-                    switch video.mode {
-                    case .all:
-                        return true
-                    case .allowlist:
-                        return video.allowlist.contains { allowed in
-                            let allowedName = allowed.replacingOccurrences(of: "/dev/", with: "")
-                            let deviceName = device.path.replacingOccurrences(of: "/dev/", with: "")
-                            return deviceName == allowedName
-                        }
-                    }
+                    device.path.hasPrefix("/dev/video")
                 }
 
                 for device in videoDevices {

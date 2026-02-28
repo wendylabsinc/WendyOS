@@ -33,10 +33,18 @@ public struct PullImage {
                 reference: imageRef.reference
             )
 
-            // Find the linux/arm64 or linux manifest
+            // Find the platform-appropriate manifest for the current architecture
+            #if arch(x86_64)
+            let targetArchitecture = "amd64"
+            #elseif arch(arm64)
+            let targetArchitecture = "arm64"
+            #else
+            let targetArchitecture = "arm64"
+            #endif
+
             if let linuxManifest = index.manifests.first(where: { desc in
                 desc.platform?.os == "linux"
-                    && (desc.platform?.architecture == "arm64"
+                    && (desc.platform?.architecture == targetArchitecture
                         || desc.mediaType.contains("image.manifest"))
             }) {
                 logger.info("Found platform-specific manifest: \(linuxManifest.digest)")

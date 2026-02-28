@@ -218,4 +218,38 @@ struct RunCommandTests {
             }
         }
     }
+
+    // MARK: - Passthrough Args Tests
+
+    @Suite("Passthrough Args Parsing")
+    struct PassthroughArgsTests {
+
+        @Test("No passthrough args by default")
+        func testNoPassthroughArgs() throws {
+            let cmd = try RunCommand.parse([])
+            #expect(cmd.userPassthroughArgs.isEmpty)
+        }
+
+        @Test("Captures args after --")
+        func testCapturePassthroughArgs() throws {
+            let cmd = try RunCommand.parse(["--", "--port", "9090"])
+            #expect(cmd.userPassthroughArgs == ["--port", "9090"])
+        }
+
+        @Test("Passthrough args with existing flags")
+        func testPassthroughWithFlags() throws {
+            let cmd = try RunCommand.parse(["--deploy", "--", "--port", "9090"])
+            #expect(cmd.deploy == true)
+            #expect(cmd.userPassthroughArgs == ["--port", "9090"])
+        }
+
+        @Test("Passthrough args filters -- separator")
+        func testFiltersSeparator() throws {
+            let cmd = try RunCommand.parse(["--", "--debug"])
+            // The separator should be filtered out
+            #expect(!cmd.userPassthroughArgs.contains("--"))
+            #expect(cmd.userPassthroughArgs == ["--debug"])
+        }
+    }
+
 }
