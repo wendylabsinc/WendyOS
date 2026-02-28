@@ -156,19 +156,10 @@ struct ListCommand: ModifyProjectCommand {
         switch entitlement {
         case .network(let networkEntitlement):
             print("   Mode: \(networkEntitlement.mode.rawValue)")
-        case .bluetooth(let bluetoothEntitlement):
-            print("   Mode: \(bluetoothEntitlement.mode.rawValue)")
-        case .video(let videoEntitlement):
-            print("   Mode: \(videoEntitlement.mode.rawValue)")
-            switch videoEntitlement.mode {
-            case .all:
-                print("   All detected video devices")
-            case .allowlist:
-                print("   Selected Video Devices:")
-                for allowlist in videoEntitlement.allowlist {
-                    print("      - \(allowlist)")
-                }
-            }
+        case .bluetooth:
+            print("   No additional configuration")
+        case .video:
+            print("   No additional configuration")
         case .audio:
             print("   No additional configuration")
         case .gpu:
@@ -281,57 +272,9 @@ struct AddCommand: ModifyProjectCommand {
                     newEntitlement = .network(NetworkEntitlements(mode: .none))
                 }
             case .bluetooth:
-                let bluez = try await cliOutput.yesOrNoPrompt(
-                    question: "Do you want to use bluez?",
-                    defaultAnswer: true
-                )
-                newEntitlement = .bluetooth(
-                    BluetoothEntitlements(
-                        mode: bluez ? .bluez : .kernel
-                    )
-                )
+                newEntitlement = .bluetooth(BluetoothEntitlements())
             case .video:
-                let modeName = try await cliOutput.singleChoicePrompt(
-                    title: nil,
-                    question: "Which devices do you want to allow?",
-                    options: VideoEntitlements.VideoMode.allCases.map(\.description)
-                )
-                let mode = VideoEntitlements.VideoMode.allCases.first {
-                    $0.description == modeName
-                }!
-
-                switch mode {
-                case .all:
-                    newEntitlement = .video(VideoEntitlements(mode: .all))
-                case .allowlist:
-                    let devices = try await withAgentGRPCClient(
-                        TargetOptions(endpoint: nil),
-                        title: "Select a WendyOS device to discover video inputs"
-                    ) { client in
-                        let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(
-                            wrapping: client
-                        )
-
-                        var request = Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest()
-                        request.categoryFilter = "camera"
-
-                        return try await agent.listHardwareCapabilities(request).capabilities
-                    }
-
-                    if devices.isEmpty {
-                        cliOutput.warning("No camera devices found")
-                        return
-                    } else {
-                        let allowlist = try await cliOutput.multipleChoicePrompt(
-                            question: "Which device(s) do you want to allow?",
-                            options: devices.map { $0.devicePath }
-                        )
-
-                        newEntitlement = .video(
-                            VideoEntitlements(mode: .allowlist, allowlist: allowlist)
-                        )
-                    }
-                }
+                newEntitlement = .video(VideoEntitlements())
             case .audio:
                 newEntitlement = .audio
             case .gpu:
@@ -386,21 +329,7 @@ struct AddCommand: ModifyProjectCommand {
             return .network(NetworkEntitlements(mode: networkMode))
 
         case .bluetooth:
-            let bluetoothMode: BluetoothEntitlements.BluetoothMode
-            if let modeString = mode {
-                guard let parsedMode = BluetoothEntitlements.BluetoothMode(rawValue: modeString)
-                else {
-                    throw CLIError.invalidArgument(
-                        name: "mode",
-                        value: modeString,
-                        reason: "Invalid for entitlement type '\(type.rawValue)'"
-                    )
-                }
-                bluetoothMode = parsedMode
-            } else {
-                bluetoothMode = .kernel  // Default
-            }
-            return .bluetooth(BluetoothEntitlements(mode: bluetoothMode))
+            return .bluetooth(BluetoothEntitlements())
 
         case .video:
             return .video(VideoEntitlements())

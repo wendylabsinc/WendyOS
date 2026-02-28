@@ -166,14 +166,29 @@ public struct PersistenceEntitlements: Codable, Sendable, Hashable {
 }
 
 public struct BluetoothEntitlements: Codable, Sendable, Hashable {
+    @available(*, deprecated, message: "BluetoothMode is no longer used. Bluetooth is now a yes/no entitlement.")
     public enum BluetoothMode: String, Codable, Sendable, Hashable {
         case bluez, kernel
     }
 
-    public let mode: BluetoothMode
+    /// Deprecated: mode is ignored. Kept for backward compatibility with existing wendy.json files.
+    public let mode: BluetoothMode?
 
-    public init(mode: BluetoothMode) {
+    public init(mode: BluetoothMode? = nil) {
         self.mode = mode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try container.decodeIfPresent(BluetoothMode.self, forKey: .mode)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        // Only encode "type" (handled by Entitlement.encode) — mode is deprecated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
     }
 }
 
@@ -182,7 +197,8 @@ public struct GPUEntitlements: Codable, Sendable, Hashable {
 }
 
 public struct VideoEntitlements: Codable, Sendable, Hashable {
-    /// Video entitlement modes for V4L2 device access.
+    /// Deprecated: Video mode is no longer used. Video is now a yes/no entitlement.
+    @available(*, deprecated, message: "VideoMode is no longer used. Video is now a yes/no entitlement.")
     public enum VideoMode: String, Codable, Sendable, Hashable, CaseIterable,
         CustomStringConvertible
     {
@@ -202,11 +218,13 @@ public struct VideoEntitlements: Codable, Sendable, Hashable {
         }
     }
 
-    public var mode: VideoMode
+    /// Deprecated: mode is ignored. Kept for backward compatibility with existing wendy.json files.
+    public var mode: VideoMode?
+
+    /// Deprecated: allowlist is ignored. Kept for backward compatibility with existing wendy.json files.
     public var allowlist: [String]
 
-    /// Defaults to `.all` mode and a single `/dev/video0` whitelist entry.
-    public init(mode: VideoMode = .all, allowlist: [String] = []) {
+    public init(mode: VideoMode? = nil, allowlist: [String] = []) {
         self.mode = mode
         self.allowlist = allowlist
     }
@@ -218,15 +236,13 @@ public struct VideoEntitlements: Codable, Sendable, Hashable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.mode = try container.decodeIfPresent(VideoMode.self, forKey: .mode) ?? .all
+        self.mode = try container.decodeIfPresent(VideoMode.self, forKey: .mode)
         self.allowlist =
             try container.decodeIfPresent([String].self, forKey: .allowlist) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(mode, forKey: .mode)
-        try container.encode(allowlist, forKey: .allowlist)
+        // Only encode "type" (handled by Entitlement.encode) — mode and allowlist are deprecated
     }
 }
 

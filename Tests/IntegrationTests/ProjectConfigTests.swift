@@ -47,9 +47,9 @@ struct ProjectConfigTests {
         let config = try loadConfig(at: projectDir)
 
         #expect(config.entitlements.contains(.audio))
-        #expect(config.entitlements.contains(.bluetooth(.init(mode: .bluez))))
+        #expect(config.entitlements.contains(.bluetooth(.init())))
         #expect(config.entitlements.contains(.network(.init(mode: .host))))
-        #expect(config.entitlements.contains(.video(.init(mode: .all))))
+        #expect(config.entitlements.contains(.video(.init())))
         #expect(
             config.entitlements.contains(
                 .persist(.init(name: "app-\(config.appId)", path: "/mnt/app"))
@@ -109,9 +109,9 @@ struct ProjectConfigTests {
         case .network(let networkEntitlements):
             command.entitlementType = .network
             command.mode = networkEntitlements.mode.rawValue
-        case .bluetooth(let bluetoothEntitlements):
+        case .bluetooth:
             command.entitlementType = .bluetooth
-            command.mode = bluetoothEntitlements.mode.rawValue
+            command.mode = nil
         case .video:
             command.entitlementType = .video
             command.mode = nil
@@ -131,8 +131,7 @@ struct ProjectConfigTests {
 
     @Test(
         arguments: [
-            Entitlement.bluetooth(BluetoothEntitlements(mode: .kernel)),
-            Entitlement.bluetooth(BluetoothEntitlements(mode: .bluez)),
+            Entitlement.bluetooth(BluetoothEntitlements()),
             Entitlement.network(NetworkEntitlements(mode: .host)),
             Entitlement.network(NetworkEntitlements(mode: .none)),
             Entitlement.video(VideoEntitlements()),
@@ -147,8 +146,7 @@ struct ProjectConfigTests {
 
     @Test(
         arguments: [
-            Entitlement.bluetooth(BluetoothEntitlements(mode: .kernel)),
-            Entitlement.bluetooth(BluetoothEntitlements(mode: .bluez)),
+            Entitlement.bluetooth(BluetoothEntitlements()),
             Entitlement.network(NetworkEntitlements(mode: .host)),
             Entitlement.network(NetworkEntitlements(mode: .none)),
             Entitlement.video(VideoEntitlements()),
