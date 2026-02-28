@@ -30,13 +30,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "containerd.services.sandbox.v1.Store" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Sandbox_V1_Store {
+public enum Containerd_Services_Sandbox_V1_Store: Sendable {
     /// Service descriptor for the "containerd.services.sandbox.v1.Store" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.sandbox.v1.Store")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Sandbox_V1_StoreCreateRequest
             /// Response type for "Create".
@@ -48,7 +48,7 @@ public enum Containerd_Services_Sandbox_V1_Store {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Sandbox_V1_StoreUpdateRequest
             /// Response type for "Update".
@@ -60,7 +60,7 @@ public enum Containerd_Services_Sandbox_V1_Store {
             )
         }
         /// Namespace for "Delete" metadata.
-        public enum Delete {
+        public enum Delete: Sendable {
             /// Request type for "Delete".
             public typealias Input = Containerd_Services_Sandbox_V1_StoreDeleteRequest
             /// Response type for "Delete".
@@ -72,7 +72,7 @@ public enum Containerd_Services_Sandbox_V1_Store {
             )
         }
         /// Namespace for "List" metadata.
-        public enum List {
+        public enum List: Sendable {
             /// Request type for "List".
             public typealias Input = Containerd_Services_Sandbox_V1_StoreListRequest
             /// Response type for "List".
@@ -84,7 +84,7 @@ public enum Containerd_Services_Sandbox_V1_Store {
             )
         }
         /// Namespace for "Get" metadata.
-        public enum Get {
+        public enum Get: Sendable {
             /// Request type for "Get".
             public typealias Input = Containerd_Services_Sandbox_V1_StoreGetRequest
             /// Response type for "Get".
@@ -679,13 +679,13 @@ extension Containerd_Services_Sandbox_V1_Store.ClientProtocol {
 
 /// Namespace containing generated types for the "containerd.services.sandbox.v1.Controller" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Containerd_Services_Sandbox_V1_Controller {
+public enum Containerd_Services_Sandbox_V1_Controller: Sendable {
     /// Service descriptor for the "containerd.services.sandbox.v1.Controller" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "containerd.services.sandbox.v1.Controller")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "Create" metadata.
-        public enum Create {
+        public enum Create: Sendable {
             /// Request type for "Create".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerCreateRequest
             /// Response type for "Create".
@@ -697,7 +697,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Start" metadata.
-        public enum Start {
+        public enum Start: Sendable {
             /// Request type for "Start".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerStartRequest
             /// Response type for "Start".
@@ -709,7 +709,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Platform" metadata.
-        public enum Platform {
+        public enum Platform: Sendable {
             /// Request type for "Platform".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerPlatformRequest
             /// Response type for "Platform".
@@ -721,7 +721,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Stop" metadata.
-        public enum Stop {
+        public enum Stop: Sendable {
             /// Request type for "Stop".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerStopRequest
             /// Response type for "Stop".
@@ -733,7 +733,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Wait" metadata.
-        public enum Wait {
+        public enum Wait: Sendable {
             /// Request type for "Wait".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerWaitRequest
             /// Response type for "Wait".
@@ -745,7 +745,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Status" metadata.
-        public enum Status {
+        public enum Status: Sendable {
             /// Request type for "Status".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerStatusRequest
             /// Response type for "Status".
@@ -757,7 +757,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Shutdown" metadata.
-        public enum Shutdown {
+        public enum Shutdown: Sendable {
             /// Request type for "Shutdown".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerShutdownRequest
             /// Response type for "Shutdown".
@@ -769,7 +769,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Metrics" metadata.
-        public enum Metrics {
+        public enum Metrics: Sendable {
             /// Request type for "Metrics".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerMetricsRequest
             /// Response type for "Metrics".
@@ -781,7 +781,7 @@ public enum Containerd_Services_Sandbox_V1_Controller {
             )
         }
         /// Namespace for "Update" metadata.
-        public enum Update {
+        public enum Update: Sendable {
             /// Request type for "Update".
             public typealias Input = Containerd_Services_Sandbox_V1_ControllerUpdateRequest
             /// Response type for "Update".

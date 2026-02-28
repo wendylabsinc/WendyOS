@@ -16,6 +16,67 @@ import WendyAgentGRPC
     import AppKit
 #endif
 
+enum DeviceArchitecture: String, Sendable {
+    case aarch64
+    case x86_64
+
+    var dockerPlatform: String {
+        switch self {
+        case .aarch64: return "linux/arm64"
+        case .x86_64: return "linux/amd64"
+        }
+    }
+
+    var swiftContainerArchitecture: String {
+        switch self {
+        case .aarch64: return "arm64"
+        case .x86_64: return "amd64"
+        }
+    }
+
+    var backtraceSearchNames: [String] {
+        switch self {
+        case .aarch64: return [
+            "swift-backtrace-static-linux-arm64",
+            "swift-backtrace-linux-arm64",
+        ]
+        case .x86_64: return [
+            "swift-backtrace-static-linux-x86_64",
+            "swift-backtrace-linux-x86_64",
+        ]
+        }
+    }
+
+    var ds2BinaryName: String {
+        switch self {
+        case .aarch64: return "ds2-124963fd-static-linux-arm64"
+        case .x86_64: return "ds2-124963fd-static-linux-x86_64"
+        }
+    }
+
+    init(fromDeviceString arch: String) throws {
+        switch arch.lowercased() {
+        case "aarch64", "arm64":
+            self = .aarch64
+        case "x86_64", "amd64":
+            self = .x86_64
+        default:
+            throw BuildError.unsupportedArchitecture(arch)
+        }
+    }
+}
+
+enum BuildError: Error, LocalizedError {
+    case unsupportedArchitecture(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedArchitecture(let arch):
+            return "Unsupported device architecture: \(arch)"
+        }
+    }
+}
+
 struct BuildCommand: AsyncParsableCommand, Sendable {
     static let configuration = CommandConfiguration(
         commandName: "build",
@@ -60,12 +121,22 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     }
 
     var swiftVersion: String { "6.2.3" }
-    var swiftSDK: String { "\(swiftVersion)-RELEASE_wendyos_aarch64" }
-    var sdkDownloadURL: String {
-        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.4.0/\(swiftVersion)-RELEASE_wendyos_aarch64.artifactbundle.zip"
+
+    func swiftSDK(for architecture: DeviceArchitecture) -> String {
+        "\(swiftVersion)-RELEASE_wendyos_\(architecture.rawValue)"
     }
-    var sdkChecksum: String {
-        "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e"
+
+    func sdkDownloadURL(for architecture: DeviceArchitecture) -> String {
+        "https://github.com/wendylabsinc/wendy-swift-tools/releases/download/0.4.0/\(swiftVersion)-RELEASE_wendyos_\(architecture.rawValue).artifactbundle.zip"
+    }
+
+    func sdkChecksum(for architecture: DeviceArchitecture) -> String {
+        switch architecture {
+        case .aarch64:
+            return "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e"
+        case .x86_64:
+            return "b5a4d08ad4d4841043727f6671c6aa004da3a2b7f12dc28101d6770c1dc57eb1"
+        }
     }
 
     /// CLI args after `--`, with the separator itself filtered out.
@@ -88,6 +159,17 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         }
     }
 
+    func queryDeviceArchitecture() async throws -> DeviceArchitecture {
+        try await withAgentGRPCClient(
+            agentConnectionOptions,
+            title: "Detecting device architecture"
+        ) { client in
+            let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+            let version = try await agent.getAgentVersion(request: .init(message: .init()))
+            return try DeviceArchitecture(fromDeviceString: version.cpuArchitecture)
+        }
+    }
+
     func withContainer(
         restartPolicy: RestartPolicy,
         userArgs: [String] = [],
@@ -100,8 +182,12 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         let isSwiftPackage = FileManager.default.fileExists(atPath: "Package.swift")
         let directory = try FileManager.default.contentsOfDirectory(atPath: currentPath)
 
+        // Query target device architecture before building
+        let architecture = try await queryDeviceArchitecture()
+
         for item in directory where isDockerfile(item) {
             try await withBuiltDockerfileApp(
+                architecture: architecture,
                 restartPolicy: restartPolicy,
                 userArgs: userArgs,
                 perform: perform
@@ -111,6 +197,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
 
         if isSwiftPackage {
             try await withBuiltSwiftApp(
+                architecture: architecture,
                 restartPolicy: restartPolicy,
                 userArgs: userArgs,
                 perform: perform
@@ -128,6 +215,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
             }
             // Now build as a Dockerfile app
             try await withBuiltDockerfileApp(
+                architecture: architecture,
                 restartPolicy: restartPolicy,
                 userArgs: userArgs,
                 perform: perform
@@ -227,6 +315,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     }
 
     func withBuiltDockerfileApp(
+        architecture: DeviceArchitecture,
         restartPolicy: RestartPolicy,
         userArgs: [String] = [],
         perform:
@@ -245,7 +334,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
         try await withAgentGRPCClientAndEndpoint(
             agentConnectionOptions,
             title: "Which device do you want to build this app for?"
-        ) { [name, dockerContext, userArgs] client, endpoint in
+        ) { [name, dockerContext, userArgs, architecture] client, endpoint in
             // Build additional properties for analytics
             var buildPhaseProperties: [String: String] = [:]
             if let dockerContext {
@@ -279,7 +368,8 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 try await docker.buildxAndPush(
                     name: name,
                     registryHostname: endpoint.host,
-                    registryPort: 5000
+                    registryPort: 5000,
+                    platform: architecture.dockerPlatform
                 )
                 cliOutput.success("Container built and uploaded successfully!")
             }
@@ -311,6 +401,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     }
 
     func withBuiltSwiftApp(
+        architecture: DeviceArchitecture,
         restartPolicy: RestartPolicy,
         userArgs: [String] = [],
         perform:
@@ -320,9 +411,9 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
     ) async throws {
         try await AppBuildHelpers.checkSwiftRequirements(
             swiftVersion: swiftVersion,
-            swiftSDK: swiftSDK,
-            sdkDownloadURL: sdkDownloadURL,
-            sdkChecksum: sdkChecksum,
+            swiftSDK: swiftSDK(for: architecture),
+            sdkDownloadURL: sdkDownloadURL(for: architecture),
+            sdkChecksum: sdkChecksum(for: architecture),
             shouldAutoAccept: shouldAutoAccept
         )
 
@@ -480,10 +571,8 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 var hasBacktrace = false
 
                 // Add swift-backtrace binaries for crash reporting
-                findBacktrace: for binaryName in [
-                    "swift-backtrace-static-linux-arm64",
-                    "swift-backtrace-linux-arm64",
-                ] where pluginSupportsBacktrace {
+                findBacktrace: for binaryName in architecture.backtraceSearchNames
+                    where pluginSupportsBacktrace {
                     let destination = "/swift-backtrace"
                     if let backtraceUrl = Bundle.module.url(
                         forResource: binaryName,
@@ -521,7 +610,7 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                 }
 
                 if debug {
-                    let ds2BinaryName = "ds2-124963fd-static-linux-arm64"
+                    let ds2BinaryName = architecture.ds2BinaryName
                     // Include the ds2 executable in the container image.
                     if let url = Bundle.module.url(
                         forResource: ds2BinaryName,
@@ -561,9 +650,10 @@ struct BuildCommand: AsyncParsableCommand, Sendable {
                     maxLines: 20
                 ) { [additionalEnv] emit in
                     try await swiftPM.buildAndPushContainer(
-                        swiftSDK: swiftSDK,
+                        swiftSDK: swiftSDK(for: architecture),
                         product: executableTarget,
                         device: endpoint.host,
+                        architecture: architecture.swiftContainerArchitecture,
                         entrypoint: finalEntrypoint,
                         additionalEnv: additionalEnv,
                         arguments: finalArguments,

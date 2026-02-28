@@ -27,6 +27,9 @@ service WendyAgentService {
     
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
+
+    // Update the operating system using a Mender artifact
+    rpc UpdateOS(UpdateOSRequest) returns (stream UpdateOSResponse);
 }
 
 message RunContainerRequest {
@@ -141,6 +144,10 @@ message GetAgentVersionResponse {
     string version = 1;
     // OS version read from /etc/wendy/version.txt (only present on WendyOS)
     optional string os_version = 2;
+    string os = 3;
+    string cpu_architecture = 4;
+    optional string public_key = 5;
+    repeated string featureset = 6;
 }
 
 // Request message for listing WiFi networks
@@ -236,5 +243,37 @@ message ListHardwareCapabilitiesResponse {
         
         // Additional properties as key-value pairs
         map<string, string> properties = 4;
+    }
+}
+
+// Request message for updating the OS
+message UpdateOSRequest {
+    // URL to download the Mender artifact from
+    string artifact_url = 1;
+}
+
+// Response message for OS update progress
+message UpdateOSResponse {
+    oneof response_type {
+        Progress progress = 1;
+        Completed completed = 2;
+        Failed failed = 3;
+    }
+
+    message Progress {
+        // Current phase of the update (downloading, installing, etc.)
+        string phase = 1;
+        // Progress percentage (0-100)
+        int32 percent = 2;
+    }
+
+    message Completed {
+        // Whether a reboot is required to complete the update
+        bool reboot_required = 1;
+    }
+
+    message Failed {
+        // Error message describing the failure
+        string error_message = 1;
     }
 }

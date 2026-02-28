@@ -1,0 +1,9 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service protocol="any">
+    <type>_wendyos._udp</type>
+    <port>50051</port>
+  </service>
+</service-group>

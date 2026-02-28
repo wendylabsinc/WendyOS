@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.UserService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_UserService {
+public enum Wendycloud_V1_UserService: Sendable {
     /// Service descriptor for the "wendycloud.v1.UserService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.UserService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateUser" metadata.
-        public enum CreateUser {
+        public enum CreateUser: Sendable {
             /// Request type for "CreateUser".
             public typealias Input = Wendycloud_V1_CreateUserRequest
             /// Response type for "CreateUser".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_UserService {
             )
         }
         /// Namespace for "GetUser" metadata.
-        public enum GetUser {
+        public enum GetUser: Sendable {
             /// Request type for "GetUser".
             public typealias Input = Wendycloud_V1_GetUserRequest
             /// Response type for "GetUser".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_UserService {
             )
         }
         /// Namespace for "UpdateUser" metadata.
-        public enum UpdateUser {
+        public enum UpdateUser: Sendable {
             /// Request type for "UpdateUser".
             public typealias Input = Wendycloud_V1_UpdateUserRequest
             /// Response type for "UpdateUser".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_UserService {
             )
         }
         /// Namespace for "ListUsers" metadata.
-        public enum ListUsers {
+        public enum ListUsers: Sendable {
             /// Request type for "ListUsers".
             public typealias Input = Wendycloud_V1_ListUsersRequest
             /// Response type for "ListUsers".

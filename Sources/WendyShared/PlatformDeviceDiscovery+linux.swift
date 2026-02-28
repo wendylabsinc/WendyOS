@@ -292,6 +292,11 @@
             var seen = Set<String>()
 
             var devices: [LANDevice] = []
+            let id = txt?.resource.values.values.first ?? "WendyOS Device"
+            let hostname = srv.resource.domainName.string
+
+            // Derive display name from hostname if id is a generic fallback
+            let displayName = (id == "WendyOS Device") ? String(hostname.replacingOccurrences(of: ".local", with: "")) : id
 
             await MdnsBrowser.browse(
                 serviceType: "_wendyos._udp.local.",
@@ -307,9 +312,9 @@
 
                 devices.append(LANDevice(
                     id: id,
-                    displayName: id,
+                    displayName: displayName,
                     hostname: hostname,
-                    port: Int(entry.port),
+                    port: Int(srv.resource.port),
                     interfaceType: "LAN",
                     isWendyDevice: true
                 ))

@@ -143,6 +143,79 @@ public struct Config: Sendable, Codable {
     }
 }
 
+extension Config.Auth.Certificates {
+    /// Returns true if the certificate is expired or will expire within the buffer period
+    func needsRefresh(buffer: TimeInterval = 259_200) -> Bool {
+        guard let leafPEM = certificateChainPEM.first else { return true }
+        do {
+            let cert = try Certificate(pemEncoded: leafPEM)
+            return cert.notValidAfter < Date(timeIntervalSinceNow: buffer)
+        } catch {
+            return true
+        }
+    }
+}
+
+/// Refreshes a single certificate at the given index if it needs refresh.
+/// Returns true if a refresh was performed.
+func refreshCertificateIfNeeded(
+    auth: inout Config.Auth,
+    certIndex: Int,
+    force: Bool = false
+) async throws -> Bool {
+    guard auth.certificates.indices.contains(certIndex),
+        force || auth.certificates[certIndex].needsRefresh()
+    else {
+        return false
+    }
+
+    let oldCert = auth.certificates[certIndex]
+    cliOutput.info("Certificate expiring soon, refreshing automatically...")
+
+    let newCertEntry = try await _withCloudGRPCClient(auth: auth) {
+        client -> Config.Auth.Certificates in
+        let certs = Wendycloud_V1_CertificateService.Client(wrapping: client.grpc)
+        let privateKey = Certificate.PrivateKey(P256.Signing.PrivateKey())
+        let issued = try await withCSR(
+            userId: oldCert.userID,
+            forOrganizationId: oldCert.organizationID,
+            privateKey: privateKey
+        ) { csr in
+            try await certs.refreshCertificate(
+                .with {
+                    $0.pemCsr = try csr.serializeAsPEM().pemString
+                }
+            )
+        }
+
+        let newCert = try Certificate(pemEncoded: issued.certificate.pemCertificate)
+        let newCertificateChainPEM = try PEMDocument.parseMultiple(
+            pemString: issued.certificate.pemCertificateChain
+        )
+        let newCertificateChain =
+            try [newCert]
+            + newCertificateChainPEM.map { pem in
+                return try Certificate(pemDocument: pem)
+            }
+
+        return try Config.Auth.Certificates(
+            organizationID: oldCert.organizationID,
+            userID: oldCert.userID,
+            privateKeyPEM: privateKey.serializeAsPEM().pemString,
+            certificateChainPEM: newCertificateChain.map {
+                try $0.serializeAsPEM().pemString
+            }
+        )
+    }
+
+    auth.certificates[certIndex] = newCertEntry
+    var config = getConfig()
+    config.addAuth(auth)
+    try config.save()
+    cliOutput.success("Certificate refreshed successfully")
+    return true
+}
+
 var configURL: URL {
     get throws {
         let wendyURL = FileManager.default
@@ -202,12 +275,17 @@ func withCertificates<R: Sendable>(
     forOrganizationId orgId: Int32,
     perform: @Sendable @escaping (Config.Auth.Certificates) async throws -> R
 ) async throws -> R {
-    let config = getConfig()
+    var config = getConfig()
 
-    for auth in config.auth {
-        for certificate in auth.certificates {
+    for (authIndex, var auth) in config.auth.enumerated() {
+        for (certIndex, certificate) in auth.certificates.enumerated() {
             if certificate.organizationID == orgId {
-                return try await perform(certificate)
+                if certificate.needsRefresh() {
+                    if try await refreshCertificateIfNeeded(auth: &auth, certIndex: certIndex) {
+                        config.auth[authIndex] = auth
+                    }
+                }
+                return try await perform(auth.certificates[certIndex])
             }
         }
     }

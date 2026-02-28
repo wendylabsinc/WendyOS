@@ -293,6 +293,7 @@ public struct SwiftPM: Sendable {
         swiftSDK: String,
         product: Executable,
         device: String,
+        architecture: String = "arm64",
         entrypoint: String?,
         additionalEnv: [String],
         arguments entrypointArguments: [String],
@@ -308,8 +309,7 @@ public struct SwiftPM: Sendable {
             "--allow-insecure-http=destination",
             "--product=\(product.name)",
             "--repository=\(device):5000/\(product.name.lowercased())",
-            // TODO: Select target architecture based on target device advertisement?
-            "--architecture=arm64",
+            "--architecture=\(architecture)",
         ]
 
         flags += resources.map { "--resources=\($0.source):\($0.destination)" }

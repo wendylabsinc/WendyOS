@@ -10,6 +10,7 @@ url="https://wendy.sh"
 license=('custom:proprietary')
 provides=('wendy')
 conflicts=('wendy-git')
+depends=('usbutils' 'ca-certificates')
 
 source_x86_64=("${pkgname}-${_pkgver}-x86_64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${_pkgtag}/wendy-cli-linux-static-musl-x86_64-${_pkgver}.tar.gz")
 source_aarch64=("${pkgname}-${_pkgver}-aarch64.tar.gz::https://github.com/wendylabsinc/wendy-agent/releases/download/${_pkgtag}/wendy-cli-linux-static-musl-aarch64-${_pkgver}.tar.gz")

@@ -140,6 +140,10 @@ extension DeviceDiscovery {
                         rssi: rssi,
                         isWendyDevice: true,
                         agentVersion: nil,
+                        os: nil,
+                        osVersion: nil,
+                        cpuArchitecture: nil,
+                        featureset: [],
                         l2capPSM: WendyBluetoothUUIDs.l2capPSM
                     )
 
@@ -168,7 +172,9 @@ extension DeviceDiscovery {
 
             // Resolve agent versions if requested
             if resolveAgentVersion {
-                await withTaskGroup(of: (String, String?).self) { group in
+                await withTaskGroup(
+                    of: (String, Wendy_Agent_Services_V1_AgentVersionResponse?).self
+                ) { group in
                     for (deviceId, (_, peripheral)) in discoveredDevices {
                         group.addTask {
                             do {
@@ -187,7 +193,11 @@ extension DeviceDiscovery {
                         if let version,
                             var entry = discoveredDevices[deviceId]
                         {
-                            entry.0.agentVersion = version
+                            entry.0.agentVersion = version.version
+                            entry.0.os = version.os
+                            entry.0.osVersion = version.osVersion
+                            entry.0.cpuArchitecture = version.cpuArchitecture
+                            entry.0.featureset = Set(version.featureset)
                             discoveredDevices[deviceId] = entry
                         }
                     }
@@ -210,7 +220,7 @@ extension DeviceDiscovery {
     private func resolveBluetoothAgentVersion(
         peripheral: Peripheral,
         centralManager: CentralManager
-    ) async throws -> String {
+    ) async throws -> Wendy_Agent_Services_V1_AgentVersionResponse {
         let logger = Logger(label: "sh.wendy.bluetooth.version-resolution")
         // Connect to peripheral
         let connection = try await centralManager.connect(to: peripheral)
@@ -285,7 +295,7 @@ extension DeviceDiscovery {
                 )
 
                 if case .agentVersion(let agentVersion) = bluetoothRespone.response {
-                    return agentVersion.version
+                    return agentVersion
                 }
                 throw BluetoothVersionResolutionError.unexpectedResponse
             }

@@ -270,17 +270,38 @@ extension AgentClient {
 // MARK: - Agent Info Commands
 
 extension AgentClient {
+    struct AgentVersionInfo: Sendable {
+        let version: String
+        let os: String?
+        let osVersion: String?
+        let cpuArchitecture: String
+        let featureset: Set<String>
+    }
+
     /// Get agent version
-    func getAgentVersion() async throws -> String {
+    func getAgentVersion() async throws -> AgentVersionInfo {
         switch self {
         case .grpc(let client):
             let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
             let request = Wendy_Agent_Services_V1_GetAgentVersionRequest()
             let response = try await agent.getAgentVersion(request)
-            return response.version
+            return AgentVersionInfo(
+                version: response.version,
+                os: response.os.isEmpty ? "Linux" : response.os,
+                osVersion: response.hasOsVersion ? response.osVersion : nil,
+                cpuArchitecture: response.cpuArchitecture,
+                featureset: Set(response.featureset)
+            )
 
         case .bluetooth(let client):
-            return try await client.getAgentVersion()
+            let version = try await client.getAgentVersion()
+            return AgentVersionInfo(
+                version: version.version,
+                os: version.os,
+                osVersion: version.osVersion,
+                cpuArchitecture: version.cpuArchitecture,
+                featureset: Set(version.featureset)
+            )
         }
     }
 }

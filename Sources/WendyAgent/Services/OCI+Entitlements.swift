@@ -47,9 +47,20 @@ extension OCI {
             self.linux.resources?.devices = []
         }
 
-        // Configure cgroup path and mode for device controller delegation
+        // Configure cgroup path and mode for device controller delegation.
+        // Keep "edge-agent" as the default for backward compatibility on legacy images,
+        // but allow packaged installs to override to "wendy-agent" via environment.
         let path = appName.replacingOccurrences(of: "-", with: "_")
-        self.linux.cgroupsPath = "system.slice:edge-agent:\(path)"
+        let serviceName =
+            ProcessInfo.processInfo.environment["WENDY_SYSTEMD_SERVICE_NAME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cgroupServiceName =
+            if let serviceName, !serviceName.isEmpty {
+                serviceName
+            } else {
+                "edge-agent"
+            }
+        self.linux.cgroupsPath = "system.slice:\(cgroupServiceName):\(path)"
         self.linux.namespaces.append(.init(type: "cgroup"))
 
         // Apply resources to container, these are applies in order

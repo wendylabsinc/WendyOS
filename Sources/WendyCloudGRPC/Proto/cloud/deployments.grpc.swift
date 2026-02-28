@@ -15,13 +15,13 @@ import GRPCProtobuf
 
 /// Namespace containing generated types for the "wendycloud.v1.DeploymentService" service.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
-public enum Wendycloud_V1_DeploymentService {
+public enum Wendycloud_V1_DeploymentService: Sendable {
     /// Service descriptor for the "wendycloud.v1.DeploymentService" service.
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService")
     /// Namespace for method metadata.
-    public enum Method {
+    public enum Method: Sendable {
         /// Namespace for "CreateAppRelease" metadata.
-        public enum CreateAppRelease {
+        public enum CreateAppRelease: Sendable {
             /// Request type for "CreateAppRelease".
             public typealias Input = Wendycloud_V1_CreateAppReleaseRequest
             /// Response type for "CreateAppRelease".
@@ -33,7 +33,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "UpdateAppRelease" metadata.
-        public enum UpdateAppRelease {
+        public enum UpdateAppRelease: Sendable {
             /// Request type for "UpdateAppRelease".
             public typealias Input = Wendycloud_V1_UpdateAppReleaseRequest
             /// Response type for "UpdateAppRelease".
@@ -45,7 +45,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "ListAppReleases" metadata.
-        public enum ListAppReleases {
+        public enum ListAppReleases: Sendable {
             /// Request type for "ListAppReleases".
             public typealias Input = Wendycloud_V1_ListAppReleasesRequest
             /// Response type for "ListAppReleases".
@@ -57,7 +57,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "GetPushImageCredentials" metadata.
-        public enum GetPushImageCredentials {
+        public enum GetPushImageCredentials: Sendable {
             /// Request type for "GetPushImageCredentials".
             public typealias Input = Wendycloud_V1_GetPushImageCredentialsRequest
             /// Response type for "GetPushImageCredentials".
@@ -69,7 +69,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "CreateDeployment" metadata.
-        public enum CreateDeployment {
+        public enum CreateDeployment: Sendable {
             /// Request type for "CreateDeployment".
             public typealias Input = Wendycloud_V1_CreateDeploymentRequest
             /// Response type for "CreateDeployment".
@@ -81,7 +81,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "GetDeployment" metadata.
-        public enum GetDeployment {
+        public enum GetDeployment: Sendable {
             /// Request type for "GetDeployment".
             public typealias Input = Wendycloud_V1_GetDeploymentRequest
             /// Response type for "GetDeployment".
@@ -93,7 +93,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "ListDeployments" metadata.
-        public enum ListDeployments {
+        public enum ListDeployments: Sendable {
             /// Request type for "ListDeployments".
             public typealias Input = Wendycloud_V1_ListDeploymentsRequest
             /// Response type for "ListDeployments".
@@ -105,7 +105,7 @@ public enum Wendycloud_V1_DeploymentService {
             )
         }
         /// Namespace for "HandleReportedState" metadata.
-        public enum HandleReportedState {
+        public enum HandleReportedState: Sendable {
             /// Request type for "HandleReportedState".
             public typealias Input = Wendycloud_V1_UpdateReportedStateRequest
             /// Response type for "HandleReportedState".
