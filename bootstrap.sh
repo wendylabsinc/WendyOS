@@ -75,6 +75,7 @@ SRCREV_TEGRA_COMM="241d1073ba8e610ef8da3fe8470b0a4d0567521f"
 SRCREV_VIRT="f92518e20530edfebca45e4170e11460949a5303"
 SRCREV_MENDER="76404a7b914676a57d76ccb5fe12149112c05c03"
 SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"
+SRCREV_RPI="3afc9728b1f4ba0f5be1af34883d6582966133a1"
 
 declare -Ar repos=(
     [0]="1|git://git.yoctoproject.org/poky.git||${SRCREV_POKY}"
@@ -84,6 +85,7 @@ declare -Ar repos=(
     [4]="1|git://git.yoctoproject.org/meta-virtualization.git||${SRCREV_VIRT}"
     [5]="1|https://github.com/mendersoftware/meta-mender.git||${SRCREV_MENDER}"
     [6]="1|https://github.com/mendersoftware/meta-mender-community.git||${SRCREV_MENDER_COMM}"
+    [7]="1|https://github.com/agherzan/meta-raspberrypi.git||${SRCREV_RPI}"
 )
 
 
@@ -317,7 +319,11 @@ mkdir -p "${YOCTO_BUILD_DIR}/conf"
 # use the template only if the corresponding one in build/conf doesn't exist
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/bblayers.conf" ]]
 then
-    cp "${META_LAYER_DIR}/conf/template/bblayers.conf" "./${YOCTO_BUILD_DIR}/conf"
+    BBLAYERS_TEMPLATE="bblayers.conf"
+    if [[ "${MACHINE:-}" == *"raspberrypi"* ]]; then
+        BBLAYERS_TEMPLATE="bblayers-rpi5.conf"
+    fi
+    cp "${META_LAYER_DIR}/conf/template/${BBLAYERS_TEMPLATE}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
     sed -i.bak "s|%META-REPO%|${image_name}|g" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
 fi
 

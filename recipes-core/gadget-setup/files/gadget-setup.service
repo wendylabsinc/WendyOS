@@ -1,12 +1,13 @@
 [Unit]
-Description=USB Gadget setup (NCM)
-After=local-fs.target
+Description=USB Gadget setup (NCM+ACM composite)
+After=sysinit.target local-fs.target systemd-udevd.service
 Before=NetworkManager.service network.target
 Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/gadget-setup.sh
+ExecStart=/usr/sbin/gadget-setup.sh
+ExecStartPost=/usr/libexec/usb0-force-up
 RemainAfterExit=yes
 
 [Install]

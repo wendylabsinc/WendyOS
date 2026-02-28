@@ -93,6 +93,7 @@ help:
 	@printf "  make build                                    # Build default image\n"
 	@printf "  make build MACHINE=jetson-orin-nano-devkit-wendyos  # Build for SD card\n"
 	@printf "  make build MACHINE=jetson-agx-orin-devkit-nvme-wendyos  # Build for AGX Orin 64GB\n"
+	@printf "  make build MACHINE=raspberrypi5-wendyos       # Build for RPi5\n"
 	@printf "  make shell                                    # Interactive development\n"
 	@printf "  make flash-to-external                        # Interactive flash\n"
 	@printf "  make flash-to-external FLASH_DEVICE=/dev/disk4 FLASH_CONFIRM=yes  # Non-interactive\n"
@@ -328,6 +329,16 @@ flash-to-external:
 	if [ -f "$(PROJECT_DIR)/deploy/wendyos.img" ]; then \
 		IMG_SIZE=$$(ls -lh "$(PROJECT_DIR)/deploy/wendyos.img" | awk '{print $$5}'); \
 		printf "Using existing image: $(PROJECT_DIR)/deploy/wendyos.img ($$IMG_SIZE)\n\n"; \
+	elif echo "$(MACHINE)" | grep -q "raspberrypi"; then \
+		WIC_IMG="$(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).rootfs.wic"; \
+		if [ ! -f "$$WIC_IMG" ]; then \
+			printf "$(RED)Error: WIC image not found: $$WIC_IMG$(NC)\n"; \
+			printf "Run 'make build MACHINE=$(MACHINE)' first.\n"; \
+			exit 1; \
+		fi; \
+		mkdir -p "$(PROJECT_DIR)/deploy"; \
+		cp "$$WIC_IMG" "$(PROJECT_DIR)/deploy/wendyos.img"; \
+		printf "$(GREEN)RPi5 WIC image ready: $(PROJECT_DIR)/deploy/wendyos.img$(NC)\n\n"; \
 	else \
 		if [ "$$OS_TYPE" = "Darwin" ]; then \
 			if [ ! -f "$(PROJECT_DIR)/deploy/$(IMAGE_TARGET)-$(MACHINE).tegraflash.tar.gz" ]; then \

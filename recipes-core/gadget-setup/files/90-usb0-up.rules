@@ -1,0 +1,4 @@
+
+SUBSYSTEM=="net", KERNEL=="usb0", ACTION=="add|change", \
+  RUN+="/bin/sh -c 'PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/libexec/usb0-force-up'"
+

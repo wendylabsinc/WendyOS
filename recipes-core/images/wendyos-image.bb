@@ -54,10 +54,10 @@ IMAGE_INSTALL:append = " \
     audio-config \
     "
 
-# Mender packages (only for real hardware, not QEMU)
+# Mender packages (only for real hardware, not QEMU or RPi)
 IMAGE_INSTALL:append = " \
-    ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'mender-configure mender-connect'} \
-    ${@'' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else 'python3-pip-jetson-config'} \
+    ${@'' if ('qemuall' in d.getVar('MACHINEOVERRIDES').split(':') or 'rpi' in d.getVar('MACHINEOVERRIDES').split(':')) else 'mender-configure mender-connect'} \
+    ${@'' if ('qemuall' in d.getVar('MACHINEOVERRIDES').split(':') or 'rpi' in d.getVar('MACHINEOVERRIDES').split(':')) else 'python3-pip-jetson-config'} \
     "
 
 # Enable USB peripheral (gadget) support for real hardware
@@ -97,3 +97,4 @@ BUILDCFG_VARS += " \
 # These files contain IMAGE_INSTALL modifications and other hardware-specific settings
 require ${@'conf/distro/include/qemu-image.inc' if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
 require ${@'conf/distro/include/tegra-image.inc' if 'tegra' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'conf/distro/include/rpi-image.inc' if 'rpi' in d.getVar('MACHINEOVERRIDES').split(':') else ''}

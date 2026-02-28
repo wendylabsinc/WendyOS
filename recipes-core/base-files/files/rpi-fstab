@@ -1,0 +1,2 @@
+PARTUUID=RPI_BOOT_UUID  /boot  vfat    defaults          0 2
+PARTUUID=RPI_ROOT_UUID  /      ext4    defaults,noatime  0 1

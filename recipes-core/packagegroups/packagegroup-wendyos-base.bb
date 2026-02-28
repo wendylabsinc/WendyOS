@@ -47,5 +47,6 @@ RDEPENDS:${PN}:append = " \
     "
 
 # Include hardware-specific packagegroup configuration
-require ${@bb.utils.contains('MACHINEOVERRIDES', 'qemuall', 'qemu-packagegroup-base.inc', '', d)}
-require ${@bb.utils.contains('MACHINEOVERRIDES', 'tegra', 'tegra-packagegroup-base.inc', '', d)}
+require ${@'qemu-packagegroup-base.inc'  if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'tegra-packagegroup-base.inc' if 'tegra'   in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'packagegroup-base-rpi.inc'   if 'rpi'     in d.getVar('MACHINEOVERRIDES').split(':') else ''}

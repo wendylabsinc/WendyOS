@@ -16,4 +16,4 @@ do_install() {
 FILES:${PN} = "${sysconfdir}/udev/rules.d/70-qemu-usb0.rules"
 
 # Only needed for QEMU machines, not real hardware
-COMPATIBLE_MACHINE = "qemuarm64-wendyos"
+COMPATIBLE_MACHINE = "qemuall"

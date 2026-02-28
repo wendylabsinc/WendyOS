@@ -33,6 +33,7 @@ IMAGE_INSTALL:append = " \
 # - GPU device nodes (/dev/nvhost-*) for tegrastats and GPU monitoring
 # - CUDA compilation toolchain (headers, binaries, nvvm) for Triton/JIT
 # - Additional libraries (libnuma) and monitoring paths
+WENDYOS_USB_GADGET ?= "1"
 WENDYOS_DEEPSTREAM ?= "1"
 IMAGE_INSTALL:append = " \
     ${@oe.utils.ifelse( \
