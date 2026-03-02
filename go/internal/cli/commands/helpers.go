@@ -33,5 +33,5 @@ func connectToAgent(ctx context.Context) (*grpcclient.AgentConnection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return grpcclient.Connect(ctx, addr)
+	return grpcclient.Connect(addr)
 }

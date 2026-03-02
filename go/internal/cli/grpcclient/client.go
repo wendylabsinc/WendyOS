@@ -2,7 +2,6 @@
 package grpcclient
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 
@@ -25,7 +24,9 @@ type AgentConnection struct {
 }
 
 // Connect creates an insecure gRPC connection to the agent at the given address.
-func Connect(ctx context.Context, address string) (*AgentConnection, error) {
+// The connection is established lazily on the first RPC call; pass the context
+// to individual RPC methods to control timeouts and cancellation.
+func Connect(address string) (*AgentConnection, error) {
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
@@ -35,7 +36,9 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 }
 
 // ConnectWithTLS creates an mTLS connection using certificates from config.
-func ConnectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
+// The connection is established lazily on the first RPC call; pass the context
+// to individual RPC methods to control timeouts and cancellation.
+func ConnectWithTLS(address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
 	tlsCfg, err := certs.LoadTLSConfig(
 		certInfo.PemCertificate,
 		certInfo.PemCertificateChain,
