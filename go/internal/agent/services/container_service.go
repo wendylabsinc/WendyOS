@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -60,9 +61,8 @@ func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.
 	return nil
 }
 
-// WriteLayer receives a streaming layer upload. Data is piped directly from
-// the gRPC stream into the containerd content store to avoid buffering the
-// entire layer in memory (which could be hundreds of MB).
+// WriteLayer receives a streaming layer upload and writes it to the containerd
+// content store. Chunks are buffered in memory before writing.
 func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse]) error {
 	ctx := stream.Context()
 
@@ -80,60 +80,36 @@ func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.Wr
 		return status.Error(codes.InvalidArgument, "no digest provided in layer upload")
 	}
 
-	// Create an io.Pipe to stream data from the gRPC receiver to the containerd writer.
-	pr, pw := io.Pipe()
-	var size int64
+	// Buffer all chunks.
+	var data []byte
+	if chunk := first.GetData(); len(chunk) > 0 {
+		data = append(data, chunk...)
+	}
 
-	// Goroutine to receive chunks and write to the pipe.
-	writeErr := make(chan error, 1)
-	go func() {
-		defer pw.Close()
-
-		// Write the first chunk's data.
-		if data := first.GetData(); len(data) > 0 {
-			size += int64(len(data))
-			if _, err := pw.Write(data); err != nil {
-				pw.CloseWithError(err)
-				writeErr <- err
-				return
-			}
+	for {
+		msg, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
 		}
-
-		for {
-			msg, err := stream.Recv()
-			if err == io.EOF {
-				writeErr <- nil
-				return
-			}
-			if err != nil {
-				pw.CloseWithError(err)
-				writeErr <- err
-				return
-			}
-			if data := msg.GetData(); len(data) > 0 {
-				size += int64(len(data))
-				if _, err := pw.Write(data); err != nil {
-					pw.CloseWithError(err)
-					writeErr <- err
-					return
-				}
-			}
+		if recvErr != nil {
+			return status.Errorf(codes.Internal, "error receiving layer data: %v", recvErr)
 		}
-	}()
+		if chunk := msg.GetData(); len(chunk) > 0 {
+			data = append(data, chunk...)
+		}
+	}
 
-	// Pass the pipe reader to containerd client. The size is not known ahead
-	// of time in the streaming protocol so we pass 0 and let the content
-	// store determine the final size from the reader.
-	if err := s.containerd.WriteLayer(ctx, digest, pr, 0); err != nil {
+	s.logger.Info("Received layer data",
+		zap.String("digest", digest),
+		zap.Int("bytes", len(data)),
+	)
+
+	// Write to containerd content store.
+	if err := s.containerd.WriteLayer(ctx, digest, bytes.NewReader(data), int64(len(data))); err != nil {
 		return status.Errorf(codes.Internal, "failed to write layer: %v", err)
 	}
 
-	// Wait for the receiver goroutine to finish.
-	if recvErr := <-writeErr; recvErr != nil {
-		return status.Errorf(codes.Internal, "error receiving layer data: %v", recvErr)
-	}
-
-	s.logger.Info("Layer written", zap.String("digest", digest), zap.Int64("size", size))
+	s.logger.Info("Layer written", zap.String("digest", digest), zap.Int("size", len(data)))
 	return stream.Send(&agentpb.WriteLayerResponse{})
 }
 
@@ -184,7 +160,14 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		return status.Errorf(codes.InvalidArgument, "invalid app config: %v", err)
 	}
 
-	// Create the container first.
+	// Assemble the image from uploaded layers if layer headers are provided.
+	if layers := req.GetLayers(); len(layers) > 0 {
+		if err := s.containerd.AssembleImage(ctx, req.GetImageName(), layers); err != nil {
+			return status.Errorf(codes.Internal, "failed to assemble image: %v", err)
+		}
+	}
+
+	// Create the container.
 	createReq := &agentpb.CreateContainerRequest{
 		ImageName:     req.GetImageName(),
 		AppName:       req.GetAppName(),

@@ -1,0 +1,85 @@
+//go:build linux
+
+package discovery
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/mdns"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
+)
+
+// discoverLAN uses hashicorp/mdns to find WendyOS devices on Linux.
+func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+
+	entriesCh := make(chan *mdns.ServiceEntry, 16)
+	var devices []models.LANDevice
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		seen := make(map[string]bool)
+		for entry := range entriesCh {
+			hostname := strings.TrimSuffix(entry.Host, ".")
+
+			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			displayName := strings.TrimSuffix(hostname, ".local")
+
+			ipAddr := ""
+			if entry.AddrV4 != nil {
+				ipAddr = entry.AddrV4.String()
+			} else if entry.AddrV6 != nil {
+				ipAddr = entry.AddrV6.String()
+			}
+
+			id := ""
+			for _, txt := range entry.InfoFields {
+				if k, v, ok := strings.Cut(txt, "="); ok && k == "id" {
+					id = v
+				}
+			}
+			if id == "" {
+				id = displayName
+			}
+
+			devices = append(devices, models.LANDevice{
+				ID:            id,
+				DisplayName:   displayName,
+				Hostname:      hostname,
+				IPAddress:     ipAddr,
+				Port:          entry.Port,
+				InterfaceType: "LAN",
+				IsWendyDevice: true,
+			})
+		}
+	}()
+
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	params := mdns.DefaultParams(wendyServiceType)
+	params.Entries = entriesCh
+	params.Timeout = timeout
+	params.DisableIPv6 = true
+
+	err := mdns.Query(params)
+	close(entriesCh)
+	<-done
+
+	if lookupCtx.Err() != nil || err != nil {
+		return devices, nil
+	}
+
+	return devices, nil
+}

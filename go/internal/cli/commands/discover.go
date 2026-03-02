@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
@@ -20,10 +22,9 @@ func newDiscoverCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "discover",
 		Short: "Discover WendyOS devices on the network",
+		Long:  "Continuously scan for WendyOS devices until Ctrl+C. Use --timeout to scan once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := discovery.DiscoveryOptions{
-				Timeout: timeout,
-			}
+			opts := discovery.DiscoveryOptions{}
 
 			switch discoverType {
 			case "usb":
@@ -38,15 +39,26 @@ func newDiscoverCmd() *cobra.Command {
 				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, all)", discoverType)
 			}
 
+			timeoutSet := cmd.Flags().Changed("timeout")
+
 			if jsonOutput {
+				if !timeoutSet {
+					timeout = 5 * time.Second
+				}
+				opts.Timeout = timeout
 				return discoverJSON(cmd.Context(), opts)
 			}
-			return discoverInteractive(cmd.Context(), opts)
+
+			if timeoutSet {
+				opts.Timeout = timeout
+				return discoverOnce(cmd.Context(), opts)
+			}
+			return discoverContinuous(cmd.Context(), opts)
 		},
 	}
 
 	cmd.Flags().StringVar(&discoverType, "type", "all", "Discovery type: usb, lan, bluetooth, all")
-	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Discovery timeout duration")
+	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Scan once for this duration then exit")
 
 	return cmd
 }
@@ -65,7 +77,8 @@ func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
 	return nil
 }
 
-func discoverInteractive(ctx context.Context, opts discovery.DiscoveryOptions) error {
+// discoverOnce runs a single scan with the given timeout and prints results.
+func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions) error {
 	s := tui.NewSpinner("Scanning for WendyOS devices...")
 
 	work := func() tea.Msg {
@@ -75,8 +88,7 @@ func discoverInteractive(ctx context.Context, opts discovery.DiscoveryOptions) e
 
 	p := tea.NewProgram(s)
 	go func() {
-		result := work()
-		p.Send(result)
+		p.Send(work())
 	}()
 
 	finalModel, err := p.Run()
@@ -91,37 +103,137 @@ func discoverInteractive(ctx context.Context, opts discovery.DiscoveryOptions) e
 	}
 
 	collection, ok := result.(*models.DevicesCollection)
-	if !ok || collection == nil {
+	if !ok || collection == nil || collection.IsEmpty() {
 		fmt.Println("No devices found.")
 		return nil
 	}
 
-	if collection.IsEmpty() {
-		fmt.Println("No devices found.")
-		return nil
+	fmt.Print(renderDeviceTable(collection))
+	return nil
+}
+
+// discoverContinuous runs scans in a loop, refreshing the table until Ctrl+C.
+func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions) error {
+	opts.Timeout = 3 * time.Second // per-scan timeout
+	m := newDiscoverModel(ctx, opts)
+	p := tea.NewProgram(m)
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+	return nil
+}
+
+// --- Bubble Tea model for continuous discovery ---
+
+type scanResultMsg struct {
+	collection *models.DevicesCollection
+	err        error
+}
+
+type discoverModel struct {
+	ctx        context.Context
+	opts       discovery.DiscoveryOptions
+	collection *models.DevicesCollection
+	scanning   bool
+	scanCount  int
+	quitting   bool
+	err        error
+}
+
+func newDiscoverModel(ctx context.Context, opts discovery.DiscoveryOptions) discoverModel {
+	return discoverModel{
+		ctx:  ctx,
+		opts: opts,
+	}
+}
+
+func (m discoverModel) startScan() tea.Cmd {
+	return func() tea.Msg {
+		collection, err := discovery.Discover(m.ctx, m.opts)
+		return scanResultMsg{collection: collection, err: err}
+	}
+}
+
+func (m discoverModel) Init() tea.Cmd {
+	return m.startScan()
+}
+
+func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		}
+
+	case scanResultMsg:
+		m.scanCount++
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.collection = msg.collection
+		}
+		// Immediately start the next scan.
+		return m, m.startScan()
 	}
 
-	// Render results as a styled table.
-	headers := []string{"Name", "Type", "Address", "Version"}
+	return m, nil
+}
+
+var (
+	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	scanStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+)
+
+func (m discoverModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" (press q or Ctrl+C to stop)") + "\n\n")
+
+	if m.err != nil {
+		sb.WriteString(fmt.Sprintf("Error: %v\n", m.err))
+	}
+
+	if m.collection != nil && !m.collection.IsEmpty() {
+		sb.WriteString(renderDeviceTable(m.collection))
+	} else if m.scanCount > 0 {
+		sb.WriteString(dimStyle.Render("No devices found yet...") + "\n")
+	}
+
+	return sb.String()
+}
+
+// --- shared table rendering ---
+
+func renderDeviceTable(collection *models.DevicesCollection) string {
+	headers := []string{"Name", "Type", "Address", "Port", "Version"}
 	var rows [][]string
 
 	for _, d := range collection.USBDevices {
-		rows = append(rows, []string{d.DisplayName, "USB", d.Hostname, d.AgentVersion})
+		rows = append(rows, []string{d.DisplayName, "USB", d.Hostname, "", d.AgentVersion})
 	}
 	for _, d := range collection.LANDevices {
 		addr := d.Hostname
 		if d.IPAddress != "" {
 			addr = d.IPAddress
 		}
-		rows = append(rows, []string{d.DisplayName, "LAN", addr, d.AgentVersion})
+		port := ""
+		if d.Port > 0 {
+			port = fmt.Sprintf("%d", d.Port)
+		}
+		rows = append(rows, []string{d.DisplayName, "LAN", addr, port, d.AgentVersion})
 	}
 	for _, d := range collection.BluetoothDevices {
-		rows = append(rows, []string{d.DisplayName, "Bluetooth", d.Address, d.AgentVersion})
+		rows = append(rows, []string{d.DisplayName, "Bluetooth", d.Address, "", d.AgentVersion})
 	}
 	for _, d := range collection.EthernetInterfaces {
-		rows = append(rows, []string{d.DisplayName, "Ethernet", d.IPAddress, d.AgentVersion})
+		rows = append(rows, []string{d.DisplayName, "Ethernet", d.IPAddress, "", d.AgentVersion})
 	}
 
-	fmt.Print(tui.RenderTable(headers, rows))
-	return nil
+	return tui.RenderTable(headers, rows)
 }

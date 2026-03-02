@@ -12,6 +12,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -149,6 +150,126 @@ func (c *Client) WriteLayer(ctx context.Context, dgst string, reader io.Reader, 
 	return nil
 }
 
+// AssembleImage creates a containerd image from layers already present in the
+// content store. It builds an OCI manifest and config, writes them to the content
+// store, and registers the image. If the image already exists it is updated.
+func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader) error {
+	ctx = c.withNamespace(ctx)
+	cs := c.client.ContentStore()
+	is := c.client.ImageService()
+
+	// Build OCI layer descriptors and diff IDs.
+	var layerDescs []ocispec.Descriptor
+	var diffIDs []digest.Digest
+	for _, l := range layers {
+		mediaType := ocispec.MediaTypeImageLayerGzip
+		if !l.GetGzip() {
+			mediaType = ocispec.MediaTypeImageLayer
+		}
+
+		dgst, err := digest.Parse(l.GetDigest())
+		if err != nil {
+			return fmt.Errorf("parsing layer digest %q: %w", l.GetDigest(), err)
+		}
+
+		layerDescs = append(layerDescs, ocispec.Descriptor{
+			MediaType: mediaType,
+			Digest:    dgst,
+			Size:      l.GetSize(),
+		})
+
+		diffID := l.GetDiffId()
+		if diffID == "" {
+			diffID = l.GetDigest()
+		}
+		did, err := digest.Parse(diffID)
+		if err != nil {
+			return fmt.Errorf("parsing diff ID %q: %w", diffID, err)
+		}
+		diffIDs = append(diffIDs, did)
+	}
+
+	// Build OCI image config.
+	imgConfig := ocispec.Image{
+		Platform: ocispec.Platform{
+			Architecture: "arm64",
+			OS:           "linux",
+		},
+		RootFS: ocispec.RootFS{
+			Type:    "layers",
+			DiffIDs: diffIDs,
+		},
+	}
+	configData, err := json.Marshal(imgConfig)
+	if err != nil {
+		return fmt.Errorf("marshaling image config: %w", err)
+	}
+	configDigest := digest.FromBytes(configData)
+
+	// Write config to content store.
+	configDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageConfig,
+		Digest:    configDigest,
+		Size:      int64(len(configData)),
+	}
+	if err := content.WriteBlob(ctx, cs, configDigest.String(), strings.NewReader(string(configData)), configDesc); err != nil {
+		if !errdefs.IsAlreadyExists(err) {
+			return fmt.Errorf("writing config blob: %w", err)
+		}
+	}
+
+	// Build OCI manifest.
+	manifest := ocispec.Manifest{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    configDesc,
+		Layers:    layerDescs,
+	}
+	manifest.SchemaVersion = 2
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshaling manifest: %w", err)
+	}
+	manifestDigest := digest.FromBytes(manifestData)
+
+	// Write manifest to content store.
+	manifestDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    manifestDigest,
+		Size:      int64(len(manifestData)),
+	}
+	if err := content.WriteBlob(ctx, cs, manifestDigest.String(), strings.NewReader(string(manifestData)), manifestDesc); err != nil {
+		if !errdefs.IsAlreadyExists(err) {
+			return fmt.Errorf("writing manifest blob: %w", err)
+		}
+	}
+
+	// Create or update the image in the image store.
+	_, err = is.Create(ctx, images.Image{
+		Name:   imageName,
+		Target: manifestDesc,
+	})
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			_, err = is.Update(ctx, images.Image{
+				Name:   imageName,
+				Target: manifestDesc,
+			})
+			if err != nil {
+				return fmt.Errorf("updating image %q: %w", imageName, err)
+			}
+		} else {
+			return fmt.Errorf("creating image %q: %w", imageName, err)
+		}
+	}
+
+	c.logger.Info("Assembled image",
+		zap.String("name", imageName),
+		zap.Int("layers", len(layers)),
+		zap.String("manifest_digest", manifestDigest.String()),
+	)
+	return nil
+}
+
 // CreateContainer creates (or replaces) a container in containerd for the given
 // app. It builds an OCI runtime specification from the app config and request
 // parameters, unpacks the image, and registers the container.
@@ -198,7 +319,7 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	}
 
 	// Build OCI spec using local oci package, then apply entitlements.
-	spec := localoci.DefaultSpec("/", args)
+	spec := localoci.DefaultSpec("rootfs", args)
 	spec.Process.Cwd = workingDir
 	spec.Process.Env = env
 	if spec.Linux == nil {
@@ -225,6 +346,18 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	image, err := c.client.GetImage(ctx, imageName)
 	if err != nil {
 		return fmt.Errorf("getting image %q: %w", imageName, err)
+	}
+
+	// Unpack the image into the snapshotter if not already done.
+	unpacked, err := image.IsUnpacked(ctx, "")
+	if err != nil {
+		c.logger.Warn("Failed to check if image is unpacked", zap.Error(err))
+	}
+	if !unpacked {
+		c.logger.Info("Unpacking image", zap.String("image", imageName))
+		if err := image.Unpack(ctx, ""); err != nil {
+			return fmt.Errorf("unpacking image %q: %w", imageName, err)
+		}
 	}
 
 	// Build labels for the container.
@@ -270,9 +403,17 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 		return nil, fmt.Errorf("loading container %q: %w", appName, err)
 	}
 
-	// Create a new task with FIFO-based stdio.
-	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+	// Create pipes for stdout/stderr capture.
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	// Create a new task with pipe-based stdio for programmatic capture.
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, stdoutW, stderrW)))
 	if err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
 		return nil, fmt.Errorf("creating task for %q: %w", appName, err)
 	}
 
@@ -280,25 +421,33 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	exitStatusCh, err := task.Wait(ctx)
 	if err != nil {
 		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
 		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
 	}
 
 	// Start the task.
 	if err := task.Start(ctx); err != nil {
 		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
 		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
 	}
 
 	c.logger.Info("Container started", zap.String("app_name", appName))
 
-	// Stream output from the task's IO.
+	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
-	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName)
+	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 
 	return outputCh, nil
 }
 
-// streamOutput reads stdout/stderr from the task and sends it to the output
+// streamOutput reads stdout/stderr from pipes and sends it to the output
 // channel. It closes the channel when the task exits.
 func (c *Client) streamOutput(
 	ctx context.Context,
@@ -306,22 +455,28 @@ func (c *Client) streamOutput(
 	exitStatusCh <-chan containerd.ExitStatus,
 	outputCh chan<- services.ContainerOutput,
 	appName string,
+	stdoutR, stderrR *io.PipeReader,
+	stdoutW, stderrW *io.PipeWriter,
 ) {
 	defer close(outputCh)
 
-	taskIO := task.IO()
-	if taskIO == nil {
-		c.logger.Warn("Task IO is nil, waiting for exit only", zap.String("app_name", appName))
-		<-exitStatusCh
-		outputCh <- services.ContainerOutput{Done: true}
-		return
-	}
+	// Read stdout and stderr concurrently.
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	// Create pipes to read from the task's stdout and stderr.
-	// The containerd cio package manages the FIFOs; we read from the config paths.
-	// For simplicity, we poll the IO config. The actual IO streaming depends on the
-	// cio.Creator used. With cio.WithStdio, output goes to os.Stdout/Stderr directly.
-	// For programmatic capture, we use a DirectIO approach.
+	go func() {
+		defer wg.Done()
+		streamReader(stdoutR, outputCh, func(data []byte) services.ContainerOutput {
+			return services.ContainerOutput{Stdout: data}
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		streamReader(stderrR, outputCh, func(data []byte) services.ContainerOutput {
+			return services.ContainerOutput{Stderr: data}
+		})
+	}()
 
 	// Wait for the task to exit.
 	exitStatus := <-exitStatusCh
@@ -337,6 +492,13 @@ func (c *Client) streamOutput(
 			zap.Uint32("exit_code", code),
 		)
 	}
+
+	// Close the write ends to unblock readers.
+	stdoutW.Close()
+	stderrW.Close()
+
+	// Wait for readers to finish.
+	wg.Wait()
 
 	outputCh <- services.ContainerOutput{Done: true}
 }

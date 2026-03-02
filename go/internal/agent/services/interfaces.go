@@ -34,6 +34,7 @@ type BluetoothManager interface {
 type ContainerdClient interface {
 	ListLayers(ctx context.Context) ([]*agentpb.LayerHeader, error)
 	WriteLayer(ctx context.Context, digest string, reader io.Reader, size int64) error
+	AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader) error
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	StartContainer(ctx context.Context, appName string) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error

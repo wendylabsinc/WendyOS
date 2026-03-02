@@ -26,9 +26,13 @@ type OCILayer struct {
 
 // OCIImage holds all the extracted components of a Docker/OCI image tar.
 type OCIImage struct {
-	Layers   []OCILayer
-	Config   []byte
-	Manifest []byte
+	Layers     []OCILayer
+	Config     []byte
+	Manifest   []byte
+	Cmd        []string
+	Entrypoint []string
+	WorkingDir string
+	Env        []string
 }
 
 // detectProjectType determines the project type from the directory contents.
@@ -137,6 +141,12 @@ type dockerManifestJSON struct {
 
 // ociImageConfig represents the image config JSON (just the fields we need).
 type ociImageConfig struct {
+	Config struct {
+		Cmd        []string `json:"Cmd"`
+		Entrypoint []string `json:"Entrypoint"`
+		WorkingDir string   `json:"WorkingDir"`
+		Env        []string `json:"Env"`
+	} `json:"config"`
 	RootFS struct {
 		DiffIDs []string `json:"diff_ids"`
 	} `json:"rootfs"`
@@ -250,9 +260,13 @@ func extractOCIImage(tarPath string) (*OCIImage, error) {
 	}
 
 	return &OCIImage{
-		Layers:   layers,
-		Config:   configEntry.data,
-		Manifest: manifestData,
+		Layers:     layers,
+		Config:     configEntry.data,
+		Manifest:   manifestData,
+		Cmd:        imgConfig.Config.Cmd,
+		Entrypoint: imgConfig.Config.Entrypoint,
+		WorkingDir: imgConfig.Config.WorkingDir,
+		Env:        imgConfig.Config.Env,
 	}, nil
 }
 

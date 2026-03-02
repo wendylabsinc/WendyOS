@@ -54,6 +54,9 @@ func (m *mockContainerdClient) WriteLayer(_ context.Context, digest string, read
 	m.writtenData = data
 	return m.writeLayerErr
 }
+func (m *mockContainerdClient) AssembleImage(_ context.Context, _ string, _ []*agentpb.RunContainerLayerHeader) error {
+	return nil
+}
 func (m *mockContainerdClient) CreateContainer(_ context.Context, _ *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	return m.createErr
 }

@@ -185,6 +185,21 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 		}
 		spec.Linux.Namespaces = namespaces
 
+		// When using host networking, sysfs cannot be mounted as a new
+		// filesystem because the host network namespace already has it
+		// mounted. Replace the sysfs mount with a bind mount from the host.
+		for i, m := range spec.Mounts {
+			if m.Destination == "/sys" && m.Type == "sysfs" {
+				spec.Mounts[i] = Mount{
+					Destination: "/sys",
+					Type:        "bind",
+					Source:      "/sys",
+					Options:     []string{"rbind", "nosuid", "noexec", "nodev", "ro"},
+				}
+				break
+			}
+		}
+
 		// Add CAP_NET_ADMIN and CAP_NET_RAW for host networking.
 		spec.Process.Capabilities.Bounding = appendUnique(spec.Process.Capabilities.Bounding, "CAP_NET_ADMIN")
 		spec.Process.Capabilities.Effective = appendUnique(spec.Process.Capabilities.Effective, "CAP_NET_ADMIN")

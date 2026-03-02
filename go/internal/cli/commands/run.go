@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -15,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"golang.org/x/term"
 )
 
 // runOptions holds the parsed flags for the run command.
@@ -131,22 +133,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	// Step 8: Upload missing layers and create container.
 	restartPolicy := resolveRestartPolicy(opts)
 
-	if err := uploadAndDeploy(ctx, conn, appCfg, ociImage, tarPath, appConfigData, restartPolicy, opts); err != nil {
-		return err
-	}
-
-	if opts.deploy {
-		fmt.Printf("Application %s deployed (not started, use --detach or remove --deploy to start).\n", appCfg.AppID)
-		return nil
-	}
-
-	if opts.detach {
-		fmt.Printf("Application %s started in detached mode.\n", appCfg.AppID)
-		return nil
-	}
-
-	// Step 11: Stream stdout/stderr from the container.
-	return streamContainerLogs(ctx, conn, appCfg.AppID)
+	return uploadAndDeploy(ctx, conn, appCfg, ociImage, tarPath, appConfigData, restartPolicy, opts)
 }
 
 // resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.
@@ -203,55 +190,8 @@ func uploadAndDeploy(
 	fmt.Printf("Uploading %d of %d layers (%d bytes)...\n", len(missingLayers), len(ociImage.Layers), totalUploadSize)
 
 	if len(missingLayers) > 0 {
-		// Upload missing layers with progress bar.
-		var uploadedSoFar int64
-
-		progModel := tui.NewProgress("Uploading layers...")
-		p := tea.NewProgram(progModel)
-
-		go func() {
-			for _, layer := range missingLayers {
-				layerData, readErr := readLayerData(tarPath, layer.FilePath)
-				if readErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: readErr})
-					return
-				}
-
-				if uploadErr := uploadLayer(ctx, conn, layer.Digest, layerData); uploadErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: uploadErr})
-					return
-				}
-
-				uploadedSoFar += layer.Size
-				if totalUploadSize > 0 {
-					p.Send(tui.ProgressUpdateMsg{Percent: float64(uploadedSoFar) / float64(totalUploadSize)})
-				}
-			}
-
-			// Upload config and manifest as special layers.
-			configDigest := "sha256:config"
-			if uploadErr := uploadLayer(ctx, conn, configDigest, ociImage.Config); uploadErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: uploadErr})
-				return
-			}
-
-			manifestDigest := "sha256:manifest"
-			if uploadErr := uploadLayer(ctx, conn, manifestDigest, ociImage.Manifest); uploadErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: uploadErr})
-				return
-			}
-
-			p.Send(tui.ProgressDoneMsg{})
-		}()
-
-		finalModel, runErr := p.Run()
-		if runErr != nil {
-			return fmt.Errorf("TUI error: %w", runErr)
-		}
-
-		pm := finalModel.(tui.ProgressModel)
-		if pm.Err() != nil {
-			return fmt.Errorf("upload failed: %w", pm.Err())
+		if err := uploadLayers(ctx, conn, ociImage, missingLayers, totalUploadSize, tarPath); err != nil {
+			return err
 		}
 	}
 
@@ -268,11 +208,22 @@ func uploadAndDeploy(
 		})
 	}
 
+	// Build the container command from the image's Entrypoint + Cmd.
+	var cmdParts []string
+	cmdParts = append(cmdParts, ociImage.Entrypoint...)
+	cmdParts = append(cmdParts, ociImage.Cmd...)
+	containerCmd := strings.Join(cmdParts, " ")
+
+	// Use image's WorkingDir if available.
+	workingDir := ociImage.WorkingDir
+
 	if opts.deploy {
 		// Create container without starting.
 		_, err := conn.ContainerService.CreateContainer(ctx, &agentpb.CreateContainerRequest{
 			ImageName:     appCfg.AppID + ":latest",
 			AppName:       appCfg.AppID,
+			Cmd:           containerCmd,
+			WorkingDir:    workingDir,
 			AppConfig:     appConfigData,
 			RestartPolicy: restartPolicy,
 			UserArgs:      opts.userArgs,
@@ -284,9 +235,14 @@ func uploadAndDeploy(
 	}
 
 	// Use RunContainer on the container service to create and start.
-	stream, err := conn.ContainerService.RunContainer(ctx, &agentpb.RunContainerLayersRequest{
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	stream, err := conn.ContainerService.RunContainer(runCtx, &agentpb.RunContainerLayersRequest{
 		ImageName:     appCfg.AppID + ":latest",
 		AppName:       appCfg.AppID,
+		Cmd:           containerCmd,
+		WorkingDir:    workingDir,
 		AppConfig:     appConfigData,
 		Layers:        layerHeaders,
 		RestartPolicy: restartPolicy,
@@ -311,6 +267,114 @@ func uploadAndDeploy(
 		}
 	}
 
+	if opts.detach {
+		fmt.Printf("Application %s running in detached mode.\n", appCfg.AppID)
+		return nil
+	}
+
+	// Stream stdout/stderr from the RunContainer stream directly.
+	// Set up Ctrl+C handler to stop the container.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+
+	go func() {
+		<-sigCh
+		fmt.Println("\nStopping container...")
+		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		runCancel()
+	}()
+
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			if runCtx.Err() != nil {
+				break
+			}
+			return fmt.Errorf("receiving container output: %w", recvErr)
+		}
+		if out := resp.GetStdoutOutput(); out != nil {
+			_, _ = os.Stdout.Write(out.GetData())
+		}
+		if out := resp.GetStderrOutput(); out != nil {
+			_, _ = os.Stderr.Write(out.GetData())
+		}
+	}
+
+	fmt.Printf("\nApplication %s stopped.\n", appCfg.AppID)
+	return nil
+}
+
+// uploadLayers uploads missing layers, config, and manifest to the agent.
+// Uses a TUI progress bar when a terminal is available, plain text otherwise.
+func uploadLayers(ctx context.Context, conn *grpcclient.AgentConnection, ociImage *OCIImage, missingLayers []OCILayer, totalUploadSize int64, tarPath string) error {
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
+	doUpload := func(onProgress func(layerIdx int, layerDigest string, uploaded int64)) error {
+		var uploadedSoFar int64
+		for i, layer := range missingLayers {
+			layerData, err := readLayerData(tarPath, layer.FilePath)
+			if err != nil {
+				return err
+			}
+			if err := uploadLayer(ctx, conn, layer.Digest, layerData); err != nil {
+				return err
+			}
+			uploadedSoFar += layer.Size
+			if onProgress != nil {
+				onProgress(i, layer.Digest, uploadedSoFar)
+			}
+		}
+
+		return nil
+	}
+
+	if !isTTY {
+		// Plain text progress.
+		err := doUpload(func(i int, digest string, uploaded int64) {
+			pct := 0
+			if totalUploadSize > 0 {
+				pct = int(100 * uploaded / totalUploadSize)
+			}
+			short := digest
+			if len(short) > 19 {
+				short = short[:19]
+			}
+			fmt.Printf("  [%d/%d] %s... %d%% (%d / %d bytes)\n", i+1, len(missingLayers), short, pct, uploaded, totalUploadSize)
+		})
+		if err != nil {
+			return fmt.Errorf("upload failed: %w", err)
+		}
+		fmt.Println("Upload complete.")
+		return nil
+	}
+
+	// TUI progress bar.
+	progModel := tui.NewProgress("Uploading layers...")
+	p := tea.NewProgram(progModel)
+
+	go func() {
+		err := doUpload(func(_ int, _ string, uploaded int64) {
+			if totalUploadSize > 0 {
+				p.Send(tui.ProgressUpdateMsg{Percent: float64(uploaded) / float64(totalUploadSize)})
+			}
+		})
+		p.Send(tui.ProgressDoneMsg{Err: err})
+	}()
+
+	finalModel, runErr := p.Run()
+	if runErr != nil {
+		return fmt.Errorf("TUI error: %w", runErr)
+	}
+	pm := finalModel.(tui.ProgressModel)
+	if pm.Err() != nil {
+		return fmt.Errorf("upload failed: %w", pm.Err())
+	}
+	fmt.Println("Upload complete.")
 	return nil
 }
 
@@ -348,53 +412,3 @@ func uploadLayer(ctx context.Context, conn *grpcclient.AgentConnection, digest s
 	return nil
 }
 
-// streamContainerLogs streams stdout/stderr from the running container until
-// the user presses Ctrl+C or the container exits.
-func streamContainerLogs(ctx context.Context, conn *grpcclient.AgentConnection, appName string) error {
-	// Set up Ctrl+C handler.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-
-	go func() {
-		<-sigCh
-		fmt.Println("\nStopping container...")
-		// Best-effort stop.
-		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
-			AppName: appName,
-		})
-		cancel()
-	}()
-
-	stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-		AppName: appName,
-	})
-	if err != nil {
-		return fmt.Errorf("starting container log stream: %w", err)
-	}
-
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			// Context cancelled (Ctrl+C) is expected.
-			if ctx.Err() != nil {
-				break
-			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
-		}
-		if out := resp.GetStdoutOutput(); out != nil {
-			_, _ = os.Stdout.Write(out.GetData())
-		}
-		if out := resp.GetStderrOutput(); out != nil {
-			_, _ = os.Stderr.Write(out.GetData())
-		}
-	}
-
-	fmt.Printf("\nApplication %s stopped.\n", appName)
-	return nil
-}

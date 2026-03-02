@@ -1,0 +1,8 @@
+{
+    "appId": "sh.wendy.examples.hello-python",
+    "version": "1.0.0",
+    "language": "python",
+    "entitlements": [
+        {"type": "network", "mode": "host"}
+    ]
+}

@@ -145,6 +145,10 @@ func (m *statefulContainerdClient) WriteLayer(_ context.Context, digest string, 
 	return nil
 }
 
+func (m *statefulContainerdClient) AssembleImage(_ context.Context, _ string, _ []*agentpb.RunContainerLayerHeader) error {
+	return nil
+}
+
 func (m *statefulContainerdClient) CreateContainer(_ context.Context, req *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
