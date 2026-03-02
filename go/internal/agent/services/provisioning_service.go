@@ -192,14 +192,11 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		zap.Int32("asset_id", s.assetID),
 	)
 
-	// Invoke the callback outside the lock is not safe since we hold the lock;
-	// capture the callback and call it after releasing.
+	// Capture the callback and invoke it without manually unlocking/re-locking
+	// the mutex here, to avoid interfering with any deferred Unlock.
 	cb := s.OnProvisioned
 	if cb != nil {
-		// Release lock before calling the callback to avoid deadlocks.
-		s.mu.Unlock()
 		cb(certPEM, chainPEM, keyPEM)
-		s.mu.Lock()
 	}
 
 	return &agentpb.StartProvisioningResponse{}, nil
