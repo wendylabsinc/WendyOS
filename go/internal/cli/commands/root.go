@@ -14,9 +14,9 @@ var (
 // NewRootCmd creates the root Cobra command with all subcommands.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "wendy",
-		Short: "Wendy CLI - Edge Computing Development Tool",
-		Long:  "Wendy is a CLI for developing and deploying edge computing applications to WendyOS devices.",
+		Use:           "wendy",
+		Short:         "Wendy CLI - Edge Computing Development Tool",
+		Long:          "Wendy is a CLI for developing and deploying edge computing applications to WendyOS devices.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

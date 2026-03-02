@@ -10,7 +10,7 @@ func TestParseWiFiList(t *testing.T) {
 		"HomeNet:80:WPA2:*",
 		"OfficeNet:65:WPA2:",
 		"OpenNet:45::",
-		":30:WPA2:", // empty SSID, should be skipped
+		":30:WPA2:",        // empty SSID, should be skipped
 		"HomeNet:75:WPA2:", // duplicate SSID, should be skipped
 	}
 
@@ -50,10 +50,10 @@ func TestParseWiFiList(t *testing.T) {
 func TestParseWiFiStatus(t *testing.T) {
 	// Simulate nmcli -t output: TYPE:STATE:CONNECTION
 	tests := []struct {
-		name      string
-		lines     []string
-		wantConn  bool
-		wantSSID  string
+		name     string
+		lines    []string
+		wantConn bool
+		wantSSID string
 	}{
 		{
 			name: "connected",

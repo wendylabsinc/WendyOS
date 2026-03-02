@@ -64,8 +64,8 @@ func (d *SystemHardwareDiscoverer) discoverGPU() []*agentpb.ListHardwareCapabili
 		path := fmt.Sprintf("/dev/nvidia%d", i)
 		if _, err := os.Stat(path); err == nil {
 			caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-				Category:   "gpu",
-				DevicePath: path,
+				Category:    "gpu",
+				DevicePath:  path,
 				Description: fmt.Sprintf("NVIDIA GPU %d", i),
 			})
 		}
@@ -87,8 +87,8 @@ func (d *SystemHardwareDiscoverer) discoverGPU() []*agentpb.ListHardwareCapabili
 				}
 
 				caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-					Category:   "gpu",
-					DevicePath: devPath,
+					Category:    "gpu",
+					DevicePath:  devPath,
 					Description: name,
 				})
 			}
@@ -126,8 +126,8 @@ func (d *SystemHardwareDiscoverer) discoverUSB() []*agentpb.ListHardwareCapabili
 		}
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "usb",
-			DevicePath: devDir,
+			Category:    "usb",
+			DevicePath:  devDir,
 			Description: name,
 		})
 	}
@@ -143,8 +143,8 @@ func (d *SystemHardwareDiscoverer) discoverI2C() []*agentpb.ListHardwareCapabili
 		path := fmt.Sprintf("/dev/i2c-%d", i)
 		if _, err := os.Stat(path); err == nil {
 			caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-				Category:   "i2c",
-				DevicePath: path,
+				Category:    "i2c",
+				DevicePath:  path,
 				Description: fmt.Sprintf("I2C bus %d", i),
 			})
 		}
@@ -164,8 +164,8 @@ func (d *SystemHardwareDiscoverer) discoverSPI() []*agentpb.ListHardwareCapabili
 
 	for _, path := range entries {
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "spi",
-			DevicePath: path,
+			Category:    "spi",
+			DevicePath:  path,
 			Description: filepath.Base(path),
 		})
 	}
@@ -198,8 +198,8 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 		}
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "gpio",
-			DevicePath: devPath,
+			Category:    "gpio",
+			DevicePath:  devPath,
 			Description: name,
 		})
 	}
@@ -227,8 +227,8 @@ func (d *SystemHardwareDiscoverer) discoverCamera() []*agentpb.ListHardwareCapab
 		}
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "camera",
-			DevicePath: path,
+			Category:    "camera",
+			DevicePath:  path,
 			Description: name,
 		})
 	}
@@ -268,8 +268,8 @@ func (d *SystemHardwareDiscoverer) discoverAudio() []*agentpb.ListHardwareCapabi
 		}
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "audio",
-			DevicePath: fmt.Sprintf("/dev/snd/controlC%s", cardNum),
+			Category:    "audio",
+			DevicePath:  fmt.Sprintf("/dev/snd/controlC%s", cardNum),
 			Description: name,
 		})
 	}
@@ -303,8 +303,8 @@ func (d *SystemHardwareDiscoverer) discoverNetwork() []*agentpb.ListHardwareCapa
 		_ = ifType
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "network",
-			DevicePath: devPath,
+			Category:    "network",
+			DevicePath:  devPath,
 			Description: name,
 		})
 	}
@@ -338,8 +338,8 @@ func (d *SystemHardwareDiscoverer) discoverStorage() []*agentpb.ListHardwareCapa
 		_ = size
 
 		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
-			Category:   "storage",
-			DevicePath: devPath,
+			Category:    "storage",
+			DevicePath:  devPath,
 			Description: name,
 		})
 	}

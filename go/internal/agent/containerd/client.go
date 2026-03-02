@@ -21,8 +21,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 
-	"github.com/wendylabsinc/wendy/internal/agent/services"
 	localoci "github.com/wendylabsinc/wendy/internal/agent/oci"
+	"github.com/wendylabsinc/wendy/internal/agent/services"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )

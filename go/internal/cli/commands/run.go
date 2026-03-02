@@ -411,4 +411,3 @@ func uploadLayer(ctx context.Context, conn *grpcclient.AgentConnection, digest s
 
 	return nil
 }
-

@@ -15,9 +15,9 @@ func newInfoCmd() *cobra.Command {
 		Short: "Display CLI version and system information",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info := map[string]string{
-				"version":  version.Version,
-				"os":       runtime.GOOS,
-				"arch":     runtime.GOARCH,
+				"version":   version.Version,
+				"os":        runtime.GOOS,
+				"arch":      runtime.GOARCH,
 				"goVersion": runtime.Version(),
 			}
 

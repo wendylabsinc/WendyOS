@@ -38,9 +38,9 @@ type Process struct {
 	Env      []string `json:"env,omitempty"`
 	Cwd      string   `json:"cwd"`
 	// Capabilities restricts the process capabilities.
-	Capabilities *LinuxCapabilities `json:"capabilities,omitempty"`
-	Rlimits      []POSIXRlimit      `json:"rlimits,omitempty"`
-	NoNewPrivileges bool            `json:"noNewPrivileges,omitempty"`
+	Capabilities    *LinuxCapabilities `json:"capabilities,omitempty"`
+	Rlimits         []POSIXRlimit      `json:"rlimits,omitempty"`
+	NoNewPrivileges bool               `json:"noNewPrivileges,omitempty"`
 }
 
 // User specifies the user identity for the container process.
@@ -66,12 +66,12 @@ type Mount struct {
 
 // Linux contains Linux-specific configuration.
 type Linux struct {
-	Resources    *LinuxResources    `json:"resources,omitempty"`
-	Namespaces   []LinuxNamespace   `json:"namespaces,omitempty"`
-	Devices      []LinuxDevice      `json:"devices,omitempty"`
-	CgroupsPath  string             `json:"cgroupsPath,omitempty"`
-	MaskedPaths  []string           `json:"maskedPaths,omitempty"`
-	ReadonlyPaths []string          `json:"readonlyPaths,omitempty"`
+	Resources     *LinuxResources  `json:"resources,omitempty"`
+	Namespaces    []LinuxNamespace `json:"namespaces,omitempty"`
+	Devices       []LinuxDevice    `json:"devices,omitempty"`
+	CgroupsPath   string           `json:"cgroupsPath,omitempty"`
+	MaskedPaths   []string         `json:"maskedPaths,omitempty"`
+	ReadonlyPaths []string         `json:"readonlyPaths,omitempty"`
 }
 
 // LinuxResources has container resource constraints.
@@ -147,8 +147,8 @@ func DefaultSpec(rootfsPath string, args []string) *Spec {
 				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 				"TERM=xterm",
 			},
-			Cwd: "/",
-			Capabilities: defaultCapabilities(),
+			Cwd:             "/",
+			Capabilities:    defaultCapabilities(),
 			NoNewPrivileges: true,
 		},
 		Root: &Root{
