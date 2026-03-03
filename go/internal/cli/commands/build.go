@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 )
 
 // BuildResult is the output of the build command. Exactly one field is set.
@@ -33,12 +32,15 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("getting working directory: %w", err)
 			}
 
+			cfgPath := filepath.Join(cwd, "wendy.json")
+			appCfg, cfgErr := ensureAppConfig(cfgPath)
+
 			target, _ := resolveTarget(cmd.Context())
 
 			// If the target is an external provider device, use the provider build path.
 			if target != nil && target.External != nil && target.Provider != nil {
 				product := filepath.Base(cwd)
-				if appCfg, loadErr := appconfig.LoadFromFile(filepath.Join(cwd, "wendy.json")); loadErr == nil {
+				if cfgErr == nil {
 					product = appCfg.AppID
 				}
 
@@ -58,8 +60,7 @@ func newBuildCmd() *cobra.Command {
 
 			// Existing agent-targeted build path.
 			var language string
-			cfgPath := filepath.Join(cwd, "wendy.json")
-			if appCfg, loadErr := appconfig.LoadFromFile(cfgPath); loadErr == nil {
+			if cfgErr == nil {
 				language = appCfg.Language
 			}
 

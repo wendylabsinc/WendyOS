@@ -17,6 +17,9 @@ const (
 	// wendyBLEServiceUUID is the 128-bit service UUID advertised by WendyOS BLE devices.
 	wendyBLEServiceUUID = "7565e9eb-4c20-4b67-9272-d708b397b631"
 
+	// wendyLiteBLEServiceUUID is the GATT service UUID advertised by Wendy Lite (ESP32) devices.
+	wendyLiteBLEServiceUUID = "00004e57-454e-4459-0001-000000000000"
+
 	// wendyL2CAPPSM is the L2CAP PSM used for gRPC-over-BLE.
 	wendyL2CAPPSM = 128
 )
@@ -83,11 +86,28 @@ func queryBluetoothDeviceInfo(ctx context.Context, address, name string) (models
 		return models.BluetoothDevice{}, false
 	}
 
-	info := string(out)
+	info := strings.ToLower(string(out))
 
-	// Check if the Wendy service UUID is advertised.
-	if !strings.Contains(strings.ToLower(info), wendyBLEServiceUUID) {
-		return models.BluetoothDevice{}, false
+	// Check if either the WendyOS agent or Wendy Lite service UUID is advertised.
+	hasAgent := strings.Contains(info, wendyBLEServiceUUID)
+	hasLite := strings.Contains(info, wendyLiteBLEServiceUUID)
+
+	// Wendy Lite (ESP32) devices may not advertise their service UUID;
+	// fall back to matching the "Wendy-" BLE name prefix.
+	if !hasAgent && !hasLite {
+		if strings.HasPrefix(name, "Wendy-") {
+			hasLite = true
+		} else {
+			return models.BluetoothDevice{}, false
+		}
+	}
+
+	// If the agent UUID is present, treat as full agent even if lite UUID also appears.
+	isLite := !hasAgent && hasLite
+
+	psm := uint16(wendyL2CAPPSM)
+	if isLite {
+		psm = 0
 	}
 
 	dev := models.BluetoothDevice{
@@ -95,7 +115,7 @@ func queryBluetoothDeviceInfo(ctx context.Context, address, name string) (models
 		DisplayName:   name,
 		Address:       address,
 		IsWendyDevice: true,
-		L2CAPPSM:      wendyL2CAPPSM,
+		L2CAPPSM:      psm,
 	}
 
 	// Parse RSSI if available (line like "  RSSI: -45").
@@ -114,7 +134,11 @@ func queryBluetoothDeviceInfo(ctx context.Context, address, name string) (models
 	}
 
 	if dev.DisplayName == "" {
-		dev.DisplayName = "WendyOS Device"
+		if isLite {
+			dev.DisplayName = "Wendy Lite"
+		} else {
+			dev.DisplayName = "WendyOS Device"
+		}
 	}
 
 	return dev, true

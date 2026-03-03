@@ -7,14 +7,15 @@ import (
 )
 
 // Wendy Lite (ESP32/uwasm) BLE provisioning UUIDs.
-// Service uses a "WENDY" prefix: 4E57454E-4459-0001-xxxx-000000000000
+// NimBLE BLE_UUID128_INIT uses little-endian byte order; the actual
+// on-air UUIDs are: 00004E57-454E-4459-0001-xxxx00000000
 const (
-	liteServiceUUID  = "4E57454E-4459-0001-0000-000000000000"
-	liteSSIDCharUUID = "4E57454E-4459-0001-0001-000000000000"
-	litePassCharUUID = "4E57454E-4459-0001-0002-000000000000"
-	liteCmdCharUUID  = "4E57454E-4459-0001-0003-000000000000"
-	liteStatusUUID   = "4E57454E-4459-0001-0004-000000000000"
-	liteDevNameUUID  = "4E57454E-4459-0001-0005-000000000000"
+	liteServiceUUID  = "00004E57-454E-4459-0001-000000000000"
+	liteSSIDCharUUID = "00004E57-454E-4459-0001-000100000000"
+	litePassCharUUID = "00004E57-454E-4459-0001-000200000000"
+	liteCmdCharUUID  = "00004E57-454E-4459-0001-000300000000"
+	liteStatusUUID   = "00004E57-454E-4459-0001-000400000000"
+	liteDevNameUUID  = "00004E57-454E-4459-0001-000500000000"
 )
 
 // Wendy Lite command bytes
@@ -48,6 +49,14 @@ func ConnectLite(device *models.BluetoothDevice) (*LiteClient, error) {
 	if err := conn.DiscoverServices(10); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("discovering services: %w", err)
+	}
+
+	// Validate that the Wendy Lite provisioning service is present.
+	if !conn.HasService(liteServiceUUID) {
+		services := conn.ListServices()
+		conn.Close()
+		return nil, fmt.Errorf("device %s does not expose the Wendy Lite provisioning service (expected %s); discovered services: [%s]",
+			device.DisplayName, liteServiceUUID, services)
 	}
 
 	return &LiteClient{conn: conn}, nil

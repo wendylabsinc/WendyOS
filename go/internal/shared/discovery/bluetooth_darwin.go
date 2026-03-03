@@ -44,13 +44,21 @@ func discoverBluetooth(ctx context.Context, activeScan bool) ([]models.Bluetooth
 
 	devices := make([]models.BluetoothDevice, 0, count)
 	for _, cd := range cDevices {
+		psm := uint16(wendyL2CAPPSM)
+		displayName := C.GoString(cd.name)
+		if cd.is_lite != 0 {
+			psm = 0
+			if displayName == "" {
+				displayName = "Wendy Lite"
+			}
+		}
 		devices = append(devices, models.BluetoothDevice{
 			ID:            C.GoString(cd.uuid),
-			DisplayName:   C.GoString(cd.name),
+			DisplayName:   displayName,
 			Address:       C.GoString(cd.uuid),
 			RSSI:          int(cd.rssi),
 			IsWendyDevice: true,
-			L2CAPPSM:      wendyL2CAPPSM,
+			L2CAPPSM:      psm,
 		})
 	}
 

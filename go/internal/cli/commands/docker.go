@@ -2,6 +2,7 @@ package commands
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -9,9 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -93,15 +97,198 @@ func generatePythonDockerfile(dir string) (string, error) {
 	return dockerfilePath, nil
 }
 
+const (
+	// defaultSwiftVersion is the Swift toolchain version used for container base images.
+	defaultSwiftVersion = "6.2.3"
+	// wendySDKRelease is the GitHub release tag for WendyOS Swift SDKs.
+	wendySDKRelease = "0.4.0"
+)
+
+// buildSwiftContainerImage builds a Swift package and pushes the container image
+// directly to the device's registry using swift-container-plugin.
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, architecture string) error {
+	sdk, err := findSwiftSDK(architecture)
+	if err != nil {
+		return err
+	}
+
+	swiftArgs := []string{
+		"package",
+		"--swift-sdk=" + sdk,
+		"--allow-network-connections=all",
+		"build-container-image",
+		"--from=swift:" + defaultSwiftVersion + "-slim",
+		"--allow-insecure-http=destination",
+		"--product=" + product,
+		"--repository=" + registryHost + ":5000/" + strings.ToLower(product),
+		"--architecture=" + architecture,
+	}
+
+	cmd := exec.CommandContext(ctx, "swiftly", append([]string{"run", "+" + defaultSwiftVersion, "swift"}, swiftArgs...)...)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("swift build-container-image failed: %w", err)
+	}
+	return nil
+}
+
+// findSwiftSDK looks for an installed Swift SDK for the given architecture.
+// It prefers WendyOS-specific SDKs, installing one automatically if not present.
+// For WASM targets (Wendy Lite), it installs the official Swift WASM SDK.
+func findSwiftSDK(architecture string) (string, error) {
+	// Normalize: swift-container-plugin uses "arm64" but SDKs use "aarch64".
+	sdkArch := architecture
+	if sdkArch == "arm64" {
+		sdkArch = "aarch64"
+	}
+
+	isWasm := sdkArch == "wasm" || sdkArch == "wasm32"
+
+	sdk, err := lookupSwiftSDK(sdkArch, isWasm)
+	if err != nil {
+		return "", err
+	}
+	if sdk != "" {
+		return sdk, nil
+	}
+
+	// No suitable SDK found — install the appropriate one.
+	if isWasm {
+		if err := installWasmSwiftSDK(); err != nil {
+			return "", err
+		}
+	} else {
+		if err := installWendySwiftSDK(sdkArch); err != nil {
+			return "", err
+		}
+	}
+
+	// Look up again after install.
+	sdk, err = lookupSwiftSDK(sdkArch, isWasm)
+	if err != nil {
+		return "", err
+	}
+	if sdk == "" {
+		return "", fmt.Errorf("Swift SDK installed but not found; run 'swift sdk list' to verify")
+	}
+	return sdk, nil
+}
+
+// lookupSwiftSDK checks installed Swift SDKs for one matching the target architecture.
+func lookupSwiftSDK(sdkArch string, isWasm bool) (string, error) {
+	out, err := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "list").Output()
+	if err != nil {
+		return "", fmt.Errorf("running 'swift sdk list': %w (is swiftly installed?)", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	if isWasm {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "wasm") {
+				return line, nil
+			}
+		}
+		return "", nil
+	}
+
+	// Prefer a wendyos SDK.
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "wendyos") && strings.Contains(line, sdkArch) {
+			return line, nil
+		}
+	}
+
+	// Fall back to any matching linux SDK.
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, sdkArch) && strings.Contains(line, "linux") {
+			return line, nil
+		}
+	}
+
+	return "", nil
+}
+
+// installWendySwiftSDK downloads and installs the WendyOS Swift SDK for the given architecture.
+func installWendySwiftSDK(sdkArch string) error {
+	sdkName := fmt.Sprintf("%s-RELEASE_wendyos_%s", defaultSwiftVersion, sdkArch)
+	url := fmt.Sprintf(
+		"https://github.com/wendylabsinc/wendy-swift-tools/releases/download/%s/%s.artifactbundle.zip",
+		wendySDKRelease, sdkName,
+	)
+
+	fmt.Printf("Installing WendyOS Swift SDK (%s)...\n", sdkName)
+
+	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("installing Swift SDK from %s: %w", url, err)
+	}
+
+	fmt.Println("Swift SDK installed.")
+	return nil
+}
+
+// installWasmSwiftSDK downloads and installs the official Swift WASM SDK for Wendy Lite targets.
+func installWasmSwiftSDK() error {
+	sdkName := fmt.Sprintf("swift-%s-RELEASE", defaultSwiftVersion)
+	url := fmt.Sprintf(
+		"https://download.swift.org/swift-%s-release/wasm-sdk/%s/%s_wasm.artifactbundle.tar.gz",
+		defaultSwiftVersion, sdkName, sdkName,
+	)
+
+	fmt.Printf("Installing Swift WASM SDK (%s)...\n", sdkName)
+
+	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", "394040ecd5260e68bb02f6c20aeede733b9b90702c2204e178f3e42413edad2a")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("installing Swift WASM SDK from %s: %w", url, err)
+	}
+
+	fmt.Println("Swift WASM SDK installed.")
+	return nil
+}
+
+// findSwiftProduct determines the executable target name from Package.swift.
+// Falls back to the directory name.
+func findSwiftProduct(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "Package.swift"))
+	if err == nil {
+		re := regexp.MustCompile(`\.executableTarget\(\s*name:\s*"([^"]+)"`)
+		if m := re.FindSubmatch(data); len(m) > 1 {
+			return string(m[1])
+		}
+	}
+	return filepath.Base(dir)
+}
+
 // buildDockerImage builds a Docker image for the specified platform using docker buildx.
-func buildDockerImage(ctx context.Context, dir, imageName, platform string, streamOutput io.Writer) error {
+// If outputTar is non-empty, the image is exported directly to that tar file
+// (Docker save format) instead of loading into the local Docker daemon.
+func buildDockerImage(ctx context.Context, dir, imageName, platform, outputTar string, streamOutput io.Writer) error {
 	args := []string{
 		"buildx", "build",
 		"--platform", platform,
 		"-t", imageName,
-		"--load",
-		".",
 	}
+
+	if outputTar != "" {
+		args = append(args, "--output", "type=docker,dest="+outputTar)
+	} else {
+		args = append(args, "--load")
+	}
+
+	args = append(args, ".")
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
@@ -110,24 +297,6 @@ func buildDockerImage(ctx context.Context, dir, imageName, platform string, stre
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker buildx build failed: %w", err)
-	}
-	return nil
-}
-
-// saveDockerImage exports a Docker image as a tar archive.
-func saveDockerImage(ctx context.Context, imageName, outputPath string) error {
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("creating output file: %w", err)
-	}
-	defer outFile.Close()
-
-	cmd := exec.CommandContext(ctx, "docker", "save", imageName)
-	cmd.Stdout = outFile
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker save failed: %w", err)
 	}
 	return nil
 }
@@ -307,4 +476,212 @@ func computeGzipDiffID(data []byte) (string, error) {
 	}
 
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// registryHost formats a host for use in an HTTP registry URL,
+// wrapping IPv6 addresses in brackets as required by RFC 3986.
+func registryHost(host string, port int) string {
+	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+		return fmt.Sprintf("[%s]:%d", host, port)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// pushToRegistry pushes an extracted OCI image to an HTTP registry using
+// the Docker Registry HTTP API V2.
+func pushToRegistry(ctx context.Context, baseURL, repo string, ociImage *OCIImage, tarPath string, onProgress func(completed, total int)) error {
+	total := len(ociImage.Layers) + 2 // layers + config + manifest
+	completed := 0
+
+	// Push each layer blob.
+	for _, layer := range ociImage.Layers {
+		exists, err := blobExists(ctx, baseURL, repo, layer.Digest)
+		if err != nil {
+			return fmt.Errorf("checking layer %s: %w", layer.Digest, err)
+		}
+		if !exists {
+			data, err := readLayerData(tarPath, layer.FilePath)
+			if err != nil {
+				return fmt.Errorf("reading layer %s: %w", layer.Digest, err)
+			}
+			if err := pushBlob(ctx, baseURL, repo, layer.Digest, data); err != nil {
+				return fmt.Errorf("pushing layer %s: %w", layer.Digest, err)
+			}
+		}
+		completed++
+		if onProgress != nil {
+			onProgress(completed, total)
+		}
+	}
+
+	// Push the config blob.
+	configDigest := "sha256:" + sha256Hex(ociImage.Config)
+	exists, err := blobExists(ctx, baseURL, repo, configDigest)
+	if err != nil {
+		return fmt.Errorf("checking config blob: %w", err)
+	}
+	if !exists {
+		if err := pushBlob(ctx, baseURL, repo, configDigest, ociImage.Config); err != nil {
+			return fmt.Errorf("pushing config blob: %w", err)
+		}
+	}
+	completed++
+	if onProgress != nil {
+		onProgress(completed, total)
+	}
+
+	// Build and push the OCI manifest.
+	manifest := buildOCIManifest(ociImage, configDigest)
+	if err := pushManifest(ctx, baseURL, repo, "latest", manifest); err != nil {
+		return fmt.Errorf("pushing manifest: %w", err)
+	}
+	completed++
+	if onProgress != nil {
+		onProgress(completed, total)
+	}
+
+	return nil
+}
+
+// sha256Hex returns the hex-encoded SHA-256 hash of data.
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// blobExists checks whether a blob already exists in the registry.
+func blobExists(ctx context.Context, baseURL, repo, digest string) (bool, error) {
+	url := fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, digest)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+// pushBlob uploads a blob to the registry using the two-step POST+PUT flow.
+func pushBlob(ctx context.Context, baseURL, repo, digest string, data []byte) error {
+	// Step 1: Start the upload.
+	postURL := fmt.Sprintf("%s/v2/%s/blobs/uploads/", baseURL, repo)
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, nil)
+	if err != nil {
+		return err
+	}
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		return fmt.Errorf("starting blob upload: %w", err)
+	}
+	postResp.Body.Close()
+
+	if postResp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("unexpected status %d from upload start", postResp.StatusCode)
+	}
+
+	location := postResp.Header.Get("Location")
+	if location == "" {
+		return fmt.Errorf("no Location header in upload start response")
+	}
+
+	// Make the location absolute if it's relative.
+	if strings.HasPrefix(location, "/") {
+		location = baseURL + location
+	}
+
+	// Step 2: Complete the upload with PUT.
+	sep := "?"
+	if strings.Contains(location, "?") {
+		sep = "&"
+	}
+	putURL := fmt.Sprintf("%s%sdigest=%s", location, sep, digest)
+
+	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	putReq.Header.Set("Content-Type", "application/octet-stream")
+	putReq.ContentLength = int64(len(data))
+
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		return fmt.Errorf("completing blob upload: %w", err)
+	}
+	putResp.Body.Close()
+
+	if putResp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("unexpected status %d from blob upload", putResp.StatusCode)
+	}
+
+	return nil
+}
+
+// ociManifest is a minimal OCI image manifest for the registry push.
+type ociManifest struct {
+	SchemaVersion int                `json:"schemaVersion"`
+	MediaType     string             `json:"mediaType"`
+	Config        ociManifestEntry   `json:"config"`
+	Layers        []ociManifestEntry `json:"layers"`
+}
+
+type ociManifestEntry struct {
+	MediaType string `json:"mediaType"`
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+}
+
+// buildOCIManifest constructs an OCI image manifest from the extracted image data.
+func buildOCIManifest(ociImage *OCIImage, configDigest string) []byte {
+	var layers []ociManifestEntry
+	for _, layer := range ociImage.Layers {
+		mediaType := "application/vnd.oci.image.layer.v1.tar"
+		if layer.GZip {
+			mediaType += "+gzip"
+		}
+		layers = append(layers, ociManifestEntry{
+			MediaType: mediaType,
+			Digest:    layer.Digest,
+			Size:      layer.Size,
+		})
+	}
+
+	m := ociManifest{
+		SchemaVersion: 2,
+		MediaType:     "application/vnd.oci.image.manifest.v1+json",
+		Config: ociManifestEntry{
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			Digest:    configDigest,
+			Size:      int64(len(ociImage.Config)),
+		},
+		Layers: layers,
+	}
+
+	data, _ := json.Marshal(m)
+	return data
+}
+
+// pushManifest uploads the manifest to the registry for the given tag.
+func pushManifest(ctx context.Context, baseURL, repo, tag string, manifest []byte) error {
+	url := fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(manifest))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	req.ContentLength = int64(len(manifest))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("pushing manifest: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d from manifest push", resp.StatusCode)
+	}
+
+	return nil
 }

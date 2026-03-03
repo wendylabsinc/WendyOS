@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -27,8 +28,8 @@ type DiscoveryOptions struct {
 	Timeout time.Duration
 }
 
-// Discover runs device discovery across the requested interface types and returns
-// all found devices.
+// Discover runs device discovery across the requested interface types concurrently
+// and returns all found devices.
 func Discover(ctx context.Context, opts DiscoveryOptions) (*models.DevicesCollection, error) {
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -36,6 +37,8 @@ func Discover(ctx context.Context, opts DiscoveryOptions) (*models.DevicesCollec
 	}
 
 	collection := &models.DevicesCollection{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
 	shouldDiscover := func(t models.InterfaceType) bool {
 		if len(opts.Types) == 0 {
@@ -50,31 +53,77 @@ func Discover(ctx context.Context, opts DiscoveryOptions) (*models.DevicesCollec
 	}
 
 	if shouldDiscover(models.InterfaceUSB) {
-		if devices, err := discoverUSB(ctx); err == nil {
-			collection.USBDevices = devices
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if devices, err := discoverUSB(ctx); err == nil {
+				mu.Lock()
+				collection.USBDevices = devices
+				mu.Unlock()
+			}
+		}()
 	}
 
 	if shouldDiscover(models.InterfaceEthernet) {
-		if devices, err := discoverEthernet(ctx); err == nil {
-			collection.EthernetInterfaces = devices
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if devices, err := discoverEthernet(ctx); err == nil {
+				mu.Lock()
+				collection.EthernetInterfaces = devices
+				mu.Unlock()
+			}
+		}()
 	}
 
 	if shouldDiscover(models.InterfaceLAN) {
-		if devices, err := discoverLAN(ctx, timeout); err == nil {
-			collection.LANDevices = devices
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if devices, err := discoverLAN(ctx, timeout); err == nil {
+				mu.Lock()
+				collection.LANDevices = devices
+				mu.Unlock()
+			}
+		}()
 	}
 
 	if shouldDiscover(models.InterfaceBluetooth) {
-		// Use active scanning when bluetooth is explicitly requested or
-		// discovering all types. The scan takes ~5 seconds on Linux.
-		activeScan := len(opts.Types) == 0 || len(opts.Types) == 1
-		if devices, err := discoverBluetooth(ctx, activeScan); err == nil {
-			collection.BluetoothDevices = devices
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			activeScan := len(opts.Types) == 0 || len(opts.Types) == 1
+			if devices, err := discoverBluetooth(ctx, activeScan); err == nil {
+				mu.Lock()
+				collection.BluetoothDevices = devices
+				mu.Unlock()
+			}
+		}()
 	}
 
+	wg.Wait()
 	return collection, nil
+}
+
+// DiscoverUSB discovers USB-connected Wendy devices.
+func DiscoverUSB(ctx context.Context) ([]models.USBDevice, error) {
+	return discoverUSB(ctx)
+}
+
+// DiscoverEthernet discovers Ethernet interfaces connected to Wendy devices.
+func DiscoverEthernet(ctx context.Context) ([]models.EthernetInterface, error) {
+	return discoverEthernet(ctx)
+}
+
+// DiscoverLAN discovers Wendy devices via mDNS on the local network.
+func DiscoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	return discoverLAN(ctx, timeout)
+}
+
+// DiscoverBluetooth discovers Wendy devices via Bluetooth.
+func DiscoverBluetooth(ctx context.Context, activeScan bool) ([]models.BluetoothDevice, error) {
+	return discoverBluetooth(ctx, activeScan)
 }

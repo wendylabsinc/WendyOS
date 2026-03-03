@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -17,6 +18,7 @@ import (
 // AgentConnection holds a gRPC connection and typed service clients.
 type AgentConnection struct {
 	Conn                *grpc.ClientConn
+	Host                string // hostname or IP of the connected agent
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
@@ -31,7 +33,9 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
 	}
 
-	return newAgentConnection(conn), nil
+	ac := newAgentConnection(conn)
+	ac.Host = hostFromAddress(address)
+	return ac, nil
 }
 
 // ConnectWithTLS creates an mTLS connection using certificates from config.
@@ -54,7 +58,19 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)
 	}
 
-	return newAgentConnection(conn), nil
+	ac := newAgentConnection(conn)
+	ac.Host = hostFromAddress(address)
+	return ac, nil
+}
+
+// hostFromAddress extracts the hostname/IP from a host:port address string.
+// Handles IPv6 addresses like [::1]:50051.
+func hostFromAddress(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+	return host
 }
 
 // Close closes the underlying gRPC connection.

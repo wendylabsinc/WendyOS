@@ -6,6 +6,7 @@ typedef struct {
     const char *uuid; // peripheral identifier UUID string
     const char *name; // local name from advertisement data
     int rssi;         // signal strength in dBm
+    int is_lite;      // 1 if Wendy Lite (GATT-only), 0 if WendyOS agent
 } WendyBLEDevice;
 
 // WendyBLEScanResult holds the array of discovered BLE peripherals.

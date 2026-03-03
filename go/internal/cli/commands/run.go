@@ -63,7 +63,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	cfgPath := filepath.Join(cwd, "wendy.json")
-	appCfg, err := appconfig.LoadFromFile(cfgPath)
+	appCfg, err := ensureAppConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("loading wendy.json: %w", err)
 	}
@@ -83,13 +83,146 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, opts)
 	}
 
+	// Wendy Lite devices don't run the WendyOS agent — they can't execute containers.
+	if target.Agent == nil {
+		return fmt.Errorf("selected device is a Wendy Lite device and does not support 'wendy run'; use 'wendy wifi' for provisioning")
+	}
+
 	// Agent-based run path (existing gRPC pipeline).
 	defer target.Agent.Close()
 	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
 }
 
+// runSwiftWithAgent builds a Swift package using swift-container-plugin, which
+// pushes the image directly to the device's registry. Then it creates and
+// starts the container on the agent.
+func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	// Query the device architecture.
+	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		return fmt.Errorf("querying device version: %w", err)
+	}
+	architecture := versionResp.GetCpuArchitecture()
+	if architecture == "" {
+		architecture = "arm64"
+	}
+
+	product := findSwiftProduct(cwd)
+
+	fmt.Printf("Building Swift container image for %s (%s)...\n", product, architecture)
+	if err := buildSwiftContainerImage(ctx, cwd, product, conn.Host, architecture); err != nil {
+		return fmt.Errorf("building Swift container image: %w", err)
+	}
+	fmt.Println("Build and push completed.")
+
+	// The image is now in the device's registry. The agent will pull it
+	// from localhost:5000 when creating the container.
+	registryImage := fmt.Sprintf("localhost:5000/%s:latest", strings.ToLower(product))
+
+	appConfigData, err := json.Marshal(appCfg)
+	if err != nil {
+		return fmt.Errorf("marshaling app config: %w", err)
+	}
+
+	restartPolicy := resolveRestartPolicy(opts)
+
+	createReq := &agentpb.CreateContainerRequest{
+		ImageName:     registryImage,
+		AppName:       appCfg.AppID,
+		AppConfig:     appConfigData,
+		RestartPolicy: restartPolicy,
+		UserArgs:      opts.userArgs,
+	}
+
+	if opts.deploy {
+		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
+		if err != nil {
+			return fmt.Errorf("creating container: %w", err)
+		}
+		fmt.Printf("Container %s created (not started).\n", appCfg.AppID)
+		return nil
+	}
+
+	// Create the container.
+	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	fmt.Printf("Container %s created.\n", appCfg.AppID)
+
+	if opts.detach {
+		// Start but don't stream output.
+		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		if err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+		// Wait for the started confirmation then return.
+		if _, err := stream.Recv(); err != nil && err != io.EOF {
+			return fmt.Errorf("waiting for container start: %w", err)
+		}
+		fmt.Printf("Application %s running in detached mode.\n", appCfg.AppID)
+		return nil
+	}
+
+	// Start and stream output.
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+		AppName: appCfg.AppID,
+	})
+	if err != nil {
+		return fmt.Errorf("starting container: %w", err)
+	}
+
+	fmt.Printf("Application %s started.\n", appCfg.AppID)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		fmt.Println("\nStopping container...")
+		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		runCancel()
+	}()
+
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			if runCtx.Err() != nil {
+				break
+			}
+			return fmt.Errorf("receiving container output: %w", recvErr)
+		}
+		if out := resp.GetStdoutOutput(); out != nil {
+			_, _ = os.Stdout.Write(out.GetData())
+		}
+		if out := resp.GetStderrOutput(); out != nil {
+			_, _ = os.Stderr.Write(out.GetData())
+		}
+	}
+
+	fmt.Printf("\nApplication %s stopped.\n", appCfg.AppID)
+	return nil
+}
+
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
+	// For Swift projects, resolve the actual executable product name from
+	// Package.swift rather than using the wendy.json app ID.
+	if p.CanBuild(projectPath) {
+		if swiftProduct := findSwiftProduct(projectPath); swiftProduct != "" {
+			product = swiftProduct
+		}
+	}
+
 	fmt.Printf("Building with %s provider...\n", p.DisplayName())
 	app, err := p.Build(ctx, device, projectPath, product, opts.debug)
 	if err != nil {
@@ -153,6 +286,15 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 
 	// Detect project type and ensure a Dockerfile exists.
 	projectType := detectProjectType(cwd)
+
+	// Swift projects without a Dockerfile use swift-container-plugin to push
+	// directly to the device's registry, bypassing the Docker build pipeline.
+	if projectType == "swift" {
+		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
+		}
+	}
+
 	switch projectType {
 	case "docker":
 		// Dockerfile already exists.
@@ -165,28 +307,20 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			fmt.Println("Generated Dockerfile.")
 		}
 	case "swift":
-		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
-			return fmt.Errorf("Swift projects require a Dockerfile for cross-compilation to linux/arm64")
-		}
+		// Dockerfile exists; use the Docker build path.
 	default:
 		return fmt.Errorf("unable to detect project type; ensure a Dockerfile, requirements.txt, or Package.swift is present")
 	}
 
-	// Build the Docker image for linux/arm64.
-	fmt.Println("Building Docker image for linux/arm64...")
-	if err := buildDockerImage(ctx, cwd, imageName, "linux/arm64", os.Stdout); err != nil {
-		return fmt.Errorf("building Docker image: %w", err)
-	}
-	fmt.Println("Build completed.")
-
-	// Export the image as a tar.
+	// Build the Docker image and export directly to tar.
 	tarPath := filepath.Join(os.TempDir(), appCfg.AppID+"-image.tar")
 	defer os.Remove(tarPath)
 
-	fmt.Println("Exporting image...")
-	if err := saveDockerImage(ctx, imageName, tarPath); err != nil {
-		return fmt.Errorf("exporting Docker image: %w", err)
+	fmt.Println("Building Docker image for linux/arm64...")
+	if err := buildDockerImage(ctx, cwd, imageName, "linux/arm64", tarPath, os.Stdout); err != nil {
+		return fmt.Errorf("building Docker image: %w", err)
 	}
+	fmt.Println("Build completed.")
 
 	// Extract OCI layers from the tar.
 	ociImage, err := extractOCIImage(tarPath)
@@ -196,155 +330,79 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 
 	fmt.Printf("Image has %d layers.\n", len(ociImage.Layers))
 
-	// Serialize app config for the agent.
+	// Push image to the device's HTTP registry.
+	registryAddr := registryHost(conn.Host, 5000)
+	baseURL := fmt.Sprintf("http://%s", registryAddr)
+	repo := strings.ToLower(appCfg.AppID)
+
+	if err := pushImageToRegistry(ctx, baseURL, repo, ociImage, tarPath); err != nil {
+		return fmt.Errorf("pushing image to registry: %w", err)
+	}
+
+	// The image is now in the device's registry. The agent will pull it
+	// from localhost:5000 when creating the container.
+	registryImage := fmt.Sprintf("localhost:5000/%s:latest", repo)
+
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
 	}
 
-	// Upload missing layers and create container.
 	restartPolicy := resolveRestartPolicy(opts)
-	return uploadAndDeploy(ctx, conn, appCfg, ociImage, tarPath, appConfigData, restartPolicy, opts)
-}
 
-// resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.
-func resolveRestartPolicy(opts runOptions) *agentpb.RestartPolicy {
-	mode := agentpb.RestartPolicyMode_DEFAULT
-	if opts.restartUnlessStopped {
-		mode = agentpb.RestartPolicyMode_UNLESS_STOPPED
-	} else if opts.restartOnFailure {
-		mode = agentpb.RestartPolicyMode_ON_FAILURE
-	} else if opts.noRestart {
-		mode = agentpb.RestartPolicyMode_NO
+	createReq := &agentpb.CreateContainerRequest{
+		ImageName:     registryImage,
+		AppName:       appCfg.AppID,
+		AppConfig:     appConfigData,
+		RestartPolicy: restartPolicy,
+		UserArgs:      opts.userArgs,
 	}
-	return &agentpb.RestartPolicy{Mode: mode}
-}
-
-// uploadAndDeploy handles querying existing layers, uploading missing ones,
-// and creating/starting the container on the agent.
-func uploadAndDeploy(
-	ctx context.Context,
-	conn *grpcclient.AgentConnection,
-	appCfg *appconfig.AppConfig,
-	ociImage *OCIImage,
-	tarPath string,
-	appConfigData []byte,
-	restartPolicy *agentpb.RestartPolicy,
-	opts runOptions,
-) error {
-	// Query existing layers on the agent to skip re-uploads.
-	existingDigests := make(map[string]bool)
-	layerStream, err := conn.ContainerService.ListLayers(ctx, &agentpb.ListLayersRequest{})
-	if err == nil {
-		for {
-			header, recvErr := layerStream.Recv()
-			if recvErr == io.EOF {
-				break
-			}
-			if recvErr != nil {
-				break
-			}
-			existingDigests[header.GetDigest()] = true
-		}
-	}
-
-	// Determine which layers need uploading.
-	var missingLayers []OCILayer
-	var totalUploadSize int64
-	for _, layer := range ociImage.Layers {
-		if !existingDigests[layer.Digest] {
-			missingLayers = append(missingLayers, layer)
-			totalUploadSize += layer.Size
-		}
-	}
-
-	fmt.Printf("Uploading %d of %d layers (%d bytes)...\n", len(missingLayers), len(ociImage.Layers), totalUploadSize)
-
-	if len(missingLayers) > 0 {
-		if err := uploadLayers(ctx, conn, ociImage, missingLayers, totalUploadSize, tarPath); err != nil {
-			return err
-		}
-	}
-
-	fmt.Println("Upload complete.")
-
-	// Build layer headers for the RunContainer / CreateContainer request.
-	var layerHeaders []*agentpb.RunContainerLayerHeader
-	for _, layer := range ociImage.Layers {
-		layerHeaders = append(layerHeaders, &agentpb.RunContainerLayerHeader{
-			Digest: layer.Digest,
-			Size:   layer.Size,
-			DiffId: layer.DiffID,
-			Gzip:   layer.GZip,
-		})
-	}
-
-	// Build the container command from the image's Entrypoint + Cmd.
-	var cmdParts []string
-	cmdParts = append(cmdParts, ociImage.Entrypoint...)
-	cmdParts = append(cmdParts, ociImage.Cmd...)
-	containerCmd := strings.Join(cmdParts, " ")
-
-	workingDir := ociImage.WorkingDir
 
 	if opts.deploy {
-		_, err := conn.ContainerService.CreateContainer(ctx, &agentpb.CreateContainerRequest{
-			ImageName:     appCfg.AppID + ":latest",
-			AppName:       appCfg.AppID,
-			Cmd:           containerCmd,
-			WorkingDir:    workingDir,
-			AppConfig:     appConfigData,
-			RestartPolicy: restartPolicy,
-			UserArgs:      opts.userArgs,
-		})
+		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
 		if err != nil {
 			return fmt.Errorf("creating container: %w", err)
 		}
+		fmt.Printf("Container %s created (not started).\n", appCfg.AppID)
 		return nil
 	}
 
-	// Use RunContainer on the container service to create and start.
-	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
-
-	stream, err := conn.ContainerService.RunContainer(runCtx, &agentpb.RunContainerLayersRequest{
-		ImageName:     appCfg.AppID + ":latest",
-		AppName:       appCfg.AppID,
-		Cmd:           containerCmd,
-		WorkingDir:    workingDir,
-		AppConfig:     appConfigData,
-		Layers:        layerHeaders,
-		RestartPolicy: restartPolicy,
-		UserArgs:      opts.userArgs,
-	})
+	// Create the container.
+	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
 	if err != nil {
-		return fmt.Errorf("running container: %w", err)
+		return fmt.Errorf("creating container: %w", err)
 	}
-
-	// Wait for the Started response.
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			return nil
-		}
-		if recvErr != nil {
-			return fmt.Errorf("receiving run response: %w", recvErr)
-		}
-		if resp.GetStarted() != nil {
-			fmt.Printf("Container %s started.\n", appCfg.AppID)
-			break
-		}
-	}
+	fmt.Printf("Container %s created.\n", appCfg.AppID)
 
 	if opts.detach {
+		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		if err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+		if _, err := stream.Recv(); err != nil && err != io.EOF {
+			return fmt.Errorf("waiting for container start: %w", err)
+		}
 		fmt.Printf("Application %s running in detached mode.\n", appCfg.AppID)
 		return nil
 	}
 
-	// Stream stdout/stderr from the RunContainer stream directly.
+	// Start and stream output.
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+		AppName: appCfg.AppID,
+	})
+	if err != nil {
+		return fmt.Errorf("starting container: %w", err)
+	}
+
+	fmt.Printf("Application %s started.\n", appCfg.AppID)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
-
 	go func() {
 		<-sigCh
 		fmt.Println("\nStopping container...")
@@ -377,56 +435,38 @@ func uploadAndDeploy(
 	return nil
 }
 
-// uploadLayers uploads missing layers, config, and manifest to the agent.
-func uploadLayers(ctx context.Context, conn *grpcclient.AgentConnection, ociImage *OCIImage, missingLayers []OCILayer, totalUploadSize int64, tarPath string) error {
+// resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.
+func resolveRestartPolicy(opts runOptions) *agentpb.RestartPolicy {
+	mode := agentpb.RestartPolicyMode_DEFAULT
+	if opts.restartUnlessStopped {
+		mode = agentpb.RestartPolicyMode_UNLESS_STOPPED
+	} else if opts.restartOnFailure {
+		mode = agentpb.RestartPolicyMode_ON_FAILURE
+	} else if opts.noRestart {
+		mode = agentpb.RestartPolicyMode_NO
+	}
+	return &agentpb.RestartPolicy{Mode: mode}
+}
+
+// pushImageToRegistry pushes an OCI image to the device's HTTP registry,
+// showing a TUI progress bar when stdout is a TTY.
+func pushImageToRegistry(ctx context.Context, baseURL, repo string, ociImage *OCIImage, tarPath string) error {
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
 
-	doUpload := func(onProgress func(layerIdx int, layerDigest string, uploaded int64)) error {
-		var uploadedSoFar int64
-		for i, layer := range missingLayers {
-			layerData, err := readLayerData(tarPath, layer.FilePath)
-			if err != nil {
-				return err
-			}
-			if err := uploadLayer(ctx, conn, layer.Digest, layerData); err != nil {
-				return err
-			}
-			uploadedSoFar += layer.Size
-			if onProgress != nil {
-				onProgress(i, layer.Digest, uploadedSoFar)
-			}
-		}
-
-		return nil
-	}
-
 	if !isTTY {
-		err := doUpload(func(i int, digest string, uploaded int64) {
-			pct := 0
-			if totalUploadSize > 0 {
-				pct = int(100 * uploaded / totalUploadSize)
-			}
-			short := digest
-			if len(short) > 19 {
-				short = short[:19]
-			}
-			fmt.Printf("  [%d/%d] %s... %d%% (%d / %d bytes)\n", i+1, len(missingLayers), short, pct, uploaded, totalUploadSize)
+		return pushToRegistry(ctx, baseURL, repo, ociImage, tarPath, func(completed, total int) {
+			fmt.Printf("  Pushing [%d/%d]...\n", completed, total)
 		})
-		if err != nil {
-			return fmt.Errorf("upload failed: %w", err)
-		}
-		fmt.Println("Upload complete.")
-		return nil
 	}
 
 	// TUI progress bar.
-	progModel := tui.NewProgress("Uploading layers...")
+	progModel := tui.NewProgress("Pushing image to device registry...")
 	p := tea.NewProgram(progModel)
 
 	go func() {
-		err := doUpload(func(_ int, _ string, uploaded int64) {
-			if totalUploadSize > 0 {
-				p.Send(tui.ProgressUpdateMsg{Percent: float64(uploaded) / float64(totalUploadSize)})
+		err := pushToRegistry(ctx, baseURL, repo, ociImage, tarPath, func(completed, total int) {
+			if total > 0 {
+				p.Send(tui.ProgressUpdateMsg{Percent: float64(completed) / float64(total)})
 			}
 		})
 		p.Send(tui.ProgressDoneMsg{Err: err})
@@ -438,42 +478,8 @@ func uploadLayers(ctx context.Context, conn *grpcclient.AgentConnection, ociImag
 	}
 	pm := finalModel.(tui.ProgressModel)
 	if pm.Err() != nil {
-		return fmt.Errorf("upload failed: %w", pm.Err())
+		return fmt.Errorf("push failed: %w", pm.Err())
 	}
-	fmt.Println("Upload complete.")
-	return nil
-}
-
-// uploadLayer sends a single layer to the agent via WriteLayer streaming RPC.
-func uploadLayer(ctx context.Context, conn *grpcclient.AgentConnection, digest string, data []byte) error {
-	stream, err := conn.ContainerService.WriteLayer(ctx)
-	if err != nil {
-		return fmt.Errorf("starting WriteLayer stream: %w", err)
-	}
-
-	const chunkSize = 64 * 1024 // 64KB
-	for offset := 0; offset < len(data); offset += chunkSize {
-		end := offset + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
-
-		if err := stream.Send(&agentpb.WriteLayerRequest{
-			Digest: digest,
-			Data:   data[offset:end],
-		}); err != nil {
-			return fmt.Errorf("sending layer chunk: %w", err)
-		}
-	}
-
-	if err := stream.CloseSend(); err != nil {
-		return fmt.Errorf("closing WriteLayer stream: %w", err)
-	}
-
-	// Wait for acknowledgement.
-	if _, err := stream.Recv(); err != nil && err != io.EOF {
-		return fmt.Errorf("WriteLayer response: %w", err)
-	}
-
+	fmt.Println("Push complete.")
 	return nil
 }

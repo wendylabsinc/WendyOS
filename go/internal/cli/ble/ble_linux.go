@@ -58,5 +58,11 @@ func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
+// HasService checks whether a specific service UUID was discovered.
+func (c *Connection) HasService(serviceUUID string) bool { return false }
+
+// ListServices returns a comma-separated string of discovered service UUIDs.
+func (c *Connection) ListServices() string { return "" }
+
 // Close disconnects and frees all BLE resources.
 func (c *Connection) Close() {}

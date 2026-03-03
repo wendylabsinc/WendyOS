@@ -60,13 +60,39 @@
     NSUUID *peripheralID = peripheral.identifier;
     int rssi = [RSSI intValue];
 
-    // Prefer the local name from advertisement data, fall back to peripheral.name.
+    // Resolve the peripheral name early so we can use it for identification.
     NSString *name = advertisementData[CBAdvertisementDataLocalNameKey];
     if (!name || name.length == 0) {
         name = peripheral.name;
     }
+
+    // Determine device type by inspecting advertised service UUIDs.
+    CBUUID *agentUUID = [CBUUID UUIDWithString:@"7565E9EB-4C20-4B67-9272-D708B397B631"];
+    CBUUID *liteUUID  = [CBUUID UUIDWithString:@"00004E57-454E-4459-0001-000000000000"];
+    NSArray<CBUUID *> *serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey];
+
+    BOOL hasAgent = NO;
+    BOOL hasLite  = NO;
+    for (CBUUID *svc in serviceUUIDs) {
+        if ([svc isEqual:agentUUID]) hasAgent = YES;
+        if ([svc isEqual:liteUUID])  hasLite  = YES;
+    }
+
+    // Wendy Lite (ESP32) devices may not advertise their service UUID;
+    // fall back to matching the "Wendy-" BLE name prefix.
+    if (!hasAgent && !hasLite) {
+        if (name && [name hasPrefix:@"Wendy-"]) {
+            hasLite = YES;
+        } else {
+            return; // Not a Wendy device.
+        }
+    }
+
+    // If the agent UUID is present, treat as full agent even if lite UUID also appears.
+    BOOL isLite = (!hasAgent && hasLite);
+
     if (!name || name.length == 0) {
-        name = @"WendyOS Device";
+        name = isLite ? @"Wendy Lite" : @"WendyOS Device";
     }
 
     // Dedup: keep the entry with the strongest RSSI per peripheral UUID.
@@ -82,6 +108,7 @@
         @"uuid": peripheralID.UUIDString,
         @"name": name,
         @"rssi": @(rssi),
+        @"is_lite": @(isLite ? 1 : 0),
     };
 }
 
@@ -100,6 +127,7 @@
         devices[i].uuid = strdup([d[@"uuid"] UTF8String]);
         devices[i].name = strdup([d[@"name"] UTF8String]);
         devices[i].rssi = [d[@"rssi"] intValue];
+        devices[i].is_lite = [d[@"is_lite"] intValue];
     }
 
     return (WendyBLEScanResult){devices, count};
@@ -121,11 +149,12 @@ WendyBLEScanResult wendy_ble_scan(int scan_seconds) {
             return (WendyBLEScanResult){NULL, 0};
         }
 
-        // Start scanning for peripherals advertising the Wendy service UUID.
-        CBUUID *wendyService = [CBUUID UUIDWithString:@"7565E9EB-4C20-4B67-9272-D708B397B631"];
-
+        // Scan all peripherals. Wendy Lite (ESP32) devices do not advertise
+        // their service UUID in BLE advertisement data, so we cannot rely on
+        // CoreBluetooth's service-based filter. We filter by service UUID
+        // and name prefix ("Wendy-") in the didDiscoverPeripheral callback.
         dispatch_async(scanner.bleQueue, ^{
-            [scanner.centralManager scanForPeripheralsWithServices:@[wendyService]
+            [scanner.centralManager scanForPeripheralsWithServices:nil
                                                            options:nil];
         });
 

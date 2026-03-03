@@ -75,7 +75,7 @@ func (m ProgressModel) View() string {
 	if m.done && m.err != nil {
 		return fmt.Sprintf("Error: %v\n", m.err)
 	}
-	return fmt.Sprintf("%s\n%s %.0f%%\n", m.title, m.progress.View(), m.percent*100)
+	return fmt.Sprintf("%s\n%s\n", m.title, m.progress.View())
 }
 
 // Err returns any error from the completed progress.

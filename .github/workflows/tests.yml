@@ -62,7 +62,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          UNFORMATTED=$(gofmt -l .)
+          UNFORMATTED=$(gofmt -l -s .)
           if [ -n "$UNFORMATTED" ]; then
             echo "The following files need formatting:"
             echo "$UNFORMATTED"

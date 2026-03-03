@@ -134,6 +134,157 @@ type DevicesCollection struct {
 	ExternalDevices    []ExternalDevice    `json:"externalDevices,omitempty"`
 }
 
+// DiscoveredDevice represents a single physical device that may have been
+// discovered via LAN (mDNS), Bluetooth, or both. When the same device appears
+// on multiple transports, they are merged into one DiscoveredDevice.
+type DiscoveredDevice struct {
+	DisplayName     string
+	AgentVersion    string
+	OS              string
+	OSVersion       string
+	CPUArchitecture string
+
+	LAN       *LANDevice
+	Bluetooth *BluetoothDevice
+	External  *ExternalDevice
+}
+
+// ConnectionTypes returns a human-readable list of available transports,
+// e.g. "LAN", "Bluetooth", or "LAN, Bluetooth".
+func (d *DiscoveredDevice) ConnectionTypes() string {
+	var types []string
+	if d.LAN != nil {
+		types = append(types, "LAN")
+	}
+	if d.Bluetooth != nil {
+		if d.Bluetooth.IsWendyAgent() {
+			types = append(types, "Bluetooth")
+		} else {
+			types = append(types, "BLE (Lite)")
+		}
+	}
+	if d.External != nil {
+		types = append(types, "WiFi")
+	}
+	return strings.Join(types, ", ")
+}
+
+// Address returns the best available address for display purposes.
+// Prefers the LAN IP/hostname over the BLE address.
+func (d *DiscoveredDevice) Address() string {
+	if d.LAN != nil {
+		if d.LAN.IPAddress != "" {
+			return d.LAN.IPAddress
+		}
+		return d.LAN.Hostname
+	}
+	if d.External != nil {
+		if ip := d.External.ConnectionInfo["ip"]; ip != "" {
+			return ip
+		}
+	}
+	if d.Bluetooth != nil {
+		return d.Bluetooth.Address
+	}
+	return ""
+}
+
+// Port returns the LAN port if available, or 0.
+func (d *DiscoveredDevice) Port() int {
+	if d.LAN != nil {
+		return d.LAN.Port
+	}
+	return 0
+}
+
+// MergedDevices returns a deduplicated slice of DiscoveredDevice by merging
+// LAN and Bluetooth entries that share the same DisplayName (case-insensitive).
+// LAN metadata takes precedence; BLE backfills missing fields.
+func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
+	// Index by normalized (lower-case) display name.
+	byName := make(map[string]*DiscoveredDevice)
+	var order []string // preserve insertion order
+
+	for i := range c.LANDevices {
+		d := &c.LANDevices[i]
+		key := strings.ToLower(d.DisplayName)
+		merged := &DiscoveredDevice{
+			DisplayName:     d.DisplayName,
+			AgentVersion:    d.AgentVersion,
+			OS:              d.OS,
+			OSVersion:       d.OSVersion,
+			CPUArchitecture: d.CPUArchitecture,
+			LAN:             d,
+		}
+		byName[key] = merged
+		order = append(order, key)
+	}
+
+	for i := range c.BluetoothDevices {
+		d := &c.BluetoothDevices[i]
+		key := strings.ToLower(d.DisplayName)
+		if existing, ok := byName[key]; ok {
+			// Merge BLE into existing LAN entry.
+			existing.Bluetooth = d
+			// Backfill any fields the LAN entry is missing.
+			if existing.AgentVersion == "" {
+				existing.AgentVersion = d.AgentVersion
+			}
+			if existing.OS == "" {
+				existing.OS = d.OS
+			}
+			if existing.OSVersion == "" {
+				existing.OSVersion = d.OSVersion
+			}
+			if existing.CPUArchitecture == "" {
+				existing.CPUArchitecture = d.CPUArchitecture
+			}
+		} else {
+			// BLE-only device.
+			merged := &DiscoveredDevice{
+				DisplayName:     d.DisplayName,
+				AgentVersion:    d.AgentVersion,
+				OS:              d.OS,
+				OSVersion:       d.OSVersion,
+				CPUArchitecture: d.CPUArchitecture,
+				Bluetooth:       d,
+			}
+			byName[key] = merged
+			order = append(order, key)
+		}
+	}
+
+	// Merge microwasm external devices by name. These represent the same
+	// physical Wendy Lite hardware discovered via mDNS (WiFi) instead of BLE.
+	for i := range c.ExternalDevices {
+		d := &c.ExternalDevices[i]
+		if d.ProviderKey != "microwasm" {
+			continue
+		}
+		key := strings.ToLower(d.DisplayName)
+		if existing, ok := byName[key]; ok {
+			existing.External = d
+			if existing.CPUArchitecture == "" {
+				existing.CPUArchitecture = d.CPUArchitecture
+			}
+		} else {
+			merged := &DiscoveredDevice{
+				DisplayName:     d.DisplayName,
+				CPUArchitecture: d.CPUArchitecture,
+				External:        d,
+			}
+			byName[key] = merged
+			order = append(order, key)
+		}
+	}
+
+	result := make([]DiscoveredDevice, 0, len(order))
+	for _, key := range order {
+		result = append(result, *byName[key])
+	}
+	return result
+}
+
 // IsEmpty returns true if no devices were found across any interface.
 func (c *DevicesCollection) IsEmpty() bool {
 	return len(c.USBDevices) == 0 &&

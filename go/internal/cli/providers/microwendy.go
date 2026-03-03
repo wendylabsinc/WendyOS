@@ -87,6 +87,9 @@ func (p *MicroWendyProvider) Build(ctx context.Context, device models.ExternalDe
 		"run", "+6.2.3", "swift", "build",
 		"--triple", "wasm32-unknown-none-wasm",
 	}
+	if !debug {
+		args = append(args, "-c", "release")
+	}
 	cmd := exec.CommandContext(ctx, "swiftly", args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
@@ -136,6 +139,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/app.wasm", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/wasm")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(wasmData)))
 		w.Write(wasmData)
 	})
 

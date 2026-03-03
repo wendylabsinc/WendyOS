@@ -151,7 +151,7 @@ func main() {
 		}
 		mtlsPort := strconv.Itoa(portNum + 1)
 
-		lis, err := net.Listen("tcp", ":"+mtlsPort)
+		lis, err := net.Listen("tcp", "[::]:"+mtlsPort)
 		if err != nil {
 			logger.Error("Failed to listen on mTLS port", zap.String("port", mtlsPort), zap.Error(err))
 			return
@@ -195,7 +195,7 @@ func main() {
 		registerAllServices(agentServer)
 	}
 
-	agentLis, err := net.Listen("tcp", ":"+agentPort)
+	agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
 	if err != nil {
 		logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
 	}
@@ -223,7 +223,7 @@ func main() {
 	otelpb.RegisterMetricsServiceServer(otelServer, otelMetricReceiver)
 	otelpb.RegisterTraceServiceServer(otelServer, otelTraceReceiver)
 
-	otelLis, err := net.Listen("tcp", ":"+otelPort)
+	otelLis, err := net.Listen("tcp", "[::]:"+otelPort)
 	if err != nil {
 		logger.Fatal("Failed to listen on OTEL port", zap.String("port", otelPort), zap.Error(err))
 	}
@@ -244,7 +244,7 @@ func main() {
 	}
 
 	otelHTTPReceiver := services.NewOTELHTTPReceiver(logger, broadcaster)
-	otelHTTPLis, err := net.Listen("tcp", ":"+otelHTTPPort)
+	otelHTTPLis, err := net.Listen("tcp", "[::]:"+otelHTTPPort)
 	if err != nil {
 		logger.Fatal("Failed to listen on OTEL HTTP port", zap.String("port", otelHTTPPort), zap.Error(err))
 	}

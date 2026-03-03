@@ -342,10 +342,18 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		_ = existing.Delete(ctx, containerd.WithSnapshotCleanup)
 	}
 
-	// Get the image handle (must already exist in the image store).
+	// Get the image handle from the local store, or pull from registry.
 	image, err := c.client.GetImage(ctx, imageName)
 	if err != nil {
-		return fmt.Errorf("getting image %q: %w", imageName, err)
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
+		)
+		image, err = c.client.Pull(ctx, imageName,
+			containerd.WithPullUnpack,
+		)
+		if err != nil {
+			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+		}
 	}
 
 	// Unpack the image into the snapshotter if not already done.

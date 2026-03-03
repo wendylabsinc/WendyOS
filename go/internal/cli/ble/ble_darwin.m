@@ -498,6 +498,27 @@ WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn handle, int timeout_se
     return res;
 }
 
+int wendy_ble_has_service(WendyBLEConn handle, const char *service_uuid) {
+    WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
+    CBUUID *svcUUID = [CBUUID UUIDWithString:[NSString stringWithUTF8String:service_uuid]];
+    for (CBService *svc in conn.peripheral.services) {
+        if ([svc.UUID isEqual:svcUUID]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+char *wendy_ble_list_services(WendyBLEConn handle) {
+    WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
+    NSMutableArray<NSString *> *uuids = [NSMutableArray array];
+    for (CBService *svc in conn.peripheral.services) {
+        [uuids addObject:svc.UUID.UUIDString];
+    }
+    NSString *joined = [uuids componentsJoinedByString:@", "];
+    return strdup([joined UTF8String]);
+}
+
 void wendy_ble_disconnect(WendyBLEConn handle) {
     if (!handle) return;
     WendyBLEConnection *conn = (__bridge_transfer WendyBLEConnection *)handle;

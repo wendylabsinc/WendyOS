@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/ble"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -33,7 +35,7 @@ func newWifiListCmd() *cobra.Command {
 		Short: "List available WiFi networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
+			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"))
 			if err != nil {
 				return err
 			}
@@ -96,16 +98,21 @@ func newWifiConnectCmd() *cobra.Command {
 		Use:   "connect",
 		Short: "Connect to a WiFi network",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if ssid == "" {
-				return fmt.Errorf("--ssid is required")
-			}
-
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
+			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"))
 			if err != nil {
 				return err
 			}
 			defer target.Close()
+
+			// If no SSID provided, scan for networks and let the user pick.
+			if ssid == "" {
+				picked, pickErr := pickWifiNetwork(ctx, target)
+				if pickErr != nil {
+					return pickErr
+				}
+				ssid = picked
+			}
 
 			// BLE WendyOS agent path (protobuf over L2CAP)
 			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
@@ -151,7 +158,7 @@ func newWifiStatusCmd() *cobra.Command {
 		Short: "Get current WiFi connection status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
+			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"))
 			if err != nil {
 				return err
 			}
@@ -205,7 +212,7 @@ func newWifiDisconnectCmd() *cobra.Command {
 		Short: "Disconnect from the current WiFi network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
+			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"))
 			if err != nil {
 				return err
 			}
@@ -239,6 +246,99 @@ func newWifiDisconnectCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// ── WiFi network picker ─────────────────────────────────────────────
+
+// pickWifiNetwork scans for WiFi networks on the target device and presents
+// an interactive picker. Returns the selected SSID.
+func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error) {
+	type wifiEntry struct {
+		ssid           string
+		signalStrength int32
+	}
+
+	var networks []wifiEntry
+
+	switch {
+	case target.Bluetooth != nil && target.Bluetooth.IsWendyAgent():
+		fmt.Printf("Scanning for WiFi networks on %s...\n", target.Bluetooth.DisplayName)
+		client, err := ble.ConnectAgent(target.Bluetooth)
+		if err != nil {
+			return "", fmt.Errorf("connecting to device: %w", err)
+		}
+		defer client.Close()
+
+		nets, err := client.WifiList()
+		if err != nil {
+			return "", fmt.Errorf("listing WiFi networks: %w", err)
+		}
+		for _, n := range nets {
+			networks = append(networks, wifiEntry{ssid: n.GetSsid(), signalStrength: n.GetSignalStrength()})
+		}
+
+	case target.Bluetooth != nil:
+		return "", fmt.Errorf("Wendy Lite devices do not support listing WiFi networks; use --ssid to specify the network")
+
+	case target.Agent != nil:
+		fmt.Println("Scanning for WiFi networks...")
+		resp, err := target.Agent.AgentService.ListWiFiNetworks(ctx, &agentpb.ListWiFiNetworksRequest{})
+		if err != nil {
+			return "", fmt.Errorf("listing WiFi networks: %w", err)
+		}
+		for _, n := range resp.GetNetworks() {
+			networks = append(networks, wifiEntry{ssid: n.GetSsid(), signalStrength: n.GetSignalStrength()})
+		}
+
+	default:
+		return "", fmt.Errorf("selected device does not support WiFi network scanning")
+	}
+
+	if len(networks) == 0 {
+		return "", fmt.Errorf("no WiFi networks found")
+	}
+
+	// Build picker items from the scan results.
+	var items []tui.PickerItem
+	for _, n := range networks {
+		signal := ""
+		if n.signalStrength > 0 {
+			signal = fmt.Sprintf("%d%%", n.signalStrength)
+		}
+		items = append(items, tui.PickerItem{
+			Name:  n.ssid,
+			Type:  signal,
+			Value: n.ssid,
+		})
+	}
+
+	picker := tui.NewPickerWithTitle("Select a WiFi network")
+	p := tea.NewProgram(picker)
+
+	go func() {
+		p.Send(tui.PickerAddMsg{Items: items})
+		p.Send(tui.PickerDoneMsg{})
+	}()
+
+	finalModel, err := p.Run()
+	if err != nil {
+		return "", fmt.Errorf("network picker: %w", err)
+	}
+
+	pm := finalModel.(tui.PickerModel)
+	if pm.Cancelled() {
+		return "", ErrUserCancelled
+	}
+	sel := pm.Selected()
+	if sel == nil {
+		return "", fmt.Errorf("no network selected")
+	}
+
+	ssid, ok := sel.Value.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid picker selection")
+	}
+	return ssid, nil
 }
 
 // ── BLE WendyOS Agent helpers (protobuf over L2CAP) ────────────────

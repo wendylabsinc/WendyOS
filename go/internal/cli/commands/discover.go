@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -162,19 +163,21 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions) er
 }
 
 // --- Bubble Tea model for continuous discovery ---
+// Each discovery type (USB, Ethernet, LAN, Bluetooth, External) runs as an
+// independent tea.Cmd so results stream in as soon as each completes.
 
-type scanResultMsg struct {
-	collection *models.DevicesCollection
-	err        error
-}
+type usbScanMsg struct{ devices []models.USBDevice }
+type ethScanMsg struct{ devices []models.EthernetInterface }
+type lanScanMsg struct{ devices []models.LANDevice }
+type btScanMsg struct{ devices []models.BluetoothDevice }
+type extScanMsg struct{ devices []models.ExternalDevice }
 
 type discoverModel struct {
 	ctx             context.Context
 	opts            discovery.DiscoveryOptions
 	collection      *models.DevicesCollection
-	scanning        bool
-	scanCount       int
 	quitting        bool
+	hasResults      bool
 	err             error
 	includeExternal bool
 }
@@ -183,22 +186,76 @@ func newDiscoverModel(ctx context.Context, opts discovery.DiscoveryOptions) disc
 	return discoverModel{
 		ctx:             ctx,
 		opts:            opts,
+		collection:      &models.DevicesCollection{},
 		includeExternal: shouldIncludeExternal(opts),
 	}
 }
 
-func (m discoverModel) startScan() tea.Cmd {
-	return func() tea.Msg {
-		collection, err := discovery.Discover(m.ctx, m.opts)
-		if err == nil && m.includeExternal {
-			collection.ExternalDevices = discoverExternalDevices(m.ctx)
+func (m discoverModel) shouldDiscover(t models.InterfaceType) bool {
+	if len(m.opts.Types) == 0 {
+		return true
+	}
+	for _, ot := range m.opts.Types {
+		if ot == t {
+			return true
 		}
-		return scanResultMsg{collection: collection, err: err}
+	}
+	return false
+}
+
+func (m discoverModel) scanUSB() tea.Cmd {
+	return func() tea.Msg {
+		devices, _ := discovery.DiscoverUSB(m.ctx)
+		return usbScanMsg{devices: devices}
+	}
+}
+
+func (m discoverModel) scanEthernet() tea.Cmd {
+	return func() tea.Msg {
+		devices, _ := discovery.DiscoverEthernet(m.ctx)
+		return ethScanMsg{devices: devices}
+	}
+}
+
+func (m discoverModel) scanLAN() tea.Cmd {
+	return func() tea.Msg {
+		devices, _ := discovery.DiscoverLAN(m.ctx, m.opts.Timeout)
+		return lanScanMsg{devices: devices}
+	}
+}
+
+func (m discoverModel) scanBluetooth() tea.Cmd {
+	return func() tea.Msg {
+		activeScan := len(m.opts.Types) == 0 || len(m.opts.Types) == 1
+		devices, _ := discovery.DiscoverBluetooth(m.ctx, activeScan)
+		return btScanMsg{devices: devices}
+	}
+}
+
+func (m discoverModel) scanExternal() tea.Cmd {
+	return func() tea.Msg {
+		return extScanMsg{devices: discoverExternalDevices(m.ctx)}
 	}
 }
 
 func (m discoverModel) Init() tea.Cmd {
-	return m.startScan()
+	var cmds []tea.Cmd
+	if m.shouldDiscover(models.InterfaceUSB) {
+		cmds = append(cmds, m.scanUSB())
+	}
+	if m.shouldDiscover(models.InterfaceEthernet) {
+		cmds = append(cmds, m.scanEthernet())
+	}
+	if m.shouldDiscover(models.InterfaceLAN) {
+		cmds = append(cmds, m.scanLAN())
+	}
+	if m.shouldDiscover(models.InterfaceBluetooth) {
+		cmds = append(cmds, m.scanBluetooth())
+	}
+	if m.includeExternal {
+		cmds = append(cmds, m.scanExternal())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -209,15 +266,26 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		}
-
-	case scanResultMsg:
-		m.scanCount++
-		if msg.err != nil {
-			m.err = msg.err
-		} else {
-			m.collection = msg.collection
-		}
-		return m, m.startScan()
+	case usbScanMsg:
+		m.collection.USBDevices = msg.devices
+		m.hasResults = true
+		return m, m.scanUSB()
+	case ethScanMsg:
+		m.collection.EthernetInterfaces = msg.devices
+		m.hasResults = true
+		return m, m.scanEthernet()
+	case lanScanMsg:
+		m.collection.LANDevices = msg.devices
+		m.hasResults = true
+		return m, m.scanLAN()
+	case btScanMsg:
+		m.collection.BluetoothDevices = msg.devices
+		m.hasResults = true
+		return m, m.scanBluetooth()
+	case extScanMsg:
+		m.collection.ExternalDevices = msg.devices
+		m.hasResults = true
+		return m, m.scanExternal()
 	}
 
 	return m, nil
@@ -241,9 +309,9 @@ func (m discoverModel) View() string {
 		sb.WriteString(fmt.Sprintf("Error: %v\n", m.err))
 	}
 
-	if m.collection != nil && !m.collection.IsEmpty() {
+	if !m.collection.IsEmpty() {
 		sb.WriteString(renderDeviceTable(m.collection))
-	} else if m.scanCount > 0 {
+	} else if m.hasResults {
 		sb.WriteString(dimStyle.Render("No devices found yet...") + "\n")
 	}
 
@@ -259,27 +327,31 @@ func renderDeviceTable(collection *models.DevicesCollection) string {
 	for _, d := range collection.USBDevices {
 		rows = append(rows, []string{d.DisplayName, "USB", d.Hostname, "", d.AgentVersion})
 	}
-	for _, d := range collection.LANDevices {
-		addr := d.Hostname
-		if d.IPAddress != "" {
-			addr = d.IPAddress
-		}
+	for _, d := range collection.MergedDevices() {
 		port := ""
-		if d.Port > 0 {
-			port = fmt.Sprintf("%d", d.Port)
+		if d.Port() > 0 {
+			port = fmt.Sprintf("%d", d.Port())
 		}
-		rows = append(rows, []string{d.DisplayName, "LAN", addr, port, d.AgentVersion})
-	}
-	for _, d := range collection.BluetoothDevices {
-		rows = append(rows, []string{d.DisplayName, "Bluetooth", d.Address, "", d.AgentVersion})
+		rows = append(rows, []string{d.DisplayName, d.ConnectionTypes(), d.Address(), port, d.AgentVersion})
 	}
 	for _, d := range collection.EthernetInterfaces {
 		rows = append(rows, []string{d.DisplayName, "Ethernet", d.IPAddress, "", d.AgentVersion})
 	}
 	for _, d := range collection.ExternalDevices {
+		// Microwasm devices are merged with BLE Lite in MergedDevices().
+		if d.ProviderKey == "microwasm" {
+			continue
+		}
 		addr := fmt.Sprintf("%s: %s", d.ProviderKey, d.ID)
 		rows = append(rows, []string{d.DisplayName, "External", addr, "", d.AgentVersion})
 	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i][1] != rows[j][1] {
+			return rows[i][1] < rows[j][1]
+		}
+		return strings.ToLower(rows[i][0]) < strings.ToLower(rows[j][0])
+	})
 
 	return tui.RenderTable(headers, rows)
 }

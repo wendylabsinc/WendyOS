@@ -74,6 +74,12 @@ WendyBLEError wendy_ble_l2cap_send(WendyBLEConn conn, const uint8_t *data, int l
 // Receive data from the L2CAP channel (blocks until data or timeout).
 WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn conn, int timeout_seconds);
 
+// Check whether a specific service UUID was discovered. Returns 1 if found, 0 if not.
+int wendy_ble_has_service(WendyBLEConn conn, const char *service_uuid);
+
+// Get a comma-separated list of discovered service UUIDs. Caller must free the result.
+char *wendy_ble_list_services(WendyBLEConn conn);
+
 // Disconnect and free all resources.
 void wendy_ble_disconnect(WendyBLEConn conn);
 

@@ -29,8 +29,9 @@ type PickerAddMsg struct {
 type PickerDoneMsg struct{}
 
 // PickerModel is a Bubble Tea model that presents a live-updating list of
-// devices and lets the user select one with arrow keys + Enter.
+// items and lets the user select one with arrow keys + Enter.
 type PickerModel struct {
+	Title    string // header line, e.g. "Select a device"
 	items    []PickerItem
 	seen     map[string]bool
 	cursor   int
@@ -39,9 +40,19 @@ type PickerModel struct {
 	quitting bool
 }
 
-// NewPicker creates a new device picker model.
+// NewPicker creates a new picker model with the default "Select a device" title.
 func NewPicker() PickerModel {
 	return PickerModel{
+		Title:    "Select a device",
+		seen:     make(map[string]bool),
+		scanning: true,
+	}
+}
+
+// NewPickerWithTitle creates a new picker model with a custom title.
+func NewPickerWithTitle(title string) PickerModel {
+	return PickerModel{
+		Title:    title,
 		seen:     make(map[string]bool),
 		scanning: true,
 	}
@@ -104,7 +115,7 @@ func (m PickerModel) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(pickerTitle.Render("Select a device") + pickerHint.Render(" (↑/↓ navigate, enter select, q quit)") + "\n\n")
+	sb.WriteString(pickerTitle.Render(m.Title) + pickerHint.Render(" (↑/↓ navigate, enter select, q quit)") + "\n\n")
 
 	if len(m.items) == 0 {
 		if m.scanning {
@@ -133,6 +144,11 @@ func (m PickerModel) View() string {
 	}
 
 	return sb.String()
+}
+
+// Cancelled returns true if the user quit the picker without selecting (e.g. Ctrl+C).
+func (m PickerModel) Cancelled() bool {
+	return m.quitting
 }
 
 // Selected returns the item the user chose, or nil if they quit without selecting.

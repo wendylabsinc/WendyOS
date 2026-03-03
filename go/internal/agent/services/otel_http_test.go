@@ -151,7 +151,7 @@ func TestOTELHTTPReceiver_BodyTooLarge(t *testing.T) {
 
 	receiver.server.Handler.ServeHTTP(w, httpReq)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for oversized body, got %d", w.Code)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized body, got %d", w.Code)
 	}
 }

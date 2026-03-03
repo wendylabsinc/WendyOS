@@ -166,6 +166,23 @@ func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(result.data), result.length), nil
 }
 
+// HasService checks whether a specific service UUID was discovered.
+func (c *Connection) HasService(serviceUUID string) bool {
+	cSvc := C.CString(serviceUUID)
+	defer C.free(unsafe.Pointer(cSvc))
+	return C.wendy_ble_has_service(c.handle, cSvc) == 1
+}
+
+// ListServices returns a comma-separated string of discovered service UUIDs.
+func (c *Connection) ListServices() string {
+	cStr := C.wendy_ble_list_services(c.handle)
+	if cStr == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(cStr))
+	return C.GoString(cStr)
+}
+
 // Close disconnects and frees all BLE resources.
 func (c *Connection) Close() {
 	if c.handle != nil {
