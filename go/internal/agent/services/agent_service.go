@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -330,37 +333,133 @@ func (s *AgentService) ForgetBluetoothPeripheral(ctx context.Context, req *agent
 	return &agentpb.ForgetBluetoothPeripheralResponse{}, nil
 }
 
+// menderProgressRe matches percentage patterns in mender output, e.g.
+// "  10%" or "50% 5120 kB" or "Installing:  75%".
+var menderProgressRe = regexp.MustCompile(`(\d{1,3})%`)
+
 // UpdateOS streams OS update progress using mender.
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started", zap.String("artifact_url", req.GetArtifactUrl()))
 
-	// Send initial progress.
-	if err := stream.Send(&agentpb.UpdateOSResponse{
-		ResponseType: &agentpb.UpdateOSResponse_Progress_{
-			Progress: &agentpb.UpdateOSResponse_Progress{
-				Phase:   "downloading",
-				Percent: 0,
-			},
-		},
-	}); err != nil {
-		return err
-	}
-
-	// Execute mender install.
-	cmd := exec.CommandContext(stream.Context(), "mender", "install", req.GetArtifactUrl())
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		errMsg := fmt.Sprintf("mender install failed: %v: %s", err, string(output))
-		return stream.Send(&agentpb.UpdateOSResponse{
-			ResponseType: &agentpb.UpdateOSResponse_Failed_{
-				Failed: &agentpb.UpdateOSResponse_Failed{
-					ErrorMessage: errMsg,
+	sendProgress := func(phase string, percent int32) {
+		_ = stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Progress_{
+				Progress: &agentpb.UpdateOSResponse_Progress{
+					Phase:   phase,
+					Percent: percent,
 				},
 			},
 		})
 	}
 
-	// Send completion.
+	sendProgress("downloading", 0)
+
+	cmd := exec.CommandContext(stream.Context(), "mender", "install", req.GetArtifactUrl())
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: fmt.Sprintf("failed to create stderr pipe: %v", err),
+				},
+			},
+		})
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: fmt.Sprintf("failed to create stdout pipe: %v", err),
+				},
+			},
+		})
+	}
+
+	if err := cmd.Start(); err != nil {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: fmt.Sprintf("failed to start mender: %v", err),
+				},
+			},
+		})
+	}
+
+	// Stream progress by scanning mender's output in real time.
+	// Mender writes structured log lines to stderr; stdout may have additional info.
+	// We merge both and parse for phase transitions and percentage patterns.
+	//
+	// Download progress occupies 0-80% of the overall bar.
+	// Install progress occupies 80-95%.
+	// 95-100% is reserved for finalization.
+	phase := "downloading"
+	lastPercent := int32(0)
+
+	scanLines := func(r io.Reader) {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := scanner.Text()
+			lower := strings.ToLower(line)
+			s.logger.Debug("mender output", zap.String("line", line))
+
+			// Detect phase transitions.
+			switch {
+			case strings.Contains(lower, "installing") || strings.Contains(lower, "writing artifact"):
+				if phase != "installing" {
+					phase = "installing"
+					sendProgress(phase, 80)
+					lastPercent = 80
+				}
+			case strings.Contains(lower, "download complete") || strings.Contains(lower, "download finished"):
+				if phase == "downloading" {
+					sendProgress("downloading", 80)
+					lastPercent = 80
+				}
+			}
+
+			// Extract percentage from the line.
+			if m := menderProgressRe.FindStringSubmatch(line); len(m) > 1 {
+				if pct, err := strconv.Atoi(m[1]); err == nil && pct >= 0 && pct <= 100 {
+					var overall int32
+					if phase == "downloading" {
+						// Map download 0-100% → overall 0-80%
+						overall = int32(pct) * 80 / 100
+					} else {
+						// Map install 0-100% → overall 80-95%
+						overall = 80 + int32(pct)*15/100
+					}
+					if overall > lastPercent {
+						lastPercent = overall
+						sendProgress(phase, overall)
+					}
+				}
+			}
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); scanLines(stderr) }()
+	go func() { defer wg.Done(); scanLines(stdout) }()
+
+	// Wait for output scanners to finish (pipes close when process exits).
+	wg.Wait()
+
+	if err := cmd.Wait(); err != nil {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: fmt.Sprintf("mender install failed: %v", err),
+				},
+			},
+		})
+	}
+
+	sendProgress("finalizing", 100)
+
 	return stream.Send(&agentpb.UpdateOSResponse{
 		ResponseType: &agentpb.UpdateOSResponse_Completed_{
 			Completed: &agentpb.UpdateOSResponse_Completed{
