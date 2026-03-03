@@ -30,6 +30,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceUnsetDefaultCmd(),
 		newDeviceSetupCmd(),
 		newDeviceUpdateCmd(),
+		newWifiCmd(),
 	)
 
 	return cmd
@@ -181,7 +182,7 @@ func newDeviceSetupCmd() *cobra.Command {
 					}
 					fmt.Print(tui.RenderTable(headers, rows))
 					fmt.Println("\nTo connect to a WiFi network, run:")
-					fmt.Println("  wendy wifi connect --ssid <SSID> --password <PASSWORD>")
+					fmt.Println("  wendy device wifi connect --ssid <SSID> --password <PASSWORD>")
 				} else {
 					fmt.Println("No WiFi networks found.")
 				}

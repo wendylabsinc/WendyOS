@@ -18,7 +18,6 @@ func TestRootCommand_HasAllSubcommands(t *testing.T) {
 		"device",
 		"os",
 		"apps",
-		"wifi",
 		"audio",
 		"hardware",
 		"bluetooth",

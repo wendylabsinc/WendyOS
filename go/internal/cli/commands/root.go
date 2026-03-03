@@ -59,8 +59,6 @@ func NewRootCmd() *cobra.Command {
 	osCmd.GroupID = "devices"
 	appsCmd := newAppsCmd()
 	appsCmd.GroupID = "devices"
-	wifiCmd := newWifiCmd()
-	wifiCmd.GroupID = "devices"
 	audioCmd := newAudioCmd()
 	audioCmd.GroupID = "devices"
 	bluetoothCmd := newBluetoothCmd()
@@ -88,7 +86,6 @@ func NewRootCmd() *cobra.Command {
 		discoverCmd,
 		osCmd,
 		appsCmd,
-		wifiCmd,
 		audioCmd,
 		bluetoothCmd,
 		hardwareCmd,
