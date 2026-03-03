@@ -117,6 +117,11 @@ jobs:
             goarch: amd64
             product: wendy.exe
             cmd: wendy
+          - artifact-name: wendy-cli-windows-arm64
+            goos: windows
+            goarch: arm64
+            product: wendy.exe
+            cmd: wendy
     defaults:
       run:
         working-directory: go
@@ -265,7 +270,7 @@ jobs:
 
           # Build wendy-cli .deb
           fpm -s dir -t deb \
-            -n wendy \
+            -n wendy-cli \
             -v "$VERSION" \
             --architecture ${{ matrix.arch }} \
             --description "Wendy CLI - Remote device debugging and deployment" \
@@ -316,7 +321,7 @@ jobs:
 
           # Build wendy-cli .rpm
           fpm -s dir -t rpm \
-            -n wendy \
+            -n wendy-cli \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
             --description "Wendy CLI - Remote device debugging and deployment" \
@@ -360,9 +365,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          WENDY_DEB=$(ls -1 wendy_*_${{ matrix.arch }}.deb | head -1)
+          WENDY_DEB=$(ls -1 wendy-cli_*_${{ matrix.arch }}.deb | head -1)
           WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
-          WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
+          WENDY_RPM=$(ls -1 wendy-cli-[0-9]*.rpm | head -1)
           WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
 
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
