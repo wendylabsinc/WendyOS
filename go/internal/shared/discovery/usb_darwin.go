@@ -28,7 +28,7 @@ type spUSBItem struct {
 	ProductID    string      `json:"product_id"`
 	SerialNum    string      `json:"serial_num"`
 	Manufacturer string      `json:"manufacturer"`
-	BusPower     string      `json:"bus_power"`     // max available mA
+	BusPower     string      `json:"bus_power"`      // max available mA
 	BusPowerUsed string      `json:"bus_power_used"` // actual mA
 	Speed        string      `json:"device_speed"`   // e.g. "Up to 480 Mb/sec"
 	Items        []spUSBItem `json:"_items"`         // nested hubs
