@@ -609,17 +609,13 @@ jobs:
           ref: main
           path: tap
 
-      - name: Bump formula
+      - name: Calculate binary checksums
+        id: checksums
         run: |
           set -euo pipefail
-          cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
           TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
-          BRANCH="ci/bump-wendy-${VERSION}"
 
-          git checkout -b "$BRANCH"
-
-          # Calculate URLs and SHA256s for pre-built binaries
           MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-darwin-arm64-${VERSION}.tar.gz"
           MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
 
@@ -634,26 +630,76 @@ jobs:
           echo "  Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
           echo "  Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
 
-          # Update formula URLs and SHA256s (Linux sed syntax)
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-\(macos-arm64\|darwin-arm64\)[^\"]*|${MACOS_URL}|" Formula/wendy.rb
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-\(linux-static-musl-aarch64\|linux-arm64\)[^\"]*|${LINUX_ARM_URL}|" Formula/wendy.rb
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-\(linux-static-musl-x86_64\|linux-amd64\)[^\"]*|${LINUX_X86_URL}|" Formula/wendy.rb
+          echo "macos_url=${MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "macos_sha=${MACOS_SHA}" >> $GITHUB_OUTPUT
+          echo "linux_arm_url=${LINUX_ARM_URL}" >> $GITHUB_OUTPUT
+          echo "linux_arm_sha=${LINUX_ARM_SHA}" >> $GITHUB_OUTPUT
+          echo "linux_x86_url=${LINUX_X86_URL}" >> $GITHUB_OUTPUT
+          echo "linux_x86_sha=${LINUX_X86_SHA}" >> $GITHUB_OUTPUT
 
-          # Update SHA256s based on URL context
-          sed -i "/wendy-cli-\(macos-arm64\|darwin-arm64\).*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${MACOS_SHA}\"|" Formula/wendy.rb
-          sed -i "/wendy-cli-\(linux-static-musl-aarch64\|linux-arm64\).*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_ARM_SHA}\"|" Formula/wendy.rb
-          sed -i "/wendy-cli-\(linux-static-musl-x86_64\|linux-amd64\).*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_X86_SHA}\"|" Formula/wendy.rb
+      # Nightly: update wendy-nightly.rb and push directly to main
+      - name: Bump nightly formula
+        if: needs.determine-version.outputs.is_release != 'true'
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          FORMULA="Formula/wendy-nightly.rb"
 
-          echo "Updated formula:"
-          grep -A 1 "url\|sha256" Formula/wendy.rb | head -20
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
+
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
+
+          # Update bottle root_url version
+          sed -i "s|wendy-nightly-[^\"]*|wendy-nightly-${VERSION}|" "$FORMULA"
+
+          echo "Updated nightly formula:"
+          grep -A 1 "url\|sha256" "$FORMULA" | head -20
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/wendy.rb
+          git add "$FORMULA"
+          git commit -m "wendy-nightly: update to ${VERSION}"
+          git push origin main
+
+      # Stable: update wendy.rb via PR
+      - name: Bump stable formula
+        if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BRANCH="ci/bump-wendy-${VERSION}"
+          FORMULA="Formula/wendy.rb"
+
+          git checkout -b "$BRANCH"
+
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
+
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
+
+          # Update bottle root_url version
+          sed -i "s|wendy-[0-9][^\"]*|wendy-${VERSION}|" "$FORMULA"
+
+          echo "Updated stable formula:"
+          grep -A 1 "url\|sha256" "$FORMULA" | head -20
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FORMULA"
           git commit -m "wendy: bump to ${VERSION}"
           git push -u origin "$BRANCH"
 
       - name: Create PR
+        if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -752,3 +798,25 @@ jobs:
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to ${{ needs.determine-version.outputs.version }}"
+
+  publish-winget:
+    name: Publish to Winget
+    runs-on: windows-latest
+    needs: [determine-version, release]
+    if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
+    steps:
+      - name: Install wingetcreate
+        run: |
+          iwr https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Update Winget package
+        run: |
+          $version = "${{ needs.determine-version.outputs.version }}"
+          $tag = "${{ needs.determine-version.outputs.tag_name }}"
+          $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
+
+          .\wingetcreate.exe update WendyLabs.Wendy `
+            --version $version `
+            --urls "$base/wendy-cli-windows-amd64-$version.zip" "$base/wendy-cli-windows-arm64-$version.zip" `
+            --submit `
+            --token "${{ secrets.WINGET_GITHUB_TOKEN }}"

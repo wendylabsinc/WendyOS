@@ -44,7 +44,7 @@ fi
 echo "Latest release: $RELEASE_TAG"
 
 # Construct download URL for aarch64 (WendyOS devices are ARM)
-ASSET_NAME="wendy-agent-linux-static-musl-aarch64-${RELEASE_TAG}.tar.gz"
+ASSET_NAME="wendy-agent-linux-arm64-${RELEASE_TAG}.tar.gz"
 DOWNLOAD_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
 
 echo "Downloading $ASSET_NAME..."
@@ -54,7 +54,7 @@ echo "Extracting binary..."
 tar -xzf "$TEMP_DIR/$ASSET_NAME" -C "$TEMP_DIR"
 
 # Find the binary in the extracted directory
-BINARY_PATH="$TEMP_DIR/wendy-agent-linux-static-musl-aarch64/wendy-agent"
+BINARY_PATH="$TEMP_DIR/wendy-agent-linux-arm64/wendy-agent"
 if [ ! -f "$BINARY_PATH" ]; then
     echo "Error: Could not find wendy-agent binary in extracted archive"
     exit 1
