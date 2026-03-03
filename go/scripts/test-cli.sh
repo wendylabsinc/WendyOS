@@ -224,22 +224,22 @@ echo -e "${BOLD}Phase 5: App lifecycle${RESET}"
 if [[ "$SKIP_DEPLOY" == true ]]; then
     skip_test "wendy build"
     skip_test "wendy run --detach"
-    skip_test "wendy apps list (app present)"
-    skip_test "wendy apps stop"
-    skip_test "wendy apps start"
-    skip_test "wendy apps remove"
-    skip_test "wendy apps list (app gone)"
+    skip_test "wendy device apps list (app present)"
+    skip_test "wendy device apps stop"
+    skip_test "wendy device apps start"
+    skip_test "wendy device apps remove"
+    skip_test "wendy device apps list (app gone)"
 else
     HELLO_DIR="$PROJECT_DIR/tmp/hello-python"
     if [[ ! -d "$HELLO_DIR" ]]; then
         echo -e "${RED}ERROR: Example project not found at $HELLO_DIR${RESET}"
         skip_test "wendy build"
         skip_test "wendy run --detach"
-        skip_test "wendy apps list (app present)"
-        skip_test "wendy apps stop"
-        skip_test "wendy apps start"
-        skip_test "wendy apps remove"
-        skip_test "wendy apps list (app gone)"
+        skip_test "wendy device apps list (app present)"
+        skip_test "wendy device apps stop"
+        skip_test "wendy device apps start"
+        skip_test "wendy device apps remove"
+        skip_test "wendy device apps list (app gone)"
     else
         APP_ID="sh.wendy.examples.hello-python"
 
@@ -249,21 +249,21 @@ else
         run_test "wendy run --detach" \
             bash -c "cd '$HELLO_DIR' && '$WENDY' run --device '$HOSTNAME' --detach"
 
-        run_test_expect_output "wendy apps list (app present)" "$APP_ID" \
-            "$WENDY" apps list --device "$HOSTNAME"
+        run_test_expect_output "wendy device apps list (app present)" "$APP_ID" \
+            "$WENDY" device device apps list --device "$HOSTNAME"
 
-        run_test "wendy apps stop" \
-            "$WENDY" apps stop "$APP_ID" --device "$HOSTNAME"
+        run_test "wendy device apps stop" \
+            "$WENDY" device apps stop "$APP_ID" --device "$HOSTNAME"
 
-        run_test "wendy apps start" \
-            "$WENDY" apps start "$APP_ID" --device "$HOSTNAME"
+        run_test "wendy device apps start" \
+            "$WENDY" device apps start "$APP_ID" --device "$HOSTNAME"
 
-        run_test "wendy apps remove" \
-            "$WENDY" apps remove "$APP_ID" --device "$HOSTNAME" --force
+        run_test "wendy device apps remove" \
+            "$WENDY" device apps remove "$APP_ID" --device "$HOSTNAME" --force
 
         # Verify the app is gone
-        printf "  %-50s " "wendy apps list (app gone)"
-        LIST_OUTPUT=$("$WENDY" apps list --device "$HOSTNAME" 2>&1)
+        printf "  %-50s " "wendy device apps list (app gone)"
+        LIST_OUTPUT=$("$WENDY" device apps list --device "$HOSTNAME" 2>&1)
         if echo "$LIST_OUTPUT" | grep -q "$APP_ID"; then
             echo -e "${RED}FAIL${RESET} (app still present)"
             ((FAIL_COUNT++))
