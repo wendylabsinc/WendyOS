@@ -12,7 +12,7 @@ let package = Package(
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.10.0"),
         .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0-beta.1"),
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.0.0"),
-        .package(url: "https://github.com/apple/swift-container-plugin", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-container-plugin", from: "1.3.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.

@@ -1,0 +1,7 @@
+# Environment overrides for wendy-agent.
+# This sets the cgroup parent used for container workloads.
+WENDY_SYSTEMD_SERVICE_NAME=wendy-agent
+
+# Network manager selection options:
+# auto, connman, networkmanager, force-connman, force-networkmanager
+# WENDY_NETWORK_MANAGER=auto

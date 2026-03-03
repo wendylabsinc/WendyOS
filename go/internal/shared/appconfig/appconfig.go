@@ -1,0 +1,195 @@
+// Package appconfig provides parsing and validation of wendy.json application configuration files.
+package appconfig
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"slices"
+	"sort"
+	"strings"
+)
+
+// EntitlementType enumerates the supported entitlement types.
+const (
+	EntitlementNetwork   = "network"
+	EntitlementBluetooth = "bluetooth"
+	EntitlementVideo     = "video"
+	EntitlementGPU       = "gpu"
+	EntitlementPersist   = "persist"
+	EntitlementAudio     = "audio"
+	EntitlementCamera    = "camera"
+	EntitlementUSB       = "usb"
+	EntitlementI2C       = "i2c"
+	EntitlementGPIO      = "gpio"
+)
+
+// ValidEntitlementTypes is the set of all recognized entitlement type strings.
+var ValidEntitlementTypes = []string{
+	EntitlementNetwork,
+	EntitlementBluetooth,
+	EntitlementVideo,
+	EntitlementGPU,
+	EntitlementPersist,
+	EntitlementAudio,
+	EntitlementCamera,
+	EntitlementUSB,
+	EntitlementI2C,
+	EntitlementGPIO,
+}
+
+// allowedKeys maps each entitlement type to the set of JSON keys that are valid for it.
+var allowedKeys = map[string][]string{
+	EntitlementNetwork:   {"type", "mode"},
+	EntitlementBluetooth: {"type", "mode"},
+	EntitlementVideo:     {"type", "mode", "allowlist"},
+	EntitlementGPU:       {"type"},
+	EntitlementPersist:   {"type", "name", "path"},
+	EntitlementAudio:     {"type"},
+	EntitlementCamera:    {"type"},
+	EntitlementUSB:       {"type"},
+	EntitlementI2C:       {"type", "device"},
+	EntitlementGPIO:      {"type", "pins"},
+}
+
+// AppConfig represents the wendy.json application configuration.
+type AppConfig struct {
+	AppID        string        `json:"appId"`
+	Version      string        `json:"version,omitempty"`
+	Language     string        `json:"language,omitempty"`
+	Entitlements []Entitlement `json:"entitlements,omitempty"`
+	Python       *PythonConfig `json:"python,omitempty"`
+}
+
+// PythonConfig holds Python-specific configuration.
+type PythonConfig struct {
+	SourceRoot string `json:"sourceRoot,omitempty"`
+}
+
+// Entitlement represents a single entitlement entry in wendy.json.
+type Entitlement struct {
+	Type   string `json:"type"`
+	Mode   string `json:"mode,omitempty"`   // Network, Bluetooth, Video
+	Name   string `json:"name,omitempty"`   // Persist
+	Path   string `json:"path,omitempty"`   // Persist
+	Device string `json:"device,omitempty"` // I2C
+	Pins   []int  `json:"pins,omitempty"`   // GPIO
+}
+
+// LoadFromFile reads and parses a wendy.json file at the given path.
+func LoadFromFile(path string) (*AppConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading wendy.json: %w", err)
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing wendy.json: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+// Validate checks the AppConfig for required fields and valid entitlement types.
+func (c *AppConfig) Validate() error {
+	if c.AppID == "" {
+		return fmt.Errorf("appId is required")
+	}
+
+	for i, e := range c.Entitlements {
+		if e.Type == "" {
+			return fmt.Errorf("entitlement[%d]: type is required", i)
+		}
+		if !slices.Contains(ValidEntitlementTypes, e.Type) {
+			return fmt.Errorf("entitlement[%d]: unknown type %q", i, e.Type)
+		}
+
+		switch e.Type {
+		case EntitlementNetwork:
+			if e.Mode != "" && e.Mode != "host" && e.Mode != "none" {
+				return fmt.Errorf("entitlement[%d]: network mode must be \"host\" or \"none\", got %q", i, e.Mode)
+			}
+		case EntitlementPersist:
+			if e.Name == "" {
+				return fmt.Errorf("entitlement[%d]: persist entitlement requires a name", i)
+			}
+			if e.Path == "" {
+				return fmt.Errorf("entitlement[%d]: persist entitlement requires a path", i)
+			}
+		case EntitlementI2C:
+			if e.Device == "" {
+				return fmt.Errorf("entitlement[%d]: i2c entitlement requires a device", i)
+			}
+		case EntitlementGPIO:
+			if len(e.Pins) == 0 {
+				return fmt.Errorf("entitlement[%d]: gpio entitlement requires at least one pin", i)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ValidateJSON checks raw JSON data for unknown keys in entitlements and returns warnings.
+// Call this after decoding to detect potential typos or invalid configuration.
+func ValidateJSON(data []byte) []string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+
+	entRaw, ok := raw["entitlements"]
+	if !ok {
+		return nil
+	}
+
+	var entitlements []map[string]json.RawMessage
+	if err := json.Unmarshal(entRaw, &entitlements); err != nil {
+		return nil
+	}
+
+	var warnings []string
+	for i, ent := range entitlements {
+		typeRaw, ok := ent["type"]
+		if !ok {
+			continue
+		}
+		var entType string
+		if err := json.Unmarshal(typeRaw, &entType); err != nil {
+			continue
+		}
+
+		allowed, ok := allowedKeys[entType]
+		if !ok {
+			continue
+		}
+
+		allowedSet := make(map[string]bool, len(allowed))
+		for _, k := range allowed {
+			allowedSet[k] = true
+		}
+
+		var unknown []string
+		for k := range ent {
+			if !allowedSet[k] {
+				unknown = append(unknown, k)
+			}
+		}
+
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			sortedAllowed := make([]string, len(allowed))
+			copy(sortedAllowed, allowed)
+			sort.Strings(sortedAllowed)
+			warnings = append(warnings, fmt.Sprintf(
+				"Unknown key(s) in entitlement[%d] (%s): %s. Allowed keys are: %s",
+				i, entType,
+				strings.Join(unknown, ", "),
+				strings.Join(sortedAllowed, ", "),
+			))
+		}
+	}
+
+	return warnings
+}

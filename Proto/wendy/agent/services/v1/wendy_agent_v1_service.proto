@@ -27,6 +27,15 @@ service WendyAgentService {
     
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
+
+    rpc ScanBluetoothPeripherals(stream ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
+
+    rpc ConnectBluetoothPeripheral(ConnectBluetoothPeripheralRequest) returns (ConnectBluetoothPeripheralResponse);
+    rpc DisconnectBluetoothPeripheral(DisconnectBluetoothPeripheralRequest) returns (DisconnectBluetoothPeripheralResponse);
+    rpc ForgetBluetoothPeripheral(ForgetBluetoothPeripheralRequest) returns (ForgetBluetoothPeripheralResponse);
+
+    // Update the operating system using a Mender artifact
+    rpc UpdateOS(UpdateOSRequest) returns (stream UpdateOSResponse);
 }
 
 message RunContainerRequest {
@@ -141,6 +150,10 @@ message GetAgentVersionResponse {
     string version = 1;
     // OS version read from /etc/wendy/version.txt (only present on WendyOS)
     optional string os_version = 2;
+    string os = 3;
+    string cpu_architecture = 4;
+    optional string public_key = 5;
+    repeated string featureset = 6;
 }
 
 // Request message for listing WiFi networks
@@ -236,5 +249,70 @@ message ListHardwareCapabilitiesResponse {
         
         // Additional properties as key-value pairs
         map<string, string> properties = 4;
+    }
+}
+
+message ScanBluetoothPeripheralsRequest {}
+
+message DiscoveredBluetoothPeripheral {
+    string name = 1;
+    string address = 2;
+    int32 rssi = 3;
+    string deviceType = 4;
+    bool paired = 5;
+    bool connected = 6;
+    bool trusted = 7;
+}
+
+message ScanBluetoothPeripheralsResponse {
+    repeated DiscoveredBluetoothPeripheral discovered_devices = 1;
+}
+
+message ConnectBluetoothPeripheralRequest {
+    string address = 1;
+    bool pair = 2;
+    bool trust = 3;
+}
+message ConnectBluetoothPeripheralResponse {}
+
+message DisconnectBluetoothPeripheralRequest {
+    string address = 1;
+}
+message DisconnectBluetoothPeripheralResponse {}
+
+message ForgetBluetoothPeripheralRequest {
+    string address = 1;
+}
+message ForgetBluetoothPeripheralResponse {}
+
+// Request message for updating the OS
+message UpdateOSRequest {
+    // URL to download the Mender artifact from
+    string artifact_url = 1;
+}
+
+// Response message for OS update progress
+message UpdateOSResponse {
+    oneof response_type {
+        Progress progress = 1;
+        Completed completed = 2;
+        Failed failed = 3;
+    }
+
+    message Progress {
+        // Current phase of the update (downloading, installing, etc.)
+        string phase = 1;
+        // Progress percentage (0-100)
+        int32 percent = 2;
+    }
+
+    message Completed {
+        // Whether a reboot is required to complete the update
+        bool reboot_required = 1;
+    }
+
+    message Failed {
+        // Error message describing the failure
+        string error_message = 1;
     }
 }

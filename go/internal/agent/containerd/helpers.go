@@ -1,0 +1,99 @@
+// Package containerd implements the ContainerdClient interface using the official
+// containerd v2 SDK to manage containers, images, and content on the agent device.
+package containerd
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
+)
+
+// labelKeyAppVersion is the containerd label key that marks Wendy-managed containers.
+const labelKeyAppVersion = "sh.wendy/app.version"
+
+// labelKeyRestartPolicy stores the restart policy (e.g. "on-failure:5").
+const labelKeyRestartPolicy = "sh.wendy/restart.policy"
+
+// labelKeyGCRoot prevents garbage collection of content blobs.
+const labelKeyGCRoot = "containerd.io/gc.root"
+
+// labelKeyWendyLayer marks a content blob as a Wendy-pushed layer.
+const labelKeyWendyLayer = "sh.wendy.layer"
+
+// computeChainID computes the chain ID for a layer given its parent chain ID
+// and the layer's diff ID. The chain ID is defined recursively:
+//
+//	chainID(L0) = diffID(L0)
+//	chainID(L0|...|Ln) = SHA256(chainID(L0|...|Ln-1) + " " + diffID(Ln))
+func computeChainID(parent, diffID string) string {
+	if parent == "" {
+		return diffID
+	}
+	h := sha256.New()
+	h.Write([]byte(parent + " " + diffID))
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+// parseRestartPolicyLabel parses a restart policy label value such as
+// "on-failure:5" or "unless-stopped" into the policy string and max retries.
+func parseRestartPolicyLabel(label string) (string, int) {
+	parts := strings.SplitN(label, ":", 2)
+	policy := parts[0]
+	maxRetries := 0
+	if len(parts) == 2 {
+		if n, err := strconv.Atoi(parts[1]); err == nil {
+			maxRetries = n
+		}
+	}
+	return policy, maxRetries
+}
+
+// gcTimestamp returns an RFC3339 timestamp string suitable for use as a GC root
+// label value, anchoring content so it is not garbage collected.
+func gcTimestamp() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// wendyLabels builds the standard set of containerd labels for a Wendy-managed
+// container. These labels are used to identify, filter, and manage containers.
+func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy) map[string]string {
+	labels := map[string]string{
+		labelKeyAppVersion: version,
+	}
+
+	if restartPolicy != nil {
+		policyStr := restartPolicyToLabel(restartPolicy)
+		if policyStr != "" {
+			labels[labelKeyRestartPolicy] = policyStr
+		}
+	}
+
+	return labels
+}
+
+// restartPolicyToLabel converts a protobuf RestartPolicy to a label string.
+func restartPolicyToLabel(rp *agentpb.RestartPolicy) string {
+	if rp == nil {
+		return ""
+	}
+	switch rp.GetMode() {
+	case agentpb.RestartPolicyMode_NO:
+		return "no"
+	case agentpb.RestartPolicyMode_UNLESS_STOPPED:
+		return "unless-stopped"
+	case agentpb.RestartPolicyMode_ON_FAILURE:
+		maxRetries := rp.GetOnFailureMaxRetries()
+		if maxRetries > 0 {
+			return fmt.Sprintf("on-failure:%d", maxRetries)
+		}
+		return "on-failure"
+	case agentpb.RestartPolicyMode_DEFAULT:
+		return "unless-stopped"
+	default:
+		return ""
+	}
+}

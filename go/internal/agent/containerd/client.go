@@ -1,0 +1,698 @@
+package containerd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
+	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"go.uber.org/zap"
+
+	localoci "github.com/wendylabsinc/wendy/internal/agent/oci"
+	"github.com/wendylabsinc/wendy/internal/agent/services"
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
+)
+
+// Compile-time check that *Client satisfies services.ContainerdClient.
+var _ services.ContainerdClient = (*Client)(nil)
+
+// DefaultAddress is the default containerd socket path on Linux.
+const DefaultAddress = "/run/containerd/containerd.sock"
+
+// Client wraps the containerd SDK client and implements services.ContainerdClient.
+type Client struct {
+	client    *containerd.Client
+	logger    *zap.Logger
+	namespace string
+	mu        sync.Mutex
+}
+
+// NewClient creates a new containerd SDK client connected to the given Unix
+// socket address. If address is empty, DefaultAddress is used.
+func NewClient(logger *zap.Logger, address string) (*Client, error) {
+	if address == "" {
+		address = DefaultAddress
+	}
+
+	c, err := containerd.New(address)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to containerd at %s: %w", address, err)
+	}
+
+	return &Client{
+		client:    c,
+		logger:    logger,
+		namespace: "default",
+	}, nil
+}
+
+// Close releases the underlying containerd client connection.
+func (c *Client) Close() error {
+	return c.client.Close()
+}
+
+// withNamespace returns a context annotated with the client's containerd namespace.
+func (c *Client) withNamespace(ctx context.Context) context.Context {
+	return namespaces.WithNamespace(ctx, c.namespace)
+}
+
+// ListLayers walks the content store and returns metadata for all layer blobs.
+func (c *Client) ListLayers(ctx context.Context) ([]*agentpb.LayerHeader, error) {
+	ctx = c.withNamespace(ctx)
+	cs := c.client.ContentStore()
+
+	var layers []*agentpb.LayerHeader
+	err := cs.Walk(ctx, func(info content.Info) error {
+		// Include blobs that are tagged as wendy layers or have a layer media type.
+		if info.Labels[labelKeyWendyLayer] == "true" || isLayerDigest(info) {
+			layers = append(layers, &agentpb.LayerHeader{
+				Digest: info.Digest.String(),
+				Size:   info.Size,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking content store: %w", err)
+	}
+
+	return layers, nil
+}
+
+// isLayerDigest checks if a content info entry looks like a layer by inspecting
+// its labels for known layer media type indicators.
+func isLayerDigest(info content.Info) bool {
+	for k, v := range info.Labels {
+		if strings.HasPrefix(k, "containerd.io/distribution.source") {
+			_ = v
+			continue
+		}
+		// Labels set by image handlers for layer children include media type info.
+		if strings.Contains(v, "diff.tar") || strings.Contains(v, "layer") {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteLayer writes a layer blob to the containerd content store. The digest
+// parameter should be the expected content digest (e.g. "sha256:abc123...").
+// Data is read from the provided io.Reader, which allows streaming without
+// buffering the entire layer in memory. If size is 0, the descriptor size is
+// left unset and determined by the content store from the reader.
+func (c *Client) WriteLayer(ctx context.Context, dgst string, reader io.Reader, size int64) error {
+	ctx = c.withNamespace(ctx)
+	cs := c.client.ContentStore()
+
+	expected, err := digest.Parse(dgst)
+	if err != nil {
+		return fmt.Errorf("parsing digest %q: %w", dgst, err)
+	}
+
+	labels := map[string]string{
+		labelKeyGCRoot:     gcTimestamp(),
+		labelKeyWendyLayer: "true",
+	}
+
+	err = content.WriteBlob(ctx, cs, dgst, reader, ocispec.Descriptor{
+		Digest: expected,
+		Size:   size,
+	}, content.WithLabels(labels))
+	if err != nil {
+		// If the blob already exists, that is fine.
+		if errdefs.IsAlreadyExists(err) {
+			c.logger.Debug("Layer already exists in content store",
+				zap.String("digest", dgst),
+			)
+			return nil
+		}
+		return fmt.Errorf("writing layer %s: %w", dgst, err)
+	}
+
+	c.logger.Info("Wrote layer to content store",
+		zap.String("digest", dgst),
+		zap.Int64("size", size),
+	)
+	return nil
+}
+
+// AssembleImage creates a containerd image from layers already present in the
+// content store. It builds an OCI manifest and config, writes them to the content
+// store, and registers the image. If the image already exists it is updated.
+func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader) error {
+	ctx = c.withNamespace(ctx)
+	cs := c.client.ContentStore()
+	is := c.client.ImageService()
+
+	// Build OCI layer descriptors and diff IDs.
+	var layerDescs []ocispec.Descriptor
+	var diffIDs []digest.Digest
+	for _, l := range layers {
+		mediaType := ocispec.MediaTypeImageLayerGzip
+		if !l.GetGzip() {
+			mediaType = ocispec.MediaTypeImageLayer
+		}
+
+		dgst, err := digest.Parse(l.GetDigest())
+		if err != nil {
+			return fmt.Errorf("parsing layer digest %q: %w", l.GetDigest(), err)
+		}
+
+		layerDescs = append(layerDescs, ocispec.Descriptor{
+			MediaType: mediaType,
+			Digest:    dgst,
+			Size:      l.GetSize(),
+		})
+
+		diffID := l.GetDiffId()
+		if diffID == "" {
+			diffID = l.GetDigest()
+		}
+		did, err := digest.Parse(diffID)
+		if err != nil {
+			return fmt.Errorf("parsing diff ID %q: %w", diffID, err)
+		}
+		diffIDs = append(diffIDs, did)
+	}
+
+	// Build OCI image config.
+	imgConfig := ocispec.Image{
+		Platform: ocispec.Platform{
+			Architecture: "arm64",
+			OS:           "linux",
+		},
+		RootFS: ocispec.RootFS{
+			Type:    "layers",
+			DiffIDs: diffIDs,
+		},
+	}
+	configData, err := json.Marshal(imgConfig)
+	if err != nil {
+		return fmt.Errorf("marshaling image config: %w", err)
+	}
+	configDigest := digest.FromBytes(configData)
+
+	// Write config to content store.
+	configDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageConfig,
+		Digest:    configDigest,
+		Size:      int64(len(configData)),
+	}
+	if err := content.WriteBlob(ctx, cs, configDigest.String(), strings.NewReader(string(configData)), configDesc); err != nil {
+		if !errdefs.IsAlreadyExists(err) {
+			return fmt.Errorf("writing config blob: %w", err)
+		}
+	}
+
+	// Build OCI manifest.
+	manifest := ocispec.Manifest{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    configDesc,
+		Layers:    layerDescs,
+	}
+	manifest.SchemaVersion = 2
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshaling manifest: %w", err)
+	}
+	manifestDigest := digest.FromBytes(manifestData)
+
+	// Write manifest to content store.
+	manifestDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    manifestDigest,
+		Size:      int64(len(manifestData)),
+	}
+	if err := content.WriteBlob(ctx, cs, manifestDigest.String(), strings.NewReader(string(manifestData)), manifestDesc); err != nil {
+		if !errdefs.IsAlreadyExists(err) {
+			return fmt.Errorf("writing manifest blob: %w", err)
+		}
+	}
+
+	// Create or update the image in the image store.
+	_, err = is.Create(ctx, images.Image{
+		Name:   imageName,
+		Target: manifestDesc,
+	})
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			_, err = is.Update(ctx, images.Image{
+				Name:   imageName,
+				Target: manifestDesc,
+			})
+			if err != nil {
+				return fmt.Errorf("updating image %q: %w", imageName, err)
+			}
+		} else {
+			return fmt.Errorf("creating image %q: %w", imageName, err)
+		}
+	}
+
+	c.logger.Info("Assembled image",
+		zap.String("name", imageName),
+		zap.Int("layers", len(layers)),
+		zap.String("manifest_digest", manifestDigest.String()),
+	)
+	return nil
+}
+
+// CreateContainer creates (or replaces) a container in containerd for the given
+// app. It builds an OCI runtime specification from the app config and request
+// parameters, unpacks the image, and registers the container.
+func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ctx = c.withNamespace(ctx)
+	appName := req.GetAppName()
+	imageName := req.GetImageName()
+
+	c.logger.Info("Creating container",
+		zap.String("app_name", appName),
+		zap.String("image", imageName),
+	)
+
+	// Determine version from the app config or default.
+	version := appCfg.Version
+	if version == "" {
+		version = "latest"
+	}
+
+	// Build the container command.
+	var args []string
+	cmd := req.GetCmd()
+	if cmd != "" {
+		args = strings.Fields(cmd)
+	}
+	if len(req.GetUserArgs()) > 0 {
+		args = append(args, req.GetUserArgs()...)
+	}
+	if len(args) == 0 {
+		args = []string{"/bin/sh"}
+	}
+
+	// Build the working directory.
+	workingDir := req.GetWorkingDir()
+	if workingDir == "" {
+		workingDir = "/"
+	}
+
+	// Build environment variables.
+	env := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TERM=xterm",
+		fmt.Sprintf("WENDY_HOSTNAME=%s.local", appName),
+	}
+
+	// Build OCI spec using local oci package, then apply entitlements.
+	spec := localoci.DefaultSpec("rootfs", args)
+	spec.Process.Cwd = workingDir
+	spec.Process.Env = env
+	if spec.Linux == nil {
+		spec.Linux = &localoci.Linux{}
+	}
+	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:wendy-agent:%s", appName)
+
+	if err := localoci.ApplyEntitlements(spec, appCfg); err != nil {
+		return fmt.Errorf("applying entitlements: %w", err)
+	}
+
+	// Delete any pre-existing container with the same name.
+	if existing, err := c.client.LoadContainer(ctx, appName); err == nil {
+		c.logger.Info("Removing existing container", zap.String("app_name", appName))
+		// Try to stop/kill the task first.
+		if task, taskErr := existing.Task(ctx, nil); taskErr == nil {
+			_ = task.Kill(ctx, syscall.SIGKILL)
+			_, _ = task.Delete(ctx, containerd.WithProcessKill)
+		}
+		_ = existing.Delete(ctx, containerd.WithSnapshotCleanup)
+	}
+
+	// Get the image handle from the local store, or pull from registry.
+	image, err := c.client.GetImage(ctx, imageName)
+	if err != nil {
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
+		)
+		image, err = c.client.Pull(ctx, imageName,
+			containerd.WithPullUnpack,
+		)
+		if err != nil {
+			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+		}
+	}
+
+	// Unpack the image into the snapshotter if not already done.
+	unpacked, err := image.IsUnpacked(ctx, "")
+	if err != nil {
+		c.logger.Warn("Failed to check if image is unpacked", zap.Error(err))
+	}
+	if !unpacked {
+		c.logger.Info("Unpacking image", zap.String("image", imageName))
+		if err := image.Unpack(ctx, ""); err != nil {
+			return fmt.Errorf("unpacking image %q: %w", imageName, err)
+		}
+	}
+
+	// Build labels for the container.
+	labels := wendyLabels(appName, version, req.GetRestartPolicy())
+
+	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return fmt.Errorf("marshaling OCI spec: %w", err)
+	}
+
+	// Create the container with a new snapshot from the image.
+	snapshotKey := fmt.Sprintf("wendy-%s", appName)
+	_, err = c.client.NewContainer(ctx, appName,
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot(snapshotKey, image),
+		containerd.WithContainerLabels(labels),
+		containerd.WithNewSpec(
+			oci.WithSpecFromBytes(specJSON),
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("creating container %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container created",
+		zap.String("app_name", appName),
+		zap.String("image", imageName),
+		zap.String("version", version),
+	)
+
+	return nil
+}
+
+// StartContainer starts the task for a named container and returns a channel
+// that streams stdout/stderr output. When the container exits, a final
+// ContainerOutput with Done=true is sent and the channel is closed.
+func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan services.ContainerOutput, error) {
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	// Create pipes for stdout/stderr capture.
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	// Create a new task with pipe-based stdio for programmatic capture.
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, stdoutW, stderrW)))
+	if err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("creating task for %q: %w", appName, err)
+	}
+
+	// Set up the wait channel before starting.
+	exitStatusCh, err := task.Wait(ctx)
+	if err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+	}
+
+	// Start the task.
+	if err := task.Start(ctx); err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container started", zap.String("app_name", appName))
+
+	// Stream output from the pipes.
+	outputCh := make(chan services.ContainerOutput, 64)
+	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
+
+	return outputCh, nil
+}
+
+// streamOutput reads stdout/stderr from pipes and sends it to the output
+// channel. It closes the channel when the task exits.
+func (c *Client) streamOutput(
+	ctx context.Context,
+	task containerd.Task,
+	exitStatusCh <-chan containerd.ExitStatus,
+	outputCh chan<- services.ContainerOutput,
+	appName string,
+	stdoutR, stderrR *io.PipeReader,
+	stdoutW, stderrW *io.PipeWriter,
+) {
+	defer close(outputCh)
+
+	// Read stdout and stderr concurrently.
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		streamReader(stdoutR, outputCh, func(data []byte) services.ContainerOutput {
+			return services.ContainerOutput{Stdout: data}
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		streamReader(stderrR, outputCh, func(data []byte) services.ContainerOutput {
+			return services.ContainerOutput{Stderr: data}
+		})
+	}()
+
+	// Wait for the task to exit.
+	exitStatus := <-exitStatusCh
+	code, _, err := exitStatus.Result()
+	if err != nil {
+		c.logger.Error("Task exited with error",
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+	} else {
+		c.logger.Info("Task exited",
+			zap.String("app_name", appName),
+			zap.Uint32("exit_code", code),
+		)
+	}
+
+	// Close the write ends to unblock readers.
+	stdoutW.Close()
+	stderrW.Close()
+
+	// Wait for readers to finish.
+	wg.Wait()
+
+	outputCh <- services.ContainerOutput{Done: true}
+}
+
+// StopContainer sends SIGTERM to the container's task, waits briefly, then
+// sends SIGKILL if the task is still running, and finally deletes the task.
+func (c *Client) StopContainer(ctx context.Context, appName string) error {
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil // No task running.
+		}
+		return fmt.Errorf("getting task for %q: %w", appName, err)
+	}
+
+	// Send SIGTERM first for graceful shutdown.
+	if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+		if !errdefs.IsNotFound(err) {
+			c.logger.Warn("Failed to send SIGTERM",
+				zap.String("app_name", appName),
+				zap.Error(err),
+			)
+		}
+	}
+
+	// Wait up to 10 seconds for graceful exit.
+	waitCh, err := task.Wait(ctx)
+	if err != nil {
+		c.logger.Warn("Failed to wait on task, sending SIGKILL",
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+	} else {
+		select {
+		case <-waitCh:
+			// Task exited gracefully.
+			c.logger.Info("Container stopped gracefully", zap.String("app_name", appName))
+		case <-time.After(10 * time.Second):
+			// Force kill.
+			c.logger.Warn("Container did not stop within 10s, sending SIGKILL",
+				zap.String("app_name", appName),
+			)
+			if err := task.Kill(ctx, syscall.SIGKILL); err != nil && !errdefs.IsNotFound(err) {
+				c.logger.Error("Failed to send SIGKILL",
+					zap.String("app_name", appName),
+					zap.Error(err),
+				)
+			}
+			<-waitCh
+		}
+	}
+
+	// Delete the task.
+	_, err = task.Delete(ctx)
+	if err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("deleting task for %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container stopped", zap.String("app_name", appName))
+	return nil
+}
+
+// DeleteContainer stops the container task if running, deletes the container,
+// cleans up the snapshot, and optionally deletes the image.
+func (c *Client) DeleteContainer(ctx context.Context, appName string, deleteImage bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil // Already gone.
+		}
+		return fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	// Stop the task if running.
+	if task, taskErr := container.Task(ctx, nil); taskErr == nil {
+		_ = task.Kill(ctx, syscall.SIGKILL)
+		_, _ = task.Delete(ctx, containerd.WithProcessKill)
+	}
+
+	// Get the image name before deleting the container.
+	var imgName string
+	if deleteImage {
+		if img, imgErr := container.Image(ctx); imgErr == nil {
+			imgName = img.Name()
+		}
+	}
+
+	// Delete the container and its snapshot.
+	if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		return fmt.Errorf("deleting container %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container deleted", zap.String("app_name", appName))
+
+	// Optionally delete the image.
+	if deleteImage && imgName != "" {
+		imgService := c.client.ImageService()
+		if err := imgService.Delete(ctx, imgName); err != nil && !errdefs.IsNotFound(err) {
+			c.logger.Warn("Failed to delete image",
+				zap.String("image", imgName),
+				zap.Error(err),
+			)
+		} else {
+			c.logger.Info("Image deleted", zap.String("image", imgName))
+		}
+	}
+
+	return nil
+}
+
+// ListContainers lists all containers managed by Wendy (those with the
+// sh.wendy/app.version label) and returns their status.
+func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, error) {
+	ctx = c.withNamespace(ctx)
+
+	containers, err := c.client.Containers(ctx, fmt.Sprintf("labels.%q", labelKeyAppVersion))
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+
+	var result []*agentpb.AppContainer
+	for _, ctr := range containers {
+		info, err := ctr.Info(ctx)
+		if err != nil {
+			c.logger.Warn("Failed to get container info",
+				zap.String("id", ctr.ID()),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		appVersion := info.Labels[labelKeyAppVersion]
+		runningState := agentpb.AppRunningState_STOPPED
+		var failureCount uint32
+
+		// Check if a task is running.
+		task, err := ctr.Task(ctx, nil)
+		if err == nil {
+			status, statusErr := task.Status(ctx)
+			if statusErr == nil && status.Status == containerd.Running {
+				runningState = agentpb.AppRunningState_RUNNING
+			}
+		}
+
+		// Parse failure count from restart policy label if present.
+		if policyLabel, ok := info.Labels[labelKeyRestartPolicy]; ok {
+			_, maxRetries := parseRestartPolicyLabel(policyLabel)
+			_ = maxRetries
+		}
+
+		result = append(result, &agentpb.AppContainer{
+			AppName:      ctr.ID(),
+			AppVersion:   appVersion,
+			RunningState: runningState,
+			FailureCount: failureCount,
+		})
+	}
+
+	return result, nil
+}
+
+// streamReader is a helper that continuously reads from a reader and sends
+// chunks to the output channel with the specified builder function.
+func streamReader(r io.Reader, ch chan<- services.ContainerOutput, buildOutput func([]byte) services.ContainerOutput) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			ch <- buildOutput(data)
+		}
+		if err != nil {
+			return
+		}
+	}
+}

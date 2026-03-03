@@ -35,10 +35,10 @@ swift sdk install https://download.swift.org/swift-6.2-release/static-sdk/swift-
 
 ### Installing the CLI
 
-We have a [Homebrew Tap](https://github.com/wendyengineer/homebrew-tap) to install the developer CLI on macOS.
+We have a [Homebrew Tap](https://github.com/wendylabsinc/homebrew-tap) to install the developer CLI on macOS.
 
 ```sh
-brew tap wendyengineer/tap
+brew tap wendylabsinc/tap
 brew install wendy
 ```
 
@@ -98,7 +98,7 @@ sudo systemctl enable docker
 sudo usermod -aG docker $USER
 ```
 
-Then, you can download and run your `wendy-agent` on the device. We provide nightly tags with the latest `wendy-agent` builds [in this repository](https://github.com/wendyengineer/wendy-agent/tags).
+Then, you can download and run your `wendy-agent` on the device. We provide nightly tags with the latest `wendy-agent` builds [in this repository](https://github.com/wendylabsinc/wendy-agent/tags).
 
 If you're planning to test the wendy-agent on macOS, you'll need to build and run the agent yourself from this repository.
 

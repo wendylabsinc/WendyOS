@@ -1,4 +1,4 @@
-name: Run Tests
+name: Go Tests
 
 on:
   pull_request:
@@ -9,224 +9,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-bugfix:
-    name: Check for BUGFIX tag
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    outputs:
-      spot: ${{ steps.check.outputs.spot }}
-    steps:
-      - name: Check PR for BUGFIX tag or bug label
-        id: check
-        env:
-          HAS_BUG_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'bug') }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          SPOT="true"
-
-          if [[ "$PR_TITLE" == *"[BUGFIX]"* ]] || [[ "$PR_BODY" == *"[BUGFIX]"* ]]; then
-            echo "Found [BUGFIX] tag in PR, using on-demand instances"
-            SPOT="false"
-          elif [ "$HAS_BUG_LABEL" == "true" ]; then
-            echo "Found 'bug' label on PR, using on-demand instances"
-            SPOT="false"
-          fi
-
-          echo "spot=$SPOT" >> $GITHUB_OUTPUT
-
-  generate-protos:
-    name: Generate Protocol Buffers
-    needs: check-bugfix
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
-    container: swift:6.2.3
+    defaults:
+      run:
+        working-directory: go
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache generated protos
-        id: cache-protos
-        uses: actions/cache@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          path: |
-            Sources/WendyAgentGRPC/Proto/
-            Sources/WendyCloudGRPC/Proto/
-            Sources/ContainerdGRPC/Proto/
-            Sources/ContainerdGRPCTypes/Proto/
-            Sources/OpenTelemetryGRPC/Proto/
-            Sources/OpenTelemetryGRPCTypes/Proto/
-          key: protos-${{ hashFiles('Proto/**/*.proto', 'Scripts/Generate-Proto.sh') }}
-          restore-keys: protos-
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
-      - name: Generate protos
-        if: steps.cache-protos.outputs.cache-hit != 'true'
-        run: |
-          chmod +x ./Scripts/Generate-Proto.sh
-          ./Scripts/Generate-Proto.sh
+      - name: Run tests
+        run: go test ./... -race -count=1 -timeout 120s
 
-      - name: Upload generated protos
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-protos
-          path: |
-            Sources/WendyAgentGRPC/Proto/
-            Sources/WendyCloudGRPC/Proto/
-            Sources/ContainerdGRPC/Proto/
-            Sources/ContainerdGRPCTypes/Proto/
-            Sources/OpenTelemetryGRPC/Proto/
-            Sources/OpenTelemetryGRPCTypes/Proto/
-          retention-days: 1
-
-  test:
-    needs: [check-bugfix, generate-protos]
-    name: Swift Tests
-    strategy:
-      matrix:
-        include:
-          - runner: 8cpu-linux-arm64
-            container: swift:6.2.3
-          - runner: macos-26
-            xcode-select: /Applications/Xcode_26.0.app
-
-    runs-on: ${{ matrix.runner == 'macos-26' && 'macos-26' || format('runs-on={0}/runner={1}/spot={2}', github.run_id, matrix.runner, needs.check-bugfix.outputs.spot) }}
-    container: ${{ matrix.container }}
-
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download generated protos
-        uses: actions/download-artifact@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          name: generated-protos
-          # Downloads to current directory, preserving Sources/ structure
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
+      - name: Run go vet
+        run: go vet ./...
+
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          path: |
-            .build/repositories
-            .build/checkouts
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: xcode-select
-        if: ${{ matrix.xcode-select != '' }}
+      - name: Check formatting
         run: |
-          sudo xcode-select --switch ${{ matrix.xcode-select }}
-
-      - name: Run Tests
-        env:
-          CC: "sccache clang"
-          CXX: "sccache clang++"
-        run: |
-          # Use parallel compilation and testing
-          NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-          swift test --enable-code-coverage --parallel --jobs "$NCPU"
-
-      # Generate code coverage report for macOS
-      - name: Generate Code Coverage Report (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          # Debug: Show build directory structure
-          echo "Build directory structure:"
-          find .build -name "*.xctest" -type d 2>/dev/null | head -5
-          
-          # Find the test binary - look in multiple possible locations
-          TEST_BINARY=$(find .build -name "*.xctest" -type d 2>/dev/null | grep -E "(debug|arm64-apple-macosx/debug|x86_64-apple-macosx/debug)" | head -1)
-          if [ -z "$TEST_BINARY" ]; then
-            echo "Error: Could not find test binary"
-            echo "Contents of .build:"
-            find .build -type d -name "*debug*" 2>/dev/null
+          UNFORMATTED=$(gofmt -l -s .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files need formatting:"
+            echo "$UNFORMATTED"
+            echo ""
+            echo "Run 'gofmt -w -s .' to fix."
             exit 1
           fi
-          
-          echo "Found test binary: $TEST_BINARY"
-          TEST_BINARY_NAME=$(basename "$TEST_BINARY" .xctest)
-          
-          # Find profdata file
-          PROF_DATA=$(find .build -name "default.profdata" -path "*/codecov/*" 2>/dev/null | head -1)
-          if [ -z "$PROF_DATA" ]; then
-            echo "Error: Could not find profdata file"
-            echo "Looking for profdata:"
-            find .build -name "*.profdata" 2>/dev/null
-            exit 1
-          fi
-          
-          echo "Found profdata: $PROF_DATA"
-          
-          # Generate LCOV report
-          xcrun llvm-cov export \
-            "$TEST_BINARY/Contents/MacOS/$TEST_BINARY_NAME" \
-            -instr-profile="$PROF_DATA" \
-            --format=lcov > coverage.lcov
-          
-          echo "Generated coverage.lcov for macOS"
-          ls -la coverage.lcov
-
-      # Generate code coverage report for Linux
-      - name: Generate Code Coverage Report (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          # Install required dependencies
-          apt-get update
-          apt-get install -y curl gnupg
-          
-          # Install llvm tools if not available
-          if ! command -v llvm-cov &> /dev/null; then
-            apt-get install -y llvm
-          fi
-          
-          # Debug: Show build directory structure
-          echo "Build directory structure:"
-          find .build -type f -name "*PackageTests*" 2>/dev/null | head -10
-          
-          # Find the test binary - look for the actual binary name pattern
-          TEST_BINARY=$(find .build -type f -name "*PackageTests.xctest" 2>/dev/null | head -1)
-          if [ -z "$TEST_BINARY" ]; then
-            # Fallback: try to find any executable in the debug directory
-            TEST_BINARY=$(find .build/debug -type f -executable -name "*PackageTests*" 2>/dev/null | head -1)
-          fi
-          
-          if [ -z "$TEST_BINARY" ]; then
-            echo "Error: Could not find test binary"
-            echo "Contents of .build/debug:"
-            ls -la .build/debug/ || echo ".build/debug not found"
-            exit 1
-          fi
-          
-          echo "Found test binary: $TEST_BINARY"
-          
-          # Find profdata file
-          PROF_DATA=$(find .build -name "default.profdata" -path "*/codecov/*" 2>/dev/null | head -1)
-          if [ -z "$PROF_DATA" ]; then
-            echo "Error: Could not find profdata file"
-            echo "Looking for profdata:"
-            find .build -name "*.profdata" 2>/dev/null
-            exit 1
-          fi
-          
-          echo "Found profdata: $PROF_DATA"
-          
-          # Generate LCOV report
-          llvm-cov export \
-            "$TEST_BINARY" \
-            -instr-profile="$PROF_DATA" \
-            --format=lcov > coverage.lcov
-          
-          echo "Generated coverage.lcov for Linux"
-          ls -la coverage.lcov
-      
-      # Upload coverage to Codecov
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: wendylabsinc/wendy-agent
-          fail_ci_if_error: false
-          flags: ${{ runner.os }}
-          name: ${{ matrix.os }}-coverage

@@ -1,0 +1,416 @@
+package oci
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+)
+
+const (
+	// nvidiaGroupGID is the GID for the nvidia group (standard across most distros).
+	nvidiaGroupGID uint32 = 44
+	// audioGroupGID is the standard audio group GID.
+	audioGroupGID uint32 = 29
+	// videoGroupGID is the standard video group GID.
+	videoGroupGID uint32 = 44
+)
+
+// ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
+func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig) error {
+	didSetDeviceCapabilities := false
+
+	for _, ent := range cfg.Entitlements {
+		switch ent.Type {
+		case appconfig.EntitlementGPU:
+			applyGPU(spec)
+		case appconfig.EntitlementNetwork:
+			applyNetwork(spec, ent)
+		case appconfig.EntitlementAudio:
+			applyAudio(spec)
+			if !didSetDeviceCapabilities {
+				didSetDeviceCapabilities = true
+				SetDeviceCapabilities(spec, cfg.AppID)
+			}
+		case appconfig.EntitlementVideo:
+			applyVideo(spec)
+			if !didSetDeviceCapabilities {
+				didSetDeviceCapabilities = true
+				SetDeviceCapabilities(spec, cfg.AppID)
+			}
+		case appconfig.EntitlementPersist:
+			applyPersist(spec, ent, cfg.AppID)
+		case appconfig.EntitlementBluetooth:
+			applyBluetooth(spec)
+		case appconfig.EntitlementCamera:
+			applyCamera(spec)
+		case appconfig.EntitlementUSB:
+			applyUSB(spec)
+		case appconfig.EntitlementI2C:
+			applyI2C(spec, ent)
+		case appconfig.EntitlementGPIO:
+			applyGPIO(spec, ent)
+		}
+	}
+	return nil
+}
+
+// SetDeviceCapabilities adds standard device capabilities, cgroup mount,
+// cgroup namespace, and a default device allowance to the spec.
+func SetDeviceCapabilities(spec *Spec, appName string) {
+	caps := []string{
+		"CAP_CHOWN",
+		"CAP_DAC_OVERRIDE",
+		"CAP_FSETID",
+		"CAP_FOWNER",
+		"CAP_MKNOD",
+		"CAP_NET_RAW",
+		"CAP_SETGID",
+		"CAP_SETUID",
+		"CAP_SETFCAP",
+		"CAP_SETPCAP",
+		"CAP_NET_BIND_SERVICE",
+		"CAP_SYS_CHROOT",
+		"CAP_KILL",
+		"CAP_AUDIT_WRITE",
+		"CAP_SYS_PTRACE",
+	}
+
+	if spec.Process.Capabilities == nil {
+		spec.Process.Capabilities = &LinuxCapabilities{}
+	}
+	for _, cap := range caps {
+		spec.Process.Capabilities.Bounding = appendUnique(spec.Process.Capabilities.Bounding, cap)
+		spec.Process.Capabilities.Effective = appendUnique(spec.Process.Capabilities.Effective, cap)
+		spec.Process.Capabilities.Inheritable = appendUnique(spec.Process.Capabilities.Inheritable, cap)
+		spec.Process.Capabilities.Permitted = appendUnique(spec.Process.Capabilities.Permitted, cap)
+	}
+
+	// Add cgroup mount.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/sys/fs/cgroup",
+		Type:        "cgroup",
+		Source:      "cgroup",
+		Options:     []string{"ro", "nosuid", "noexec", "nodev"},
+	})
+
+	if spec.Linux.Resources == nil {
+		spec.Linux.Resources = &LinuxResources{}
+	}
+
+	// Configure cgroupsPath: use WENDY_SYSTEMD_SERVICE_NAME env var or default to "edge-agent".
+	path := strings.ReplaceAll(appName, "-", "_")
+	serviceName := "edge-agent"
+	if envVal := os.Getenv("WENDY_SYSTEMD_SERVICE_NAME"); envVal != "" {
+		trimmed := strings.TrimSpace(envVal)
+		if trimmed != "" {
+			serviceName = trimmed
+		}
+	}
+	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:%s:%s", serviceName, path)
+
+	// Add cgroup namespace.
+	spec.Linux.Namespaces = append(spec.Linux.Namespaces, LinuxNamespace{Type: "cgroup"})
+
+	// Default allow-all device rule.
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Access: "rwm",
+	})
+}
+
+// applyGPU adds NVIDIA GPU device access using CDI or direct device mapping.
+func applyGPU(spec *Spec) {
+	// Add the nvidia group GID for device access.
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, nvidiaGroupGID)
+
+	// Add NVIDIA device nodes.
+	nvidiaDevices := []string{
+		"/dev/nvidia0",
+		"/dev/nvidiactl",
+		"/dev/nvidia-uvm",
+		"/dev/nvidia-uvm-tools",
+		"/dev/nvidia-modeset",
+	}
+
+	for _, devPath := range nvidiaDevices {
+		spec.Linux.Devices = append(spec.Linux.Devices, LinuxDevice{
+			Path:  devPath,
+			Type:  "c",
+			Major: 195, // NVIDIA major number.
+			Minor: 0,
+		})
+	}
+
+	// Allow access to NVIDIA character devices (major 195).
+	major := int64(195)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+
+	// Add NVIDIA library mounts.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/usr/lib/aarch64-linux-gnu/tegra",
+		Source:      "/usr/lib/aarch64-linux-gnu/tegra",
+		Type:        "bind",
+		Options:     []string{"rbind", "ro"},
+	})
+
+	// Add environment variables for NVIDIA.
+	spec.Process.Env = append(spec.Process.Env,
+		"NVIDIA_VISIBLE_DEVICES=all",
+		"NVIDIA_DRIVER_CAPABILITIES=all",
+	)
+}
+
+// applyNetwork configures the network namespace.
+func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
+	mode := ent.Mode
+	if mode == "" {
+		mode = "host"
+	}
+
+	if mode == "host" {
+		// Remove the network namespace to use host networking.
+		var namespaces []LinuxNamespace
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Type != "network" {
+				namespaces = append(namespaces, ns)
+			}
+		}
+		spec.Linux.Namespaces = namespaces
+
+		// When using host networking, sysfs cannot be mounted as a new
+		// filesystem because the host network namespace already has it
+		// mounted. Replace the sysfs mount with a bind mount from the host.
+		for i, m := range spec.Mounts {
+			if m.Destination == "/sys" && m.Type == "sysfs" {
+				spec.Mounts[i] = Mount{
+					Destination: "/sys",
+					Type:        "bind",
+					Source:      "/sys",
+					Options:     []string{"rbind", "nosuid", "noexec", "nodev", "ro"},
+				}
+				break
+			}
+		}
+
+		// Add CAP_NET_ADMIN and CAP_NET_RAW for host networking.
+		spec.Process.Capabilities.Bounding = appendUnique(spec.Process.Capabilities.Bounding, "CAP_NET_ADMIN")
+		spec.Process.Capabilities.Effective = appendUnique(spec.Process.Capabilities.Effective, "CAP_NET_ADMIN")
+		spec.Process.Capabilities.Permitted = appendUnique(spec.Process.Capabilities.Permitted, "CAP_NET_ADMIN")
+
+		// Mount systemd-resolved's actual resolv.conf for DNS resolution.
+		// /etc/resolv.conf often points to 127.0.0.53 (systemd-resolved stub)
+		// which does not work in containers. The /run path contains real upstream DNS servers.
+		alreadyMounted := false
+		for _, m := range spec.Mounts {
+			if m.Destination == "/etc/resolv.conf" {
+				alreadyMounted = true
+				break
+			}
+		}
+		if !alreadyMounted {
+			spec.Mounts = append(spec.Mounts, Mount{
+				Destination: "/etc/resolv.conf",
+				Type:        "bind",
+				Source:      "/run/systemd/resolve/resolv.conf",
+				Options:     []string{"rbind", "ro"},
+			})
+		}
+	} else if mode == "none" {
+		// Ensure the network namespace is present (container gets its own isolated network).
+		// The default spec already has a network namespace, so this is a no-op in most cases,
+		// but we add it explicitly in case it was removed previously.
+		hasNetworkNS := false
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Type == "network" {
+				hasNetworkNS = true
+				break
+			}
+		}
+		if !hasNetworkNS {
+			spec.Linux.Namespaces = append(spec.Linux.Namespaces, LinuxNamespace{Type: "network"})
+		}
+	}
+}
+
+// applyAudio adds audio device access (ALSA/PipeWire).
+func applyAudio(spec *Spec) {
+	// Add audio group GID.
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, audioGroupGID)
+
+	// Mount /dev/snd for ALSA access.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/dev/snd",
+		Source:      "/dev/snd",
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
+
+	// Allow all sound devices (major 116).
+	major := int64(116)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+
+	// Mount PipeWire socket if available.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/run/pipewire",
+		Source:      "/run/pipewire",
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
+
+	spec.Process.Env = append(spec.Process.Env,
+		"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
+	)
+}
+
+// applyVideo adds video device access.
+func applyVideo(spec *Spec) {
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, videoGroupGID)
+
+	// Allow video4linux devices (major 81).
+	major := int64(81)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+
+	// Mount all /dev/video* devices.
+	for i := 0; i < 16; i++ {
+		devPath := fmt.Sprintf("/dev/video%d", i)
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: devPath,
+			Source:      devPath,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		})
+	}
+}
+
+// applyPersist adds a persistent volume bind mount.
+func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
+	hostPath := filepath.Join("/var/lib/wendy/volumes", appID, ent.Name)
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: ent.Path,
+		Source:      hostPath,
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
+}
+
+// applyBluetooth adds D-Bus socket mounts for Bluetooth access.
+func applyBluetooth(spec *Spec) {
+	// Mount D-Bus system socket for BlueZ access.
+	spec.Mounts = append(spec.Mounts,
+		Mount{
+			Destination: "/var/run/dbus",
+			Source:      "/var/run/dbus",
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		},
+		Mount{
+			Destination: "/run/dbus",
+			Source:      "/run/dbus",
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		},
+	)
+
+	spec.Process.Env = append(spec.Process.Env,
+		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
+	)
+}
+
+// applyCamera adds camera/V4L2 device access.
+func applyCamera(spec *Spec) {
+	// Camera uses the same V4L2 devices as video.
+	applyVideo(spec)
+}
+
+// applyUSB adds USB device access.
+func applyUSB(spec *Spec) {
+	// Mount /dev/bus/usb for USB access.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/dev/bus/usb",
+		Source:      "/dev/bus/usb",
+		Type:        "bind",
+		Options:     []string{"rbind", "rw"},
+	})
+
+	// Allow USB devices (major 189).
+	major := int64(189)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+}
+
+// applyI2C adds I2C device access for a specific bus.
+func applyI2C(spec *Spec, ent appconfig.Entitlement) {
+	devPath := fmt.Sprintf("/dev/%s", ent.Device)
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: devPath,
+		Source:      devPath,
+		Type:        "bind",
+		Options:     []string{"rbind", "rw"},
+	})
+
+	// Allow I2C devices (major 89).
+	major := int64(89)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+}
+
+// applyGPIO adds GPIO device access for specified pins.
+func applyGPIO(spec *Spec, ent appconfig.Entitlement) {
+	// Mount all gpiochip devices.
+	for i := 0; i < 8; i++ {
+		devPath := fmt.Sprintf("/dev/gpiochip%d", i)
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: devPath,
+			Source:      devPath,
+			Type:        "bind",
+			Options:     []string{"rbind", "rw"},
+		})
+	}
+
+	// Allow GPIO devices (major 254).
+	major := int64(254)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+
+	_ = ent.Pins // Pins are used for documentation/validation; access is chip-level.
+}
+
+// appendUnique appends a value to a slice only if it is not already present.
+func appendUnique[T comparable](slice []T, val T) []T {
+	for _, v := range slice {
+		if v == val {
+			return slice
+		}
+	}
+	return append(slice, val)
+}

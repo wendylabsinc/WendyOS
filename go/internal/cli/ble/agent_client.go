@@ -1,0 +1,190 @@
+package ble
+
+import (
+	"encoding/binary"
+	"fmt"
+
+	"github.com/wendylabsinc/wendy/internal/shared/models"
+	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	// WendyOS BLE agent L2CAP PSM
+	wendyAgentL2CAPPSM = 128
+)
+
+// AgentClient communicates with a WendyOS agent over BLE L2CAP using
+// protobuf-framed messages (UInt16 BE length prefix).
+type AgentClient struct {
+	conn *Connection
+}
+
+// ConnectAgent establishes a BLE connection to a WendyOS device and opens
+// the L2CAP channel for protobuf communication.
+func ConnectAgent(device *models.BluetoothDevice) (*AgentClient, error) {
+	conn, err := Connect(device.Address, 10)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to %s: %w", device.DisplayName, err)
+	}
+
+	psm := uint16(wendyAgentL2CAPPSM)
+	if device.L2CAPPSM != 0 {
+		psm = device.L2CAPPSM
+	}
+
+	if err := conn.OpenL2CAP(psm, 10); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("opening L2CAP channel (PSM %d): %w", psm, err)
+	}
+
+	return &AgentClient{conn: conn}, nil
+}
+
+// Close disconnects the BLE connection.
+func (c *AgentClient) Close() {
+	c.conn.Close()
+}
+
+// sendCommand serializes a BluetoothCommand, sends it over L2CAP with a
+// UInt16 BE length prefix, reads the response, and returns it.
+func (c *AgentClient) sendCommand(cmd *agentpb.BluetoothCommand) (*agentpb.BluetoothResponse, error) {
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling command: %w", err)
+	}
+
+	// Build length-prefixed frame: [UInt16 BE length] [protobuf data]
+	frame := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(data)))
+	copy(frame[2:], data)
+
+	if err := c.conn.L2CAPSend(frame); err != nil {
+		return nil, fmt.Errorf("sending command: %w", err)
+	}
+
+	// Read response
+	respData, err := c.conn.L2CAPRecv(30)
+	if err != nil {
+		return nil, fmt.Errorf("receiving response: %w", err)
+	}
+
+	if len(respData) < 2 {
+		return nil, fmt.Errorf("response too short: %d bytes", len(respData))
+	}
+
+	msgLen := binary.BigEndian.Uint16(respData[:2])
+	if int(msgLen) > len(respData)-2 {
+		return nil, fmt.Errorf("response length mismatch: header says %d, got %d", msgLen, len(respData)-2)
+	}
+
+	resp := &agentpb.BluetoothResponse{}
+	if err := proto.Unmarshal(respData[2:2+msgLen], resp); err != nil {
+		return nil, fmt.Errorf("unmarshaling response: %w", err)
+	}
+
+	// Check for error response
+	if errResp := resp.GetError(); errResp != nil {
+		return nil, fmt.Errorf("agent error: %s", errResp.GetMessage())
+	}
+
+	return resp, nil
+}
+
+// WifiConnect sends a WiFi connect command over BLE.
+func (c *AgentClient) WifiConnect(ssid, password string) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiConnect{
+			WifiConnect: &agentpb.WifiConnectCommand{
+				Ssid:     ssid,
+				Password: password,
+			},
+		},
+	}
+
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+
+	wifiResp := resp.GetWifiConnect()
+	if wifiResp == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !wifiResp.GetSuccess() {
+		msg := wifiResp.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("WiFi connect failed: %s", msg)
+	}
+
+	return nil
+}
+
+// WifiList lists available WiFi networks over BLE.
+func (c *AgentClient) WifiList() ([]*agentpb.WifiNetworkInfo, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiList{
+			WifiList: &agentpb.WifiListCommand{},
+		},
+	}
+
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	wifiResp := resp.GetWifiList()
+	if wifiResp == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return wifiResp.GetNetworks(), nil
+}
+
+// WifiStatus gets the current WiFi connection status over BLE.
+func (c *AgentClient) WifiStatus() (*agentpb.WifiStatusResponse, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiStatus{
+			WifiStatus: &agentpb.WifiStatusCommand{},
+		},
+	}
+
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	wifiResp := resp.GetWifiStatus()
+	if wifiResp == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return wifiResp, nil
+}
+
+// WifiDisconnect disconnects from the current WiFi network over BLE.
+func (c *AgentClient) WifiDisconnect() error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiDisconnect{
+			WifiDisconnect: &agentpb.WifiDisconnectCommand{},
+		},
+	}
+
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+
+	wifiResp := resp.GetWifiDisconnect()
+	if wifiResp == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !wifiResp.GetSuccess() {
+		msg := wifiResp.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("WiFi disconnect failed: %s", msg)
+	}
+	return nil
+}

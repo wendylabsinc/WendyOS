@@ -47,17 +47,20 @@ message RunContainerLayersRequest {
 
     // The command to run when the container starts.
     string cmd = 3;
-    
+
     // The layers that will be uploaded to the agent.
     repeated RunContainerLayerHeader layers = 4;
 
     /// The `wendy.json` file as found in the project
     bytes app_config = 5;
-    
+
     // Optional restart policy override for Docker runtime.
     optional RestartPolicy restart_policy = 6;
 
     string working_dir = 7;
+
+    // User-provided runtime arguments to append to the container entrypoint.
+    repeated string user_args = 8;
 }
 
 message CreateContainerRequest {
@@ -67,6 +70,7 @@ message CreateContainerRequest {
     bytes app_config = 4;
     string working_dir = 5;
     optional RestartPolicy restart_policy = 6;
+    repeated string user_args = 7;
 }
 
 message CreateContainerResponse {}

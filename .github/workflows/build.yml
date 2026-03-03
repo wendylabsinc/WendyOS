@@ -20,18 +20,6 @@ permissions:
   contents: write
 
 jobs:
-  check-bugfix:
-    name: Check for BUGFIX tag
-    runs-on: ubuntu-latest
-    outputs:
-      spot: ${{ steps.check.outputs.spot }}
-    steps:
-      - name: Set spot instance preference
-        id: check
-        run: |
-          # Always use spot instances (on-demand requires runs-on.com configuration)
-          echo "spot=true" >> $GITHUB_OUTPUT
-
   determine-version:
     name: Determine Version
     runs-on: ubuntu-latest
@@ -55,7 +43,7 @@ jobs:
 
             IS_RELEASE="true"
 
-            # Detect pre-release suffix (anything with a hyphen after semver, e.g. 1.0.0-beta.1)
+            # Check if it's a prerelease (contains hyphen after version, e.g. v1.0.0-beta.1)
             if [[ "$VERSION" == *-* ]]; then
               IS_PRERELEASE="true"
             else
@@ -87,500 +75,157 @@ jobs:
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-  generate-protos:
-    name: Generate Protocol Buffers
-    needs: check-bugfix
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
-    container: swift:6.2.3
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache generated protos
-        id: cache-protos
-        uses: actions/cache@v5
-        with:
-          path: |
-            Sources/WendyAgentGRPC/Proto/
-            Sources/WendyCloudGRPC/Proto/
-            Sources/ContainerdGRPC/Proto/
-            Sources/ContainerdGRPCTypes/Proto/
-            Sources/OpenTelemetryGRPC/Proto/
-            Sources/OpenTelemetryGRPCTypes/Proto/
-          key: protos-${{ hashFiles('Proto/**/*.proto', 'Scripts/Generate-Proto.sh') }}
-          restore-keys: protos-
-
-      - name: Generate protos
-        if: steps.cache-protos.outputs.cache-hit != 'true'
-        run: |
-          chmod +x ./Scripts/Generate-Proto.sh
-          ./Scripts/Generate-Proto.sh
-
-      - name: Upload generated protos
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-protos
-          path: |
-            Sources/WendyAgentGRPC/Proto/
-            Sources/WendyCloudGRPC/Proto/
-            Sources/ContainerdGRPC/Proto/
-            Sources/ContainerdGRPCTypes/Proto/
-            Sources/OpenTelemetryGRPC/Proto/
-            Sources/OpenTelemetryGRPCTypes/Proto/
-          retention-days: 1
-
-  build-windows:
-    name: wendy-cli-windows-amd64
-    needs: [check-bugfix, determine-version]
-    runs-on: runs-on=${{ github.run_id }}/image=windows25-full-x64/family=c7i/cpu=16/spot=false
-
-    steps:
-      - name: Setup Swift
-        uses: compnerd/gha-setup-swift@main
-        with:
-          swift-version: swift-6.3-branch
-          swift-build: 6.3-DEVELOPMENT-SNAPSHOT-2026-01-03-a
-          update-sdk-modules: true
-
-      - name: Checkout Wendy-Agent Repository
-        uses: actions/checkout@v4
-        with:
-          path: wendy-agent
-
-      - name: Checkout Custom AsyncHTTPClient
-        uses: actions/checkout@v4
-        with:
-          repository: swift-server/async-http-client
-          ref: jo/windows-support
-          path: async-http-client
-
-      - name: Checkout Custom Hummingbird
-        uses: actions/checkout@v4
-        with:
-          repository: hummingbird-project/hummingbird
-          ref: jo/windows-support
-          path: hummingbird
-
-      - name: Checkout Custom Rainbow
-        uses: actions/checkout@v4
-        with:
-          repository: joannis/Rainbow
-          ref: jo/windows
-          path: Rainbow
-
-      - name: Checkout Custom SwiftNIO
-        uses: actions/checkout@v4
-        with:
-          repository: joannis/swift-nio
-          ref: jo/winsock-fixes
-          path: swift-nio
-
-      - name: Checkout Custom SwiftNIO-SSL
-        uses: actions/checkout@v4
-        with:
-          repository: joannis/swift-nio-ssl
-          ref: jo/windows-support
-          path: swift-nio-ssl
-
-      - name: Checkout Custom SwiftNIO-Extras
-        uses: actions/checkout@v4
-        with:
-          repository: joannis/swift-nio-extras
-          ref: jo/windows-ucrt
-          path: swift-nio-extras
-
-      - name: Checkout Custom DNSClient
-        uses: actions/checkout@v4
-        with:
-          repository: orlandos-nl/DNSClient
-          ref: jo/windows-support
-          path: DNSClient
-
-      - name: Checkout Custom GRPC SwiftNIO Transport
-        uses: actions/checkout@v4
-        with:
-          repository: joannis/grpc-swift-nio-transport
-          ref: jo/windows-support
-          path: grpc-swift-nio-transport
-
-      - name: Install Visual Studio Build Tools (C++ workload)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-
-          $installer = "$env:TEMP\vs_BuildTools.exe"
-          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $installer
-
-          $args = @(
-            "--quiet", "--wait", "--norestart", "--nocache",
-            "--installPath", "C:\BuildTools",
-            "--installChannelUri", "https://aka.ms/vs/17/release/channel",
-            "--add", "Microsoft.VisualStudio.Workload.VCTools",
-            "--includeRecommended"
-          )
-
-          $p = Start-Process -FilePath $installer -ArgumentList $args -PassThru -Wait
-          "VS installer exit code: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { throw "VS Build Tools install failed (exit code $($p.ExitCode))" }
-
-      - name: Set up MSVC dev environment
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Provision Dependencies
-        shell: pwsh
-        run: |
-          $VcpkgRoot = "C:\vcpkg"
-          $ZlibDll = "$VcpkgRoot\installed\x64-windows\bin\zlib1.dll"
-
-          if (-not (Test-Path $ZlibDll)) {
-            Write-Host "Zlib not found. Installing via vcpkg..."
-            & "$VcpkgRoot\vcpkg.exe" install zlib:x64-windows
-          } else {
-            Write-Host "Zlib found at $ZlibDll"
-          }
-
-      - name: Copy zlib.lib to z.lib
-        shell: pwsh
-        run: |
-          Copy-Item "C:\vcpkg\installed\x64-windows\lib\zlib.lib" "C:\vcpkg\installed\x64-windows\lib\z.lib"
-
-      - name: Inject Version
-        shell: pwsh
-        run: |
-          cd ${{ github.workspace }}/wendy-agent
-          $version = "${{ needs.determine-version.outputs.version }}"
-          Write-Host "Using version: $version"
-          & bash ./Scripts/inject-version.sh "$version"
-
-      - name: Build wendy CLI (release)
-        shell: pwsh
-        run: |
-          cd ${{ github.workspace }}/wendy-agent
-          swift build -c release --arch x86_64 --product wendy --static-swift-stdlib -Xcc -I"C:\vcpkg\installed\x64-windows\include" -Xlinker -L"C:\vcpkg\installed\x64-windows\lib"
-
-      - name: Create Distribution Bundle
-        shell: pwsh
-        run: |
-          cd ${{ github.workspace }}/wendy-agent
-          $BuildDir = (swift build --show-bin-path -c release --arch x86_64 --static-swift-stdlib | Select-Object -Last 1).Trim()
-          Write-Host "Build directory: $BuildDir"
-          cd ${{ github.workspace }}
-          $StagingDir = "wendy-cli-windows-amd64"
-          $ZlibSource = "C:\vcpkg\installed\x64-windows\bin\zlib1.dll"
-
-          $SwiftBin = (Get-Command swift).Source | Split-Path
-          $SwiftRuntime = Join-Path (Split-Path $SwiftBin) "bin"
-          Write-Host "Swift runtime directory: $SwiftRuntime"
-
-          if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
-          New-Item -ItemType Directory -Path $StagingDir
-
-          Copy-Item "$BuildDir\wendy.exe" -Destination "$StagingDir\"
-          Copy-Item $ZlibSource -Destination "$StagingDir\"
-
-          $SwiftDlls = @(
-            "swift_Concurrency.dll",
-            "swiftCore.dll",
-            "Foundation.dll",
-            "FoundationNetworking.dll",
-            "FoundationXML.dll",
-            "dispatch.dll",
-            "BlocksRuntime.dll",
-            "swiftWinSDK.dll",
-            "swiftCRT.dll",
-            "swiftDispatch.dll",
-            "swiftDistributed.dll",
-            "swiftObservation.dll",
-            "swiftRegex.dll",
-            "swiftSwiftOnoneSupport.dll",
-            "swift_RegexParser.dll",
-            "swift_StringProcessing.dll",
-            "swiftSynchronization.dll"
-          )
-
-          foreach ($dll in $SwiftDlls) {
-            $dllPath = Join-Path $SwiftRuntime $dll
-            if (Test-Path $dllPath) {
-              Write-Host "Copying $dll"
-              Copy-Item $dllPath -Destination "$StagingDir\"
-            } else {
-              Write-Host "Warning: $dll not found at $dllPath"
-            }
-          }
-
-          Write-Host "`nStaging directory contents:"
-          Get-ChildItem $StagingDir
-
-      - name: Create tarball
-        shell: pwsh
-        run: |
-          $version = "${{ needs.determine-version.outputs.version }}"
-          $tarballName = "wendy-cli-windows-amd64-$version.tar.gz"
-
-          Write-Host "Working directory: $(Get-Location)"
-          Write-Host "Directory listing:"
-          Get-ChildItem
-
-          if (-not (Test-Path "wendy-cli-windows-amd64")) {
-            Write-Error "Staging directory wendy-cli-windows-amd64 does not exist!"
-            exit 1
-          }
-
-          Write-Host "Contents of wendy-cli-windows-amd64:"
-          Get-ChildItem wendy-cli-windows-amd64
-
-          Write-Host "Creating tarball: $tarballName"
-          tar.exe -czvf $tarballName "wendy-cli-windows-amd64"
-          "tarball_name=$tarballName" >> $env:GITHUB_OUTPUT
-        id: create-tarball
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.create-tarball.outputs.tarball_name }}
-          path: ${{ steps.create-tarball.outputs.tarball_name }}
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Build MSI Installer
-        shell: pwsh
-        run: |
-          $version = "${{ needs.determine-version.outputs.version }}"
-          $isRelease = "${{ needs.determine-version.outputs.is_release }}"
-
-          if ($isRelease -eq "true") {
-            # Semver release: use MAJOR.MINOR.PATCH directly (strip any pre-release suffix)
-            $msiVersion = ($version -split '-')[0]
-          } else {
-            # Timestamp version: YYYY.MM.DD-HHMMSS -> YYYY.M.D (removing leading zeros)
-            $parts = $version -split '-'
-            $dateParts = $parts[0] -split '\.'
-            $msiVersion = "$($dateParts[0]).$([int]$dateParts[1]).$([int]$dateParts[2])"
-          }
-          Write-Host "Full version: $version"
-          Write-Host "MSI version: $msiVersion"
-
-          # Install WiX v5
-          dotnet tool install --global wix --version 5.0.2
-
-          # Build MSI
-          wix build `
-            -d Version="$msiVersion" `
-            -d SourceDir="wendy-cli-windows-amd64" `
-            -arch x64 `
-            -o "wendy-cli-windows-amd64-$version.msi" `
-            wendy-agent/Scripts/windows/wendy.wxs
-
-      - name: Upload MSI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
-          path: wendy-cli-windows-amd64-${{ needs.determine-version.outputs.version }}.msi
-          retention-days: 14
-          if-no-files-found: error
-
   build:
-    needs: [check-bugfix, determine-version, generate-protos]
+    name: ${{ matrix.artifact-name }}
+    runs-on: ubuntu-latest
+    needs: [determine-version]
     strategy:
       matrix:
         include:
-          - artifact-name: wendy-agent-linux-static-musl-aarch64
-            runner: 8cpu-linux-arm64
-            container: swift:6.2.3
-            swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
+          - artifact-name: wendy-agent-linux-amd64
+            goos: linux
+            goarch: amd64
             product: wendy-agent
-          - artifact-name: wendy-agent-linux-static-musl-x86_64
-            runner: 8cpu-linux-x64
-            container: swift:6.2.3
-            swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
+            cmd: wendy-agent
+          - artifact-name: wendy-agent-linux-arm64
+            goos: linux
+            goarch: arm64
             product: wendy-agent
-          - artifact-name: wendy-cli-linux-static-musl-aarch64
-            runner: 8cpu-linux-arm64
-            container: swift:6.2.3
-            swift-sdk: aarch64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
+            cmd: wendy-agent
+          - artifact-name: wendy-cli-linux-amd64
+            goos: linux
+            goarch: amd64
             product: wendy
-          - artifact-name: wendy-cli-linux-static-musl-x86_64
-            runner: 8cpu-linux-x64
-            container: swift:6.2.3
-            swift-sdk: x86_64-swift-linux-musl
-            swift-sdk-url: https://download.swift.org/swift-6.2.3-release/static-sdk/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
-            swift-sdk-checksum: f30ec724d824ef43b5546e02ca06a8682dafab4b26a99fbb0e858c347e507a2c
+            cmd: wendy
+          - artifact-name: wendy-cli-linux-arm64
+            goos: linux
+            goarch: arm64
             product: wendy
-          - artifact-name: wendy-cli-macos-arm64
-            runner: macos-26
-            xcode-select: /Applications/Xcode_26.0.app
-            product: wendy
-
-    name: ${{ matrix.artifact-name }}
-    runs-on: ${{ matrix.runner == 'macos-26' && 'macos-26' || format('runs-on={0}/runner={1}/spot={2}', github.run_id, matrix.runner, needs.check-bugfix.outputs.spot) }}
-    container: ${{ matrix.container }}
-
+            cmd: wendy
+          - artifact-name: wendy-cli-windows-amd64
+            goos: windows
+            goarch: amd64
+            product: wendy.exe
+            cmd: wendy
+          - artifact-name: wendy-cli-windows-arm64
+            goos: windows
+            goarch: arm64
+            product: wendy.exe
+            cmd: wendy
+    defaults:
+      run:
+        working-directory: go
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download generated protos
-        uses: actions/download-artifact@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          name: generated-protos
-          # Downloads to current directory, preserving Sources/ structure
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
-      - name: Cache Swift SDK
-        if: ${{ matrix.swift-sdk-url != '' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/.swiftpm/swift-sdks
-          key: swift-sdk-${{ matrix.swift-sdk }}-${{ matrix.swift-sdk-checksum }}
-
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            .build/repositories
-            .build/checkouts
-          key: ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-${{ hashFiles('Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.swift-sdk || 'native' }}-spm-
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install Static Linux SDK
-        if: ${{ matrix.swift-sdk-url != '' }}
-        run: |
-          sdk_url="${{ matrix.swift-sdk-url }}"
-          sdk_checksum="${{ matrix.swift-sdk-checksum }}"
-          sdk_archive="${sdk_url##*/}"
-          sdk_bundle="${sdk_archive%.tar.gz}"
-          sdk_path="$HOME/.swiftpm/swift-sdks/$sdk_bundle"
-          sdk_tmp="${RUNNER_TEMP:-/tmp}/$sdk_archive"
-
-          if [ -d "$sdk_path" ]; then
-            echo "Swift SDK already installed at $sdk_path"
-            exit 0
-          fi
-
-          for attempt in 1 2 3; do
-            echo "Attempt $attempt of 3..."
-            rm -rf "$sdk_path"
-            if command -v curl >/dev/null 2>&1; then
-              curl -L --fail --retry 5 --retry-delay 2 -o "$sdk_tmp" "$sdk_url"
-              install_target="$sdk_tmp"
-            else
-              echo "curl not found; installing SDK directly from URL"
-              install_target="$sdk_url"
-            fi
-
-            if swift sdk install "$install_target" --checksum "$sdk_checksum"; then
-              echo "SDK installed successfully"
-              exit 0
-            fi
-            echo "Attempt $attempt failed, retrying in 5 seconds..."
-            sleep 5
-          done
-          echo "All 3 attempts failed"
-          exit 1
-      - name: xcode-select
-        if: ${{ matrix.xcode-select != '' }}
-        run: |
-          sudo xcode-select --switch ${{ matrix.xcode-select }}
-      - name: Inject Version
-        run: |
-          # Use the version from the needs context
-          echo "Using version: ${{ needs.determine-version.outputs.version }}"
-          ./Scripts/inject-version.sh "${{ needs.determine-version.outputs.version }}"
       - name: Build
-        shell: bash
         env:
-          CC: "sccache clang"
-          CXX: "sccache clang++"
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          args=(
-            --configuration release
-            --product "${{ matrix.product }}"
-          )
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          LDFLAGS="-s -w -X github.com/wendylabsinc/wendy/internal/shared/version.Version=${VERSION}"
+          mkdir -p ../${{ matrix.artifact-name }}
+          go build -ldflags "${LDFLAGS}" -o ../${{ matrix.artifact-name }}/${{ matrix.product }} ./cmd/${{ matrix.cmd }}
 
-          if [ -n "${{ matrix.swift-sdk }}" ]; then
-            args+=(--swift-sdk "${{ matrix.swift-sdk }}")
+      - name: Create archive
+        working-directory: .
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            ARCHIVE="${{ matrix.artifact-name }}-${VERSION}.zip"
+            apt-get update && apt-get install -y zip
+            zip -r "$ARCHIVE" ${{ matrix.artifact-name }}/
+          else
+            ARCHIVE="${{ matrix.artifact-name }}-${VERSION}.tar.gz"
+            tar -czvf "$ARCHIVE" ${{ matrix.artifact-name }}/
           fi
+          echo "archive=$ARCHIVE" >> $GITHUB_ENV
 
-          # Add optimization flags for wendy-agent builds
-          if [ "${{ matrix.product }}" == "wendy-agent" ]; then
-            args+=(-Xswiftc -whole-module-optimization)
-            args+=(-Xlinker --gc-sections)
-            args+=(-Xlinker --strip-all)
-          fi
-
-          # Use parallel compilation
-          NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-          args+=(--jobs "$NCPU")
-
-          swift build "${args[@]}"
-
-          # Copy built binary to the output directory
-          OUTPUT_DIR=${{ matrix.artifact-name }}
-          BIN_PATH=$(swift build --show-bin-path "${args[@]}")
-          mkdir $OUTPUT_DIR
-          cp $BIN_PATH/${{ matrix.product }} $OUTPUT_DIR/
-
-          # If a folder exists at $BIN_PATH/wendy-agent_${{ matrix.product }}.bundle, copy it to output/
-          if [ -d "$BIN_PATH/wendy-agent_${{ matrix.product }}.bundle" ]; then
-            cp -r $BIN_PATH/wendy-agent_${{ matrix.product }}.bundle $OUTPUT_DIR/
-          fi
-      - name: Import P12 Certificate
-        if: ${{ matrix.artifact-name == 'wendy-cli-macos-arm64' }}
-        uses: apple-actions/import-codesign-certs@v3
-        with: 
-          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
-          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
-          keychain: notary-keychain
-      - name: Setup Notary Profile
-        if: ${{ matrix.artifact-name == 'wendy-cli-macos-arm64' }}
-        run: |
-          xcrun notarytool store-credentials "notary-profile" \
-            --apple-id "${{ secrets.NOTARY_APPLE_ID }}" \
-            --team-id "${{ secrets.NOTARY_TEAM_ID }}" \
-            --password "${{ secrets.NOTARY_PASSWORD }}"
-      - name: Codesign
-        if: ${{ matrix.artifact-name == 'wendy-cli-macos-arm64' }}
-        timeout-minutes: 10
-        run: |
-          ./Scripts/codesign.sh "${{ matrix.artifact-name }}/${{ matrix.product }}"
-      - name: Create tarball
-        run: |
-          TARBALL_NAME="${{ matrix.artifact-name }}-${{ needs.determine-version.outputs.version }}.tar.gz"
-          tar -czvf "$TARBALL_NAME" ${{ matrix.artifact-name }}/
-          echo "tarball_name=$TARBALL_NAME" >> $GITHUB_OUTPUT
-        id: create-tarball
-      - name: Upload binary artifact
-        id: upload-artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.create-tarball.outputs.tarball_name }}
-          path: ${{ steps.create-tarball.outputs.tarball_name }}
+          name: ${{ env.archive }}
+          path: ${{ env.archive }}
+          retention-days: 14
+          if-no-files-found: error
+
+  build-go-macos:
+    name: ${{ matrix.artifact-name }}
+    runs-on: macos-15
+    needs: [determine-version]
+    strategy:
+      matrix:
+        include:
+          - artifact-name: wendy-cli-darwin-arm64
+            goarch: arm64
+          - artifact-name: wendy-cli-darwin-amd64
+            goarch: amd64
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          LDFLAGS="-s -w -X github.com/wendylabsinc/wendy/internal/shared/version.Version=${VERSION}"
+          mkdir -p ../${{ matrix.artifact-name }}
+          go build -ldflags "${LDFLAGS}" -o ../${{ matrix.artifact-name }}/wendy ./cmd/wendy
+
+      - name: Create archive
+        working-directory: .
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          ARCHIVE="${{ matrix.artifact-name }}-${VERSION}.tar.gz"
+          tar -czvf "$ARCHIVE" ${{ matrix.artifact-name }}/
+          echo "archive=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.archive }}
+          path: ${{ env.archive }}
           retention-days: 14
           if-no-files-found: error
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
-    needs: [check-bugfix, determine-version, build]
+    runs-on: ubuntu-latest
+    needs: [determine-version, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
       matrix:
         include:
           - arch: amd64
-            artifact-suffix: x86_64
+            goarch: amd64
             rpm-arch: x86_64
+            registry-arch: amd64
           - arch: arm64
-            artifact-suffix: aarch64
+            goarch: arm64
             rpm-arch: aarch64
+            registry-arch: arm64
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install FPM dependencies
         run: |
           sudo apt-get update
@@ -590,25 +235,80 @@ jobs:
       - name: Download CLI artifact
         uses: actions/download-artifact@v4
         with:
-          name: wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          name: wendy-cli-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
       - name: Download Agent artifact
         uses: actions/download-artifact@v4
         with:
-          name: wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          name: wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
       - name: Extract artifacts
         run: |
           ls -la
-          tar -xzf wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
-          tar -xzf wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          tar -xzf wendy-cli-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
+          tar -xzf wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
           ls -la
+
+      - name: Download containerd-registry image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REGISTRY_VERSION="v1.1.0"
+          ASSET="containerd-registry-${{ matrix.registry-arch }}.tar.gz"
+          gh release download "$REGISTRY_VERSION" \
+            --repo wendylabsinc/containerd-registry \
+            --pattern "$ASSET"
+          gunzip "$ASSET"
+          ls -lh "containerd-registry-${{ matrix.registry-arch }}.tar"
+
+      - name: Prepare package roots
+        run: |
+          set -euo pipefail
+
+          mkdir -p pkgroot/wendy/usr/bin
+          mkdir -p pkgroot/wendy-agent/usr/bin
+          mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
+          mkdir -p pkgroot/wendy-agent/etc/default
+          mkdir -p pkgroot/wendy-agent/etc/wendy-agent
+          mkdir -p pkgroot/wendy-agent/etc/avahi/services
+          mkdir -p pkgroot/wendy-agent/usr/share/wendyos/offline-images
+          mkdir -p pkgroot/wendy-agent/var/lib/wendy-agent/storage
+
+          install -m755 ./wendy-cli-linux-${{ matrix.goarch }}/wendy \
+            pkgroot/wendy/usr/bin/wendy
+          install -m755 ./wendy-agent-linux-${{ matrix.goarch }}/wendy-agent \
+            pkgroot/wendy-agent/usr/bin/wendy-agent
+
+          install -m644 packaging/linux/systemd/wendy-agent.service \
+            pkgroot/wendy-agent/usr/lib/systemd/system/wendy-agent.service
+          install -m644 packaging/linux/default/wendy-agent \
+            pkgroot/wendy-agent/etc/default/wendy-agent
+          install -m644 packaging/linux/avahi/wendy-agent.service \
+            pkgroot/wendy-agent/etc/avahi/services/wendy-agent.service
+
+          # Dev registry service files
+          install -m644 packaging/linux/wendyos-dev-registry/wendyos-dev-registry.service \
+            pkgroot/wendy-agent/usr/lib/systemd/system/wendyos-dev-registry.service
+          install -m644 packaging/linux/wendyos-dev-registry/wendyos-dev-registry-import.service \
+            pkgroot/wendy-agent/usr/lib/systemd/system/wendyos-dev-registry-import.service
+          install -m755 packaging/linux/wendyos-dev-registry/wendyos-dev-registry.sh \
+            pkgroot/wendy-agent/usr/bin/wendyos-dev-registry
+
+          # Containerd registry offline image
+          install -m644 containerd-registry-${{ matrix.registry-arch }}.tar \
+            pkgroot/wendy-agent/usr/share/wendyos/offline-images/containerd-registry.tar
+
+          # Placeholder config created at install time by package manager.
+          printf "{}\n" > pkgroot/wendy-agent/etc/wendy-agent/config.json
+          chmod 600 pkgroot/wendy-agent/etc/wendy-agent/config.json
 
       - name: Build .deb packages
         run: |
+          set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
 
-          # Build wendy-cli .deb
+          # Build wendy .deb
           fpm -s dir -t deb \
             -n wendy \
             -v "$VERSION" \
@@ -619,7 +319,10 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "devel" \
-            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+            --depends "usbutils" \
+            --depends "ca-certificates" \
+            -C pkgroot/wendy \
+            .
 
           # Build wendy-agent .deb
           fpm -s dir -t deb \
@@ -632,17 +335,31 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "devel" \
-            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+            --depends "containerd" \
+            --depends "dbus" \
+            --depends "systemd" \
+            --depends "ca-certificates" \
+            --depends "avahi-daemon" \
+            --deb-recommends "network-manager | connman" \
+            --deb-recommends "bluez" \
+            --config-files /etc/default/wendy-agent \
+            --config-files /etc/wendy-agent/config.json \
+            --config-files /etc/avahi/services/wendy-agent.service \
+            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
+            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            -C pkgroot/wendy-agent \
+            .
 
           ls -la *.deb
 
       - name: Build .rpm packages
         run: |
+          set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
           # RPM doesn't allow hyphens in version, replace with underscores
           RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
 
-          # Build wendy-cli .rpm
+          # Build wendy .rpm
           fpm -s dir -t rpm \
             -n wendy \
             -v "$RPM_VERSION" \
@@ -653,7 +370,10 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "Development/Tools" \
-            ./wendy-cli-linux-static-musl-${{ matrix.artifact-suffix }}/wendy=/usr/bin/wendy
+            --depends "usbutils" \
+            --depends "ca-certificates" \
+            -C pkgroot/wendy \
+            .
 
           # Build wendy-agent .rpm
           fpm -s dir -t rpm \
@@ -666,9 +386,59 @@ jobs:
             --license "Proprietary" \
             --vendor "Wendy Labs Inc." \
             --category "Development/Tools" \
-            ./wendy-agent-linux-static-musl-${{ matrix.artifact-suffix }}/wendy-agent=/usr/bin/wendy-agent
+            --depends "containerd" \
+            --depends "dbus" \
+            --depends "systemd" \
+            --depends "ca-certificates" \
+            --depends "avahi" \
+            --config-files /etc/default/wendy-agent \
+            --config-files /etc/wendy-agent/config.json \
+            --config-files /etc/avahi/services/wendy-agent.service \
+            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
+            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            -C pkgroot/wendy-agent \
+            .
 
           ls -la *.rpm
+
+      - name: Validate package metadata
+        run: |
+          set -euo pipefail
+
+          WENDY_DEB=$(ls -1 wendy_*_${{ matrix.arch }}.deb | head -1)
+          WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
+          WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
+          WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
+
+          dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
+          dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*systemd"
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*ca-certificates"
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/lib/systemd/system/wendy-agent.service" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/lib/systemd/system/wendyos-dev-registry.service" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/lib/systemd/system/wendyos-dev-registry-import.service" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/bin/wendyos-dev-registry" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/share/wendyos/offline-images/containerd-registry.tar" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "etc/default/wendy-agent" > /dev/null
+          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "etc/avahi/services/wendy-agent.service" > /dev/null
+          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*avahi-daemon"
+
+          rpm -qp --requires "$WENDY_RPM" | grep "^usbutils" > /dev/null
+          rpm -qp --requires "$WENDY_RPM" | grep "^ca-certificates" > /dev/null
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^containerd" > /dev/null
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^dbus" > /dev/null
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^systemd" > /dev/null
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^ca-certificates" > /dev/null
+          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^avahi" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendyos-dev-registry.service" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendyos-dev-registry-import.service" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/bin/wendyos-dev-registry" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/share/wendyos/offline-images/containerd-registry.tar" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
+          rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
 
       - name: Upload .deb packages
         uses: actions/upload-artifact@v4
@@ -686,8 +456,8 @@ jobs:
 
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=${{ needs.check-bugfix.outputs.spot }}
-    needs: [check-bugfix, determine-version, package-linux]
+    runs-on: ubuntu-latest
+    needs: [determine-version, package-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     permissions:
       contents: read
@@ -740,8 +510,8 @@ jobs:
 
   release:
     name: Release
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-arm64/spot=${{ needs.check-bugfix.outputs.spot }}
-    needs: [check-bugfix, determine-version, build, package-linux]
+    runs-on: ubuntu-latest
+    needs: [determine-version, build, build-go-macos, package-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     steps:
       - name: Download artifact
@@ -751,10 +521,10 @@ jobs:
       - name: List files
         run: |
           ls -la
-          # Create a newline-delimited list of release files (tar.gz, deb, rpm, msi)
+          # Create a newline-delimited list of release files
           {
             echo 'FILES<<EOF'
-            find . -name "*.tar.gz" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" | sort
+            find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
       - name: Create Release
@@ -879,25 +649,20 @@ jobs:
           ref: main
           path: tap
 
-      - name: Bump formula
+      - name: Calculate binary checksums
+        id: checksums
         run: |
           set -euo pipefail
-          cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
           TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
-          BRANCH="ci/bump-wendy-${VERSION}"
 
-          git checkout -b "$BRANCH"
-
-          # Calculate URLs and SHA256s for pre-built binaries
-          # Download URL uses tag_name (e.g. v0.1.18 or 2026.02.02-123456), artifact filename uses version
-          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-macos-arm64-${VERSION}.tar.gz"
+          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-darwin-arm64-${VERSION}.tar.gz"
           MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-static-musl-aarch64-${VERSION}.tar.gz"
+          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-arm64-${VERSION}.tar.gz"
           LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-static-musl-x86_64-${VERSION}.tar.gz"
+          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-amd64-${VERSION}.tar.gz"
           LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
 
           echo "URLs and SHA256s:"
@@ -905,26 +670,76 @@ jobs:
           echo "  Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
           echo "  Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
 
-          # Update formula URLs and SHA256s (Linux sed syntax)
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-macos-arm64[^\"]*|${MACOS_URL}|" Formula/wendy.rb
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-static-musl-aarch64[^\"]*|${LINUX_ARM_URL}|" Formula/wendy.rb
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-static-musl-x86_64[^\"]*|${LINUX_X86_URL}|" Formula/wendy.rb
+          echo "macos_url=${MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "macos_sha=${MACOS_SHA}" >> $GITHUB_OUTPUT
+          echo "linux_arm_url=${LINUX_ARM_URL}" >> $GITHUB_OUTPUT
+          echo "linux_arm_sha=${LINUX_ARM_SHA}" >> $GITHUB_OUTPUT
+          echo "linux_x86_url=${LINUX_X86_URL}" >> $GITHUB_OUTPUT
+          echo "linux_x86_sha=${LINUX_X86_SHA}" >> $GITHUB_OUTPUT
 
-          # Update SHA256s based on URL context (not sequential position)
-          sed -i "/wendy-cli-macos-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${MACOS_SHA}\"|" Formula/wendy.rb
-          sed -i "/wendy-cli-linux-static-musl-aarch64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_ARM_SHA}\"|" Formula/wendy.rb
-          sed -i "/wendy-cli-linux-static-musl-x86_64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${LINUX_X86_SHA}\"|" Formula/wendy.rb
+      # Nightly: update wendy-nightly.rb and push directly to main
+      - name: Bump nightly formula
+        if: needs.determine-version.outputs.is_release != 'true'
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          FORMULA="Formula/wendy-nightly.rb"
 
-          echo "Updated formula:"
-          grep -A 1 "url\|sha256" Formula/wendy.rb | head -20
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
+
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
+
+          # Update bottle root_url version
+          sed -i "s|wendy-nightly-[^\"]*|wendy-nightly-${VERSION}|" "$FORMULA"
+
+          echo "Updated nightly formula:"
+          grep -A 1 "url\|sha256" "$FORMULA" | head -20
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/wendy.rb
+          git add "$FORMULA"
+          git commit -m "wendy-nightly: update to ${VERSION}"
+          git push origin main
+
+      # Stable: update wendy.rb via PR
+      - name: Bump stable formula
+        if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
+        run: |
+          set -euo pipefail
+          cd tap
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BRANCH="ci/bump-wendy-${VERSION}"
+          FORMULA="Formula/wendy.rb"
+
+          git checkout -b "$BRANCH"
+
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
+
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
+
+          # Update bottle root_url version
+          sed -i "s|wendy-[0-9][^\"]*|wendy-${VERSION}|" "$FORMULA"
+
+          echo "Updated stable formula:"
+          grep -A 1 "url\|sha256" "$FORMULA" | head -20
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FORMULA"
           git commit -m "wendy: bump to ${VERSION}"
           git push -u origin "$BRANCH"
 
       - name: Create PR
+        if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -938,7 +753,7 @@ jobs:
 
           This PR updates the wendy formula to version ${VERSION}.
 
-          All platforms use pre-built binaries (signed and notarized for macOS ARM64)."
+          All platforms use pre-built Go binaries."
 
   publish-aur:
     name: Publish AUR Packages
@@ -950,12 +765,12 @@ jobs:
         include:
           - pkgname: wendy
             pkgbuild_path: packaging/arch/wendy/PKGBUILD
-            x86_64_artifact: wendy-cli-linux-static-musl-x86_64
-            aarch64_artifact: wendy-cli-linux-static-musl-aarch64
+            x86_64_artifact: wendy-cli-linux-amd64
+            aarch64_artifact: wendy-cli-linux-arm64
           - pkgname: wendy-agent
             pkgbuild_path: packaging/arch/wendy-agent/PKGBUILD
-            x86_64_artifact: wendy-agent-linux-static-musl-x86_64
-            aarch64_artifact: wendy-agent-linux-static-musl-aarch64
+            x86_64_artifact: wendy-agent-linux-amd64
+            aarch64_artifact: wendy-agent-linux-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -1023,3 +838,25 @@ jobs:
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to ${{ needs.determine-version.outputs.version }}"
+
+  publish-winget:
+    name: Publish to Winget
+    runs-on: windows-latest
+    needs: [determine-version, release]
+    if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
+    steps:
+      - name: Install wingetcreate
+        run: |
+          iwr https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Update Winget package
+        run: |
+          $version = "${{ needs.determine-version.outputs.version }}"
+          $tag = "${{ needs.determine-version.outputs.tag_name }}"
+          $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
+
+          .\wingetcreate.exe update WendyLabs.Wendy `
+            --version $version `
+            --urls "$base/wendy-cli-windows-amd64-$version.zip" "$base/wendy-cli-windows-arm64-$version.zip" `
+            --submit `
+            --token "${{ secrets.WINGET_GITHUB_TOKEN }}"
