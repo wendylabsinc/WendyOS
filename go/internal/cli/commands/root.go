@@ -3,6 +3,7 @@ package commands
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 )
 
@@ -19,6 +20,10 @@ func NewRootCmd() *cobra.Command {
 		Long:          "Wendy is a CLI for developing and deploying edge computing applications to WendyOS devices.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			providers.Initialize(cmd.Context())
+			return nil
+		},
 	}
 
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")

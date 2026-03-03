@@ -13,8 +13,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"golang.org/x/term"
 )
@@ -70,13 +72,90 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("invalid wendy.json: %w", err)
 	}
 
+	// Step 2: Resolve the target device.
+	target, err := resolveTarget(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Provider-based run path.
+	if target.External != nil && target.Provider != nil {
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, opts)
+	}
+
+	// Agent-based run path (existing gRPC pipeline).
+	defer target.Agent.Close()
+	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
+}
+
+// runWithProvider builds and runs via an external device provider.
+func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
+	fmt.Printf("Building with %s provider...\n", p.DisplayName())
+	app, err := p.Build(ctx, device, projectPath, product, opts.debug)
+	if err != nil {
+		return fmt.Errorf("provider build: %w", err)
+	}
+	fmt.Println("Build completed.")
+
+	if opts.deploy {
+		fmt.Printf("Application %s built but not started (--deploy).\n", product)
+		return nil
+	}
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	output := make(chan providers.RunOutput, 64)
+
+	// Ctrl+C handler.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		fmt.Println("\nStopping application...")
+		p.Stop(context.Background(), app)
+		runCancel()
+	}()
+
+	// Start the application in a goroutine.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Run(runCtx, app, opts.detach, output)
+	}()
+
+	// Consume output.
+	for out := range output {
+		switch out.Type {
+		case providers.RunOutputStarted:
+			fmt.Printf("Application %s started.\n", product)
+			if opts.detach {
+				fmt.Printf("Application %s running in detached mode.\n", product)
+				return nil
+			}
+		case providers.RunOutputStdout:
+			os.Stdout.Write(out.Data)
+		case providers.RunOutputStderr:
+			os.Stderr.Write(out.Data)
+		}
+	}
+
+	runErr := <-errCh
+	fmt.Printf("\nApplication %s stopped.\n", product)
+	if runCtx.Err() != nil {
+		return nil // cancelled by signal
+	}
+	return runErr
+}
+
+// runWithAgent is the existing gRPC agent pipeline.
+func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	imageName := appCfg.AppID + ":latest"
 
-	// Step 2: Detect project type and ensure a Dockerfile exists.
+	// Detect project type and ensure a Dockerfile exists.
 	projectType := detectProjectType(cwd)
 	switch projectType {
 	case "docker":
-		// Dockerfile already exists, nothing to do.
+		// Dockerfile already exists.
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			fmt.Println("No Dockerfile found. Generating one for Python project...")
@@ -93,14 +172,14 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("unable to detect project type; ensure a Dockerfile, requirements.txt, or Package.swift is present")
 	}
 
-	// Step 3: Build the Docker image for linux/arm64.
+	// Build the Docker image for linux/arm64.
 	fmt.Println("Building Docker image for linux/arm64...")
 	if err := buildDockerImage(ctx, cwd, imageName, "linux/arm64", os.Stdout); err != nil {
 		return fmt.Errorf("building Docker image: %w", err)
 	}
 	fmt.Println("Build completed.")
 
-	// Step 4: Export the image as a tar.
+	// Export the image as a tar.
 	tarPath := filepath.Join(os.TempDir(), appCfg.AppID+"-image.tar")
 	defer os.Remove(tarPath)
 
@@ -109,7 +188,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("exporting Docker image: %w", err)
 	}
 
-	// Step 5: Extract OCI layers from the tar.
+	// Extract OCI layers from the tar.
 	ociImage, err := extractOCIImage(tarPath)
 	if err != nil {
 		return fmt.Errorf("extracting OCI image: %w", err)
@@ -117,22 +196,14 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	fmt.Printf("Image has %d layers.\n", len(ociImage.Layers))
 
-	// Step 6: Connect to agent gRPC.
-	conn, err := connectToAgent(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	// Step 7: Serialize app config for the agent.
+	// Serialize app config for the agent.
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
 	}
 
-	// Step 8: Upload missing layers and create container.
+	// Upload missing layers and create container.
 	restartPolicy := resolveRestartPolicy(opts)
-
 	return uploadAndDeploy(ctx, conn, appCfg, ociImage, tarPath, appConfigData, restartPolicy, opts)
 }
 
@@ -214,11 +285,9 @@ func uploadAndDeploy(
 	cmdParts = append(cmdParts, ociImage.Cmd...)
 	containerCmd := strings.Join(cmdParts, " ")
 
-	// Use image's WorkingDir if available.
 	workingDir := ociImage.WorkingDir
 
 	if opts.deploy {
-		// Create container without starting.
 		_, err := conn.ContainerService.CreateContainer(ctx, &agentpb.CreateContainerRequest{
 			ImageName:     appCfg.AppID + ":latest",
 			AppName:       appCfg.AppID,
@@ -273,7 +342,6 @@ func uploadAndDeploy(
 	}
 
 	// Stream stdout/stderr from the RunContainer stream directly.
-	// Set up Ctrl+C handler to stop the container.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 
@@ -310,7 +378,6 @@ func uploadAndDeploy(
 }
 
 // uploadLayers uploads missing layers, config, and manifest to the agent.
-// Uses a TUI progress bar when a terminal is available, plain text otherwise.
 func uploadLayers(ctx context.Context, conn *grpcclient.AgentConnection, ociImage *OCIImage, missingLayers []OCILayer, totalUploadSize int64, tarPath string) error {
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
 
@@ -334,7 +401,6 @@ func uploadLayers(ctx context.Context, conn *grpcclient.AgentConnection, ociImag
 	}
 
 	if !isTTY {
-		// Plain text progress.
 		err := doUpload(func(i int, digest string, uploaded int64) {
 			pct := 0
 			if totalUploadSize > 0 {

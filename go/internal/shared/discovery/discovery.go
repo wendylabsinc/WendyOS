@@ -28,7 +28,7 @@ type DiscoveryOptions struct {
 }
 
 // Discover runs device discovery across the requested interface types and returns
-// all found devices. Currently only LAN (mDNS) discovery is implemented.
+// all found devices.
 func Discover(ctx context.Context, opts DiscoveryOptions) (*models.DevicesCollection, error) {
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -49,12 +49,31 @@ func Discover(ctx context.Context, opts DiscoveryOptions) (*models.DevicesCollec
 		return false
 	}
 
-	if shouldDiscover(models.InterfaceLAN) {
-		devices, err := discoverLAN(ctx, timeout)
-		if err != nil {
-			return collection, nil // return empty rather than failing
+	if shouldDiscover(models.InterfaceUSB) {
+		if devices, err := discoverUSB(ctx); err == nil {
+			collection.USBDevices = devices
 		}
-		collection.LANDevices = devices
+	}
+
+	if shouldDiscover(models.InterfaceEthernet) {
+		if devices, err := discoverEthernet(ctx); err == nil {
+			collection.EthernetInterfaces = devices
+		}
+	}
+
+	if shouldDiscover(models.InterfaceLAN) {
+		if devices, err := discoverLAN(ctx, timeout); err == nil {
+			collection.LANDevices = devices
+		}
+	}
+
+	if shouldDiscover(models.InterfaceBluetooth) {
+		// Use active scanning when bluetooth is explicitly requested or
+		// discovering all types. The scan takes ~5 seconds on Linux.
+		activeScan := len(opts.Types) == 0 || len(opts.Types) == 1
+		if devices, err := discoverBluetooth(ctx, activeScan); err == nil {
+			collection.BluetoothDevices = devices
+		}
 	}
 
 	return collection, nil

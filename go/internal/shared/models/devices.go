@@ -15,6 +15,7 @@ const (
 	InterfaceEthernet  InterfaceType = "ethernet"
 	InterfaceLAN       InterfaceType = "lan"
 	InterfaceBluetooth InterfaceType = "bluetooth"
+	InterfaceExternal  InterfaceType = "external"
 )
 
 // USBDevice represents a USB-connected Wendy device.
@@ -79,6 +80,12 @@ type BluetoothDevice struct {
 	L2CAPPSM        uint16 `json:"l2capPSM,omitempty"`
 }
 
+// IsWendyAgent returns true if this device supports the WendyOS agent
+// protobuf-over-L2CAP protocol (as opposed to Wendy Lite GATT provisioning).
+func (d BluetoothDevice) IsWendyAgent() bool {
+	return d.L2CAPPSM > 0
+}
+
 // HumanReadable returns a human-friendly string describing this Bluetooth device.
 func (d BluetoothDevice) HumanReadable() string {
 	s := d.DisplayName
@@ -124,6 +131,7 @@ type DevicesCollection struct {
 	LANDevices         []LANDevice         `json:"lanDevices"`
 	BluetoothDevices   []BluetoothDevice   `json:"bluetoothDevices"`
 	EthernetInterfaces []EthernetInterface `json:"ethernetDevices"`
+	ExternalDevices    []ExternalDevice    `json:"externalDevices,omitempty"`
 }
 
 // IsEmpty returns true if no devices were found across any interface.
@@ -131,7 +139,8 @@ func (c *DevicesCollection) IsEmpty() bool {
 	return len(c.USBDevices) == 0 &&
 		len(c.LANDevices) == 0 &&
 		len(c.BluetoothDevices) == 0 &&
-		len(c.EthernetInterfaces) == 0
+		len(c.EthernetInterfaces) == 0 &&
+		len(c.ExternalDevices) == 0
 }
 
 // ToJSON returns a pretty-printed JSON representation of the collection.
@@ -161,6 +170,9 @@ func (c *DevicesCollection) ToHumanReadable() string {
 		sb.WriteString("\n" + d.HumanReadable())
 	}
 	for _, d := range c.BluetoothDevices {
+		sb.WriteString("\n" + d.HumanReadable())
+	}
+	for _, d := range c.ExternalDevices {
 		sb.WriteString("\n" + d.HumanReadable())
 	}
 

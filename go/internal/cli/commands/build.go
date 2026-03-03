@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,9 +9,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 )
+
+// BuildResult is the output of the build command. Exactly one field is set.
+type BuildResult struct {
+	// ProviderApp is set when the build used an external provider.
+	ProviderApp *providers.BuiltApp
+	// OCIImage is set when the build produced a Docker/OCI image for a LAN device.
+	OCIImage *OCIImage
+}
 
 func newBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -23,14 +33,36 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("getting working directory: %w", err)
 			}
 
-			// Try to load wendy.json for language hints.
+			target, _ := resolveTarget(cmd.Context())
+
+			// If the target is an external provider device, use the provider build path.
+			if target != nil && target.External != nil && target.Provider != nil {
+				product := filepath.Base(cwd)
+				if appCfg, loadErr := appconfig.LoadFromFile(filepath.Join(cwd, "wendy.json")); loadErr == nil {
+					product = appCfg.AppID
+				}
+
+				fmt.Printf("Building with %s provider...\n", target.Provider.DisplayName())
+				app, err := target.Provider.Build(cmd.Context(), *target.External, cwd, product, false)
+				if err != nil {
+					return fmt.Errorf("provider build: %w", err)
+				}
+				fmt.Printf("Build completed successfully (%s).\n", app.ProviderKey)
+				return nil
+			}
+
+			// Close the agent connection if one was opened during target resolution.
+			if target != nil && target.Agent != nil {
+				defer target.Agent.Close()
+			}
+
+			// Existing agent-targeted build path.
 			var language string
 			cfgPath := filepath.Join(cwd, "wendy.json")
 			if appCfg, loadErr := appconfig.LoadFromFile(cfgPath); loadErr == nil {
 				language = appCfg.Language
 			}
 
-			// Detect project type: prefer wendy.json language, then filesystem heuristics.
 			projectType := detectProjectTypeWithLanguage(cwd, language)
 			return buildProject(cmd.Context(), cwd, projectType)
 		},
@@ -42,18 +74,16 @@ func newBuildCmd() *cobra.Command {
 // detectProjectTypeWithLanguage determines the project type using the wendy.json
 // language field as a hint, falling back to filesystem detection.
 func detectProjectTypeWithLanguage(dir, language string) string {
-	// If wendy.json specifies a language, use that.
 	switch language {
 	case "python":
 		return "python"
 	case "swift":
 		return "swift"
 	}
-	// Fall back to filesystem detection.
 	return detectProjectType(dir)
 }
 
-func buildProject(ctx interface{ Done() <-chan struct{} }, dir, projectType string) error {
+func buildProject(ctx context.Context, dir, projectType string) error {
 	imageName := filepath.Base(dir) + ":latest"
 
 	switch projectType {
@@ -104,7 +134,6 @@ func buildDockerProject(dir, imageName string) error {
 }
 
 func buildPythonProject(dir, imageName string) error {
-	// If there is no Dockerfile, generate one.
 	dockerfilePath := filepath.Join(dir, "Dockerfile")
 	generatedDockerfile := false
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
@@ -118,7 +147,6 @@ func buildPythonProject(dir, imageName string) error {
 
 	err := buildDockerProject(dir, imageName)
 
-	// Clean up generated Dockerfile if we created it.
 	if generatedDockerfile {
 		os.Remove(dockerfilePath)
 	}
@@ -127,12 +155,10 @@ func buildPythonProject(dir, imageName string) error {
 }
 
 func buildSwiftProject(dir string) error {
-	// For Swift projects, check for a Dockerfile first.
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
 		return buildDockerProject(dir, filepath.Base(dir)+":latest")
 	}
 
-	// Fall back to swift build (local, not cross-compiled).
 	fmt.Println("Building Swift project locally...")
 	s := tui.NewSpinner("Building Swift project...")
 	p := tea.NewProgram(s)
