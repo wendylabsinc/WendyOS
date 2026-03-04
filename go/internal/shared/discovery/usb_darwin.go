@@ -63,14 +63,22 @@ func collectUSBDevices(items []spUSBItem, devices *[]models.USBDevice) {
 			collectUSBDevices(item.Items, devices)
 		}
 
-		if !strings.Contains(strings.ToLower(item.Name), "wendy") {
+		isWendy := strings.Contains(strings.ToLower(item.Name), "wendy")
+		isESP32 := isESP32Device(item.VendorID, item.ProductID)
+
+		if !isWendy && !isESP32 {
 			continue
 		}
 
 		dev := models.USBDevice{
 			Name:          item.Name,
 			DisplayName:   item.Name,
-			IsWendyDevice: true,
+			IsWendyDevice: isWendy || isESP32,
+			IsESP32:       isESP32,
+		}
+
+		if isESP32 {
+			dev.DisplayName = "ESP32-C6"
 		}
 
 		// vendor_id may contain a suffix like "0x05ac  (Apple Inc.)"
@@ -95,6 +103,13 @@ func collectUSBDevices(items []spUSBItem, devices *[]models.USBDevice) {
 
 		*devices = append(*devices, dev)
 	}
+}
+
+// isESP32Device checks if the VID/PID matches an Espressif ESP32-C6.
+func isESP32Device(vendorID, productID string) bool {
+	vid := strings.ToLower(strings.Fields(vendorID)[0])
+	pid := strings.ToLower(strings.Fields(productID)[0])
+	return vid == models.ESP32VendorID && pid == models.ESP32ProductID
 }
 
 func parseUSBSpeed(speed string) string {

@@ -68,7 +68,7 @@
 
     // Determine device type by inspecting advertised service UUIDs.
     CBUUID *agentUUID = [CBUUID UUIDWithString:@"7565E9EB-4C20-4B67-9272-D708B397B631"];
-    CBUUID *liteUUID  = [CBUUID UUIDWithString:@"00004E57-454E-4459-0001-000000000000"];
+    CBUUID *liteUUID  = [CBUUID UUIDWithString:@"4E57454E-4459-0001-0000-000000000000"];
     NSArray<CBUUID *> *serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey];
 
     BOOL hasAgent = NO;

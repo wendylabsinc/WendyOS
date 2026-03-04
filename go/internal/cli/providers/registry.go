@@ -41,6 +41,15 @@ func AvailableProviders() []DeviceProvider {
 	return availableProviders
 }
 
+// AllProviders returns all registered providers regardless of toolchain availability.
+// Use this for device discovery where you want to find devices even if you can't
+// build for them.
+func AllProviders() []DeviceProvider {
+	mu.RLock()
+	defer mu.RUnlock()
+	return allProviders
+}
+
 // ProviderForKey returns the available provider with the given key, or nil.
 func ProviderForKey(key string) DeviceProvider {
 	mu.RLock()

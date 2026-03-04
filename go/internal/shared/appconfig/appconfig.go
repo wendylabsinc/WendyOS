@@ -52,10 +52,17 @@ var allowedKeys = map[string][]string{
 	EntitlementGPIO:      {"type", "pins"},
 }
 
+// Platform constants identify the target hardware family.
+const (
+	PlatformWendyOS   = "wendyos"
+	PlatformWendyLite = "wendy-lite"
+)
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
 	AppID        string        `json:"appId"`
 	Version      string        `json:"version,omitempty"`
+	Platform     string        `json:"platform,omitempty"`
 	Language     string        `json:"language,omitempty"`
 	Entitlements []Entitlement `json:"entitlements,omitempty"`
 	Python       *PythonConfig `json:"python,omitempty"`

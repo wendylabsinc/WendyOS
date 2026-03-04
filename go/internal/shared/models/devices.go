@@ -18,6 +18,12 @@ const (
 	InterfaceExternal  InterfaceType = "external"
 )
 
+// ESP32 USB identifiers (Espressif ESP32-C6).
+const (
+	ESP32VendorID  = "0x303a"
+	ESP32ProductID = "0x1001"
+)
+
 // USBDevice represents a USB-connected Wendy device.
 type USBDevice struct {
 	Name              string `json:"name"`
@@ -30,6 +36,7 @@ type USBDevice struct {
 	Hostname          string `json:"hostname,omitempty"`
 	AgentVersion      string `json:"agentVersion,omitempty"`
 	IsWendyDevice     bool   `json:"isWendyDevice"`
+	IsESP32           bool   `json:"isESP32,omitempty"`
 }
 
 // HumanReadable returns a human-friendly string describing this USB device.

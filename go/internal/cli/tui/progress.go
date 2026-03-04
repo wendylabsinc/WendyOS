@@ -75,6 +75,11 @@ func (m ProgressModel) View() string {
 	if m.done && m.err != nil {
 		return fmt.Sprintf("Error: %v\n", m.err)
 	}
+	if m.done {
+		// Render at 100% directly — the animation may not have caught up
+		// before tea.Quit was processed.
+		return fmt.Sprintf("%s\n%s\n", m.title, m.progress.ViewAs(1.0))
+	}
 	return fmt.Sprintf("%s\n%s\n", m.title, m.progress.View())
 }
 

@@ -67,10 +67,12 @@ func newDiscoverCmd() *cobra.Command {
 	return cmd
 }
 
-// discoverExternalDevices queries all available providers for their devices.
+// discoverExternalDevices queries all registered providers for their devices.
+// This uses AllProviders (not just available ones) so devices are discoverable
+// even when the build toolchain isn't installed.
 func discoverExternalDevices(ctx context.Context) []models.ExternalDevice {
 	var all []models.ExternalDevice
-	for _, p := range providers.AvailableProviders() {
+	for _, p := range providers.AllProviders() {
 		devices, err := p.DiscoverDevices(ctx)
 		if err != nil {
 			continue

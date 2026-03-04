@@ -25,12 +25,18 @@ func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.Contains(strings.ToLower(line), "wendy") {
+
+		isWendy := strings.Contains(strings.ToLower(line), "wendy")
+		// Check for Espressif ESP32-C6 VID:PID (303a:1001).
+		isESP32 := strings.Contains(line, "303a:1001")
+
+		if !isWendy && !isESP32 {
 			continue
 		}
 
 		dev := models.USBDevice{
-			IsWendyDevice: true,
+			IsWendyDevice: isWendy || isESP32,
+			IsESP32:       isESP32,
 		}
 
 		// Extract "ID VVVV:PPPP"
@@ -52,8 +58,16 @@ func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 		}
 
 		if dev.Name == "" {
-			dev.Name = "Wendy Device"
+			if isESP32 {
+				dev.Name = "ESP32-C6"
+			} else {
+				dev.Name = "Wendy Device"
+			}
 			dev.DisplayName = dev.Name
+		}
+
+		if isESP32 {
+			dev.DisplayName = "ESP32-C6"
 		}
 
 		devices = append(devices, dev)
