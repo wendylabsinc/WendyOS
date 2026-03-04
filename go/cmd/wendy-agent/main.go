@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/internal/agent/bluetooth"
@@ -47,13 +48,17 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Create the telemetry broadcaster early so we can tee agent logs into it.
+	broadcaster := services.NewTelemetryBroadcaster()
+
+	// Wrap the logger so agent internal logs are published to the telemetry stream.
+	telemetryCore := services.NewTelemetryCore(broadcaster, zapcore.DebugLevel)
+	logger = zap.New(zapcore.NewTee(logger.Core(), telemetryCore))
+
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
 	// Clean up old agent binary backups from previous updates.
 	services.CleanupOldBackups(logger)
-
-	// Create services.
-	broadcaster := services.NewTelemetryBroadcaster()
 	networkMgr := agentnet.NewNMCLINetworkManager(logger)
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
 	btManager := bluetooth.NewManager(logger)
