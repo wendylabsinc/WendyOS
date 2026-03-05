@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +39,8 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceSetupCmd(),
 		newDeviceUpdateCmd(),
 		newDeviceLogsCmd(),
+		newDeviceDashboardCmd(),
+		newDeviceTelemetryStreamCmd(),
 		newWifiCmd(),
 	)
 
@@ -94,22 +97,51 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set-default [hostname]",
 		Short: "Set the default device hostname",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var device string
+			if len(args) > 0 {
+				device = args[0]
+			} else {
+				sel, err := pickDeviceForDefault(cmd.Context())
+				if err != nil {
+					return err
+				}
+				device = sel
+			}
+
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			cfg.DefaultDevice = args[0]
+			cfg.DefaultDevice = device
 			if err := config.Save(cfg); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Printf("Default device set to: %s\n", args[0])
+			fmt.Printf("Default device set to: %s\n", device)
 			return nil
 		},
 	}
+}
+
+// pickDeviceForDefault runs the interactive device picker and returns a
+// hostname or provider key suitable for storing as the default device.
+func pickDeviceForDefault(ctx context.Context) (string, error) {
+	selected, err := pickDevice(ctx, nil, false)
+	if err != nil {
+		return "", err
+	}
+	defer selected.Close()
+
+	if selected.Agent != nil {
+		return selected.Agent.Host, nil
+	}
+	if selected.External != nil {
+		return selected.External.ProviderKey, nil
+	}
+	return "", fmt.Errorf("no device selected")
 }
 
 func newDeviceUnsetDefaultCmd() *cobra.Command {
@@ -272,10 +304,14 @@ func newDeviceLogsCmd() *cobra.Command {
 				}
 
 				for _, rl := range logs.GetResourceLogs() {
-					serviceName := resourceServiceName(rl.GetResource())
+					svcName := resourceServiceName(rl.GetResource())
 					for _, sl := range rl.GetScopeLogs() {
 						for _, lr := range sl.GetLogRecords() {
-							printLogRecord(serviceName, lr)
+							if jsonOutput {
+								printLogRecordJSON(svcName, lr)
+							} else {
+								printLogRecord(svcName, lr)
+							}
 						}
 					}
 				}
@@ -353,6 +389,28 @@ func anyValueString(v *otelpb.AnyValue) string {
 	}
 }
 
+func printLogRecordJSON(service string, lr *otelpb.LogRecord) {
+	entry := map[string]any{
+		"timestamp": time.Unix(0, int64(lr.GetTimeUnixNano())).UTC().Format(time.RFC3339Nano),
+		"severity":  lr.GetSeverityText(),
+	}
+	if service != "" {
+		entry["service"] = service
+	}
+	if body := lr.GetBody(); body != nil {
+		entry["body"] = body.GetStringValue()
+	}
+	if attrs := lr.GetAttributes(); len(attrs) > 0 {
+		meta := make(map[string]string, len(attrs))
+		for _, kv := range attrs {
+			meta[kv.GetKey()] = anyValueString(kv.GetValue())
+		}
+		entry["attributes"] = meta
+	}
+	data, _ := json.Marshal(entry)
+	fmt.Println(string(data))
+}
+
 func printLogRecord(service string, lr *otelpb.LogRecord) {
 	ts := time.Unix(0, int64(lr.GetTimeUnixNano())).Local().Format("15:04:05.000")
 	label, style := severityLabel(lr.GetSeverityNumber())
@@ -384,6 +442,292 @@ func printLogRecord(service string, lr *otelpb.LogRecord) {
 	}
 
 	fmt.Println(b.String())
+}
+
+func newDeviceTelemetryStreamCmd() *cobra.Command {
+	var appName string
+	var serviceName string
+
+	cmd := &cobra.Command{
+		Use:   "telemetry-stream",
+		Short: "Stream all telemetry data (logs, metrics, traces) as JSONL",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			conn, err := connectToAgent(ctx)
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+
+			enc := json.NewEncoder(os.Stdout)
+
+			var mu sync.Mutex
+			emit := func(v any) {
+				mu.Lock()
+				defer mu.Unlock()
+				enc.Encode(v) //nolint:errcheck
+			}
+
+			var wg sync.WaitGroup
+			errc := make(chan error, 3)
+
+			// Stream logs.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				logReq := &agentpb.StreamLogsRequest{}
+				if appName != "" {
+					logReq.AppName = &appName
+				}
+				if serviceName != "" {
+					logReq.ServiceName = &serviceName
+				}
+				stream, err := conn.TelemetryService.StreamLogs(ctx, logReq)
+				if err != nil {
+					errc <- fmt.Errorf("starting log stream: %w", err)
+					return
+				}
+				for {
+					resp, err := stream.Recv()
+					if err == io.EOF {
+						return
+					}
+					if err != nil {
+						errc <- fmt.Errorf("receiving logs: %w", err)
+						return
+					}
+					logs := resp.GetLogs()
+					if logs == nil {
+						continue
+					}
+					for _, rl := range logs.GetResourceLogs() {
+						res := kvMapFromResource(rl.GetResource())
+						svc := res["service.name"]
+						for _, sl := range rl.GetScopeLogs() {
+							for _, lr := range sl.GetLogRecords() {
+								sev, sevNum := severityTextAndNumber(lr.GetSeverityNumber())
+								emit(telemetryLogEntry{
+									Type:           "log",
+									Timestamp:      formatNanoUTC(lr.GetTimeUnixNano()),
+									TimestampNano:  lr.GetTimeUnixNano(),
+									Severity:       sev,
+									SeverityNumber: sevNum,
+									Service:        svc,
+									Resource:       res,
+									Body:           anyValueString(lr.GetBody()),
+									Attributes:     kvMapFromKeyValues(lr.GetAttributes()),
+								})
+							}
+						}
+					}
+				}
+			}()
+
+			// Stream metrics.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				metricReq := &agentpb.StreamMetricsRequest{}
+				if appName != "" {
+					metricReq.AppName = &appName
+				}
+				if serviceName != "" {
+					metricReq.ServiceName = &serviceName
+				}
+				stream, err := conn.TelemetryService.StreamMetrics(ctx, metricReq)
+				if err != nil {
+					errc <- fmt.Errorf("starting metrics stream: %w", err)
+					return
+				}
+				for {
+					resp, err := stream.Recv()
+					if err == io.EOF {
+						return
+					}
+					if err != nil {
+						errc <- fmt.Errorf("receiving metrics: %w", err)
+						return
+					}
+					metrics := resp.GetMetrics()
+					if metrics == nil {
+						continue
+					}
+					for _, rm := range metrics.GetResourceMetrics() {
+						res := kvMapFromResource(rm.GetResource())
+						svc := res["service.name"]
+						for _, sm := range rm.GetScopeMetrics() {
+							for _, m := range sm.GetMetrics() {
+								emit(telemetryMetricEntry{
+									Type:        "metric",
+									Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+									Service:     svc,
+									Resource:    res,
+									Name:        m.GetName(),
+									Description: m.GetDescription(),
+									Unit:        m.GetUnit(),
+								})
+							}
+						}
+					}
+				}
+			}()
+
+			// Stream traces.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				traceReq := &agentpb.StreamTracesRequest{}
+				if appName != "" {
+					traceReq.AppName = &appName
+				}
+				if serviceName != "" {
+					traceReq.ServiceName = &serviceName
+				}
+				stream, err := conn.TelemetryService.StreamTraces(ctx, traceReq)
+				if err != nil {
+					errc <- fmt.Errorf("starting traces stream: %w", err)
+					return
+				}
+				for {
+					resp, err := stream.Recv()
+					if err == io.EOF {
+						return
+					}
+					if err != nil {
+						errc <- fmt.Errorf("receiving traces: %w", err)
+						return
+					}
+					traces := resp.GetTraces()
+					if traces == nil {
+						continue
+					}
+					for _, rs := range traces.GetResourceSpans() {
+						res := kvMapFromResource(rs.GetResource())
+						svc := res["service.name"]
+						for _, ss := range rs.GetScopeSpans() {
+							for _, span := range ss.GetSpans() {
+								emit(telemetryTraceEntry{
+									Type:             "trace",
+									Timestamp:        formatNanoUTC(span.GetStartTimeUnixNano()),
+									TimestampNano:    span.GetStartTimeUnixNano(),
+									EndTimestamp:     formatNanoUTC(span.GetEndTimeUnixNano()),
+									EndTimestampNano: span.GetEndTimeUnixNano(),
+									Service:          svc,
+									Resource:         res,
+									Name:             span.GetName(),
+									Kind:             span.GetKind().String(),
+									TraceID:          hex.EncodeToString(span.GetTraceId()),
+									SpanID:           hex.EncodeToString(span.GetSpanId()),
+									ParentSpanID:     hex.EncodeToString(span.GetParentSpanId()),
+									Attributes:       kvMapFromKeyValues(span.GetAttributes()),
+								})
+							}
+						}
+					}
+				}
+			}()
+
+			// Wait for all goroutines, return first error if any.
+			go func() {
+				wg.Wait()
+				close(errc)
+			}()
+
+			for err := range errc {
+				if err != nil && ctx.Err() == nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&appName, "app", "", "Filter by application name")
+	cmd.Flags().StringVar(&serviceName, "service", "", "Filter by service name")
+
+	return cmd
+}
+
+type telemetryLogEntry struct {
+	Type           string            `json:"type"`
+	Timestamp      string            `json:"timestamp"`
+	TimestampNano  uint64            `json:"timestampNano"`
+	Severity       string            `json:"severity"`
+	SeverityNumber int32             `json:"severityNumber"`
+	Service        string            `json:"service"`
+	Resource       map[string]string `json:"resource"`
+	Body           string            `json:"body"`
+	Attributes     map[string]string `json:"attributes"`
+}
+
+type telemetryMetricEntry struct {
+	Type        string            `json:"type"`
+	Timestamp   string            `json:"timestamp"`
+	Service     string            `json:"service"`
+	Resource    map[string]string `json:"resource"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Unit        string            `json:"unit,omitempty"`
+}
+
+type telemetryTraceEntry struct {
+	Type             string            `json:"type"`
+	Timestamp        string            `json:"timestamp"`
+	TimestampNano    uint64            `json:"timestampNano"`
+	EndTimestamp     string            `json:"endTimestamp"`
+	EndTimestampNano uint64            `json:"endTimestampNano"`
+	Service          string            `json:"service"`
+	Resource         map[string]string `json:"resource"`
+	Name             string            `json:"name"`
+	Kind             string            `json:"kind"`
+	TraceID          string            `json:"traceId"`
+	SpanID           string            `json:"spanId"`
+	ParentSpanID     string            `json:"parentSpanId,omitempty"`
+	Attributes       map[string]string `json:"attributes"`
+}
+
+func formatNanoUTC(nanos uint64) string {
+	return time.Unix(0, int64(nanos)).UTC().Format(time.RFC3339Nano)
+}
+
+func severityTextAndNumber(sev otelpb.SeverityNumber) (string, int32) {
+	num := int32(sev)
+	switch {
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_FATAL:
+		return "FATAL", num
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_ERROR:
+		return "ERROR", num
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_WARN:
+		return "WARN", num
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_INFO:
+		return "INFO", num
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_DEBUG:
+		return "DEBUG", num
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_TRACE:
+		return "TRACE", num
+	default:
+		return "UNSPECIFIED", num
+	}
+}
+
+func kvMapFromResource(res *otelpb.Resource) map[string]string {
+	m := make(map[string]string)
+	if res == nil {
+		return m
+	}
+	for _, attr := range res.GetAttributes() {
+		m[attr.GetKey()] = anyValueString(attr.GetValue())
+	}
+	return m
+}
+
+func kvMapFromKeyValues(kvs []*otelpb.KeyValue) map[string]string {
+	m := make(map[string]string)
+	for _, kv := range kvs {
+		m[kv.GetKey()] = anyValueString(kv.GetValue())
+	}
+	return m
 }
 
 type githubReleaseAsset struct {
