@@ -23,8 +23,8 @@ DOCKER_TAG := scarthgap
 DOCKER_USER := dev
 DOCKER_WORKDIR := /home/$(DOCKER_USER)/$(IMAGE_NAME)
 BUILD_DIR := build
-MACHINE ?= jetson-orin-nano-devkit-nvme-edgeos
-IMAGE_TARGET ?= edgeos-image
+MACHINE ?= jetson-orin-nano-devkit-nvme-wendyos
+IMAGE_TARGET ?= wendyos-image
 
 # Flash configuration
 FLASH_DEVICE ?=
@@ -91,7 +91,8 @@ help:
 	@printf "$(YELLOW)Examples:$(NC)\n"
 	@printf "  make setup                                    # First time setup\n"
 	@printf "  make build                                    # Build default image\n"
-	@printf "  make build MACHINE=jetson-orin-nano-devkit-edgeos  # Build for SD card\n"
+	@printf "  make build MACHINE=jetson-orin-nano-devkit-wendyos  # Build for SD card\n"
+	@printf "  make build MACHINE=jetson-agx-orin-devkit-nvme-wendyos  # Build for AGX Orin 64GB\n"
 	@printf "  make shell                                    # Interactive development\n"
 	@printf "  make flash-to-external                        # Interactive flash\n"
 	@printf "  make flash-to-external FLASH_DEVICE=/dev/disk4 FLASH_CONFIRM=yes  # Non-interactive\n"
@@ -171,7 +172,7 @@ build: _check-setup _ensure-volumes
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
 				source ./repos/poky/oe-init-build-env $(BUILD_DIR) && \
-				MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) \
+				BB_ENV_PASSTHROUGH_ADDITIONS="MACHINE" MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) \
 			'; \
 	else \
 		cd $(DOCKER_DIR) && docker run \
@@ -186,7 +187,7 @@ build: _check-setup _ensure-volumes
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
 				source ./repos/poky/oe-init-build-env $(BUILD_DIR) && \
-				MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) \
+				BB_ENV_PASSTHROUGH_ADDITIONS="MACHINE" MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) \
 			'; \
 	fi
 	@printf "\n"
@@ -213,7 +214,7 @@ build-sdk: _check-setup _ensure-volumes
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
 				source ./repos/poky/oe-init-build-env $(BUILD_DIR) && \
-				MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) -c populate_sdk \
+				BB_ENV_PASSTHROUGH_ADDITIONS="MACHINE" MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) -c populate_sdk \
 			'; \
 	else \
 		cd $(DOCKER_DIR) && docker run \
@@ -228,7 +229,7 @@ build-sdk: _check-setup _ensure-volumes
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
 				source ./repos/poky/oe-init-build-env $(BUILD_DIR) && \
-				MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) -c populate_sdk \
+				BB_ENV_PASSTHROUGH_ADDITIONS="MACHINE" MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET) -c populate_sdk \
 			'; \
 	fi
 	@printf "\n"

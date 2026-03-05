@@ -38,16 +38,15 @@ DEVICE_NAME=$(cat "$DEVICE_NAME_FILE" 2>/dev/null || echo "unknown-device")
 # Generate display name (Title Case with spaces)
 DISPLAY_NAME=$(echo "$DEVICE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
 
-# Generate device ID for macOS app discovery (format: "WendyOS Device <device-name>")
-DEVICE_ID="WendyOS Device $DEVICE_NAME"
+# Default domain for unprovisioned devices
+DEFAULT_DOMAIN="sh.wendy"
 
-# Replace SOME_DEVICE_ID with actual UUID
-sed -i "s/SOME_DEVICE_ID/$UUID/g" "$SERVICE_FILE"
+# Build FQDN: <domain>.<device-name> (e.g. sh.wendy.warm-pepper)
+FQDN="${DEFAULT_DOMAIN}.${DEVICE_NAME}"
 
-# Replace device ID placeholder (for macOS app discovery)
-sed -i "s/DEVICE_ID_PLACEHOLDER/$DEVICE_ID/g" "$SERVICE_FILE"
-
-# Replace device name placeholders
+# Replace placeholders in service file
+sed -i "s/DEVICE_ID_PLACEHOLDER/$UUID/g" "$SERVICE_FILE"
+sed -i "s/DEVICE_FQDN_PLACEHOLDER/$FQDN/g" "$SERVICE_FILE"
 sed -i "s/DEVICE_NAME_PLACEHOLDER/$DEVICE_NAME/g" "$SERVICE_FILE"
 sed -i "s/DEVICE_DISPLAYNAME_PLACEHOLDER/$DISPLAY_NAME/g" "$SERVICE_FILE"
 

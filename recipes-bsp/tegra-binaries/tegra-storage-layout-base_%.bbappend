@@ -11,10 +11,14 @@ PATH =. "${STAGING_BINDIR_NATIVE}/tegra-flash:"
 # This runs AFTER meta-mender-tegra's do_install:append which creates the _rootfs_ab.xml variant
 
 do_install:append() {
-    # Only apply to NVMe variant
-    if [ "${MACHINE}" != "jetson-orin-nano-devkit-nvme-wendyos" ]; then
-        return
-    fi
+    # Only apply to NVMe variants (both Nano and AGX use same T234 partition layout)
+    case "${MACHINE}" in
+        jetson-orin-nano-devkit-nvme-wendyos|jetson-agx-orin-devkit-nvme-wendyos)
+            ;;
+        *)
+            return
+            ;;
+    esac
 
     # Modify the _rootfs_ab.xml file created by meta-mender-tegra
     local layout_file="flash_l4t_t234_nvme_rootfs_ab.xml"
