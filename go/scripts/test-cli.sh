@@ -262,22 +262,22 @@ echo ""
 echo -e "${BOLD}Phase 5: WiFi${RESET}"
 
 if [[ "$SKIP_WIFI" == true ]]; then
-    skip_test "wendy wifi list"
-    skip_test "wendy wifi connect"
-    skip_test "wendy wifi status"
-    skip_test "wendy wifi disconnect"
+    skip_test "wendy device wifi list"
+    skip_test "wendy device wifi connect"
+    skip_test "wendy device wifi status"
+    skip_test "wendy device wifi disconnect"
 else
-    run_test "wendy wifi list" \
-        "$WENDY" wifi list --device "$HOSTNAME"
+    run_test "wendy device wifi list" \
+        "$WENDY" device wifi list --device "$HOSTNAME"
 
-    run_test "wendy wifi connect" \
-        "$WENDY" wifi connect --ssid "$WIFI_SSID" --password "$WIFI_PASSWORD" --device "$HOSTNAME"
+    run_test "wendy device wifi connect" \
+        "$WENDY" device wifi connect --ssid "$WIFI_SSID" --password "$WIFI_PASSWORD" --device "$HOSTNAME"
 
-    run_test_expect_output "wendy wifi status" "connected" \
-        "$WENDY" wifi status --device "$HOSTNAME"
+    run_test_expect_output "wendy device wifi status" "connected" \
+        "$WENDY" device wifi status --device "$HOSTNAME"
 
-    run_test "wendy wifi disconnect" \
-        "$WENDY" wifi disconnect --device "$HOSTNAME"
+    run_test "wendy device wifi disconnect" \
+        "$WENDY" device wifi disconnect --device "$HOSTNAME"
 fi
 
 echo ""
@@ -295,26 +295,13 @@ if [[ "$SKIP_DEPLOY" == true ]]; then
     skip_test "wendy apps remove"
     skip_test "wendy apps list (app gone)"
 else
-    # Create a temporary Python project for deployment testing
+    # Create a temporary Python project for deployment testing.
+    # wendy init scaffolds app.py, requirements.txt, and Dockerfile.
     TEST_APP_DIR=$(mktemp -d)
     APP_ID="sh.wendy.cli-test"
     trap "rm -rf '$TEST_APP_DIR'" EXIT
 
-    cat > "$TEST_APP_DIR/main.py" <<'PYEOF'
-import http.server
-import socketserver
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-with socketserver.TCPServer(("", 8080), Handler) as httpd:
-    httpd.serve_forever()
-PYEOF
-
-    "$WENDY" init --language python --directory "$TEST_APP_DIR" --app-id "$APP_ID" >/dev/null 2>&1
+    bash -c "cd '$TEST_APP_DIR' && '$WENDY' init --language python '$APP_ID'" >/dev/null 2>&1
 
     run_test "wendy build" \
         bash -c "cd '$TEST_APP_DIR' && '$WENDY' build"
@@ -352,17 +339,23 @@ echo ""
 
 echo -e "${BOLD}Phase 7: Telemetry${RESET}"
 
-# Streaming command — run with a short timeout; both success and timeout are OK
+# Streaming command — run briefly then kill; success or SIGTERM are both OK.
 printf "  %-50s " "wendy telemetry logs (3s timeout)"
-TELEM_OUTPUT=$(timeout 3 "$WENDY" telemetry logs --device "$HOSTNAME" 2>&1)
+"$WENDY" telemetry logs --device "$HOSTNAME" >"/tmp/wendy-telem-$$" 2>&1 &
+TELEM_PID=$!
+sleep 3
+kill "$TELEM_PID" 2>/dev/null
+wait "$TELEM_PID" 2>/dev/null
 TELEM_RC=$?
-# exit 124 = timeout reached, which is fine for a streaming command
-if [[ $TELEM_RC -eq 0 ]] || [[ $TELEM_RC -eq 124 ]]; then
+TELEM_OUTPUT=$(head -5 "/tmp/wendy-telem-$$" 2>/dev/null)
+rm -f "/tmp/wendy-telem-$$"
+# exit 0 = normal, 143 = SIGTERM (expected for a streaming command)
+if [[ $TELEM_RC -eq 0 ]] || [[ $TELEM_RC -eq 143 ]]; then
     echo -e "${GREEN}PASS${RESET}"
     ((PASS_COUNT++))
 else
     echo -e "${RED}FAIL${RESET} (exit $TELEM_RC)"
-    echo "    Output: $(echo "$TELEM_OUTPUT" | head -5)"
+    echo "    Output: $TELEM_OUTPUT"
     ((FAIL_COUNT++))
 fi
 

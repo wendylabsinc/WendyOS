@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"golang.org/x/term"
 )
 
 // BuildResult is the output of the build command. Exactly one field is set.
@@ -107,19 +108,29 @@ func buildProject(ctx context.Context, dir, projectType, appID string) error {
 func buildDockerProject(dir, imageName string) error {
 	fmt.Printf("Building Docker image %s for linux/arm64...\n", imageName)
 
+	cmd := exec.Command("docker", "buildx", "build",
+		"--platform", "linux/arm64",
+		"-t", imageName,
+		"--load",
+		".")
+	cmd.Dir = dir
+
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		fmt.Println("Build completed successfully.")
+		return nil
+	}
+
 	s := tui.NewSpinner("Building Docker image...")
 	p := tea.NewProgram(s)
 
 	go func() {
-		cmd := exec.Command("docker", "buildx", "build",
-			"--platform", "linux/arm64",
-			"-t", imageName,
-			"--load",
-			".")
-		cmd.Dir = dir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-
 		err := cmd.Run()
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
@@ -166,12 +177,24 @@ func buildSwiftProject(dir, appID string) error {
 	}
 
 	fmt.Println("Building Swift project locally...")
+
+	cmd := exec.Command("swift", "build")
+	cmd.Dir = dir
+
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		fmt.Println("Build completed successfully.")
+		return nil
+	}
+
 	s := tui.NewSpinner("Building Swift project...")
 	p := tea.NewProgram(s)
 
 	go func() {
-		cmd := exec.Command("swift", "build")
-		cmd.Dir = dir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		err := cmd.Run()
