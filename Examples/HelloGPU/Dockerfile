@@ -18,5 +18,5 @@ USER app
 ENV PYTHONUNBUFFERED=1
 
 # Default command
-CMD ["python", "app.py"]
+CMD ["python3", "app.py"]
 
