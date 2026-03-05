@@ -271,6 +271,34 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 	return nil
 }
 
+// wrapWithDebugpy modifies the command args to run through debugpy for remote debugging.
+// It injects "-m debugpy --listen 0.0.0.0:5678" after the Python binary.
+func wrapWithDebugpy(args []string) []string {
+	debugpyArgs := []string{"-m", "debugpy", "--listen", "0.0.0.0:5678"}
+
+	if len(args) > 0 {
+		base := args[0]
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		if base == "python" || base == "python3" || strings.HasPrefix(base, "python3.") {
+			// python3 app.py -> python3 -m debugpy --listen 0.0.0.0:5678 app.py
+			result := make([]string, 0, len(args)+len(debugpyArgs))
+			result = append(result, args[0])
+			result = append(result, debugpyArgs...)
+			result = append(result, args[1:]...)
+			return result
+		}
+	}
+
+	// No python binary found; prepend python3 -m debugpy.
+	result := make([]string, 0, len(args)+len(debugpyArgs)+1)
+	result = append(result, "python3")
+	result = append(result, debugpyArgs...)
+	result = append(result, args...)
+	return result
+}
+
 // CreateContainer creates (or replaces) a container in containerd for the given
 // app. It builds an OCI runtime specification from the app config and request
 // parameters, unpacks the image, and registers the container.
@@ -350,6 +378,11 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	}
 	if len(args) == 0 {
 		args = []string{"/bin/sh"}
+	}
+
+	// Wrap Python commands with debugpy for remote debugging.
+	if appCfg.Language == "python" {
+		args = wrapWithDebugpy(args)
 	}
 
 	// Build the working directory: explicit request > image config > /.

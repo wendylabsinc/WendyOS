@@ -50,6 +50,22 @@ func detectProjectType(dir string) string {
 	return "unknown"
 }
 
+// injectDebugpy builds a wrapper image on top of the given image that installs debugpy.
+func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, streamOutput *os.File) error {
+	tmpDir, err := os.MkdirTemp("", "wendy-debugpy-*")
+	if err != nil {
+		return fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dockerfile := fmt.Sprintf("FROM %s\nUSER root\nRUN pip install debugpy\n", registryImage)
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
+		return fmt.Errorf("writing debugpy Dockerfile: %w", err)
+	}
+
+	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, streamOutput)
+}
+
 // generatePythonDockerfile creates a Dockerfile for Python projects that do not already have one.
 // It returns the path to the generated Dockerfile.
 func generatePythonDockerfile(dir string) (string, error) {

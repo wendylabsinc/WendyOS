@@ -81,7 +81,8 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	// Debug mode requires host networking for remote debugger access (gdb/lldb).
-	if opts.debug {
+	// Python apps also need host networking for debugpy.
+	if opts.debug || appCfg.Language == "python" {
 		foundNetwork := false
 		for i, e := range appCfg.Entitlements {
 			if e.Type == appconfig.EntitlementNetwork {
@@ -356,6 +357,14 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
+
+	// Inject debugpy for Python remote debugging.
+	if appCfg.Language == "python" {
+		cliLogln("Injecting debugpy for remote debugging...")
+		if err := injectDebugpy(ctx, registryAddr, registryImage, "linux/arm64", os.Stdout); err != nil {
+			return fmt.Errorf("injecting debugpy: %w", err)
+		}
+	}
 
 	// The agent pulls from localhost:5000.
 	deviceImage := fmt.Sprintf("localhost:5000/%s:latest", repo)
