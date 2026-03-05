@@ -17,8 +17,6 @@ import (
 type BuildResult struct {
 	// ProviderApp is set when the build used an external provider.
 	ProviderApp *providers.BuiltApp
-	// OCIImage is set when the build produced a Docker/OCI image for a LAN device.
-	OCIImage *OCIImage
 }
 
 func newBuildCmd() *cobra.Command {

@@ -10,15 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
-	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
-	"golang.org/x/term"
 )
 
 // runOptions holds the parsed flags for the run command.
@@ -117,7 +114,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	// The image is now in the device's registry. The agent will pull it
 	// from localhost:5000 when creating the container.
-	registryImage := fmt.Sprintf("localhost:5000/%s:latest", strings.ToLower(product))
+	deviceImage := fmt.Sprintf("localhost:5000/%s:latest", strings.ToLower(product))
 
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
@@ -127,7 +124,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{
-		ImageName:     registryImage,
+		ImageName:     deviceImage,
 		AppName:       appCfg.AppID,
 		AppConfig:     appConfigData,
 		RestartPolicy: restartPolicy,
@@ -282,8 +279,6 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
-	imageName := appCfg.AppID + ":latest"
-
 	// Detect project type and ensure a Dockerfile exists.
 	projectType := detectProjectType(cwd)
 
@@ -312,36 +307,19 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("unable to detect project type; ensure a Dockerfile, requirements.txt, or Package.swift is present")
 	}
 
-	// Build the Docker image and export directly to tar.
-	tarPath := filepath.Join(os.TempDir(), appCfg.AppID+"-image.tar")
-	defer os.Remove(tarPath)
-
-	fmt.Println("Building Docker image for linux/arm64...")
-	if err := buildDockerImage(ctx, cwd, imageName, "linux/arm64", tarPath, os.Stdout); err != nil {
-		return fmt.Errorf("building Docker image: %w", err)
-	}
-	fmt.Println("Build completed.")
-
-	// Extract OCI layers from the tar.
-	ociImage, err := extractOCIImage(tarPath)
-	if err != nil {
-		return fmt.Errorf("extracting OCI image: %w", err)
-	}
-
-	fmt.Printf("Image has %d layers.\n", len(ociImage.Layers))
-
-	// Push image to the device's HTTP registry.
+	// Build and push the Docker image directly to the device's HTTP registry.
 	registryAddr := registryHost(conn.Host, 5000)
-	baseURL := fmt.Sprintf("http://%s", registryAddr)
 	repo := strings.ToLower(appCfg.AppID)
+	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
-	if err := pushImageToRegistry(ctx, baseURL, repo, ociImage, tarPath); err != nil {
-		return fmt.Errorf("pushing image to registry: %w", err)
+	fmt.Println("Building and pushing Docker image for linux/arm64...")
+	if err := buildAndPushImage(ctx, cwd, registryImage, "linux/arm64", os.Stdout); err != nil {
+		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
+	fmt.Println("Build and push completed.")
 
-	// The image is now in the device's registry. The agent will pull it
-	// from localhost:5000 when creating the container.
-	registryImage := fmt.Sprintf("localhost:5000/%s:latest", repo)
+	// The agent pulls from localhost:5000.
+	deviceImage := fmt.Sprintf("localhost:5000/%s:latest", repo)
 
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
@@ -351,7 +329,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{
-		ImageName:     registryImage,
+		ImageName:     deviceImage,
 		AppName:       appCfg.AppID,
 		AppConfig:     appConfigData,
 		RestartPolicy: restartPolicy,
@@ -448,38 +426,3 @@ func resolveRestartPolicy(opts runOptions) *agentpb.RestartPolicy {
 	return &agentpb.RestartPolicy{Mode: mode}
 }
 
-// pushImageToRegistry pushes an OCI image to the device's HTTP registry,
-// showing a TUI progress bar when stdout is a TTY.
-func pushImageToRegistry(ctx context.Context, baseURL, repo string, ociImage *OCIImage, tarPath string) error {
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-
-	if !isTTY {
-		return pushToRegistry(ctx, baseURL, repo, ociImage, tarPath, func(completed, total int) {
-			fmt.Printf("  Pushing [%d/%d]...\n", completed, total)
-		})
-	}
-
-	// TUI progress bar.
-	progModel := tui.NewProgress("Pushing image to device registry...")
-	p := tea.NewProgram(progModel)
-
-	go func() {
-		err := pushToRegistry(ctx, baseURL, repo, ociImage, tarPath, func(completed, total int) {
-			if total > 0 {
-				p.Send(tui.ProgressUpdateMsg{Percent: float64(completed) / float64(total)})
-			}
-		})
-		p.Send(tui.ProgressDoneMsg{Err: err})
-	}()
-
-	finalModel, runErr := p.Run()
-	if runErr != nil {
-		return fmt.Errorf("TUI error: %w", runErr)
-	}
-	pm := finalModel.(tui.ProgressModel)
-	if pm.Err() != nil {
-		return fmt.Errorf("push failed: %w", pm.Err())
-	}
-	fmt.Println("Push complete.")
-	return nil
-}
