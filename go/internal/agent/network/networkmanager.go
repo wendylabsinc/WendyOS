@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -58,9 +59,14 @@ func (n *NMCLINetworkManager) ListWiFiNetworks(ctx context.Context) ([]*agentpb.
 		}
 		seen[ssid] = true
 
-		networks = append(networks, &agentpb.ListWiFiNetworksResponse_WiFiNetwork{
+		net := &agentpb.ListWiFiNetworksResponse_WiFiNetwork{
 			Ssid: ssid,
-		})
+		}
+		if signal, err := strconv.Atoi(fields[1]); err == nil {
+			s := int32(signal)
+			net.SignalStrength = &s
+		}
+		networks = append(networks, net)
 	}
 
 	n.logger.Info("Listed WiFi networks", zap.Int("count", len(networks)))
