@@ -15,12 +15,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
 func newDeviceCmd() *cobra.Command {
@@ -269,14 +271,11 @@ func newDeviceLogsCmd() *cobra.Command {
 					continue
 				}
 
-				// Print log records from OTLP format.
 				for _, rl := range logs.GetResourceLogs() {
+					serviceName := resourceServiceName(rl.GetResource())
 					for _, sl := range rl.GetScopeLogs() {
 						for _, lr := range sl.GetLogRecords() {
-							body := lr.GetBody()
-							if body != nil {
-								fmt.Println(body.GetStringValue())
-							}
+							printLogRecord(serviceName, lr)
 						}
 					}
 				}
@@ -291,6 +290,100 @@ func newDeviceLogsCmd() *cobra.Command {
 	cmd.Flags().Int32Var(&minSeverity, "min-severity", 0, "Minimum log severity level")
 
 	return cmd
+}
+
+var (
+	logTraceStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	logDebugStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	logInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
+	logWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	logErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	logFatalStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	logTimeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	logAppStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	logMetaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+)
+
+func severityLabel(sev otelpb.SeverityNumber) (string, lipgloss.Style) {
+	switch {
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_FATAL:
+		return "FATAL", logFatalStyle
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_ERROR:
+		return "ERROR", logErrorStyle
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_WARN:
+		return "WARN ", logWarnStyle
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_INFO:
+		return "INFO ", logInfoStyle
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_DEBUG:
+		return "DEBUG", logDebugStyle
+	case sev >= otelpb.SeverityNumber_SEVERITY_NUMBER_TRACE:
+		return "TRACE", logTraceStyle
+	default:
+		return "     ", logInfoStyle
+	}
+}
+
+func resourceServiceName(res *otelpb.Resource) string {
+	if res == nil {
+		return ""
+	}
+	for _, attr := range res.GetAttributes() {
+		if attr.GetKey() == "service.name" {
+			return attr.GetValue().GetStringValue()
+		}
+	}
+	return ""
+}
+
+func anyValueString(v *otelpb.AnyValue) string {
+	if v == nil {
+		return ""
+	}
+	switch v.Value.(type) {
+	case *otelpb.AnyValue_StringValue:
+		return v.GetStringValue()
+	case *otelpb.AnyValue_IntValue:
+		return fmt.Sprintf("%d", v.GetIntValue())
+	case *otelpb.AnyValue_DoubleValue:
+		return fmt.Sprintf("%g", v.GetDoubleValue())
+	case *otelpb.AnyValue_BoolValue:
+		return fmt.Sprintf("%t", v.GetBoolValue())
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func printLogRecord(service string, lr *otelpb.LogRecord) {
+	ts := time.Unix(0, int64(lr.GetTimeUnixNano())).Local().Format("15:04:05.000")
+	label, style := severityLabel(lr.GetSeverityNumber())
+
+	var b strings.Builder
+	b.WriteString(logTimeStyle.Render(ts))
+	b.WriteByte(' ')
+	b.WriteString(style.Render(label))
+	if service != "" {
+		b.WriteByte(' ')
+		b.WriteString(logAppStyle.Render("[" + service + "]"))
+	}
+
+	body := lr.GetBody()
+	if body != nil {
+		b.WriteByte(' ')
+		b.WriteString(body.GetStringValue())
+	}
+
+	attrs := lr.GetAttributes()
+	if len(attrs) > 0 {
+		b.WriteByte(' ')
+		for i, kv := range attrs {
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(logMetaStyle.Render(kv.GetKey() + "=" + anyValueString(kv.GetValue())))
+		}
+	}
+
+	fmt.Println(b.String())
 }
 
 type githubReleaseAsset struct {
