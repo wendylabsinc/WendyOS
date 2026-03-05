@@ -83,6 +83,16 @@ type Entitlement struct {
 	Pins   []int  `json:"pins,omitempty"`   // GPIO
 }
 
+// HasEntitlement reports whether the config contains an entitlement of the given type.
+func (c *AppConfig) HasEntitlement(entType string) bool {
+	for _, e := range c.Entitlements {
+		if e.Type == entType {
+			return true
+		}
+	}
+	return false
+}
+
 // LoadFromFile reads and parses a wendy.json file at the given path.
 func LoadFromFile(path string) (*AppConfig, error) {
 	data, err := os.ReadFile(path)

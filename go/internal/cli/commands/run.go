@@ -94,6 +94,11 @@ func runCommand(ctx context.Context, opts runOptions) error {
 // pushes the image directly to the device's registry. Then it creates and
 // starts the container on the agent.
 func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	// Verify auth certs are available if the device's registry requires mTLS.
+	if err := requireRegistryAuth(ctx, conn); err != nil {
+		return err
+	}
+
 	// Query the device architecture.
 	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
@@ -307,7 +312,12 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("unable to detect project type; ensure a Dockerfile, requirements.txt, or Package.swift is present")
 	}
 
-	// Build and push the Docker image directly to the device's HTTP registry.
+	// Verify auth certs are available if the device's registry requires mTLS.
+	if err := requireRegistryAuth(ctx, conn); err != nil {
+		return err
+	}
+
+	// Build and push the Docker image directly to the device's registry.
 	registryAddr := registryHost(conn.Host, 5000)
 	repo := strings.ToLower(appCfg.AppID)
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)

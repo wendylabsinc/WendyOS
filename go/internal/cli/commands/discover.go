@@ -101,7 +101,7 @@ func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
 
-	resolveLANVersions(ctx, collection.LANDevices)
+	collection.LANDevices = resolveLANVersions(ctx, collection.LANDevices)
 
 	if shouldIncludeExternal(opts) {
 		collection.ExternalDevices = discoverExternalDevices(ctx)
@@ -124,7 +124,7 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions) error {
 	work := func() tea.Msg {
 		collection, err := discovery.Discover(ctx, opts)
 		if err == nil {
-			resolveLANVersions(ctx, collection.LANDevices)
+			collection.LANDevices = resolveLANVersions(ctx, collection.LANDevices)
 			if includeExternal {
 				collection.ExternalDevices = discoverExternalDevices(ctx)
 			}
@@ -227,7 +227,7 @@ func (m discoverModel) scanEthernet() tea.Cmd {
 func (m discoverModel) scanLAN() tea.Cmd {
 	return func() tea.Msg {
 		devices, _ := discovery.DiscoverLAN(m.ctx, m.opts.Timeout)
-		resolveLANVersions(m.ctx, devices)
+		devices = resolveLANVersions(m.ctx, devices)
 		return lanScanMsg{devices: devices}
 	}
 }

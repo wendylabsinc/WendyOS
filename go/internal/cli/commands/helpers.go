@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,31 +41,48 @@ func hostPort(host string, port int) string {
 
 // resolveLANVersions queries each LAN device's gRPC endpoint concurrently to
 // populate AgentVersion, OS, OSVersion, and CPUArchitecture.
-func resolveLANVersions(ctx context.Context, devices []models.LANDevice) {
-	var wg sync.WaitGroup
+// Devices that are unreachable via both plaintext and mTLS are excluded from
+// the returned slice.
+func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []models.LANDevice {
+	type indexedResult struct {
+		index int
+		resp  *agentpb.GetAgentVersionResponse
+	}
+
+	ch := make(chan *indexedResult, len(devices))
 	for i := range devices {
-		wg.Add(1)
-		go func(d *models.LANDevice) {
-			defer wg.Done()
+		go func(idx int) {
+			d := &devices[idx]
 			addr := hostPort(d.Hostname, d.Port)
 			queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
-			conn, err := grpcclient.Connect(queryCtx, addr)
+			conn, err := connectWithAutoTLS(queryCtx, addr)
 			if err != nil {
+				ch <- nil
 				return
 			}
 			defer conn.Close()
 			resp, err := conn.AgentService.GetAgentVersion(queryCtx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
+				ch <- nil
 				return
 			}
-			d.AgentVersion = resp.GetVersion()
-			d.OS = resp.GetOs()
-			d.OSVersion = resp.GetOsVersion()
-			d.CPUArchitecture = resp.GetCpuArchitecture()
-		}(&devices[i])
+			ch <- &indexedResult{index: idx, resp: resp}
+		}(i)
 	}
-	wg.Wait()
+
+	reachable := make([]models.LANDevice, 0, len(devices))
+	for range devices {
+		r := <-ch
+		if r != nil {
+			devices[r.index].AgentVersion = r.resp.GetVersion()
+			devices[r.index].OS = r.resp.GetOs()
+			devices[r.index].OSVersion = r.resp.GetOsVersion()
+			devices[r.index].CPUArchitecture = r.resp.GetCpuArchitecture()
+			reachable = append(reachable, devices[r.index])
+		}
+	}
+	return reachable
 }
 
 // SelectedDevice represents either a gRPC agent, BLE device, or an external provider device.
@@ -360,8 +376,8 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			collection = &models.DevicesCollection{}
 		}
 
-		// Resolve agent versions for LAN devices.
-		resolveLANVersions(discoverCtx, collection.LANDevices)
+		// Resolve agent versions for LAN devices (filters out unreachable ones).
+		collection.LANDevices = resolveLANVersions(discoverCtx, collection.LANDevices)
 
 		// Discover external provider devices. Microwasm devices are added
 		// to the collection so MergedDevices() can merge them with BLE Lite.

@@ -8,7 +8,26 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
+
+// requireRegistryAuth checks whether the device's registry requires mTLS
+// authentication and verifies the CLI has the necessary certs.
+// Returns an error if the device is provisioned but no CLI certs are available.
+func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	resp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+	if err != nil {
+		return nil // can't determine provisioning status; let the push fail naturally
+	}
+	if _, ok := resp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned); ok {
+		if loadCLICert() == nil {
+			return fmt.Errorf("device is provisioned and its registry requires mTLS authentication.\nRun 'wendy auth login' to obtain client certificates before deploying")
+		}
+	}
+	return nil
+}
 
 // detectProjectType determines the project type from the directory contents.
 // It checks for Dockerfile first, then language-specific markers.
@@ -300,8 +319,12 @@ func findSwiftProduct(dir string) string {
 // exists and returns its name. If the CLI has auth certs, the registry is
 // configured for mTLS; otherwise it falls back to insecure HTTP.
 // If the registry address or certs have changed, the builder is recreated.
+// Cert files are copied into the builder container via docker cp so that
+// buildkitd (which runs inside Docker) can access them.
 func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, error) {
 	const builderName = "wendy"
+	// Container-internal path where certs will be copied to.
+	const containerCertDir = "/etc/buildkit/certs"
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -313,19 +336,23 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, erro
 	}
 
 	configPath := filepath.Join(configDir, "buildkitd.toml")
+	// Separate marker tracks which config was actually applied to the builder.
+	// This handles the case where the builder was created before our config system.
+	appliedPath := filepath.Join(configDir, "buildkitd.applied")
 	var buildkitdConfig string
+	var hostCertDir string
 
 	certInfo := loadCLICert()
 	if certInfo != nil && certInfo.PemCertificate != "" && certInfo.PemPrivateKey != "" {
-		// Write cert files for buildkitd.
-		certDir := filepath.Join(configDir, "certs")
-		if err := os.MkdirAll(certDir, 0o700); err != nil {
+		// Write cert files to host; they'll be docker-cp'd into the builder container.
+		hostCertDir = filepath.Join(configDir, "certs")
+		if err := os.MkdirAll(hostCertDir, 0o700); err != nil {
 			return "", fmt.Errorf("creating cert directory: %w", err)
 		}
 
-		certPath := filepath.Join(certDir, "client-cert.pem")
-		keyPath := filepath.Join(certDir, "client-key.pem")
-		caPath := filepath.Join(certDir, "ca.pem")
+		certPath := filepath.Join(hostCertDir, "client-cert.pem")
+		keyPath := filepath.Join(hostCertDir, "client-key.pem")
+		caPath := filepath.Join(hostCertDir, "ca.pem")
 
 		fullCert := certInfo.PemCertificate
 		if certInfo.PemCertificateChain != "" {
@@ -341,50 +368,82 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, erro
 			if err := os.WriteFile(caPath, []byte(certInfo.PemCertificateChain), 0o644); err != nil {
 				return "", fmt.Errorf("writing CA cert: %w", err)
 			}
-			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  ca=[\"%s\"]\n  [[registry.\"%s\".keypair]]\n    key=\"%s\"\n    cert=\"%s\"\n",
-				registryAddr, caPath, registryAddr, keyPath, certPath)
+			// Reference container-internal paths in buildkitd config.
+			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  ca=[\"%s/ca.pem\"]\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
+				registryAddr, containerCertDir, registryAddr, containerCertDir, containerCertDir)
 		} else {
-			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  insecure = true\n  [[registry.\"%s\".keypair]]\n    key=\"%s\"\n    cert=\"%s\"\n",
-				registryAddr, registryAddr, keyPath, certPath)
+			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  insecure = true\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
+				registryAddr, registryAddr, containerCertDir, containerCertDir)
 		}
 	} else {
 		// No auth certs — fall back to insecure HTTP.
 		buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
 	}
 
-	// Check if the config has changed (different device or cert rotation).
-	existing, _ := os.ReadFile(configPath)
-	configChanged := string(existing) != buildkitdConfig
+	// Compare against the applied marker (not the raw toml) to detect builders
+	// that were created before our config system or with a different config.
+	appliedConfig, _ := os.ReadFile(appliedPath)
+	configChanged := string(appliedConfig) != buildkitdConfig
 
 	if err := os.WriteFile(configPath, []byte(buildkitdConfig), 0o644); err != nil {
 		return "", fmt.Errorf("writing buildkitd config: %w", err)
 	}
 
-	// If the builder exists and config hasn't changed, reuse it.
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName)
 	builderExists := cmd.Run() == nil
-
-	if builderExists && !configChanged {
-		return builderName, nil
-	}
 
 	// Remove stale builder if config changed.
 	if builderExists && configChanged {
 		exec.CommandContext(ctx, "docker", "buildx", "rm", builderName).Run()
+		builderExists = false
 	}
 
-	// Create builder with docker-container driver.
-	cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
-		"--name", builderName,
-		"--driver", "docker-container",
-		"--driver-opt", "network=host",
-		"--buildkitd-config", configPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
+	if !builderExists {
+		// Create builder with docker-container driver.
+		cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
+			"--name", builderName,
+			"--driver", "docker-container",
+			"--driver-opt", "network=host",
+			"--buildkitd-config", configPath,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
+		}
 	}
+
+	// Copy mTLS certs into the builder container so buildkitd can use them.
+	if hostCertDir != "" {
+		if err := copyCertsToBuilder(ctx, builderName, hostCertDir, containerCertDir); err != nil {
+			return "", fmt.Errorf("copying certs to builder: %w", err)
+		}
+	}
+
+	// Record the applied config so we can detect changes next time.
+	_ = os.WriteFile(appliedPath, []byte(buildkitdConfig), 0o644)
 
 	return builderName, nil
+}
+
+// copyCertsToBuilder bootstraps the buildx builder container and copies TLS
+// client certificates from the host into it so buildkitd can authenticate
+// with the device registry.
+func copyCertsToBuilder(ctx context.Context, builderName, hostCertDir, containerCertDir string) error {
+	// Bootstrap the builder to ensure the container is running.
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bootstrapping builder: %s: %w", string(out), err)
+	}
+
+	// The docker-container driver names the container buildx_buildkit_<name>0.
+	containerName := "buildx_buildkit_" + builderName + "0"
+
+	// Copy cert files into the running container.
+	cmd = exec.CommandContext(ctx, "docker", "cp", hostCertDir+"/.", containerName+":"+containerCertDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker cp certs: %s: %w", string(out), err)
+	}
+
+	return nil
 }
 
 // buildAndPushImage builds a Docker image for the specified platform and pushes
