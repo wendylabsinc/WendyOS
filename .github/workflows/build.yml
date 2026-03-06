@@ -458,7 +458,7 @@ jobs:
 
   package-windows:
     name: Package Windows MSI (${{ matrix.arch }})
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     needs: [determine-version, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
@@ -471,8 +471,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install msitools
-        run: sudo apt-get update && sudo apt-get install -y msitools
+      - name: Install WiX
+        run: dotnet tool install --global wix
 
       - name: Download CLI artifact
         uses: actions/download-artifact@v4
@@ -481,29 +481,26 @@ jobs:
 
       - name: Extract artifact
         run: |
-          unzip wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+          Expand-Archive "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip" -DestinationPath .
 
       - name: Build MSI
         run: |
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          $VERSION = "${{ needs.determine-version.outputs.version }}"
           # MSI requires numeric X.Y.Z version (max 255.255.65535)
-          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            MSI_VERSION=$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
-          else
-            MSI_VERSION="0.0.0"
-          fi
+          if ($VERSION -match '^\d+\.\d+\.\d+') {
+            $MSI_VERSION = $Matches[0]
+          } else {
+            $MSI_VERSION = "0.0.0"
+          }
 
-          # Map matrix arch to wixl architecture
-          case "${{ matrix.arch }}" in
-            amd64) MSI_ARCH="x64" ;;
-            arm64) MSI_ARCH="arm64" ;;
-          esac
+          $MSI_ARCH = if ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "x64" }
 
-          wixl -D Version="$MSI_VERSION" \
-               -D ExePath="wendy-cli-windows-${{ matrix.goarch }}/wendy.exe" \
-               -a "$MSI_ARCH" \
-               -o "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.msi" \
-               go/installer/windows/wendy.wxs
+          wix build `
+            -d Version="$MSI_VERSION" `
+            -d ExePath="wendy-cli-windows-${{ matrix.goarch }}/wendy.exe" `
+            -arch $MSI_ARCH `
+            -o "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.msi" `
+            go/installer/windows/wendy.wxs
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
