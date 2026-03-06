@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/agent/bluetooth"
 	"github.com/wendylabsinc/wendy/internal/agent/container"
 	agentcontainerd "github.com/wendylabsinc/wendy/internal/agent/containerd"
+	"github.com/wendylabsinc/wendy/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/internal/agent/mtls"
@@ -63,10 +64,18 @@ func main() {
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
 	btManager := bluetooth.NewManager(logger)
 
+	// Initialize D-Bus proxy manager if xdg-dbus-proxy is available.
+	var proxyMgr *dbusproxy.Manager
+	if dbusproxy.IsAvailable() {
+		proxyMgr = dbusproxy.NewManager(logger)
+	} else {
+		logger.Warn("xdg-dbus-proxy not found, Bluetooth containers will have unfiltered D-Bus access")
+	}
+
 	// Initialize containerd client (best-effort; may fail on non-Linux or without containerd).
 	var containerdClient services.ContainerdClient
 	containerdAddr := os.Getenv("WENDY_CONTAINERD_ADDR")
-	ctrdClient, ctrdErr := agentcontainerd.NewClient(logger, containerdAddr)
+	ctrdClient, ctrdErr := agentcontainerd.NewClient(logger, containerdAddr, proxyMgr)
 	if ctrdErr != nil {
 		logger.Warn("Failed to connect to containerd (container features will be unavailable)", zap.Error(ctrdErr))
 	} else {

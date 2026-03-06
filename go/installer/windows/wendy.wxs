@@ -1,17 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*"
-           Name="Wendy CLI"
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Wendy CLI"
            Language="1033"
            Version="$(var.Version)"
            Manufacturer="Wendy Labs"
-           UpgradeCode="f47ac10b-58cc-4372-a567-0e02b2c3d479">
-
-    <Package InstallerVersion="500"
-             Compressed="yes"
-             InstallScope="perMachine"
-             Description="Wendy CLI - manage your Wendy devices"
-             Comments="Wendy CLI installer" />
+           UpgradeCode="f47ac10b-58cc-4372-a567-0e02b2c3d479"
+           InstallerVersion="500"
+           Compressed="yes"
+           Scope="perMachine">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Wendy CLI is already installed." />
     <MediaTemplate EmbedCab="yes" />
@@ -21,30 +17,28 @@
       <ComponentRef Id="AddToPath" />
     </Feature>
 
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="Wendy">
-          <Component Id="WendyExe" Guid="a1b2c3d4-e5f6-7890-abcd-ef1234567890" Win64="yes">
-            <File Id="WendyExeFile"
-                  Source="$(var.ExePath)"
-                  Name="wendy.exe"
-                  KeyPath="yes" />
-          </Component>
-          <Component Id="AddToPath" Guid="b2c3d4e5-f6a7-8901-bcde-f12345678901" Win64="yes">
-            <Environment Id="PATH"
-                         Name="PATH"
-                         Value="[INSTALLDIR]"
-                         Permanent="no"
-                         Part="last"
-                         Action="set"
-                         System="yes" />
-          </Component>
-        </Directory>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="Wendy">
+        <Component Id="WendyExe" Guid="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+          <File Id="WendyExeFile"
+                Source="$(var.ExePath)"
+                Name="wendy.exe"
+                KeyPath="yes" />
+        </Component>
+        <Component Id="AddToPath" Guid="b2c3d4e5-f6a7-8901-bcde-f12345678901">
+          <Environment Id="PATH"
+                       Name="PATH"
+                       Value="[INSTALLDIR]"
+                       Permanent="no"
+                       Part="last"
+                       Action="set"
+                       System="yes" />
+        </Component>
       </Directory>
-    </Directory>
+    </StandardDirectory>
 
     <Icon Id="wendy.ico" SourceFile="$(var.ExePath)" />
     <Property Id="ARPPRODUCTICON" Value="wendy.ico" />
 
-  </Product>
+  </Package>
 </Wix>

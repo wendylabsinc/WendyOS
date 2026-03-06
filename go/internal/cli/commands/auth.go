@@ -76,7 +76,7 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	errCh := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/cli-callback", func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			http.Error(w, "missing token parameter", http.StatusBadRequest)
@@ -85,7 +85,53 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wendy – Authenticated</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    color: #1a1a1a;
+  }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    padding: 48px;
+    text-align: center;
+    max-width: 420px;
+  }
+  .checkmark {
+    width: 56px;
+    height: 56px;
+    background: #e8f5e9;
+    border-radius: 50%%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+    font-size: 28px;
+  }
+  h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  p { font-size: 15px; color: #666; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="checkmark">✓</div>
+    <h2>Authentication successful</h2>
+    <p>You can close this tab and return to the terminal.</p>
+  </div>
+</body>
+</html>`)
 		tokenCh <- token
 	})
 
@@ -98,7 +144,7 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	defer server.Close()
 
 	// Step 2: Open browser to login URL with callback port.
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
 	fmt.Printf("Opening browser for authentication: %s\n", loginURL)
 

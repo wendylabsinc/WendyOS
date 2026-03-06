@@ -47,7 +47,7 @@ func TestApplyEntitlements_GPU(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestApplyEntitlements_Network_Host(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestApplyEntitlements_Network_Default(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestApplyEntitlements_Audio(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestApplyEntitlements_Persist(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestApplyEntitlements_Persist(t *testing.T) {
 	}
 }
 
-func TestApplyEntitlements_Bluetooth(t *testing.T) {
+func TestApplyEntitlements_Bluetooth_Fallback(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
 		AppID: "test-app",
@@ -193,16 +193,63 @@ func TestApplyEntitlements_Bluetooth(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{DBusProxyAvailable: false}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
-	// Should mount D-Bus sockets.
+	// Fallback should mount host D-Bus sockets directly.
 	if !hasMountDest(spec, "/var/run/dbus") {
-		t.Error("bluetooth entitlement did not add /var/run/dbus mount")
+		t.Error("bluetooth fallback did not add /var/run/dbus mount")
 	}
 	if !hasMountDest(spec, "/run/dbus") {
-		t.Error("bluetooth entitlement did not add /run/dbus mount")
+		t.Error("bluetooth fallback did not add /run/dbus mount")
+	}
+
+	// Verify source is the host path.
+	for _, m := range spec.Mounts {
+		if m.Destination == "/var/run/dbus" {
+			if m.Source != "/var/run/dbus" {
+				t.Errorf("fallback /var/run/dbus source = %q, want /var/run/dbus", m.Source)
+			}
+		}
+	}
+
+	if !hasEnv(spec, "DBUS_SYSTEM_BUS_ADDRESS") {
+		t.Error("bluetooth entitlement did not set DBUS_SYSTEM_BUS_ADDRESS")
+	}
+}
+
+func TestApplyEntitlements_Bluetooth_Proxy(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "bt-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementBluetooth},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{DBusProxyAvailable: true}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// Proxy mode should mount from the proxy directory.
+	if !hasMountDest(spec, "/var/run/dbus") {
+		t.Error("bluetooth proxy did not add /var/run/dbus mount")
+	}
+
+	// Should NOT have /run/dbus (only one mount with proxy).
+	if hasMountDest(spec, "/run/dbus") {
+		t.Error("bluetooth proxy should not add /run/dbus mount")
+	}
+
+	// Verify source points to proxy directory.
+	for _, m := range spec.Mounts {
+		if m.Destination == "/var/run/dbus" {
+			expected := "/run/wendy/dbus-proxy/bt-app"
+			if m.Source != expected {
+				t.Errorf("proxy /var/run/dbus source = %q, want %q", m.Source, expected)
+			}
+		}
 	}
 
 	if !hasEnv(spec, "DBUS_SYSTEM_BUS_ADDRESS") {
@@ -264,7 +311,7 @@ func TestApplyEntitlements_Video(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -291,7 +338,7 @@ func TestApplyEntitlements_Multiple(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -329,7 +376,7 @@ func TestApplyEntitlements_Empty(t *testing.T) {
 	originalMountCount := len(spec.Mounts)
 	originalNSCount := len(spec.Linux.Namespaces)
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 

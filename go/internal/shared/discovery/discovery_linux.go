@@ -71,7 +71,7 @@ func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice
 	params := mdns.DefaultParams(wendyServiceType)
 	params.Entries = entriesCh
 	params.Timeout = timeout
-	params.DisableIPv6 = true
+	params.Logger = silentLogger
 
 	err := mdns.Query(params)
 	close(entriesCh)

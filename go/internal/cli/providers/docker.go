@@ -64,7 +64,7 @@ func (p *DockerProvider) CanBuild(projectPath string) bool {
 }
 
 func (p *DockerProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
-	imageName := product + ":latest"
+	imageName := strings.ToLower(product) + ":latest"
 	args := []string{"build", "-t", imageName, "."}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = projectPath

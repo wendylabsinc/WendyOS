@@ -18,8 +18,17 @@ const (
 	videoGroupGID uint32 = 44
 )
 
+// ApplyOptions configures optional behavior for entitlement application.
+type ApplyOptions struct {
+	// DBusProxyAvailable indicates that xdg-dbus-proxy is available and the
+	// caller will set up a filtered proxy socket for Bluetooth containers.
+	// When true, the bluetooth entitlement mounts from the proxy socket
+	// directory instead of the host D-Bus socket directly.
+	DBusProxyAvailable bool
+}
+
 // ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
-func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig) error {
+func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) error {
 	didSetDeviceCapabilities := false
 
 	for _, ent := range cfg.Entitlements {
@@ -43,7 +52,7 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig) error {
 		case appconfig.EntitlementPersist:
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
-			applyBluetooth(spec)
+			applyBluetooth(spec, cfg.AppID, opts.DBusProxyAvailable)
 		case appconfig.EntitlementCamera:
 			applyCamera(spec)
 		case appconfig.EntitlementUSB:
@@ -309,22 +318,36 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 }
 
 // applyBluetooth adds D-Bus socket mounts for Bluetooth access.
-func applyBluetooth(spec *Spec) {
-	// Mount D-Bus system socket for BlueZ access.
-	spec.Mounts = append(spec.Mounts,
-		Mount{
+// When proxyAvailable is true, it mounts from the xdg-dbus-proxy filtered
+// socket directory (only org.bluez allowed). Otherwise, it falls back to
+// mounting the host D-Bus sockets directly (unrestricted access).
+func applyBluetooth(spec *Spec, appID string, proxyAvailable bool) {
+	if proxyAvailable {
+		// Mount the filtered proxy socket directory.
+		proxyDir := filepath.Join("/run/wendy/dbus-proxy", appID)
+		spec.Mounts = append(spec.Mounts, Mount{
 			Destination: "/var/run/dbus",
-			Source:      "/var/run/dbus",
+			Source:      proxyDir,
 			Type:        "bind",
 			Options:     []string{"rbind", "nosuid", "noexec"},
-		},
-		Mount{
-			Destination: "/run/dbus",
-			Source:      "/run/dbus",
-			Type:        "bind",
-			Options:     []string{"rbind", "nosuid", "noexec"},
-		},
-	)
+		})
+	} else {
+		// Fallback: mount host D-Bus sockets directly (unfiltered).
+		spec.Mounts = append(spec.Mounts,
+			Mount{
+				Destination: "/var/run/dbus",
+				Source:      "/var/run/dbus",
+				Type:        "bind",
+				Options:     []string{"rbind", "nosuid", "noexec"},
+			},
+			Mount{
+				Destination: "/run/dbus",
+				Source:      "/run/dbus",
+				Type:        "bind",
+				Options:     []string{"rbind", "nosuid", "noexec"},
+			},
+		)
+	}
 
 	spec.Process.Env = append(spec.Process.Env,
 		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
