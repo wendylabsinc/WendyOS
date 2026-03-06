@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -89,7 +90,7 @@ func detectProjectTypeWithLanguage(dir, language string) string {
 }
 
 func buildProject(ctx context.Context, dir, projectType, appID string) error {
-	imageName := appID + ":latest"
+	imageName := strings.ToLower(appID) + ":latest"
 
 	switch projectType {
 	case "docker":
@@ -171,7 +172,7 @@ func buildPythonProject(dir, imageName string) error {
 
 func buildSwiftProject(dir, appID string) error {
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
-		return buildDockerProject(dir, appID+":latest")
+		return buildDockerProject(dir, strings.ToLower(appID)+":latest")
 	}
 
 	fmt.Println("Building Swift project locally...")

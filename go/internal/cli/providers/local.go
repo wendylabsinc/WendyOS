@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
@@ -71,7 +72,7 @@ func (p *LocalProvider) Build(ctx context.Context, device models.ExternalDevice,
 }
 
 func (p *LocalProvider) buildDocker(ctx context.Context, projectPath, product string, debug bool) (*BuiltApp, error) {
-	imageName := product + ":latest"
+	imageName := strings.ToLower(product) + ":latest"
 	args := []string{"build", "-t", imageName, "."}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = projectPath
