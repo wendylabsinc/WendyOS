@@ -12,15 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
-func discoverUSB(_ context.Context) ([]models.USBDevice, error) {
-	return nil, nil
-}
-
 func discoverEthernet(_ context.Context) ([]models.EthernetInterface, error) {
-	return nil, nil
-}
-
-func discoverBluetooth(_ context.Context, _ bool) ([]models.BluetoothDevice, error) {
 	return nil, nil
 }
 
