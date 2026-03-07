@@ -27,6 +27,18 @@ import (
 
 const defaultAgentPort = 50051
 
+const lanAddressProbeTimeout = 1500 * time.Millisecond
+
+var getAgentVersionAtAddress = func(ctx context.Context, address string) (*agentpb.GetAgentVersionResponse, error) {
+	conn, err := connectWithAutoTLS(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	return conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+}
+
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
 var ErrUserCancelled = errors.New("cancelled")
 
@@ -39,10 +51,60 @@ func hostPort(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
+// lanAgentAddresses returns candidate gRPC addresses for a LAN device.
+// Prefer the discovered IP address so commands still work when .local
+// hostname resolution is unavailable on the host machine.
+func lanAgentAddresses(dev models.LANDevice) []string {
+	if dev.Port == 0 {
+		return nil
+	}
+
+	var addresses []string
+	seen := make(map[string]bool)
+	for _, host := range []string{strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)} {
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		addresses = append(addresses, hostPort(host, dev.Port))
+	}
+
+	return addresses
+}
+
+// preferredLANAddress returns the best available address for display and
+// follow-up connection attempts. It prefers IPs over mDNS hostnames.
+func preferredLANAddress(dev models.LANDevice) string {
+	addresses := lanAgentAddresses(dev)
+	if len(addresses) == 0 {
+		return ""
+	}
+	return addresses[0]
+}
+
+// resolveLANAgentVersion tries the discovered LAN addresses in order and
+// returns the first one that answers GetAgentVersion.
+func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, *agentpb.GetAgentVersionResponse, error) {
+	var lastErr error
+	for _, address := range lanAgentAddresses(dev) {
+		attemptCtx, cancel := context.WithTimeout(ctx, lanAddressProbeTimeout)
+		resp, err := getAgentVersionAtAddress(attemptCtx, address)
+		cancel()
+		if err == nil {
+			return address, resp, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no LAN address available for %q", dev.DisplayName)
+	}
+	return "", nil, lastErr
+}
+
 // resolveLANVersions queries each LAN device's gRPC endpoint concurrently to
 // populate AgentVersion, OS, OSVersion, and CPUArchitecture.
-// Devices that are unreachable via both plaintext and mTLS are excluded from
-// the returned slice.
+// Devices stay in the returned slice even when the metadata probe fails.
 func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []models.LANDevice {
 	type indexedResult struct {
 		index int
@@ -53,50 +115,32 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 	for i := range devices {
 		go func(idx int) {
 			d := &devices[idx]
-			addr := hostPort(d.Hostname, d.Port)
-			queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-			conn, err := connectWithAutoTLS(queryCtx, addr)
+			_, resp, err := resolveLANAgentVersion(ctx, *d)
 			if err != nil {
-				ch <- nil
-				return
-			}
-			defer conn.Close()
-			resp, err := conn.AgentService.GetAgentVersion(queryCtx, &agentpb.GetAgentVersionRequest{})
-			if err != nil {
-				ch <- nil
+				ch <- &indexedResult{index: idx}
 				return
 			}
 			ch <- &indexedResult{index: idx, resp: resp}
 		}(i)
 	}
 
-	reachable := make([]models.LANDevice, 0, len(devices))
 	for range devices {
 		r := <-ch
-		if r != nil {
+		if r != nil && r.resp != nil {
 			devices[r.index].AgentVersion = r.resp.GetVersion()
 			devices[r.index].OS = r.resp.GetOs()
 			devices[r.index].OSVersion = r.resp.GetOsVersion()
 			devices[r.index].CPUArchitecture = r.resp.GetCpuArchitecture()
-			reachable = append(reachable, devices[r.index])
 		}
 	}
-	return reachable
+	return devices
 }
 
 // resolveLANVersion queries a single LAN device's gRPC endpoint to populate
-// version metadata. Returns the enriched device and true if reachable.
+// version metadata. Returns the enriched device and true when metadata lookup
+// succeeded.
 func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDevice, bool) {
-	addr := hostPort(dev.Hostname, dev.Port)
-	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	conn, err := connectWithAutoTLS(queryCtx, addr)
-	if err != nil {
-		return dev, false
-	}
-	defer conn.Close()
-	resp, err := conn.AgentService.GetAgentVersion(queryCtx, &agentpb.GetAgentVersionRequest{})
+	_, resp, err := resolveLANAgentVersion(ctx, dev)
 	if err != nil {
 		return dev, false
 	}
@@ -389,10 +433,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	go discovery.DiscoverLANContinuous(discoverCtx, lanCh)
 	go func() {
 		for dev := range lanCh {
-			dev, reachable := resolveLANVersion(discoverCtx, dev)
-			if !reachable {
-				continue
-			}
+			dev, _ = resolveLANVersion(discoverCtx, dev)
 			name := dev.DisplayName
 			if dev.AgentVersion != "" {
 				name += " v" + dev.AgentVersion
@@ -401,7 +442,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			p.Send(tui.PickerAddMsg{Items: []tui.PickerItem{{
 				Name:    name,
 				Type:    "LAN",
-				Address: hostPort(dev.Hostname, dev.Port),
+				Address: preferredLANAddress(dev),
 				Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 					DisplayName:     dev.DisplayName,
 					AgentVersion:    dev.AgentVersion,
@@ -522,7 +563,21 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	if entry.mergedDevice != nil {
 		d := entry.mergedDevice
 		if d.LAN != nil {
-			addr := hostPort(d.LAN.Hostname, d.LAN.Port)
+			addr, _, err := resolveLANAgentVersion(ctx, *d.LAN)
+			if err != nil {
+				// LAN metadata lookups can fail on provisioned devices without CLI certs.
+				// In that case, still try the preferred address once before falling back.
+				addr = preferredLANAddress(*d.LAN)
+			}
+			if addr == "" {
+				if d.Bluetooth != nil {
+					return &SelectedDevice{Bluetooth: d.Bluetooth}, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("selected LAN device has no usable address")
+			}
 			conn, err := connectWithAutoTLS(ctx, addr)
 			if err == nil {
 				return &SelectedDevice{Agent: conn}, nil
