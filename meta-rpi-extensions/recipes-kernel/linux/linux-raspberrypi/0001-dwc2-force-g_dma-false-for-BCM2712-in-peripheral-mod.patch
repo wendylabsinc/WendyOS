@@ -1,0 +1,47 @@
+From 233bb0362bf3754b968ae8ea604b5e4f9c9fe1a8 Mon Sep 17 00:00:00 2001
+From: "Adrian Bularca" <adrian.bularca@gmail.com>
+Date: Sun, 8 Mar 2026 12:59:32 +0200
+Subject: [PATCH] dwc2: force g_dma=false for BCM2712 in peripheral mode
+
+BCM2712 reports arch=2 (internal DMA capable) but gadget DMA does not
+work in peripheral mode. OUT endpoint DMA completion interrupts never
+fire, leaving all queued requests stuck at EINPROGRESS (NAKSts=1,
+total_data=0), causing complete host->board packet loss while TX works.
+
+Force slave/PIO mode in dwc2_set_bcm_params(), matching the proven
+BCM2835 (RPi 1/2/3, arch=0) behaviour.
+
+Signed-off-by: Adrian Bularca <adrian.bularca@gmail.com>
+---
+ drivers/usb/dwc2/params.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/drivers/usb/dwc2/params.c b/drivers/usb/dwc2/params.c
+index 93f52e371cdd..cf50bb1c1631 100644
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -23,6 +23,24 @@ static void dwc2_set_bcm_params(struct dwc2_hsotg *hsotg)
+ 	p->max_transfer_size = 65535;
+ 	p->max_packet_count = 511;
+ 	p->ahbcfg = 0x10;
++
++	/*
++	 * BCM2712 (RPi5) reports arch=2 (internal DMA capable) but gadget DMA
++	 * does not work in peripheral mode — OUT endpoint transfers stall with
++	 * EINPROGRESS (DMA completion interrupt never fires) and the host sees
++	 * 100% packet loss (NAKSts=1, total_data=0 across all queued requests).
++	 * Force slave (PIO) mode to match BCM2835 behaviour.
++	 *
++	 * dwc2_set_default_params() sets g_dma=dma_capable when dr_mode is
++	 * PERIPHERAL or OTG; for BCM2712 dma_capable=true (arch=2), so this
++	 * overrides that setting back to false.
++	 *
++	 * Safe for all users of this callback:
++	 *  - BCM2835 (RPi 1/2/3): arch=0, dma_capable=false — no change
++	 *  - BCM2712 (RPi 5): arch=2, overrides broken DMA to PIO — fixes the bug
++	 *  - BCM2848 (ACPI): same Broadcom USB IP — same PIO-only behaviour expected
++	 */
++	p->g_dma = false;
+ }
+ 
+ static void dwc2_set_his_params(struct dwc2_hsotg *hsotg)
