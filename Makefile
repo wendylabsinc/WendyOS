@@ -84,7 +84,7 @@ help:
 	@printf "$(GREEN)Configuration:$(NC)\n"
 	@printf "  MACHINE=$(MACHINE)\n"
 	@printf "  IMAGE_TARGET=$(IMAGE_TARGET)\n"
-	@printf "  FLASH_IMAGE_SIZE=$(FLASH_IMAGE_SIZE)  (must match EDGEOS_FLASH_IMAGE_SIZE)\n"
+	@printf "  FLASH_IMAGE_SIZE=$(FLASH_IMAGE_SIZE)  (must match WENDYOS_FLASH_IMAGE_SIZE)\n"
 	@printf "  FLASH_DEVICE=        (e.g., /dev/disk4)\n"
 	@printf "  FLASH_CONFIRM=       (set to 'yes' for non-interactive mode)\n"
 	@printf "\n"

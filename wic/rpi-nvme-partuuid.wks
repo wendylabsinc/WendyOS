@@ -1,3 +1,3 @@
 bootloader --ptable gpt
-part /boot --source bootimg-partition --ondisk nvme0n1 --fstype=vfat --label boot --active --align 4096 --size 128M --uuid "${EDGE_BOOT_PARTUUID}"
-part / --source rootfs --ondisk nvme0n1 --fstype=ext4 --label root --align 4096 --size 8192M --uuid "${EDGE_ROOT_PARTUUID}"
+part /boot --source bootimg-partition --ondisk nvme0n1 --fstype=vfat --label boot --active --align 4096 --size 128M --uuid "${WENDYOS_BOOT_PARTUUID}"
+part / --source rootfs --ondisk nvme0n1 --fstype=ext4 --label root --align 4096 --size 8192M --uuid "${WENDYOS_ROOT_PARTUUID}"

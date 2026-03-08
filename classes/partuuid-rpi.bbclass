@@ -2,8 +2,8 @@
 # partuuid.bbclass - Generate and cache UUIDs for partition references
 #
 # Exposes:
-#   EDGE_BOOT_PARTUUID
-#   EDGE_ROOT_PARTUUID
+#   WENDYOS_BOOT_PARTUUID
+#   WENDYOS_ROOT_PARTUUID
 #
 #   do_generate_partuuids: writes the chosen values to:
 #     - ${WORKDIR}/partuuids.conf
@@ -37,9 +37,9 @@ python __anonymous() {
         try:
             with open(cache_file, 'r') as f:
                 for line in f:
-                    if line.startswith('EDGE_BOOT_PARTUUID='):
+                    if line.startswith('WENDYOS_BOOT_PARTUUID='):
                         boot_uuid = line.split('=', 1)[1].strip()
-                    elif line.startswith('EDGE_ROOT_PARTUUID='):
+                    elif line.startswith('WENDYOS_ROOT_PARTUUID='):
                         root_uuid = line.split('=', 1)[1].strip()
         except Exception as e:
             bb.warn(f"partuuids: failed to read cache: {e}")
@@ -50,19 +50,19 @@ python __anonymous() {
         root_uuid = str(uuid.uuid4())
         try:
             with open(cache_file, 'w') as f:
-                f.write(f"EDGE_BOOT_PARTUUID={boot_uuid}\n")
-                f.write(f"EDGE_ROOT_PARTUUID={root_uuid}\n")
+                f.write(f"WENDYOS_BOOT_PARTUUID={boot_uuid}\n")
+                f.write(f"WENDYOS_ROOT_PARTUUID={root_uuid}\n")
             bb.note(f"partuuids: generated & cached boot={boot_uuid} root={root_uuid}")
         except Exception as e:
             bb.warn(f"partuuids: failed to write cache: {e}")
 
     # export the variables to datastore
-    d.setVar('EDGE_BOOT_PARTUUID', boot_uuid)
-    d.setVar('EDGE_ROOT_PARTUUID', root_uuid)
+    d.setVar('WENDYOS_BOOT_PARTUUID', boot_uuid)
+    d.setVar('WENDYOS_ROOT_PARTUUID', root_uuid)
 
     # make the variables available to WIC as well
     wicvars = (d.getVar('WICVARS') or '')
-    extra = ' EDGE_BOOT_PARTUUID EDGE_ROOT_PARTUUID'
+    extra = ' WENDYOS_BOOT_PARTUUID WENDYOS_ROOT_PARTUUID'
     if extra not in wicvars:
         d.setVar('WICVARS', (wicvars + extra).strip())
 }
@@ -70,14 +70,14 @@ python __anonymous() {
 python do_generate_partuuids() {
     import os
 
-    boot_uuid = d.getVar('EDGE_BOOT_PARTUUID')
-    root_uuid = d.getVar('EDGE_ROOT_PARTUUID')
+    boot_uuid = d.getVar('WENDYOS_BOOT_PARTUUID')
+    root_uuid = d.getVar('WENDYOS_ROOT_PARTUUID')
 
     # helper file to be used if a shell task or external script wants to source the
     # values instead of relying on BitBake variable expansion
     work_conf = os.path.join(d.getVar('WORKDIR'), 'partuuids.conf')
     with open(work_conf, 'w') as f:
-        f.write(f"EDGE_BOOT_PARTUUID={boot_uuid}\nEDGE_ROOT_PARTUUID={root_uuid}\n")
+        f.write(f"WENDYOS_BOOT_PARTUUID={boot_uuid}\nWENDYOS_ROOT_PARTUUID={root_uuid}\n")
 
     # audit file to be used if post-build tooling/CI needs to read
     # the UUIDs from ${DEPLOY_DIR_IMAGE} without parsing BitBake logs
@@ -86,7 +86,7 @@ python do_generate_partuuids() {
     if deploy_dir and deploy_name:
         os.makedirs(deploy_dir, exist_ok=True)
         with open(os.path.join(deploy_dir, deploy_name), 'w') as f:
-            f.write(f"EDGE_BOOT_PARTUUID={boot_uuid}\nEDGE_ROOT_PARTUUID={root_uuid}\n")
+            f.write(f"WENDYOS_BOOT_PARTUUID={boot_uuid}\nWENDYOS_ROOT_PARTUUID={root_uuid}\n")
 
     bb.note(f"partuuids: using boot={boot_uuid} root={root_uuid}")
 }
@@ -94,4 +94,4 @@ python do_generate_partuuids() {
 addtask generate_partuuids before do_configure after do_patch
 
 # re-run the task if these knobs change
-do_generate_partuuids[vardeps] += "EDGE_BOOT_PARTUUID EDGE_ROOT_PARTUUID PARTUUID_CACHE_FILE PARTUUIDS_DEPLOY_NAME"
+do_generate_partuuids[vardeps] += "WENDYOS_BOOT_PARTUUID WENDYOS_ROOT_PARTUUID PARTUUID_CACHE_FILE PARTUUIDS_DEPLOY_NAME"

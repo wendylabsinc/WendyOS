@@ -381,7 +381,7 @@ main() {
         echo ""
         echo "Please run this script from the workspace root, or set BUILD_DIR:"
         echo "  cd ${workspace_dir}"
-        echo "  ./meta-edgeos/scripts/$(basename "$0")"
+        echo "  ./meta-wendyos/scripts/$(basename "$0")"
         echo ""
         echo "Or specify build directory:"
         echo "  $0 --build-dir /path/to/build"
