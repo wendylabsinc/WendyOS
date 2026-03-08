@@ -85,23 +85,20 @@ This containerized application can be deployed to:
 ### Environment Variables
 
 - `PORT`: Server port (default: 8000)
-- `DEBUG`: Enable debugpy for remote debugging (set to `true`)
-- `DEBUG_PORT`: Debug server port (default: 5678)
-- `DEBUG_WAIT`: Wait for debugger to attach before starting (set to `true`)
 
 ### Debugging
 
-The container includes debugpy for remote debugging. To use it:
+When you deploy this example with `wendy run`, Wendy injects `debugpy`
+automatically for Python apps.
+
+For local Docker debugging, override the container command:
 
 ```bash
-# Run with debugging enabled (doesn't wait for debugger)
-docker run -e DEBUG=true -p 8000:8000 -p 5678:5678 hello-python-server
-
-# Run with debugging and wait for debugger to attach
-docker run -e DEBUG=true -e DEBUG_WAIT=true -p 8000:8000 -p 5678:5678 hello-python-server
+docker run -p 8000:8000 -p 5678:5678 hello-python-server \
+  python -m debugpy --listen 0.0.0.0:5678 app.py
 ```
 
-Then attach your debugger to `localhost:5678`. 
+Then attach your debugger to `localhost:5678`.
 
 **VS Code Configuration** (`.vscode/launch.json`):
 ```json
@@ -132,7 +129,6 @@ Then attach your debugger to `localhost:5678`.
 ```
 .
 ├── app.py              # Main Python server
-├── entrypoint.sh       # Docker entrypoint with debug support
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile         # Docker configuration
 ├── .dockerignore      # Docker ignore file

@@ -52,6 +52,14 @@ func parseRestartPolicyLabel(label string) (string, int) {
 	return policy, maxRetries
 }
 
+// shouldRefreshImageFromRegistry reports whether CreateContainer should refresh
+// the image from the device-local registry before using any cached manifest.
+func shouldRefreshImageFromRegistry(imageName string) bool {
+	return strings.HasPrefix(imageName, "localhost:5000/") ||
+		strings.HasPrefix(imageName, "127.0.0.1:5000/") ||
+		strings.HasPrefix(imageName, "[::1]:5000/")
+}
+
 // gcTimestamp returns an RFC3339 timestamp string suitable for use as a GC root
 // label value, anchoring content so it is not garbage collected.
 func gcTimestamp() string {

@@ -87,6 +87,48 @@ func TestParseRestartPolicyLabel_Simple(t *testing.T) {
 	}
 }
 
+func TestShouldRefreshImageFromRegistry(t *testing.T) {
+	tests := []struct {
+		name      string
+		imageName string
+		want      bool
+	}{
+		{
+			name:      "localhost registry",
+			imageName: "localhost:5000/sh.wendy.examples.hellopython:latest",
+			want:      true,
+		},
+		{
+			name:      "loopback ipv4 registry",
+			imageName: "127.0.0.1:5000/example:latest",
+			want:      true,
+		},
+		{
+			name:      "loopback ipv6 registry",
+			imageName: "[::1]:5000/example:latest",
+			want:      true,
+		},
+		{
+			name:      "remote registry",
+			imageName: "ghcr.io/wendylabsinc/example:latest",
+			want:      false,
+		},
+		{
+			name:      "bare local image",
+			imageName: "example:latest",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRefreshImageFromRegistry(tt.imageName); got != tt.want {
+				t.Errorf("shouldRefreshImageFromRegistry(%q) = %v; want %v", tt.imageName, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGCTimestamp_ValidRFC3339(t *testing.T) {
 	ts := gcTimestamp()
 	if ts == "" {

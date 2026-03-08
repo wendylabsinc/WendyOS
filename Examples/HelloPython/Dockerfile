@@ -12,11 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py .
-COPY entrypoint.sh .
 
 # Create a non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \
-    chmod +x entrypoint.sh && \
     chown -R app:app /app
 USER app
 
@@ -33,6 +31,6 @@ ENV PORT=8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Run the application
-# Set DEBUG=true to enable debugpy, DEBUG_WAIT=true to wait for debugger
-CMD ["./entrypoint.sh"]
+# Wendy injects debugpy for Python apps, so keep the container command
+# as a direct Python invocation instead of wrapping it in a shell script.
+CMD ["python", "app.py"]

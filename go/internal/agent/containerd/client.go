@@ -337,17 +337,36 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		_ = existing.Delete(ctx, containerd.WithSnapshotCleanup)
 	}
 
-	// Get the image handle from the local store, or pull from registry.
-	image, err := c.client.GetImage(ctx, imageName)
-	if err != nil {
-		c.logger.Info("Image not in local store, attempting pull from registry",
+	// Refresh images from the device-local registry before falling back to any
+	// cached manifest. `wendy run` always pushes to localhost:5000 first, so a
+	// blind GetImage() can otherwise reuse stale content for repeated deploys.
+	var image containerd.Image
+	var err error
+	if shouldRefreshImageFromRegistry(imageName) {
+		c.logger.Info("Refreshing image from local registry",
 			zap.String("image", imageName),
 		)
-		image, err = c.client.Pull(ctx, imageName,
-			containerd.WithPullUnpack,
-		)
+		image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
 		if err != nil {
-			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+			c.logger.Warn("Failed to refresh image from local registry, falling back to cached image",
+				zap.String("image", imageName),
+				zap.Error(err),
+			)
+		}
+	}
+
+	if image == nil {
+		image, err = c.client.GetImage(ctx, imageName)
+		if err != nil {
+			c.logger.Info("Image not in local store, attempting pull from registry",
+				zap.String("image", imageName),
+			)
+			image, err = c.client.Pull(ctx, imageName,
+				containerd.WithPullUnpack,
+			)
+			if err != nil {
+				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+			}
 		}
 	}
 
