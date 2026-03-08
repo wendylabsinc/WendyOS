@@ -1,0 +1,12 @@
+[Unit]
+Description=Raspberry Pi 5 NVMe EEPROM Configuration
+After=local-fs.target rpi5-eeprom-config.service
+ConditionPathExists=!/var/lib/wendyos/eeprom-nvme-updated
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/rpi5-eeprom-nvme-update.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
