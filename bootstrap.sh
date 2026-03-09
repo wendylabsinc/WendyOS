@@ -93,9 +93,20 @@ declare -Ar repos=(
 # display help
 usage() {
     cat <<EOF
-  $(basename "${0}") [options]
+Usage:
+  MACHINE=<machine> $(basename "${0}") [options]
+
+Example:
+  MACHINE=rpi5 $(basename "${0}")
+  MACHINE=jetson $(basename "${0}")
+
+Environment variables:
+  MACHINE   (required) Target machine. Selects conf/template/bblayers.conf.<MACHINE>
+            and conf/template/local.conf.<MACHINE>.
+            Available machines: jetson, rpi5, qemu
 
 Options:
+  --help, -h   Show this help message.
 
 EOF
 }
@@ -111,6 +122,28 @@ trim() {
 
     printf '%s' "${s}"
 }
+
+###
+# Parse command-line arguments
+for arg in "$@"; do
+    case "${arg}" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            printf "Unknown argument: %s\n" "${arg}" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${MACHINE:-}" ]]; then
+    printf "ERROR: MACHINE environment variable is required.\n" >&2
+    usage
+    exit 1
+fi
 
 invalid_folder_structure() {
     local -r work_dir="${1}"
@@ -316,20 +349,35 @@ printf "\nPrepare the Yocto build environment...\n"
 cd "${PROJECT_DIR}"
 mkdir -p "${YOCTO_BUILD_DIR}/conf"
 
+# Resolve template file names based on MACHINE environment variable
+BBLAYERS_SRC="${META_LAYER_DIR}/conf/template/bblayers.conf.${MACHINE}"
+LOCAL_SRC="${META_LAYER_DIR}/conf/template/local.conf.${MACHINE}"
+
+if [[ ! -f "${BBLAYERS_SRC}" ]] || [[ ! -f "${LOCAL_SRC}" ]]; then
+    printf "ERROR: No template files found for machine '%s'.\n" "${MACHINE}" >&2
+    printf "  Expected:\n" >&2
+    printf "    %s\n" "${BBLAYERS_SRC}" >&2
+    printf "    %s\n" "${LOCAL_SRC}" >&2
+    printf "  Available machines:\n" >&2
+    for f in "${META_LAYER_DIR}/conf/template/bblayers.conf."*; do
+        suffix="${f##*.conf.}"
+        if [[ -f "${META_LAYER_DIR}/conf/template/local.conf.${suffix}" ]]; then
+            printf "    %s\n" "${suffix}" >&2
+        fi
+    done
+    exit 1
+fi
+
 # use the template only if the corresponding one in build/conf doesn't exist
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/bblayers.conf" ]]
 then
-    BBLAYERS_TEMPLATE="bblayers.conf"
-    if [[ "${MACHINE:-}" == *"raspberrypi"* ]]; then
-        BBLAYERS_TEMPLATE="bblayers-rpi5.conf"
-    fi
-    cp "${META_LAYER_DIR}/conf/template/${BBLAYERS_TEMPLATE}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
+    cp "${BBLAYERS_SRC}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
     sed -i.bak "s|%META-REPO%|${image_name}|g" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
 fi
 
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/local.conf" ]]
 then
-    cp "${META_LAYER_DIR}/conf/template/local.conf" "./${YOCTO_BUILD_DIR}/conf"
+    cp "${LOCAL_SRC}" "./${YOCTO_BUILD_DIR}/conf/local.conf"
 fi
 
 printf "\nDirectory structure:\n"
@@ -351,11 +399,11 @@ cd "${WORK_DIR}"
 cat <<EOF
 
 Run the following command(s):
-   # start the docker container
+   # start the Docker container
    cd ./docker
    ./docker-util.sh run
 
-   # (within container)
+   # (within Docker container)
    cd ./${IMAGE_NAME}
    . ./repos/poky/oe-init-build-env ${YOCTO_BUILD_DIR}
    bitbake wendyos-image

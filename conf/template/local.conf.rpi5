@@ -1,11 +1,5 @@
 
-# Machine configuration (override with MACHINE=... make build):
-# Orin Nano - eMMC boot:
-#MACHINE ?= "jetson-orin-nano-devkit-wendyos"
-# Orin Nano - NVMe boot (default):
-MACHINE ?= "jetson-orin-nano-devkit-nvme-wendyos"
-# AGX Orin 64GB - NVMe boot:
-#MACHINE ?= "jetson-agx-orin-devkit-nvme-wendyos"
+MACHINE = "raspberrypi5-wendyos"
 DL_DIR = "${TOPDIR}/../downloads"
 SSTATE_DIR = "${TOPDIR}/../sstate-cache"
 #TMPDIR = "${TOPDIR}/tmp"
@@ -30,7 +24,7 @@ CONF_VERSION = "2"
 # #GADGET_FUNC_ORDER="ecm ncm"
 
 # Flash image size - allows machine-specific override
-WENDYOS_FLASH_IMAGE_SIZE ?= "64GB"
+WENDYOS_FLASH_IMAGE_SIZE = "64GB"
 
 # Debug features - can be overridden in local.conf or machine config
 WENDYOS_DEBUG ?= "1"
@@ -40,25 +34,18 @@ WENDYOS_DEBUG_UART ?= "1"
 #   Real hardware (Tegra, etc.): "1" (hardware USB gadget)
 #   QEMU: "0" (uses virtio-net instead)
 WENDYOS_USB_GADGET ?= "1"
+
 # WENDYOS_PERSIST_JOURNAL_LOGS - Automatically configured per machine:
 #   Real hardware (Tegra, etc.): "1" (persistent logs stored on /data partition)
 #   QEMU: "0" (volatile logs in tmpfs, no /data partition)
 # Only uncomment if you need to override the automatic configuration:
-# WENDYOS_PERSIST_JOURNAL_LOGS = "1"
+WENDYOS_PERSIST_JOURNAL_LOGS = "1"
 
 # Enable UEFI capsule updates (bootloader updates via Mender)
 # Set to "1" to include bootloader updates in OTA deployments
-WENDYOS_UPDATE_BOOTLOADER ?= "0"
+WENDYOS_UPDATE_BOOTLOADER ?= "1"
 
 WENDYOS_EFI_DEBUG ?= "0"
-
-# QEMU rootfs size (only applies to QEMU builds, in KB)
-# Default: 2GB (automatically set for QEMU in qemu-image.inc)
-# Uncomment to override:
-# QEMU_ROOTFS_SIZE = "1048576"  # 1GB
-# QEMU_ROOTFS_SIZE ?= "2097152"  # 2GB
-# QEMU_ROOTFS_SIZE ?= "4194304"  # 4GB (default)
-QEMU_ROOTFS_SIZE = "4194304"  # 4GB
 
 # NVIDIA L4T Version Control
 # Pin to specific L4T release (configured in distro/include/l4t-r36-4-4.conf)
