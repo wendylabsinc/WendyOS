@@ -637,29 +637,16 @@ jobs:
           read -r -d '' INSTALL_INSTRUCTIONS << 'INSTALL_EOF' || true
           ## Install the Wendy CLI
 
-          **macOS (Homebrew)**
+          **Linux/macOS**
           ```
-          brew install wendylabsinc/tap/wendy
-          ```
-
-          **Arch Linux (AUR)**
-          ```
-          yay -S wendy
+          curl -fsSL https://install.wendy.sh/cli.sh | bash
           ```
 
-          **Debian/Ubuntu (APT)**
-          ```
-          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-apt.sh | sudo bash
-          ```
+          ## Install the Wendy Agent
 
-          **Fedora/RHEL (DNF/YUM)**
+          **Linux/macOS**
           ```
-          curl -fsSL https://wendylabsinc.github.io/wendy-agent/install-yum.sh | sudo bash
-          ```
-
-          **Windows (Winget)**
-          ```
-          winget install WendyLabs.Wendy
+          curl -fsSL https://install.wendy.sh/agent.sh | bash
           ```
           INSTALL_EOF
 

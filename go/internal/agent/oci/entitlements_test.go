@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"testing"
@@ -48,7 +49,7 @@ func TestApplyEntitlements_GPU(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -84,7 +85,7 @@ func TestApplyEntitlements_Network_Host(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -109,7 +110,7 @@ func TestApplyEntitlements_Network_Default(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -128,7 +129,7 @@ func TestApplyEntitlements_Audio(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -161,7 +162,7 @@ func TestApplyEntitlements_Persist(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -185,7 +186,7 @@ func TestApplyEntitlements_Persist(t *testing.T) {
 	}
 }
 
-func TestApplyEntitlements_Bluetooth(t *testing.T) {
+func TestApplyEntitlements_Bluetooth_NoProxy(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
 		AppID: "test-app",
@@ -194,20 +195,105 @@ func TestApplyEntitlements_Bluetooth(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{DBusProxyAvailable: false}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
-	// Should mount D-Bus sockets.
-	if !hasMountDest(spec, "/var/run/dbus") {
-		t.Error("bluetooth entitlement did not add /var/run/dbus mount")
+	// Without the proxy, raw host D-Bus sockets must NOT be mounted
+	// (they expose NetworkManager and other privileged services).
+	if hasMountDest(spec, "/var/run/dbus") {
+		t.Error("bluetooth without proxy should not mount /var/run/dbus")
 	}
-	if !hasMountDest(spec, "/run/dbus") {
-		t.Error("bluetooth entitlement did not add /run/dbus mount")
+	if hasMountDest(spec, "/run/dbus") {
+		t.Error("bluetooth without proxy should not mount /run/dbus")
+	}
+
+	// The env var should still be set so apps know the expected path.
+	if !hasEnv(spec, "DBUS_SYSTEM_BUS_ADDRESS") {
+		t.Error("bluetooth entitlement did not set DBUS_SYSTEM_BUS_ADDRESS")
+	}
+}
+
+func TestApplyEntitlements_Bluetooth_Proxy(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "bt-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementBluetooth},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{DBusProxyAvailable: true}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// Proxy mode should mount from the proxy directory.
+	if !hasMountDest(spec, "/var/run/dbus") {
+		t.Error("bluetooth proxy did not add /var/run/dbus mount")
+	}
+
+	// Should NOT have /run/dbus (only one mount with proxy).
+	if hasMountDest(spec, "/run/dbus") {
+		t.Error("bluetooth proxy should not add /run/dbus mount")
+	}
+
+	// Verify source points to proxy directory.
+	for _, m := range spec.Mounts {
+		if m.Destination == "/var/run/dbus" {
+			expected := "/run/wendy/dbus-proxy/bt-app"
+			if m.Source != expected {
+				t.Errorf("proxy /var/run/dbus source = %q, want %q", m.Source, expected)
+			}
+		}
 	}
 
 	if !hasEnv(spec, "DBUS_SYSTEM_BUS_ADDRESS") {
 		t.Error("bluetooth entitlement did not set DBUS_SYSTEM_BUS_ADDRESS")
+	}
+}
+
+// TestBluetoothEntitlementDoesNotExposeNetworkManager verifies that enabling
+// only the Bluetooth entitlement does not give the container unrestricted
+// access to the D-Bus system bus. Mounting the raw host D-Bus socket
+// (/var/run/dbus, /run/dbus) lets the container talk to every D-Bus service,
+// including NetworkManager — effectively granting root-level network control
+// to a container that only asked for Bluetooth.
+func TestBluetoothEntitlementDoesNotExposeNetworkManager(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "bt-only-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementBluetooth},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// The raw host D-Bus system socket must NOT be bind-mounted into the
+	// container. Doing so exposes every D-Bus service (NetworkManager,
+	// systemd, polkit, etc.) — not just BlueZ. D-Bus access should be
+	// filtered/proxied so only org.bluez is reachable.
+	for _, m := range spec.Mounts {
+		if m.Source == "/var/run/dbus" || m.Source == "/run/dbus" {
+			t.Errorf("Bluetooth entitlement bind-mounts raw D-Bus system socket %q -> %q; "+
+				"this exposes NetworkManager and other privileged D-Bus services. "+
+				"D-Bus access must be scoped to BlueZ only (org.bluez).",
+				m.Source, m.Destination)
+		}
+	}
+
+	// The network namespace must remain intact — Bluetooth should not
+	// alter network isolation.
+	if !hasNamespace(spec, "network") {
+		t.Error("Bluetooth-only entitlement removed the network namespace")
+	}
+
+	// CAP_NET_ADMIN must not be granted by Bluetooth alone.
+	if spec.Process.Capabilities != nil &&
+		slices.Contains(spec.Process.Capabilities.Bounding, "CAP_NET_ADMIN") {
+		t.Error("Bluetooth entitlement should not grant CAP_NET_ADMIN")
 	}
 }
 
@@ -220,7 +306,7 @@ func TestApplyEntitlements_Video(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -229,9 +315,27 @@ func TestApplyEntitlements_Video(t *testing.T) {
 		t.Error("video entitlement did not add GID 44")
 	}
 
-	// Should mount /dev/video0.
-	if _, err := os.Stat("/dev/video0"); err == nil && !hasMountDest(spec, "/dev/video0") {
-		t.Error("video entitlement did not add /dev/video0 mount")
+	// Should add a cgroup rule for V4L2 devices (major 81).
+	foundV4L2Rule := false
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Major != nil && *d.Major == 81 && d.Allow {
+			foundV4L2Rule = true
+			break
+		}
+	}
+	if !foundV4L2Rule {
+		t.Error("video entitlement did not add V4L2 cgroup device rule (major 81)")
+	}
+
+	// Should mount /dev/video0 when it exists on the host.
+	if _, err := os.Stat("/dev/video0"); err == nil {
+		if !hasMountDest(spec, "/dev/video0") {
+			t.Error("video entitlement did not add /dev/video0 mount")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat /dev/video0: %v", err)
+	} else {
+		t.Skip("/dev/video0 not present on this host")
 	}
 }
 
@@ -247,7 +351,7 @@ func TestApplyEntitlements_Multiple(t *testing.T) {
 		},
 	}
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
@@ -285,7 +389,7 @@ func TestApplyEntitlements_Empty(t *testing.T) {
 	originalMountCount := len(spec.Mounts)
 	originalNSCount := len(spec.Linux.Namespaces)
 
-	if err := ApplyEntitlements(spec, cfg); err != nil {
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
