@@ -166,7 +166,7 @@ make build MACHINE=jetson-orin-nano-devkit-wendyos
 
    ```bash
    MACHINE=jetson ./meta-wendyos/bootstrap.sh
-   MACHINE=rpi5   ./meta-wendyos/bootstrap.sh
+   MACHINE=rpi5 ./meta-wendyos/bootstrap.sh
    ```
 
    The bootstrap script will:

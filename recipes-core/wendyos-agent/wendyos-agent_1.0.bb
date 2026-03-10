@@ -28,8 +28,9 @@ do_compile() {
         bbfatal "Failed to fetch latest release from GitHub"
 
     # Extract download URL for aarch64 binary (match .tar.gz files only)
+    # Asset naming: wendy-agent-linux-arm64-*.tar.gz (formerly wendy-agent-linux-static-musl-aarch64)
     DOWNLOAD_URL=$(cat ${B}/release.json | \
-        grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-static-musl-aarch64[^"]*\.tar\.gz[^"]*"' | \
+        grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-arm64[^"]*\.tar\.gz[^"]*"' | \
         head -1 | cut -d'"' -f4)
 
     if [ -z "${DOWNLOAD_URL}" ]; then

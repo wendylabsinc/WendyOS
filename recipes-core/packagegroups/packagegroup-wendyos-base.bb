@@ -40,7 +40,8 @@ RDEPENDS:${PN}:append = " \
     ${@oe.utils.ifelse( \
         d.getVar('WENDYOS_DEBUG') == '1', \
         ' \
-            \
+            tcpdump \
+            gzip \
         ', \
         '' \
         )} \
