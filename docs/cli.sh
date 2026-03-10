@@ -90,7 +90,7 @@ download() {
 confirm() {
   if [[ "$YES" == true ]]; then return 0; fi
   printf "%s [y/N] " "$1"
-  read -r answer
+  read -r answer </dev/tty
   case "$answer" in
     [yY]|[yY][eE][sS]) return 0 ;;
     *) echo "Aborted."; exit 1 ;;

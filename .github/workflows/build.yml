@@ -730,6 +730,15 @@ jobs:
           # Update bottle root_url version
           sed -i "s|wendy-nightly-[^\"]*|wendy-nightly-${VERSION}|" "$FORMULA"
 
+          # Verify all URLs and checksums were actually updated
+          echo "Verifying formula was updated correctly..."
+          grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
+          grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
+          grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
+
           echo "Updated nightly formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
 
@@ -761,6 +770,15 @@ jobs:
 
           # Update bottle root_url version
           sed -i "s|wendy-[0-9][^\"]*|wendy-${VERSION}|" "$FORMULA"
+
+          # Verify all URLs and checksums were actually updated
+          echo "Verifying formula was updated correctly..."
+          grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
+          grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
+          grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
 
           echo "Updated stable formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
