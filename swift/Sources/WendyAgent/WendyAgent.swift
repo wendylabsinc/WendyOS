@@ -80,7 +80,8 @@ struct WendyAgent: AsyncParsableCommand {
                     .init(service: otelServer),
                     .init(service: bonjour),
                 ],
-                gracefulShutdownSignals: [.sigint, .sigterm],
+                gracefulShutdownSignals: [.sigterm],
+                cancellationSignals: [.sigint],
                 logger: logger
             )
         )
