@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -277,11 +278,11 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usbScanMsg:
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
-		return m, m.scanUSB()
+		return m, delayThen(usbPollInterval, m.scanUSB())
 	case ethScanMsg:
 		m.collection.EthernetInterfaces = msg.devices
 		m.hasResults = true
-		return m, m.scanEthernet()
+		return m, delayThen(ethernetPollInterval, m.scanEthernet())
 	case lanScanMsg:
 		m.collection.LANDevices = msg.devices
 		m.hasResults = true
@@ -293,11 +294,38 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case extScanMsg:
 		m.collection.ExternalDevices = msg.devices
 		m.hasResults = true
-		return m, m.scanExternal()
+		return m, delayThen(externalPollInterval, m.scanExternal())
 	}
 
 	return m, nil
 }
+
+func parseDurationEnv(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+func delayThen(d time.Duration, cmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		if d > 0 {
+			time.Sleep(d)
+		}
+		return cmd()
+	}
+}
+
+var (
+	usbPollInterval      = parseDurationEnv("WENDY_DISCOVER_USB_INTERVAL", 3*time.Second)
+	ethernetPollInterval = parseDurationEnv("WENDY_DISCOVER_ETHERNET_INTERVAL", 3*time.Second)
+	externalPollInterval = parseDurationEnv("WENDY_DISCOVER_EXTERNAL_INTERVAL", 5*time.Second)
+)
 
 var (
 	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
