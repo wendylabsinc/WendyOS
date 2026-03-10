@@ -3,17 +3,16 @@ name: Build products and release
 on:
   push:
     branches: [main]
-    tags: ['v[0-9]+.[0-9]+.[0-9]+*']   # v0.1.18, v1.0.0-beta.1, etc.
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish artifacts and release"
+        description: "Publish artifacts and create a stable release"
         type: boolean
         default: false
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: true
 
 # Add permissions needed for creating releases
 permissions:
@@ -36,40 +35,26 @@ jobs:
       - name: Set version
         id: set-version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            # Tag push: extract version from tag (v0.1.18 -> 0.1.18)
-            TAG="${GITHUB_REF#refs/tags/}"
-            VERSION="${TAG#v}"
+          TIMESTAMP=$(date +'%Y.%m.%d-%H%M%S')
 
-            IS_RELEASE="true"
-
-            # Check if it's a prerelease (contains hyphen after version, e.g. v1.0.0-beta.1)
-            if [[ "$VERSION" == *-* ]]; then
-              IS_PRERELEASE="true"
-            else
-              IS_PRERELEASE="false"
-            fi
-
-            TAG_NAME="$TAG"
-
-            echo "Tag push: version=$VERSION, tag=$TAG_NAME, prerelease=$IS_PRERELEASE"
+          if [ "$GITHUB_REF" == "refs/heads/main" ]; then
+            VERSION="${TIMESTAMP}"
           else
-            # Main branch push or workflow_dispatch: timestamp version
-            TIMESTAMP=$(date +'%Y.%m.%d-%H%M%S')
-
-            if [ "$GITHUB_REF" == "refs/heads/main" ]; then
-              VERSION="${TIMESTAMP}"
-            else
-              VERSION="${TIMESTAMP}-dev"
-            fi
-
-            IS_RELEASE="false"
-            IS_PRERELEASE="true"
-            TAG_NAME="$VERSION"
-
-            echo "Branch push: version=$VERSION"
+            VERSION="${TIMESTAMP}-dev"
           fi
 
+          # Stable release when manually triggered with publish=true
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish }}" == "true" ]]; then
+            IS_RELEASE="true"
+            IS_PRERELEASE="false"
+          else
+            IS_RELEASE="false"
+            IS_PRERELEASE="true"
+          fi
+
+          TAG_NAME="$VERSION"
+
+          echo "version=$VERSION, release=$IS_RELEASE, prerelease=$IS_PRERELEASE"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
@@ -598,7 +583,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Update floating 'latest' tag for prereleases only (semver tags don't need it)
+      # Update floating 'latest' tag for nightly prereleases
       - name: Checkout repo
         if: needs.determine-version.outputs.is_release != 'true'
         uses: actions/checkout@v4
