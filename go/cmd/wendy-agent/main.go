@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 
+	"github.com/wendylabsinc/wendy/internal/agent/bleserver"
 	"github.com/wendylabsinc/wendy/internal/agent/bluetooth"
 	"github.com/wendylabsinc/wendy/internal/agent/container"
 	agentcontainerd "github.com/wendylabsinc/wendy/internal/agent/containerd"
@@ -114,6 +115,14 @@ func main() {
 	go func() {
 		defer wg.Done()
 		monitor.Run(ctx)
+	}()
+
+	// Start BLE L2CAP server in background.
+	bleServer := bleserver.NewServer(logger, networkMgr, hwDiscoverer, btManager, containerdClient)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		bleServer.Run(ctx)
 	}()
 
 	// Main agent gRPC server port.

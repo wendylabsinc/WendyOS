@@ -58,7 +58,7 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 		Version:         version.Version,
 		Os:              runtime.GOOS,
 		CpuArchitecture: runtime.GOARCH,
-		Featureset:      detectFeatureset(),
+		Featureset:      DetectFeatureset(),
 	}
 
 	// Read WendyOS version if available.
@@ -70,8 +70,8 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	return resp, nil
 }
 
-// detectFeatureset probes the system for available hardware capabilities.
-func detectFeatureset() []string {
+// DetectFeatureset probes the system for available hardware capabilities.
+func DetectFeatureset() []string {
 	var features []string
 
 	// GPU: check for NVIDIA devices.
