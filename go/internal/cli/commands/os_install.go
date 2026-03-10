@@ -41,6 +41,7 @@ type pickerDevice struct {
 	Version      string
 	Category     string // e.g. "Linux (arm64)" or "Wendy Lite"
 	IsESP32      bool
+	ESP32Chip    string // e.g. "esp32c6", "esp32c5"
 	ManifestPath string // for Linux devices (GCS)
 }
 
@@ -81,20 +82,27 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 		})
 	}
 
-	// Add ESP32-C6 entry.
+	// Add ESP32 entries.
 	espVersion := "(latest)"
-	espKey := "esp32-c6"
-	deviceMap[espKey] = pickerDevice{
-		Name:     "ESP32-C6",
-		Version:  espVersion,
-		Category: "Wendy Lite",
-		IsESP32:  true,
+	for _, esp := range []struct {
+		key, name, chip string
+	}{
+		{"esp32-c6", "ESP32-C6", "esp32c6"},
+		{"esp32-c5", "ESP32-C5", "esp32c5"},
+	} {
+		deviceMap[esp.key] = pickerDevice{
+			Name:      esp.name,
+			Version:   espVersion,
+			Category:  "Wendy Lite",
+			IsESP32:   true,
+			ESP32Chip: esp.chip,
+		}
+		items = append(items, tui.PickerItem{
+			Name:        esp.name,
+			Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
+			Value:       esp.key,
+		})
 	}
-	items = append(items, tui.PickerItem{
-		Name:        "ESP32-C6",
-		Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
-		Value:       espKey,
-	})
 
 	if len(items) == 0 {
 		return fmt.Errorf("no devices available")
@@ -109,7 +117,7 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	device := deviceMap[selected]
 
 	if device.IsESP32 {
-		return installESP32Firmware(ctx, nightly)
+		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
 	return installLinuxImage(ctx, device, nightly)
 }
@@ -257,18 +265,19 @@ func downloadImage(img *imageInfo) (string, error) {
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
-func installESP32Firmware(ctx context.Context, nightly bool) error {
-	fmt.Println("\nScanning for ESP32-C6 devices...")
+// chip is e.g. "esp32c6" or "esp32c5".
+func installESP32Firmware(ctx context.Context, nightly bool, chip string) error {
+	fmt.Println("\nScanning for ESP32 devices...")
 
 	serialPort, err := discovery.ResolveESP32SerialPort()
 	if err != nil {
-		fmt.Println("\nNo ESP32-C6 device detected.")
-		fmt.Println("Make sure your ESP32-C6 is connected via USB and in bootloader mode.")
+		fmt.Println("\nNo ESP32 device detected.")
+		fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
 		fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
 		return fmt.Errorf("ESP32 not found: %w", err)
 	}
 
-	fmt.Printf("Found ESP32-C6 at %s\n", serialPort)
+	fmt.Printf("Found ESP32 at %s\n", serialPort)
 
 	// Fetch release.
 	fmt.Println("Fetching latest Wendy Lite firmware...")
@@ -277,7 +286,7 @@ func installESP32Firmware(ctx context.Context, nightly bool) error {
 		return fmt.Errorf("fetching release: %w", err)
 	}
 
-	asset, err := findBinAsset(release)
+	asset, err := findBinAsset(release, chip)
 	if err != nil {
 		return err
 	}

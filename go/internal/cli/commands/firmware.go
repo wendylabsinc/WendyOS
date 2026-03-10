@@ -75,10 +75,12 @@ func fetchWendyLiteRelease(nightly bool) (*wendyLiteRelease, error) {
 	return nil, fmt.Errorf("no nightly (prerelease) wendy-lite release found")
 }
 
-// findBinAsset returns the first .bin asset from a release.
-func findBinAsset(release *wendyLiteRelease) (*firmwareAsset, error) {
+// findBinAsset returns the .bin asset matching the given chip from a release.
+// chip should be "esp32c6" or "esp32c5".
+func findBinAsset(release *wendyLiteRelease, chip string) (*firmwareAsset, error) {
+	suffix := chip + ".bin" // e.g. "esp32c6.bin"
 	for _, a := range release.Assets {
-		if strings.HasSuffix(a.Name, ".bin") {
+		if strings.HasSuffix(a.Name, suffix) {
 			return &firmwareAsset{
 				Name:        a.Name,
 				DownloadURL: a.BrowserDownloadURL,
@@ -86,7 +88,7 @@ func findBinAsset(release *wendyLiteRelease) (*firmwareAsset, error) {
 			}, nil
 		}
 	}
-	return nil, fmt.Errorf("no .bin asset found in release %s", release.TagName)
+	return nil, fmt.Errorf("no %s .bin asset found in release %s", chip, release.TagName)
 }
 
 // downloadFirmware downloads a firmware .bin to a temp file, reporting progress.
