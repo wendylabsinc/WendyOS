@@ -49,7 +49,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        try process.run()
+        try! process.run()
         runningProcesses[appName] = process
         logger.info("Process started", metadata: ["app_name": "\(appName)", "pid": "\(process.processIdentifier)"])
 
