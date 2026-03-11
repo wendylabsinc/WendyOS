@@ -15,13 +15,13 @@ import (
 
 // mockNetworkManager implements services.NetworkManager for testing.
 type mockNetworkManager struct {
-	networks    []*agentpb.ListWiFiNetworksResponse_WiFiNetwork
-	listErr     error
-	connectErr  error
-	connected   bool
-	ssid        string
-	statusErr   error
-	disconnErr  error
+	networks   []*agentpb.ListWiFiNetworksResponse_WiFiNetwork
+	listErr    error
+	connectErr error
+	connected  bool
+	ssid       string
+	statusErr  error
+	disconnErr error
 }
 
 func (m *mockNetworkManager) ListWiFiNetworks(_ context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {

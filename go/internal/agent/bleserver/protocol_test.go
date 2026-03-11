@@ -83,7 +83,7 @@ func TestReadMessageLengthMismatch(t *testing.T) {
 	defer c2.Close()
 
 	// Write a frame where the length header claims more data than present
-	frame := make([]byte, 4) // 2 header + 2 data bytes
+	frame := make([]byte, 4)                  // 2 header + 2 data bytes
 	binary.BigEndian.PutUint16(frame[:2], 10) // claims 10 bytes
 	frame[2] = 0xAA
 	frame[3] = 0xBB

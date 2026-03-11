@@ -20,18 +20,19 @@ const (
 )
 
 // sockaddrL2 matches the C struct sockaddr_l2 for BLE L2CAP.
-// struct sockaddr_l2 {
-//     sa_family_t    l2_family;   // AF_BLUETOOTH
-//     __le16         l2_psm;      // PSM (little-endian)
-//     bdaddr_t       l2_bdaddr;   // 6 bytes, BDADDR_ANY = 00:00:00:00:00:00
-//     __le16         l2_cid;      // CID
-//     uint8_t        l2_bdaddr_type; // address type
-// };
+//
+//	struct sockaddr_l2 {
+//	    sa_family_t    l2_family;   // AF_BLUETOOTH
+//	    __le16         l2_psm;      // PSM (little-endian)
+//	    bdaddr_t       l2_bdaddr;   // 6 bytes, BDADDR_ANY = 00:00:00:00:00:00
+//	    __le16         l2_cid;      // CID
+//	    uint8_t        l2_bdaddr_type; // address type
+//	};
 type sockaddrL2 struct {
-	Family    uint16
-	PSM       uint16 // little-endian
-	BDAddr    [6]byte
-	CID       uint16
+	Family     uint16
+	PSM        uint16 // little-endian
+	BDAddr     [6]byte
+	CID        uint16
 	BDAddrType uint8
 	_          [1]byte // padding to 14 bytes
 }

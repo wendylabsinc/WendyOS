@@ -219,8 +219,8 @@ func (d *Dispatcher) handleAppsRemove(ctx context.Context, cmd *agentpb.AppsRemo
 
 func (d *Dispatcher) handleAgentVersion() *agentpb.BluetoothResponse {
 	resp := &agentpb.AgentVersionResponse{
-		Version:        version.Version,
-		Featureset:     services.DetectFeatureset(),
+		Version:    version.Version,
+		Featureset: services.DetectFeatureset(),
 	}
 	osStr := runtime.GOOS
 	resp.Os = &osStr
