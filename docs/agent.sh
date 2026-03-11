@@ -17,7 +17,7 @@ usage() {
 Install the Wendy Agent.
 
 The agent runs on Linux devices and provides remote debugging and deployment
-capabilities. It requires root privileges to install.
+capabilities.
 
 Usage: install-agent.sh [OPTIONS]
 
@@ -48,9 +48,10 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-# --- Escalate to root ---
+# --- Determine sudo prefix ---
+SUDO=""
 if [[ "$(id -u)" -ne 0 ]]; then
-  exec sudo bash "$0" "$@"
+  SUDO="sudo"
 fi
 
 # --- Detect Architecture ---
@@ -115,46 +116,46 @@ if command -v apt-get &>/dev/null; then
 
   echo "Adding Wendy APT repository..."
   # Ensure gnupg is available for key import
-  apt-get update -qq
-  apt-get install -y -qq ca-certificates curl gnupg >/dev/null
+  $SUDO apt-get update -qq
+  $SUDO apt-get install -y -qq ca-certificates curl gnupg >/dev/null
   # Import the Google Artifact Registry GPG key
-  mkdir -p /usr/share/keyrings
+  $SUDO mkdir -p /usr/share/keyrings
   curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg \
-    | gpg --dearmor --yes -o /usr/share/keyrings/wendy-archive-keyring.gpg
+    | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/wendy-archive-keyring.gpg
   echo "deb [signed-by=/usr/share/keyrings/wendy-archive-keyring.gpg] https://us-central1-apt.pkg.dev/projects/cloud-c7e56 wendy-apt main" \
-    > /etc/apt/sources.list.d/wendy.list
-  apt-get update
-  apt-get install -y wendy-agent
+    | $SUDO tee /etc/apt/sources.list.d/wendy.list >/dev/null
+  $SUDO apt-get update
+  $SUDO apt-get install -y wendy-agent
 
 elif command -v dnf &>/dev/null; then
   echo "DNF detected. Will add the Wendy repository and install wendy-agent."
   confirm "Proceed?"
 
   echo "Adding Wendy YUM repository..."
-  cat > /etc/yum.repos.d/wendy.repo <<'REPO'
+  $SUDO tee /etc/yum.repos.d/wendy.repo >/dev/null <<'REPO'
 [wendy]
 name=Wendy Repository
 baseurl=https://us-central1-yum.pkg.dev/projects/cloud-c7e56/wendy-yum
 enabled=1
 gpgcheck=0
 REPO
-  dnf makecache
-  dnf install -y wendy-agent
+  $SUDO dnf makecache
+  $SUDO dnf install -y wendy-agent
 
 elif command -v yum &>/dev/null; then
   echo "YUM detected. Will add the Wendy repository and install wendy-agent."
   confirm "Proceed?"
 
   echo "Adding Wendy YUM repository..."
-  cat > /etc/yum.repos.d/wendy.repo <<'REPO'
+  $SUDO tee /etc/yum.repos.d/wendy.repo >/dev/null <<'REPO'
 [wendy]
 name=Wendy Repository
 baseurl=https://us-central1-yum.pkg.dev/projects/cloud-c7e56/wendy-yum
 enabled=1
 gpgcheck=0
 REPO
-  yum makecache
-  yum install -y wendy-agent
+  $SUDO yum makecache
+  $SUDO yum install -y wendy-agent
 
 else
   # No package manager — fall back to downloading the tarball from GitHub.
@@ -177,7 +178,7 @@ else
   echo "Downloading ${URL}..."
   download "$URL" "${TMPDIR_DL}/${ARTIFACT}"
   tar -xzf "${TMPDIR_DL}/${ARTIFACT}" -C "$TMPDIR_DL"
-  install -m 755 "${TMPDIR_DL}/wendy-agent-linux-${ARCH}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+  $SUDO install -m 755 "${TMPDIR_DL}/wendy-agent-linux-${ARCH}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 fi
 
 # The .deb/.rpm postinstall scripts handle systemctl enable/start automatically.
