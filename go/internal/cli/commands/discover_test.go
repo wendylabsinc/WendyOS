@@ -30,9 +30,7 @@ func TestEnvDiscoverIntervals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.envVal != "" {
-				t.Setenv(tt.envKey, tt.envVal)
-			}
+			t.Setenv(tt.envKey, tt.envVal)
 			got := tt.fn()
 			if got != tt.want {
 				t.Errorf("got %v; want %v", got, tt.want)
