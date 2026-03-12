@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -64,12 +67,97 @@ func TestNewRunCmd(t *testing.T) {
 	}
 
 	// Verify expected flags exist.
-	expectedFlags := []string{"debug", "deploy", "detach", "restart-unless-stopped", "restart-on-failure", "no-restart", "user-args"}
+	expectedFlags := []string{"debug", "deploy", "detach", "restart-unless-stopped", "restart-on-failure", "no-restart", "prefix", "user-args"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
 		}
 	}
+}
+
+func TestResolveRunWorkingDir_Default(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+	})
+
+	got, err := resolveRunWorkingDir(runOptions{})
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	if canonicalPath(t, got) != canonicalPath(t, tempDir) {
+		t.Fatalf("got %q, want %q", got, tempDir)
+	}
+}
+
+func TestResolveRunWorkingDir_RelativePrefix(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "apps", "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+	})
+
+	got, err := resolveRunWorkingDir(runOptions{prefix: filepath.Join("apps", "demo")})
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	if canonicalPath(t, got) != canonicalPath(t, projectDir) {
+		t.Fatalf("got %q, want %q", got, projectDir)
+	}
+}
+
+func TestResolveRunWorkingDir_MissingPrefix(t *testing.T) {
+	_, err := resolveRunWorkingDir(runOptions{prefix: filepath.Join(t.TempDir(), "missing")})
+	if err == nil {
+		t.Fatal("expected error for missing directory")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "does not exist") {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
+func TestResolveRunWorkingDir_NotDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "wendy.json")
+	if err := os.WriteFile(filePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := resolveRunWorkingDir(runOptions{prefix: filePath})
+	if err == nil {
+		t.Fatal("expected error for file path")
+	}
+	if got := err.Error(); got == "" || !strings.Contains(got, "not a directory") {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
+func canonicalPath(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved
+	}
+
+	return filepath.Clean(path)
 }
 
 func TestNewBuildCmd(t *testing.T) {

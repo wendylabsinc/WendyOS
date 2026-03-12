@@ -37,6 +37,7 @@ type runOptions struct {
 	restartUnlessStopped bool
 	restartOnFailure     bool
 	noRestart            bool
+	prefix               string
 	userArgs             []string
 }
 
@@ -46,7 +47,7 @@ func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Build and run application on a WendyOS device",
-		Long:  "Reads wendy.json from the current directory, builds a container image, and deploys it to the target device.",
+		Long:  "Reads wendy.json from the current directory or --prefix directory, builds a container image, and deploys it to the target device.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCommand(cmd.Context(), opts)
 		},
@@ -58,6 +59,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.restartUnlessStopped, "restart-unless-stopped", false, "Restart unless manually stopped")
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
+	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to run from instead of the current working directory")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 
 	return cmd
@@ -65,9 +67,9 @@ func newRunCmd() *cobra.Command {
 
 func runCommand(ctx context.Context, opts runOptions) error {
 	// Step 1: Load and validate wendy.json.
-	cwd, err := os.Getwd()
+	cwd, err := resolveRunWorkingDir(opts)
 	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
+		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
 	cfgPath := filepath.Join(cwd, "wendy.json")
@@ -118,6 +120,31 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	// Agent-based run path (existing gRPC pipeline).
 	defer target.Agent.Close()
 	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
+}
+
+func resolveRunWorkingDir(opts runOptions) (string, error) {
+	prefix := strings.TrimSpace(opts.prefix)
+	if prefix == "" {
+		return os.Getwd()
+	}
+
+	abs, err := filepath.Abs(prefix)
+	if err != nil {
+		return "", fmt.Errorf("resolving %q: %w", prefix, err)
+	}
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("%q does not exist", prefix)
+		}
+		return "", fmt.Errorf("checking %q: %w", prefix, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is not a directory", prefix)
+	}
+
+	return abs, nil
 }
 
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
