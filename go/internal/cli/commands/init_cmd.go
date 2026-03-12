@@ -66,17 +66,15 @@ type initOptions struct {
 	assistant           string
 	installClaudeSkills bool
 
-	appIDSet               bool
-	targetSet              bool
-	languageSet            bool
-	entitlementsSet        bool
-	noExtraEntitlementsSet bool
-	gpioPinsSet            bool
-	i2cDeviceSet           bool
-	persistNameSet         bool
-	persistPathSet         bool
-	assistantSet           bool
-	installClaudeSkillsSet bool
+	appIDSet        bool
+	targetSet       bool
+	languageSet     bool
+	entitlementsSet bool
+	gpioPinsSet     bool
+	i2cDeviceSet    bool
+	persistNameSet  bool
+	persistPathSet  bool
+	assistantSet    bool
 }
 
 // Questions for WendyOS devices.
@@ -142,13 +140,11 @@ func newInitCmd() *cobra.Command {
 			opts.targetSet = cmd.Flags().Changed("target")
 			opts.languageSet = cmd.Flags().Changed("language")
 			opts.entitlementsSet = cmd.Flags().Changed("entitlement")
-			opts.noExtraEntitlementsSet = cmd.Flags().Changed("no-extra-entitlements")
 			opts.gpioPinsSet = cmd.Flags().Changed("gpio-pins")
 			opts.i2cDeviceSet = cmd.Flags().Changed("i2c-device")
 			opts.persistNameSet = cmd.Flags().Changed("persist-name")
 			opts.persistPathSet = cmd.Flags().Changed("persist-path")
 			opts.assistantSet = cmd.Flags().Changed("assistant")
-			opts.installClaudeSkillsSet = cmd.Flags().Changed("install-claude-skills")
 
 			return runInitWizard(args, opts)
 		},
@@ -378,7 +374,7 @@ func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]a
 }
 
 func initEntitlementsProvided(opts initOptions) bool {
-	return opts.entitlementsSet || opts.noExtraEntitlementsSet || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
+	return opts.entitlementsSet || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
 }
 
 func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfig.Entitlement, error) {
@@ -473,7 +469,7 @@ func isValidInitAssistant(choice string) bool {
 }
 
 func validateInitAssistantOptions(opts initOptions) error {
-	if opts.installClaudeSkillsSet && (!opts.assistantSet || normalizeInitChoice(opts.assistant) != assistantClaude) {
+	if opts.installClaudeSkills && (!opts.assistantSet || normalizeInitChoice(opts.assistant) != assistantClaude) {
 		return fmt.Errorf("--install-claude-skills requires --assistant=%s", assistantClaude)
 	}
 	if !opts.assistantSet {

@@ -197,3 +197,78 @@ func TestInitCommand_NoExtraEntitlementsSkipsPrompts(t *testing.T) {
 		t.Fatalf("Entitlements = %+v, want only network", cfg.Entitlements)
 	}
 }
+
+func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
+	tempDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	prevStdin := os.Stdin
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+		os.Stdin = prevStdin
+	})
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	inputFile := filepath.Join(tempDir, "stdin.txt")
+	if err := os.WriteFile(inputFile, []byte("y\nn\nn\nn\nn\nn\nn\nn\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f, err := os.Open(inputFile)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	os.Stdin = f
+
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{
+		"--app-id", "demo-app",
+		"--target", "wendyos",
+		"--language", "swift",
+		"--no-extra-entitlements=false",
+		"--assistant", "skip",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	cfg, err := appconfig.LoadFromFile(filepath.Join(tempDir, "wendy.json"))
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if !cfg.HasEntitlement(appconfig.EntitlementGPU) {
+		t.Fatalf("expected interactive prompts to run and include %q entitlement, got %+v", appconfig.EntitlementGPU, cfg.Entitlements)
+	}
+}
+
+func TestInitCommand_InstallClaudeSkillsFalseDoesNotRequireClaude(t *testing.T) {
+	tempDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+	})
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{
+		"--app-id", "lite-app",
+		"--target", "wendy-lite",
+		"--no-extra-entitlements",
+		"--assistant", "skip",
+		"--install-claude-skills=false",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
