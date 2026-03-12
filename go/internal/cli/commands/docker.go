@@ -544,6 +544,7 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
+		"--provenance=false",
 		"--cache-from", "type=local,src=" + cacheDir,
 		"--cache-to", "type=local,dest=" + cacheDir,
 		"--output", "type=image,name=" + registryImage + ",push=true",
