@@ -62,10 +62,10 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 
 	for _, dev := range linuxDevices {
 		rawVersion := dev.LatestVersion
-		displayVersion := rawVersion
+		displayVersion := "(" + rawVersion + ")"
 		if nightly && dev.NightlyVersion != "" {
 			rawVersion = dev.NightlyVersion
-			displayVersion = rawVersion + " (nightly)"
+			displayVersion = "(" + rawVersion + ", nightly)"
 		}
 		if rawVersion == "" {
 			continue // skip devices with no available version
