@@ -373,6 +373,7 @@ if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/bblayers.conf" ]]
 then
     cp "${BBLAYERS_SRC}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
     sed -i.bak "s|%META-REPO%|${image_name}|g" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
+    rm -f "./${YOCTO_BUILD_DIR}/conf/bblayers.conf.bak"
 fi
 
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/local.conf" ]]
@@ -391,6 +392,7 @@ copy_dir "${META_LAYER_DIR}/scripts/docker" "${docker_path}"
 
 sed -i.bak "s|%HOST_DIR%|${PROJECT_DIR}|g" "${docker_path}/dockerfile.config"
 sed -i.bak "s|%OS_NAME%|${IMAGE_NAME}|g" "${docker_path}/dockerfile.config"
+rm -f "${docker_path}/dockerfile.config.bak"
 
 cd "${PROJECT_DIR}/docker"
 ./docker-util.sh create

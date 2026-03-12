@@ -1,5 +1,6 @@
 SUMMARY = "Raspberry Pi 5 NVMe EEPROM Configuration"
 DESCRIPTION = "Configures Raspberry Pi 5 EEPROM PCIE_PROBE and BOOT_ORDER settings for NVMe boot support"
+HOMEPAGE = "https://github.com/raspberrypi/rpi-eeprom"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 

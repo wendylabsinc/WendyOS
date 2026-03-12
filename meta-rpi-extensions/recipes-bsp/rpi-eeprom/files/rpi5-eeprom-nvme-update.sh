@@ -55,6 +55,7 @@ main() {
     fi
 
     # Get current EEPROM configuration
+    # || true: prevent set -e from aborting on non-zero exit; empty string is checked below
     CURRENT_CONFIG=$(rpi-eeprom-config 2>/dev/null || true)
     if [ -z "${CURRENT_CONFIG}" ]; then
         log_message "ERROR: Failed to read current EEPROM configuration"
