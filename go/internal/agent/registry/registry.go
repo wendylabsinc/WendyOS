@@ -47,8 +47,18 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
 	}
 
+	// Derive the host:port prefix from the listen address so that images are
+	// registered in containerd with the same name clients use to pull them
+	// (e.g. "localhost:5000/myapp:latest").
+	host, port, _ := net.SplitHostPort(listenAddr)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	imagePrefix := net.JoinHostPort(host, port) + "/"
+
 	reg := &containerdRegistry{
 		client:              client,
+		imagePrefix:         imagePrefix,
 		blobLeaseExpiration: 15 * time.Minute,
 		manifestSizeLimit:   4 * 1024 * 1024, // 4 MiB
 	}
@@ -187,9 +197,20 @@ type containerdRegistry struct {
 	*ociregistry.Funcs
 	client *containerd.Client
 
+	// imagePrefix is prepended to repo names when registering images in
+	// containerd's image store (e.g. "localhost:5000/") so that the names
+	// match what clients pass to GetImage / Pull.
+	imagePrefix string
+
 	blobLeaseExpiration time.Duration
 	manifestSizeLimit   int64
 	maxBlobSize         int64
+}
+
+// imageName returns the full containerd image name for a repo and tag,
+// including the registry prefix (e.g. "localhost:5000/myapp:latest").
+func (r containerdRegistry) imageName(repo, tag string) string {
+	return r.imagePrefix + repo + ":" + tag
 }
 
 func (r containerdRegistry) Repositories(ctx context.Context, startAfter string) ociregistry.Seq[string] {
@@ -202,16 +223,14 @@ func (r containerdRegistry) Repositories(ctx context.Context, startAfter string)
 	seen := make(map[string]bool)
 	var names []string
 	for _, img := range imgs {
-		ref, err := reference.Parse(img.Name)
-		if err != nil {
+		// Only list images managed by this registry (matching the prefix).
+		if !strings.HasPrefix(img.Name, r.imagePrefix) {
 			continue
 		}
-		named, ok := ref.(reference.Named)
-		if !ok {
-			continue
-		}
-		repo := named.Name()
-		if seen[repo] {
+		// Strip prefix and tag/digest to get the bare repo name.
+		nameWithoutPrefix := strings.TrimPrefix(img.Name, r.imagePrefix)
+		repo, _, _ := strings.Cut(nameWithoutPrefix, ":")
+		if repo == "" || seen[repo] {
 			continue
 		}
 		seen[repo] = true
@@ -231,7 +250,8 @@ func (r containerdRegistry) Repositories(ctx context.Context, startAfter string)
 
 func (r containerdRegistry) Tags(ctx context.Context, repo string, startAfter string) ociregistry.Seq[string] {
 	is := r.client.ImageService()
-	imgs, err := is.List(ctx, "name~="+strconv.Quote("^"+escapeRegex(repo)+":"))
+	prefixedRepo := r.imagePrefix + repo
+	imgs, err := is.List(ctx, "name~="+strconv.Quote("^"+escapeRegex(prefixedRepo)+":"))
 	if err != nil {
 		return ociregistry.ErrorSeq[string](err)
 	}
@@ -246,7 +266,7 @@ func (r containerdRegistry) Tags(ctx context.Context, repo string, startAfter st
 			continue
 		}
 		named, ok := ref.(reference.Named)
-		if !ok || named.Name() != repo {
+		if !ok || named.Name() != prefixedRepo {
 			continue
 		}
 		if tagged, ok := ref.(reference.Tagged); ok {
@@ -437,7 +457,7 @@ func (r containerdRegistry) GetManifest(ctx context.Context, repo string, d ocir
 
 func (r containerdRegistry) GetTag(ctx context.Context, repo string, tagName string) (ociregistry.BlobReader, error) {
 	is := r.client.ImageService()
-	img, err := is.Get(ctx, repo+":"+tagName)
+	img, err := is.Get(ctx, r.imageName(repo, tagName))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			if repo == "sha256" && len(tagName) == 64 {
@@ -494,7 +514,7 @@ func (r containerdRegistry) DeleteManifest(ctx context.Context, repo string, d o
 }
 
 func (r containerdRegistry) DeleteTag(ctx context.Context, repo string, name string) error {
-	return r.client.ImageService().Delete(ctx, repo+":"+name)
+	return r.client.ImageService().Delete(ctx, r.imageName(repo, name))
 }
 
 type safeDeleteRegistry struct {
@@ -536,11 +556,12 @@ func (r containerdRegistry) PushBlob(ctx context.Context, repo string, desc ocir
 	}
 
 	cs := r.client.ContentStore()
-	ctx, deleteLease, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
+	// The lease protects the blob from GC until a manifest references it.
+	// Let the lease expire naturally rather than deleting it immediately.
+	ctx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
 	if err != nil {
 		return ociregistry.Descriptor{}, err
 	}
-	defer func() { _ = deleteLease(ctx) }()
 
 	reader = io.LimitReader(reader, desc.Size+1)
 	ingestRef := string(desc.Digest)
@@ -558,11 +579,10 @@ func (r containerdRegistry) PushBlob(ctx context.Context, repo string, desc ocir
 }
 
 type containerdBlobWriter struct {
-	ctx         context.Context
-	cs          content.Store
-	id          string
-	chunkSize   int
-	deleteLease func(context.Context) error
+	ctx       context.Context
+	cs        content.Store
+	id        string
+	chunkSize int
 	content.Writer
 
 	closedStatus *content.Status
@@ -577,12 +597,7 @@ func (bw *containerdBlobWriter) cacheStatus() error {
 }
 
 func (bw *containerdBlobWriter) Close() error {
-	err := errors.Join(bw.cacheStatus(), bw.Writer.Close())
-	if bw.deleteLease != nil {
-		err = errors.Join(err, bw.deleteLease(bw.ctx))
-		bw.deleteLease = nil
-	}
-	return err
+	return errors.Join(bw.cacheStatus(), bw.Writer.Close())
 }
 
 func (bw *containerdBlobWriter) Size() int64 {
@@ -647,14 +662,15 @@ func (r containerdRegistry) PushBlobChunkedResume(ctx context.Context, repo, id 
 		id = u.String()
 	}
 
-	ctx, deleteLease, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
+	// The lease protects the blob from GC until a manifest references it.
+	// Let the lease expire naturally rather than deleting it on writer close.
+	ctx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
 	if err != nil {
 		return nil, err
 	}
 
 	writer, err := content.OpenWriter(ctx, cs, content.WithRef(id))
 	if err != nil {
-		_ = deleteLease(ctx)
 		return nil, err
 	}
 
@@ -670,12 +686,11 @@ func (r containerdRegistry) PushBlobChunkedResume(ctx context.Context, repo, id 
 	}
 
 	return &containerdBlobWriter{
-		ctx:         ctx,
-		cs:          cs,
-		id:          id,
-		chunkSize:   chunkSize,
-		deleteLease: deleteLease,
-		Writer:      writer,
+		ctx:       ctx,
+		cs:        cs,
+		id:        id,
+		chunkSize: chunkSize,
+		Writer:    writer,
 	}, nil
 }
 
@@ -727,11 +742,10 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 		labels["containerd.io/gc.bref.content.subject"] = string(manifestChildren.Subject.Digest)
 	}
 
-	ctx, deleteLease, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
+	ctx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
 	if err != nil {
 		return ociregistry.Descriptor{}, err
 	}
-	defer func() { _ = deleteLease(ctx) }()
 
 	cs := r.client.ContentStore()
 	ingestRef := string(desc.Digest)
@@ -745,7 +759,7 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 	if tag != "" {
 		is := r.client.ImageService()
 		img := images.Image{
-			Name:   repo + ":" + tag,
+			Name:   r.imageName(repo, tag),
 			Target: desc,
 		}
 		_, err := is.Update(ctx, img, "target")
