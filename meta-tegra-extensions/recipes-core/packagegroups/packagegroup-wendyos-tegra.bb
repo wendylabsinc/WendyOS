@@ -24,5 +24,10 @@ RDEPENDS:${PN} = " \
 RDEPENDS:${PN} += " \
     ${@oe.utils.ifelse( \
         d.getVar('WENDYOS_UPDATE_BOOTLOADER') == '1', \
-        'tegra-uefi-capsules bootloader-update', '')} \
+        ' \
+            tegra-uefi-capsules \
+            bootloader-update \
+        ', \
+        '' \
+        )} \
     "

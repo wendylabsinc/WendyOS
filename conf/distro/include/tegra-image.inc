@@ -5,26 +5,12 @@
 TEGRA_BOOTCONTROL_OVERLAYS += "boot-priority.dtbo"
 
 # Tegra-specific packages (Jetson hardware only)
+# packagegroup-wendyos-tegra pulls in tegra-bootcontrol-overlay,
+# setup-nv-boot-control, packagegroup-nvidia-container, and
+# conditionally tegra-uefi-capsules/bootloader-update.
 IMAGE_INSTALL:append = " \
     mender-esp \
-    tegra-bootcontrol-overlay \
     packagegroup-wendyos-tegra \
-    packagegroup-nvidia-container \
-    nvidia-container-config \
-    setup-nv-boot-control \
-    "
-
-# Conditional UEFI capsule package installation
-# Controlled by WENDYOS_UPDATE_BOOTLOADER (defined in conf/distro/wendyos.conf)
-IMAGE_INSTALL:append = " \
-    ${@oe.utils.ifelse( \
-        d.getVar('WENDYOS_UPDATE_BOOTLOADER') == '1', \
-            ' \
-                tegra-uefi-capsules \
-                bootloader-update \
-            ', \
-            '' \
-        )} \
     "
 
 # Enable DeepStream SDK support (optional - adds ~1GB to image)

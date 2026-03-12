@@ -1,3 +1,16 @@
+
+# [Note]
+# This recipe fetches the wendyos-agent binary from GitHub at build time
+# inside do_compile using wget/curl, bypassing SRC_URI checksums and breaking
+# build reproducibility (two builds may produce different binaries).
+# It also uses 'SRCREV = "${AUTOREV}"'' for the source repo.
+#
+# [Fix]
+# Pin the binary download URL and its sha256sum in SRC_URI, or use a proper
+# recipe with SRC_URI[sha256sum].
+# Runtime self-update should remain in wendyos-agent-updater.service,
+# not at build time.
+
 SUMMARY = "WendyOS Agent"
 DESCRIPTION = "WendyOS agent binary for device management"
 LICENSE = "MIT"

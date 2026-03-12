@@ -1,3 +1,12 @@
+# [Note]
+# This recipe uses SRCREV = "${AUTOREV}", which always fetches the latest commit
+# from the main branch. This breaks build reproducibility and sstate-cache
+# correctness: two builds may produce different outputs.
+#
+# [Fix]
+# Pin SRCREV to a specific commit hash and update it deliberately when an
+# upgrade is needed.
+
 SUMMARY = "WendyOS Development Container Registry"
 DESCRIPTION = "A lightweight OCI registry that uses containerd's content store"
 HOMEPAGE = "https://github.com/mihai-chiorean/containerd-registry"
