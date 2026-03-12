@@ -12,6 +12,7 @@ Force slave/PIO mode in dwc2_set_bcm_params(), matching the proven
 BCM2835 (RPi 1/2/3, arch=0) behaviour.
 
 Signed-off-by: Adrian Bularca <adrian.bularca@gmail.com>
+Upstream-Status: Pending
 ---
  drivers/usb/dwc2/params.c | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
