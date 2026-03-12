@@ -433,7 +433,6 @@ fi
 echo ""
 if command -v "$BINARY_NAME" &>/dev/null; then
   echo "Installed successfully!"
-  "$BINARY_NAME" --version
 else
   echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}."
 fi
