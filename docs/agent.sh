@@ -103,6 +103,45 @@ confirm() {
   esac
 }
 
+ensure_pacman_keyring() {
+  if ! command -v pacman-key &>/dev/null; then
+    return 0
+  fi
+  if $SUDO pacman-key --list-keys >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Initializing pacman keyring..."
+  $SUDO pacman-key --init
+  if [[ -f /usr/share/pacman/keyrings/holo.gpg ]]; then
+    $SUDO pacman-key --populate archlinux holo
+  else
+    $SUDO pacman-key --populate archlinux
+  fi
+}
+
+install_pacman_dependencies() {
+  if ! command -v pacman &>/dev/null; then
+    return 0
+  fi
+
+  echo "Pacman detected. Installing Wendy Agent runtime dependencies..."
+  ensure_pacman_keyring
+  $SUDO pacman -Sy --noconfirm --needed containerd xdg-dbus-proxy ca-certificates
+}
+
+ensure_containerd_service() {
+  if [[ ! -d /run/systemd/system ]] || ! command -v systemctl &>/dev/null; then
+    return 0
+  fi
+  if ! systemctl list-unit-files containerd.service --no-legend 2>/dev/null | grep -q '^containerd\.service'; then
+    echo "Error: containerd.service was not found."
+    echo "  Wendy Agent requires containerd for app deployment."
+    echo "  Install containerd and rerun the installer."
+    exit 1
+  fi
+}
+
 ARCH=$(detect_arch)
 
 if [[ "$ARCH" == "unsupported" ]]; then
@@ -173,6 +212,10 @@ else
   echo "  and install '${BINARY_NAME}' with systemd services and dev container registry."
   confirm "Proceed?"
 
+  if command -v pacman &>/dev/null; then
+    install_pacman_dependencies
+  fi
+
   TMPDIR_DL=$(mktemp -d)
   trap 'rm -rf "$TMPDIR_DL"' EXIT
 
@@ -189,7 +232,6 @@ else
     $SUDO mkdir -p /etc/wendy-agent
     $SUDO mkdir -p /usr/lib/systemd/system
     $SUDO mkdir -p /usr/share/wendyos/offline-images
-
     # wendy-agent systemd unit (unquoted heredoc so INSTALL_DIR is expanded)
     $SUDO tee /usr/lib/systemd/system/wendy-agent.service >/dev/null <<EOF
 [Unit]
@@ -414,6 +456,12 @@ EOF
 
     # Enable and start services (mirrors wendy-agent-postinstall.sh)
     $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
+    ensure_containerd_service
+    if ! $SUDO systemctl enable --now containerd >/dev/null 2>&1; then
+      echo "Error: Failed to enable or start containerd."
+      exit 1
+    fi
+
     if systemctl is-enabled wendy-agent >/dev/null 2>&1; then
       $SUDO systemctl try-restart wendy-agent >/dev/null 2>&1 || true
     else
