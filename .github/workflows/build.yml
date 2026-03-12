@@ -765,6 +765,7 @@ jobs:
             --head "ci/bump-wendy-${VERSION}" \
             --base main \
             --title "wendy: bump to ${VERSION}" \
+            --label pr-pull \
             --body "Automated bump from release ${VERSION}
 
           This PR updates the wendy formula to version ${VERSION}.
