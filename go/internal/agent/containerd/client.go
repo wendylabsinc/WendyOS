@@ -14,6 +14,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -356,33 +357,27 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 
-	// Refresh images from the device-local registry before falling back to any
-	// cached manifest. `wendy run` always pushes to localhost:5000 first, so a
-	// blind GetImage() can otherwise reuse stale content for repeated deploys.
+	// For local-registry images, always pull from the embedded HTTP registry
+	// so containerd properly resolves manifest lists and unpacks layers.
+	// For remote images, try the local store first, then pull.
 	var image containerd.Image
 	var err error
 	if shouldRefreshImageFromRegistry(imageName) {
-		c.logger.Info("Refreshing image from local registry",
-			zap.String("image", imageName),
+		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
+		image, err = c.client.Pull(ctx, imageName,
+			containerd.WithPullUnpack,
+			containerd.WithResolver(resolver),
 		)
-		image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
 		if err != nil {
-			c.logger.Warn("Failed to refresh image from local registry, falling back to cached image",
-				zap.String("image", imageName),
-				zap.Error(err),
-			)
+			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 		}
-	}
-
-	if image == nil {
+	} else {
 		image, err = c.client.GetImage(ctx, imageName)
 		if err != nil {
 			c.logger.Info("Image not in local store, attempting pull from registry",
 				zap.String("image", imageName),
 			)
-			image, err = c.client.Pull(ctx, imageName,
-				containerd.WithPullUnpack,
-			)
+			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
 			if err != nil {
 				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 			}
@@ -423,8 +418,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		args = []string{"/bin/sh"}
 	}
 
-	// Wrap Python commands with debugpy for remote debugging.
-	if appCfg.Language == "python" {
+	// Wrap Python commands with debugpy for remote debugging (only in debug mode).
+	if appCfg.Debug && appCfg.Language == "python" {
 		args = wrapWithDebugpy(args)
 	}
 

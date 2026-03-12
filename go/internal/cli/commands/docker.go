@@ -105,7 +105,7 @@ func detectBuildOptions(dir string) []BuildOption {
 }
 
 // injectDebugpy builds a wrapper image on top of the given image that installs debugpy.
-func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, streamOutput *os.File) error {
+func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, streamOutput *os.File, useMTLS bool) error {
 	tmpDir, err := os.MkdirTemp("", "wendy-debugpy-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
@@ -117,7 +117,7 @@ func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform st
 		return fmt.Errorf("writing debugpy Dockerfile: %w", err)
 	}
 
-	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, streamOutput)
+	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, streamOutput, useMTLS)
 }
 
 // generatePythonDockerfile creates a Dockerfile for Python projects that do not already have one.
@@ -172,7 +172,7 @@ var wendySDKChecksums = map[string]string{
 
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, architecture string) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, architecture string, useMTLS bool) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -193,9 +193,9 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, a
 		"--architecture=" + architecture,
 	}
 
-	// Use insecure HTTP when no auth certs are available; otherwise the registry
-	// is running mTLS and swift-container-plugin will use the system trust store.
-	if loadCLICert() == nil {
+	// Use insecure HTTP when the connection is not mTLS; the registry only
+	// speaks TLS when the device is provisioned and the CLI connected via mTLS.
+	if !useMTLS {
 		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
 	}
 
@@ -373,33 +373,62 @@ func installWasmSwiftSDK() error {
 }
 
 // findSwiftProduct determines the product name from Package.swift using
-// `swift package dump-package`. Falls back to the directory name.
-func findSwiftProduct(dir string) string {
+// `swift package dump-package`. Returns an error with a suggestion when
+// no executable product can be determined.
+func findSwiftProduct(dir string) (string, error) {
 	cmd := exec.Command("swift", "package", "dump-package")
 	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err == nil {
-		var manifest struct {
-			Products []struct {
-				Name string `json:"name"`
-			} `json:"products"`
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("swift package dump-package failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	var manifest struct {
+		Products []struct {
+			Name string `json:"name"`
+		} `json:"products"`
+		Targets []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(out, &manifest); err != nil {
+		return "", fmt.Errorf("could not parse Package.swift manifest: %w", err)
+	}
+
+	if len(manifest.Products) == 1 {
+		return manifest.Products[0].Name, nil
+	}
+	if len(manifest.Products) > 1 {
+		var productNames []string
+		for _, p := range manifest.Products {
+			productNames = append(productNames, p.Name)
 		}
-		if json.Unmarshal(out, &manifest) == nil && len(manifest.Products) == 1 {
-			return manifest.Products[0].Name
+		return "", fmt.Errorf("Package.swift declares multiple products (%s); wendy run requires a single executable product", strings.Join(productNames, ", "))
+	}
+
+	// No products — look for a single executable target and suggest adding a product.
+	var execTargets []string
+	for _, t := range manifest.Targets {
+		if t.Type == "executable" {
+			execTargets = append(execTargets, t.Name)
 		}
 	}
-	return filepath.Base(dir)
+	if len(execTargets) == 1 {
+		return "", fmt.Errorf("Package.swift has no executable product. Add one to Package.swift:\n\n  products: [\n      .executable(name: %q, targets: [%q]),\n  ]", execTargets[0], execTargets[0])
+	}
+	if len(execTargets) > 1 {
+		return "", fmt.Errorf("Package.swift has multiple executable targets but no products; add an executable product for the target you want to run")
+	}
+	return "", fmt.Errorf("Package.swift has no executable targets or products")
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
-// exists and returns its name. If the CLI has auth certs, the registry is
-// configured for mTLS; otherwise it falls back to insecure HTTP.
-// If the registry address or certs have changed, the builder is recreated.
-// Cert files are copied into the builder container via docker cp so that
-// buildkitd (which runs inside Docker) can access them.
-func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, error) {
-	const builderName = "wendy"
-	// Container-internal path where certs will be copied to.
+// exists and returns its name. When useMTLS is true, the "wendy-mtls" builder
+// is configured with client certs; otherwise the "wendy" builder uses plain HTTP.
+func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (string, error) {
+	// Use separate builders for mTLS and plaintext so switching between
+	// provisioned and unprovisioned devices doesn't recreate builders.
 	const containerCertDir = "/etc/buildkit/certs"
 
 	home, err := os.UserHomeDir()
@@ -411,71 +440,37 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, erro
 		return "", fmt.Errorf("creating config directory: %w", err)
 	}
 
+	if !useMTLS {
+		return ensurePlaintextBuilder(ctx, configDir, registryAddr)
+	}
+	return ensureMTLSBuilder(ctx, configDir, registryAddr, containerCertDir)
+}
+
+// ensurePlaintextBuilder ensures the "wendy" buildx builder exists with plain
+// HTTP registry config.
+func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string) (string, error) {
+	const builderName = "wendy"
+
 	configPath := filepath.Join(configDir, "buildkitd.toml")
-	// Separate marker tracks which config was actually applied to the builder.
-	// This handles the case where the builder was created before our config system.
 	appliedPath := filepath.Join(configDir, "buildkitd.applied")
-	var buildkitdConfig string
-	var hostCertDir string
 
-	certInfo := loadCLICert()
-	if certInfo != nil && certInfo.PemCertificate != "" && certInfo.PemPrivateKey != "" {
-		// Write cert files to host; they'll be docker-cp'd into the builder container.
-		hostCertDir = filepath.Join(configDir, "certs")
-		if err := os.MkdirAll(hostCertDir, 0o700); err != nil {
-			return "", fmt.Errorf("creating cert directory: %w", err)
-		}
+	fullConfig := fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
 
-		certPath := filepath.Join(hostCertDir, "client-cert.pem")
-		keyPath := filepath.Join(hostCertDir, "client-key.pem")
-		caPath := filepath.Join(hostCertDir, "ca.pem")
-
-		fullCert := certInfo.PemCertificate
-		if certInfo.PemCertificateChain != "" {
-			fullCert += "\n" + certInfo.PemCertificateChain
-		}
-		if err := os.WriteFile(certPath, []byte(fullCert), 0o644); err != nil {
-			return "", fmt.Errorf("writing client cert: %w", err)
-		}
-		if err := os.WriteFile(keyPath, []byte(certInfo.PemPrivateKey), 0o600); err != nil {
-			return "", fmt.Errorf("writing client key: %w", err)
-		}
-		if certInfo.PemCertificateChain != "" {
-			if err := os.WriteFile(caPath, []byte(certInfo.PemCertificateChain), 0o644); err != nil {
-				return "", fmt.Errorf("writing CA cert: %w", err)
-			}
-			// Reference container-internal paths in buildkitd config.
-			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  ca=[\"%s/ca.pem\"]\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
-				registryAddr, containerCertDir, registryAddr, containerCertDir, containerCertDir)
-		} else {
-			buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  insecure = true\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
-				registryAddr, registryAddr, containerCertDir, containerCertDir)
-		}
-	} else {
-		// No auth certs — fall back to insecure HTTP.
-		buildkitdConfig = fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
-	}
-
-	// Compare against the applied marker (not the raw toml) to detect builders
-	// that were created before our config system or with a different config.
 	appliedConfig, _ := os.ReadFile(appliedPath)
-	configChanged := string(appliedConfig) != buildkitdConfig
-
-	if err := os.WriteFile(configPath, []byte(buildkitdConfig), 0o644); err != nil {
-		return "", fmt.Errorf("writing buildkitd config: %w", err)
-	}
+	configChanged := string(appliedConfig) != fullConfig
 
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName)
 	builderExists := cmd.Run() == nil
 
-	// Remove stale builder if config changed.
 	if builderExists && configChanged {
 		exec.CommandContext(ctx, "docker", "buildx", "rm", builderName).Run()
 		builderExists = false
 	}
 
 	if !builderExists {
-		// Create builder with docker-container driver.
+		if err := os.WriteFile(configPath, []byte(fullConfig), 0o644); err != nil {
+			return "", fmt.Errorf("writing buildkitd config: %w", err)
+		}
 		cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
 			"--name", builderName,
 			"--driver", "docker-container",
@@ -487,16 +482,90 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string) (string, erro
 		}
 	}
 
-	// Copy mTLS certs into the builder container so buildkitd can use them.
-	if hostCertDir != "" {
-		if err := copyCertsToBuilder(ctx, builderName, hostCertDir, containerCertDir); err != nil {
-			return "", fmt.Errorf("copying certs to builder: %w", err)
+	_ = os.WriteFile(appliedPath, []byte(fullConfig), 0o644)
+	return builderName, nil
+}
+
+// ensureMTLSBuilder ensures the "wendy-mtls" buildx builder exists with mTLS
+// client certs for the device registry.
+func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCertDir string) (string, error) {
+	const builderName = "wendy-mtls"
+
+	configPath := filepath.Join(configDir, "buildkitd-mtls.toml")
+	appliedPath := filepath.Join(configDir, "buildkitd-mtls.applied")
+
+	certInfo := loadCLICert()
+	if certInfo == nil || certInfo.PemCertificate == "" || certInfo.PemPrivateKey == "" {
+		return "", fmt.Errorf("mTLS connection but no CLI certificates available")
+	}
+
+	// Write cert files to host; they'll be docker-cp'd into the builder container.
+	hostCertDir := filepath.Join(configDir, "certs")
+	if err := os.MkdirAll(hostCertDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating cert directory: %w", err)
+	}
+
+	certPath := filepath.Join(hostCertDir, "client-cert.pem")
+	keyPath := filepath.Join(hostCertDir, "client-key.pem")
+	caPath := filepath.Join(hostCertDir, "ca.pem")
+
+	fullCert := certInfo.PemCertificate
+	if certInfo.PemCertificateChain != "" {
+		fullCert += "\n" + certInfo.PemCertificateChain
+	}
+	if err := os.WriteFile(certPath, []byte(fullCert), 0o644); err != nil {
+		return "", fmt.Errorf("writing client cert: %w", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(certInfo.PemPrivateKey), 0o600); err != nil {
+		return "", fmt.Errorf("writing client key: %w", err)
+	}
+	if certInfo.PemCertificateChain != "" {
+		if err := os.WriteFile(caPath, []byte(certInfo.PemCertificateChain), 0o644); err != nil {
+			return "", fmt.Errorf("writing CA cert: %w", err)
 		}
 	}
 
-	// Record the applied config so we can detect changes next time.
-	_ = os.WriteFile(appliedPath, []byte(buildkitdConfig), 0o644)
+	fullConfig := fmt.Sprintf("[registry.\"%s\"]\n  insecure = true\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
+		registryAddr, registryAddr, containerCertDir, containerCertDir)
 
+	// Minimal config for builder creation — no cert path references.
+	minimalConfig := fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
+
+	appliedConfig, _ := os.ReadFile(appliedPath)
+	configChanged := string(appliedConfig) != fullConfig
+
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName)
+	builderExists := cmd.Run() == nil
+
+	if builderExists && configChanged {
+		exec.CommandContext(ctx, "docker", "buildx", "rm", builderName).Run()
+		builderExists = false
+	}
+
+	if !builderExists {
+		if err := os.WriteFile(configPath, []byte(minimalConfig), 0o644); err != nil {
+			return "", fmt.Errorf("writing buildkitd config: %w", err)
+		}
+		cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
+			"--name", builderName,
+			"--driver", "docker-container",
+			"--driver-opt", "network=host",
+			"--buildkitd-config", configPath,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
+		}
+	}
+
+	// Copy mTLS certs into the builder container and update buildkitd config.
+	if err := copyCertsToBuilder(ctx, builderName, hostCertDir, containerCertDir); err != nil {
+		return "", fmt.Errorf("copying certs to builder: %w", err)
+	}
+	if err := updateBuilderConfig(ctx, builderName, fullConfig); err != nil {
+		return "", fmt.Errorf("updating builder config: %w", err)
+	}
+
+	_ = os.WriteFile(appliedPath, []byte(fullConfig), 0o644)
 	return builderName, nil
 }
 
@@ -522,11 +591,46 @@ func copyCertsToBuilder(ctx context.Context, builderName, hostCertDir, container
 	return nil
 }
 
+// updateBuilderConfig writes a new buildkitd.toml into the builder container
+// and restarts it so the updated configuration (e.g. mTLS keypair paths) takes
+// effect. This must be called after copyCertsToBuilder.
+func updateBuilderConfig(ctx context.Context, builderName, config string) error {
+	containerName := "buildx_buildkit_" + builderName + "0"
+	const containerConfigPath = "/etc/buildkit/buildkitd.toml"
+
+	// Write config to a temp file, then docker-cp it in.
+	tmp, err := os.CreateTemp("", "buildkitd-*.toml")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.WriteString(config); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing temp config: %w", err)
+	}
+	tmp.Close()
+
+	cmd := exec.CommandContext(ctx, "docker", "cp", tmp.Name(), containerName+":"+containerConfigPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker cp config: %s: %w", string(out), err)
+	}
+
+	// Restart the container so buildkitd reloads the config.
+	cmd = exec.CommandContext(ctx, "docker", "restart", containerName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("restarting builder: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
 // buildAndPushImage builds a Docker image for the specified platform and pushes
-// it directly to the given registry using docker buildx. The registry is accessed
-// over plain HTTP (insecure).
-func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, streamOutput *os.File) error {
-	builder, err := ensureBuildxBuilder(ctx, registryAddr)
+// it directly to the given registry using docker buildx. The registry transport
+// is conditional: plain HTTP for plaintext devices, and TLS/mTLS for provisioned
+// devices when useMTLS is enabled.
+func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, streamOutput *os.File, useMTLS bool) error {
+	builder, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
 	if err != nil {
 		return err
 	}

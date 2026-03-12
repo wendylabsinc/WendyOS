@@ -82,9 +82,10 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("invalid wendy.json: %w", err)
 	}
 
-	// Debug mode requires host networking for remote debugger access (gdb/lldb).
-	// Python apps also need host networking for debugpy.
-	if opts.debug || appCfg.Language == "python" {
+	// Debug mode requires host networking for remote debugger access
+	// (gdb/lldb for native apps, debugpy for Python apps).
+	if opts.debug {
+		appCfg.Debug = true
 		foundNetwork := false
 		for i, e := range appCfg.Entitlements {
 			if e.Type == appconfig.EntitlementNetwork {
@@ -166,10 +167,13 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		architecture = "arm64"
 	}
 
-	product := findSwiftProduct(cwd)
+	product, err := findSwiftProduct(cwd)
+	if err != nil {
+		return err
+	}
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, conn.Host, architecture); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, conn.Host, architecture, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -277,8 +281,10 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	// For Swift projects, resolve the actual executable product name from
 	// Package.swift rather than using the wendy.json app ID.
 	if p.CanBuild(projectPath) {
-		if swiftProduct := findSwiftProduct(projectPath); swiftProduct != "" {
+		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
+		} else {
+			cliLogln("Warning: could not determine Swift product: %v", err)
 		}
 	}
 
@@ -391,15 +397,15 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
 
 	// Inject debugpy for Python remote debugging.
-	if appCfg.Language == "python" {
+	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}

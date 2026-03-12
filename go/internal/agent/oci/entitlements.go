@@ -207,6 +207,8 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 		// Mount systemd-resolved's actual resolv.conf for DNS resolution.
 		// /etc/resolv.conf often points to 127.0.0.53 (systemd-resolved stub)
 		// which does not work in containers. The /run path contains real upstream DNS servers.
+		// Only mount if systemd-resolved is running (the file exists).
+		const resolvedConf = "/run/systemd/resolve/resolv.conf"
 		alreadyMounted := false
 		for _, m := range spec.Mounts {
 			if m.Destination == "/etc/resolv.conf" {
@@ -215,12 +217,14 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 			}
 		}
 		if !alreadyMounted {
-			spec.Mounts = append(spec.Mounts, Mount{
-				Destination: "/etc/resolv.conf",
-				Type:        "bind",
-				Source:      "/run/systemd/resolve/resolv.conf",
-				Options:     []string{"rbind", "ro"},
-			})
+			if _, err := os.Stat(resolvedConf); err == nil {
+				spec.Mounts = append(spec.Mounts, Mount{
+					Destination: "/etc/resolv.conf",
+					Type:        "bind",
+					Source:      resolvedConf,
+					Options:     []string{"rbind", "ro"},
+				})
+			}
 		}
 	} else if mode == "none" {
 		// Ensure the network namespace is present (container gets its own isolated network).

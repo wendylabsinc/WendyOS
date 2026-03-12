@@ -66,6 +66,7 @@ type AppConfig struct {
 	Language     string        `json:"language,omitempty"`
 	Entitlements []Entitlement `json:"entitlements,omitempty"`
 	Python       *PythonConfig `json:"python,omitempty"`
+	Debug        bool          `json:"debug,omitempty"`
 }
 
 // PythonConfig holds Python-specific configuration.
