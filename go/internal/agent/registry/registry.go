@@ -50,7 +50,11 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 	// Derive the host:port prefix from the listen address so that images are
 	// registered in containerd with the same name clients use to pull them
 	// (e.g. "localhost:5000/myapp:latest").
-	host, port, _ := net.SplitHostPort(listenAddr)
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("parsing registry listen address %q: %w", listenAddr, err)
+	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "localhost"
 	}
@@ -229,6 +233,10 @@ func (r containerdRegistry) Repositories(ctx context.Context, startAfter string)
 		}
 		// Strip prefix and tag/digest to get the bare repo name.
 		nameWithoutPrefix := strings.TrimPrefix(img.Name, r.imagePrefix)
+		// Strip digest references (e.g. "repo@sha256:...") before tags.
+		if i := strings.IndexByte(nameWithoutPrefix, '@'); i >= 0 {
+			nameWithoutPrefix = nameWithoutPrefix[:i]
+		}
 		repo, _, _ := strings.Cut(nameWithoutPrefix, ":")
 		if repo == "" || seen[repo] {
 			continue

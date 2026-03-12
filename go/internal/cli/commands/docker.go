@@ -378,9 +378,9 @@ func installWasmSwiftSDK() error {
 func findSwiftProduct(dir string) (string, error) {
 	cmd := exec.Command("swift", "package", "dump-package")
 	cmd.Dir = dir
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("could not read Package.swift: %w", err)
+		return "", fmt.Errorf("swift package dump-package failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	var manifest struct {
@@ -400,7 +400,11 @@ func findSwiftProduct(dir string) (string, error) {
 		return manifest.Products[0].Name, nil
 	}
 	if len(manifest.Products) > 1 {
-		return "", fmt.Errorf("Package.swift declares multiple products; specify which one to run")
+		var productNames []string
+		for _, p := range manifest.Products {
+			productNames = append(productNames, p.Name)
+		}
+		return "", fmt.Errorf("Package.swift declares multiple products (%s); wendy run requires a single executable product", strings.Join(productNames, ", "))
 	}
 
 	// No products — look for a single executable target and suggest adding a product.
@@ -420,11 +424,8 @@ func findSwiftProduct(dir string) (string, error) {
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
-// exists and returns its name. If the CLI has auth certs, the registry is
-// configured for mTLS; otherwise it falls back to insecure HTTP.
-// If the registry address or certs have changed, the builder is recreated.
-// Cert files are copied into the builder container via docker cp so that
-// buildkitd (which runs inside Docker) can access them.
+// exists and returns its name. When useMTLS is true, the "wendy-mtls" builder
+// is configured with client certs; otherwise the "wendy" builder uses plain HTTP.
 func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (string, error) {
 	// Use separate builders for mTLS and plaintext so switching between
 	// provisioned and unprovisioned devices doesn't recreate builders.

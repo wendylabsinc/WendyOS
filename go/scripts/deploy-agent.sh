@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 usage() {
-  echo "Usage: $0 [--host <hostname/IP>] [arm64|amd64]"
+  echo "Usage: $0 [--host <hostname/IP>] [arm64|aarch64|amd64|x86_64]"
   echo "  --host   Target device hostname or IP address"
   echo "  Default arch: arm64"
   exit 1
@@ -55,4 +55,4 @@ if [[ -n "$HOST" ]]; then
 fi
 
 echo "Deploying to device via 'wendy device update'..."
-go run "$GO_DIR/cmd/wendy/main.go" device update --binary "$BINARY" "${DEVICE_FLAG[@]}"
+go -C "$GO_DIR" run ./cmd/wendy device update --binary "$BINARY" "${DEVICE_FLAG[@]}"

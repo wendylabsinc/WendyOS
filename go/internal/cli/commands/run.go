@@ -80,8 +80,8 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("invalid wendy.json: %w", err)
 	}
 
-	// Debug mode requires host networking for remote debugger access (gdb/lldb).
-	// Python apps also need host networking for debugpy.
+	// Debug mode requires host networking for remote debugger access
+	// (gdb/lldb for native apps, debugpy for Python apps).
 	if opts.debug {
 		appCfg.Debug = true
 		foundNetwork := false
@@ -256,6 +256,8 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if p.CanBuild(projectPath) {
 		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
+		} else {
+			cliLogln("Warning: could not determine Swift product: %v", err)
 		}
 	}
 
