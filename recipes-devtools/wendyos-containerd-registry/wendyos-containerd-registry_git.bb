@@ -13,11 +13,12 @@ HOMEPAGE = "https://github.com/mihai-chiorean/containerd-registry"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd57"
 
-SRC_URI = "git://github.com/mihai-chiorean/containerd-registry.git;protocol=https;branch=main \
-           file://wendyos-dev-registry.service \
-           file://wendyos-dev-registry-import.service \
-           file://wendyos-dev-registry.sh \
-          "
+SRC_URI = " \
+    git://github.com/mihai-chiorean/containerd-registry.git;protocol=https;branch=main \
+    file://wendyos-dev-registry.service \
+    file://wendyos-dev-registry-import.service \
+    file://wendyos-dev-registry.sh \
+    "
 
 # Use latest commit on main branch (update SRCREV as needed)
 SRCREV = "${AUTOREV}"
@@ -31,23 +32,27 @@ inherit systemd
 # Skip compile - the binary is in the container image
 do_compile[noexec] = "1"
 
+# Split into two packages for independent SYSTEMD_AUTO_ENABLE control.
+# The systemd bbclass only supports per-package (not per-service) granularity:
+# SYSTEMD_AUTO_ENABLE is keyed on the package name, not the service name.
+PACKAGES =+ "${PN}-import"
+SYSTEMD_PACKAGES = "${PN} ${PN}-import"
+
+# Registry service: disabled — started on-demand by wendy-agent
+SYSTEMD_SERVICE:${PN} = "wendyos-dev-registry.service"
+SYSTEMD_AUTO_ENABLE:${PN} = "disable"
+
+# Import service: enabled — runs once on first boot to import the container image
+SYSTEMD_SERVICE:${PN}-import = "wendyos-dev-registry-import.service"
+SYSTEMD_AUTO_ENABLE:${PN}-import = "enable"
+
 # Runtime dependencies
 # Note: containerd and nerdctl are expected to be provided by other packages
 # The import service requires 'ctr' command from containerd package
-RDEPENDS:${PN} = "\
+RDEPENDS:${PN} = " \
     bash \
-"
-
-# Systemd services
-SYSTEMD_SERVICE:${PN} = "\
-    wendyos-dev-registry.service \
-    wendyos-dev-registry-import.service \
-"
-
-# Enable the import service (runs once on first boot)
-# Disable the registry service (started on-demand by wendy-agent)
-SYSTEMD_AUTO_ENABLE:${PN} = "enable"
-SYSTEMD_AUTO_ENABLE:wendyos-dev-registry.service = "disable"
+    ${PN}-import \
+    "
 
 do_install:append() {
     # Install systemd services
@@ -65,9 +70,12 @@ do_install:append() {
 
 FILES:${PN} += "\
     ${systemd_system_unitdir}/wendyos-dev-registry.service \
-    ${systemd_system_unitdir}/wendyos-dev-registry-import.service \
     ${localstatedir}/lib/wendyos \
-"
+    "
+
+FILES:${PN}-import = "\
+    ${systemd_system_unitdir}/wendyos-dev-registry-import.service \
+    "
 
 # Disable QA checks that may fail for Go binaries
 INSANE_SKIP:${PN} = "ldflags already-stripped"
