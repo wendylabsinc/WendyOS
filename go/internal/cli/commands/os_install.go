@@ -38,12 +38,13 @@ func newOSInstallCmd() *cobra.Command {
 
 // pickerDevice is a unified entry for the device selection picker.
 type pickerDevice struct {
-	Name         string
-	Version      string
-	Category     string // e.g. "Linux (arm64)" or "Wendy Lite"
-	IsESP32      bool
-	ESP32Chip    string // e.g. "esp32c6", "esp32c5"
-	ManifestPath string // for Linux devices (GCS)
+	Name       string
+	Version    string          // display version (e.g. "0.10.5 (nightly)")
+	RawVersion string          // exact version key for manifest lookup
+	Category   string          // e.g. "Linux" or "Wendy Lite"
+	IsESP32    bool
+	ESP32Chip  string          // e.g. "esp32c6", "esp32c5"
+	Manifest   *deviceManifest // cached manifest for Linux devices
 }
 
 func runOSInstall(ctx context.Context, nightly bool) error {
@@ -60,25 +61,28 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	deviceMap := make(map[string]pickerDevice)
 
 	for _, dev := range linuxDevices {
-		version := dev.LatestVersion
+		rawVersion := dev.LatestVersion
+		displayVersion := rawVersion
 		if nightly && dev.NightlyVersion != "" {
-			version = dev.NightlyVersion + " (nightly)"
+			rawVersion = dev.NightlyVersion
+			displayVersion = rawVersion + " (nightly)"
 		}
-		if version == "" {
-			version = "available"
+		if rawVersion == "" {
+			continue // skip devices with no available version
 		}
 
 		pd := pickerDevice{
-			Name:         dev.Name,
-			Version:      version,
-			Category:     fmt.Sprintf("Linux (%s)", dev.Architecture),
-			ManifestPath: dev.ManifestPath,
+			Name:       dev.Name,
+			Version:    displayVersion,
+			RawVersion: rawVersion,
+			Category:   "Linux",
+			Manifest:   dev.Manifest,
 		}
 		deviceMap[dev.Key] = pd
 
 		items = append(items, tui.PickerItem{
 			Name:        dev.Name,
-			Description: fmt.Sprintf("%s    %s", version, pd.Category),
+			Description: fmt.Sprintf("%s    %s", displayVersion, pd.Category),
 			Value:       dev.Key,
 		})
 	}
@@ -120,11 +124,11 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, device, nightly)
+	return installLinuxImage(ctx, device)
 }
 
 // installLinuxImage handles the Linux device path: pick drive → download → write.
-func installLinuxImage(ctx context.Context, device pickerDevice, nightly bool) error {
+func installLinuxImage(ctx context.Context, device pickerDevice) error {
 	// List external drives.
 	drives, err := listExternalDrives()
 	if err != nil {
@@ -171,7 +175,7 @@ func installLinuxImage(ctx context.Context, device pickerDevice, nightly bool) e
 
 	// Download image.
 	fmt.Printf("\nDownloading %s image...\n", device.Name)
-	imgInfo, err := getLatestImageInfo(device.ManifestPath, nightly)
+	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
