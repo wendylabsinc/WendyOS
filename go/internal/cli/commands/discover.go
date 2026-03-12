@@ -346,7 +346,6 @@ func (m discoverModel) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" (use arrows to navigate, press q or Ctrl+C to stop)") + "\n\n")
 	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" (use arrows to navigate, press q or Ctrl+C to stop)") + "\n")
 
 	if m.bleWarning != "" {
