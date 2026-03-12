@@ -24,12 +24,12 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
         response.version = "0.0.0-dev"
-        response.os = "macOS"
+        response.os = "darwin"
         response.osVersion = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         #if arch(arm64)
-        response.cpuArchitecture = "aarch64"
+        response.cpuArchitecture = "arm64"
         #elseif arch(x86_64)
-        response.cpuArchitecture = "x86_64"
+        response.cpuArchitecture = "amd64"
         #endif
         return ServerResponse(message: response)
     }
