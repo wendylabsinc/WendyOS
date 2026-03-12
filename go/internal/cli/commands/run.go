@@ -82,7 +82,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	// Debug mode requires host networking for remote debugger access (gdb/lldb).
 	// Python apps also need host networking for debugpy.
-	if opts.debug || appCfg.Language == "python" {
+	if opts.debug {
 		foundNetwork := false
 		for i, e := range appCfg.Entitlements {
 			if e.Type == appconfig.EntitlementNetwork {
@@ -370,7 +370,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	cliLogln("Build and push completed.")
 
 	// Inject debugpy for Python remote debugging.
-	if appCfg.Language == "python" {
+	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
 		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
