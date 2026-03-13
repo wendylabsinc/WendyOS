@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -180,17 +183,60 @@ func installLinuxImage(ctx context.Context, device pickerDevice) error {
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	imagePath, err := downloadImage(imgInfo)
+	downloadPath, err := downloadImage(imgInfo)
 	if err != nil {
 		return fmt.Errorf("downloading image: %w", err)
 	}
-	defer os.Remove(imagePath)
+	defer os.Remove(downloadPath)
 
-	// Write image to drive.
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	// Extract .img from .zip if needed.
+	imagePath := downloadPath
+	if strings.HasSuffix(strings.ToLower(imgInfo.DownloadURL), ".zip") {
+		fmt.Println("Extracting image...")
+		extracted, err := extractImageFromZip(downloadPath)
+		if err != nil {
+			return fmt.Errorf("extracting image: %w", err)
+		}
+		defer os.Remove(extracted)
+		imagePath = extracted
+	}
+
+	// Get image size for progress tracking.
+	imgStat, err := os.Stat(imagePath)
+	if err != nil {
+		return fmt.Errorf("stat image: %w", err)
+	}
+	totalSize := imgStat.Size()
+
+	// Pre-authenticate sudo so the password prompt works on the raw terminal
+	// before we start the Bubble Tea TUI.
 	fmt.Println("You may be prompted for your password (sudo is required).")
-	if err := writeImageToDisk(imagePath, targetDrive, nil); err != nil {
-		return fmt.Errorf("writing image: %w", err)
+	if err := exec.Command("sudo", "-v").Run(); err != nil {
+		return fmt.Errorf("sudo authentication failed: %w", err)
+	}
+
+	// Write image to drive with progress bar.
+	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
+	wp := tea.NewProgram(writeProg)
+
+	go func() {
+		writeErr := writeImageToDisk(imagePath, targetDrive, func(written int64) {
+			if totalSize > 0 {
+				wp.Send(tui.ProgressUpdateMsg{Percent: float64(written) / float64(totalSize)})
+			}
+		})
+		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
+	}()
+
+	writeFinal, err := wp.Run()
+	if err != nil {
+		return fmt.Errorf("progress TUI: %w", err)
+	}
+
+	writeModel := writeFinal.(tui.ProgressModel)
+	if writeModel.Err() != nil {
+		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
@@ -267,6 +313,47 @@ func downloadImage(img *imageInfo) (string, error) {
 
 	tmpFile.Close()
 	return tmpFile.Name(), nil
+}
+
+// extractImageFromZip opens a zip archive and extracts the first .img file to a temp file.
+func extractImageFromZip(zipPath string) (string, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", fmt.Errorf("opening zip: %w", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext != ".img" && ext != ".raw" {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return "", fmt.Errorf("opening %s in zip: %w", f.Name, err)
+		}
+		defer rc.Close()
+
+		tmpFile, err := os.CreateTemp("", "wendyos-*.img")
+		if err != nil {
+			return "", fmt.Errorf("creating temp file: %w", err)
+		}
+
+		if _, err := io.Copy(tmpFile, rc); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("extracting %s: %w", f.Name, err)
+		}
+
+		tmpFile.Close()
+		return tmpFile.Name(), nil
+	}
+
+	return "", fmt.Errorf("no .img file found in zip archive")
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.

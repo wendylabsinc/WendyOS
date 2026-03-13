@@ -5,6 +5,8 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 )
 
@@ -91,15 +93,53 @@ func unmountLsblkDevice(dev lsblkDevice) {
 	}
 }
 
-// writeImageToDisk writes an image file to a block device using dd.
+// writeImageToDisk writes an image file to a block device using dd,
+// streaming data via stdin in 4 MiB chunks for progress tracking.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("sudo", "dd", fmt.Sprintf("if=%s", imagePath), fmt.Sprintf("of=%s", d.DevicePath), "bs=4M", "status=progress")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("writing image: %s\n%s", err, string(out))
+	imgFile, err := os.Open(imagePath)
+	if err != nil {
+		return fmt.Errorf("opening image: %w", err)
+	}
+	defer imgFile.Close()
+
+	cmd := exec.Command("sudo", "dd", fmt.Sprintf("of=%s", d.DevicePath), "bs=4M")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("creating stdin pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting dd: %w", err)
+	}
+
+	buf := make([]byte, 4*1024*1024) // 4 MiB
+	var totalWritten int64
+	for {
+		n, readErr := imgFile.Read(buf)
+		if n > 0 {
+			if _, writeErr := stdin.Write(buf[:n]); writeErr != nil {
+				return fmt.Errorf("writing to dd: %w", writeErr)
+			}
+			totalWritten += int64(n)
+			if progressFn != nil {
+				progressFn(totalWritten)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading image: %w", readErr)
+		}
+	}
+
+	stdin.Close()
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("writing image: %w", err)
 	}
 
 	// Sync to flush writes.
