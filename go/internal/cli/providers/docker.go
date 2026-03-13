@@ -88,6 +88,21 @@ func (p *DockerProvider) Build(ctx context.Context, device models.ExternalDevice
 	}, nil
 }
 
+// BuildFromImage creates a BuiltApp handle for a pre-built Docker image.
+// This is used when the image was built outside of the provider's Build method
+// (e.g. Swift cross-compilation followed by docker build).
+func (p *DockerProvider) BuildFromImage(device models.ExternalDevice, product, imageName string) *BuiltApp {
+	return &BuiltApp{
+		ProviderKey: p.Key(),
+		Device:      device,
+		AppName:     product,
+		Context: &dockerBuildContext{
+			ImageName:     imageName,
+			ContainerName: product,
+		},
+	}
+}
+
 func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, output chan<- RunOutput) error {
 	defer close(output)
 

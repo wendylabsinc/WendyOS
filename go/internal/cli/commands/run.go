@@ -278,9 +278,17 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	// For Swift projects, resolve the actual executable product name from
-	// Package.swift rather than using the wendy.json app ID.
-	if p.CanBuild(projectPath) {
+	projectType := detectProjectType(projectPath)
+
+	// Resolve Swift product name from Package.swift.
+	if projectType == "swift" {
+		swiftProduct, err := findSwiftProduct(projectPath)
+		if err != nil {
+			return fmt.Errorf("could not determine Swift product: %w", err)
+		}
+		product = swiftProduct
+	} else if p.CanBuild(projectPath) {
+		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
 		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
 		} else {
@@ -288,11 +296,30 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		}
 	}
 
-	cliLogln("Building with %s provider...", p.DisplayName())
-	app, err := p.Build(ctx, device, projectPath, product, opts.debug)
-	if err != nil {
-		return fmt.Errorf("provider build: %w", err)
+	var app *providers.BuiltApp
+
+	// Swift projects without a Dockerfile: cross-compile on the host and
+	// build a Docker image, bypassing the provider's normal Build method.
+	if projectType == "swift" {
+		if dp, ok := p.(*providers.DockerProvider); ok {
+			cliLogln("Building Swift project for %s...", p.DisplayName())
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product)
+			if err != nil {
+				return fmt.Errorf("building Swift Docker image: %w", err)
+			}
+			app = dp.BuildFromImage(device, product, imageName)
+		}
 	}
+
+	if app == nil {
+		cliLogln("Building with %s provider...", p.DisplayName())
+		var err error
+		app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		if err != nil {
+			return fmt.Errorf("provider build: %w", err)
+		}
+	}
+
 	cliLogln("Build completed.")
 
 	if opts.deploy {

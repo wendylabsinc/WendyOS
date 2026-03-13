@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
@@ -672,4 +674,88 @@ func registryHost(host string, port int) string {
 		host = "[" + host + "]"
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a
+// Docker image containing the resulting binary. Returns the Docker image name.
+// This is used by the Docker Desktop provider for Swift projects that do not
+// have a Dockerfile, as an alternative to swift-container-plugin (which only
+// supports pushing to registries).
+func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, error) {
+	arch := runtime.GOARCH
+	sdk, err := findSwiftSDK(arch)
+	if err != nil {
+		return "", fmt.Errorf("finding Swift SDK: %w", err)
+	}
+
+	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
+	buildCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+		"build", "-c", "release", "--swift-sdk="+sdk, "--product", product)
+	buildCmd.Dir = dir
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return "", fmt.Errorf("swift build: %w", err)
+	}
+
+	// Determine the binary output path.
+	showBinCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+		"build", "-c", "release", "--swift-sdk="+sdk, "--show-bin-path")
+	showBinCmd.Dir = dir
+	out, err := showBinCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("swift build --show-bin-path: %w", err)
+	}
+	binDir := strings.TrimSpace(string(out))
+	srcBin := filepath.Join(binDir, product)
+
+	// Create a temp directory with the binary and a minimal Dockerfile.
+	tmpDir, err := os.MkdirTemp("", "wendy-swift-docker-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Copy the cross-compiled binary into the temp build context.
+	dstBin := filepath.Join(tmpDir, product)
+	if err := copyBinary(srcBin, dstBin); err != nil {
+		return "", fmt.Errorf("copying binary: %w", err)
+	}
+
+	// Write a minimal Dockerfile.
+	dockerfile := fmt.Sprintf("FROM swift:%s-slim\nCOPY %s /usr/local/bin/%s\nCMD [\"%s\"]\n",
+		defaultSwiftVersion, product, product, product)
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
+		return "", fmt.Errorf("writing Dockerfile: %w", err)
+	}
+
+	// Build the Docker image.
+	imageName := strings.ToLower(product) + ":latest"
+	dockerCmd := exec.CommandContext(ctx, "docker", "build", "-t", imageName, ".")
+	dockerCmd.Dir = tmpDir
+	dockerCmd.Stdout = os.Stdout
+	dockerCmd.Stderr = os.Stderr
+	if err := dockerCmd.Run(); err != nil {
+		return "", fmt.Errorf("docker build: %w", err)
+	}
+
+	return imageName, nil
+}
+
+// copyBinary copies a file from src to dst, preserving executable permissions.
+func copyBinary(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
 }
