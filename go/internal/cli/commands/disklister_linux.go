@@ -78,11 +78,11 @@ func listDrivesLinux(removableOnly bool) ([]drive, error) {
 		}
 
 		drives = append(drives, drive{
-			DevicePath:  devPath,
-			RawPath:     devPath,
-			Name:        dev.Name,
-			Size:        humanize.Bytes(uint64(sizeBytes)),
-			SizeBytes:   sizeBytes,
+			DevicePath: devPath,
+			RawPath:    devPath,
+			Name:       dev.Name,
+			Size:       humanize.Bytes(uint64(sizeBytes)),
+			SizeBytes:  sizeBytes,
 			// IsRemovable reflects our external-ness predicate so downstream code
 			// sees the same classification used to include this device.
 			IsRemovable: isExternal,
