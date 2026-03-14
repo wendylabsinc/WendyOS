@@ -21,19 +21,75 @@ import (
 
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
+	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "install",
+		Use:   "install [image] [drive]",
 		Short: "Install WendyOS or Wendy Lite firmware on a device",
-		Long:  "Interactively select a supported device, download the latest OS image or firmware, and write it to the target.",
+		Long: `Interactively select a supported device, download the latest OS image or firmware, and write it to the target.
+
+When called with positional arguments, skips interactive prompts:
+  wendy os install <image-path> <drive-id> --force`,
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 2 {
+				return runOSInstallDirect(args[0], args[1], force)
+			}
 			return runOSInstall(cmd.Context(), nightly)
 		},
 	}
 
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 
 	return cmd
+}
+
+// runOSInstallDirect writes a local image file to the specified drive without interactive prompts.
+func runOSInstallDirect(imagePath string, driveID string, force bool) error {
+	// Verify the image file exists.
+	if _, err := os.Stat(imagePath); err != nil {
+		return fmt.Errorf("image file: %w", err)
+	}
+
+	// Find the target drive.
+	drives, err := listAllDrives()
+	if err != nil {
+		return fmt.Errorf("listing drives: %w", err)
+	}
+
+	var targetDrive *drive
+	for _, d := range drives {
+		if d.DevicePath == driveID {
+			targetDrive = &d
+			break
+		}
+	}
+	if targetDrive == nil {
+		return fmt.Errorf("drive %s not found", driveID)
+	}
+
+	if !force {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Printf("Writing will ERASE ALL DATA on %s (%s). Continue? [y/N] ", targetDrive.Name, targetDrive.DevicePath)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if answer := strings.TrimSpace(strings.ToLower(line)); answer != "y" && answer != "yes" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	fmt.Println("You may be prompted for your password (sudo is required).")
+	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
+		return fmt.Errorf("writing image: %w", err)
+	}
+
+	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
+	return nil
 }
 
 // pickerDevice is a unified entry for the device selection picker.
