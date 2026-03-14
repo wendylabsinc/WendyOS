@@ -58,7 +58,24 @@ func newAppsListCmd() *cobra.Command {
 			}
 
 			if jsonOutput {
-				data, err := json.MarshalIndent(containers, "", "  ")
+				type jsonApp struct {
+					Name         string `json:"name"`
+					Version      string `json:"version,omitempty"`
+					RunningState string `json:"runningState,omitempty"`
+					FailureCount uint32 `json:"failureCount,omitempty"`
+				}
+
+				apps := make([]jsonApp, len(containers))
+				for i, c := range containers {
+					apps[i] = jsonApp{
+						Name:         c.GetAppName(),
+						Version:      c.GetAppVersion(),
+						RunningState: c.GetRunningState().String(),
+						FailureCount: c.GetFailureCount(),
+					}
+				}
+
+				data, err := json.MarshalIndent(apps, "", "  ")
 				if err != nil {
 					return err
 				}

@@ -15,17 +15,23 @@ type drive struct {
 	RawPath     string // e.g. /dev/rdisk4
 	Name        string // human-readable name
 	Size        string // human-readable size
+	SizeBytes   int64  // size in bytes
 	IsRemovable bool
+}
+
+// listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
+func listAllDrives() ([]drive, error) {
+	return listDrivesText()
 }
 
 // listExternalDrives uses diskutil to find external removable drives on macOS.
 func listExternalDrives() ([]drive, error) {
-	return listExternalDrivesText()
+	return listDrivesText()
 }
 
-// listExternalDrivesText parses the text output of `diskutil list external`.
-func listExternalDrivesText() ([]drive, error) {
-	out, err := exec.Command("diskutil", "list", "external").Output()
+// listDrivesText parses the text output of `diskutil list external physical`.
+func listDrivesText() ([]drive, error) {
+	out, err := exec.Command("diskutil", "list", "external", "physical").Output()
 	if err != nil {
 		return nil, fmt.Errorf("running diskutil: %w", err)
 	}
@@ -43,20 +49,17 @@ func listExternalDrivesText() ([]drive, error) {
 		devPath := strings.TrimSuffix(parts[0], ":")
 		rawPath := strings.Replace(devPath, "/dev/disk", "/dev/rdisk", 1)
 
-		desc := ""
-		if len(parts) > 1 {
-			desc = strings.Trim(parts[1], " ():")
-		}
-
 		// Get disk info for size and name.
 		info, infoErr := getDiskInfo(devPath)
 		name := devPath
 		size := ""
+		var sizeBytes int64
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
 			}
 			size = info.size
+			sizeBytes = info.sizeBytes
 		}
 
 		drives = append(drives, drive{
@@ -64,7 +67,8 @@ func listExternalDrivesText() ([]drive, error) {
 			RawPath:     rawPath,
 			Name:        name,
 			Size:        size,
-			IsRemovable: strings.Contains(desc, "external"),
+			SizeBytes:   sizeBytes,
+			IsRemovable: true,
 		})
 	}
 
@@ -72,8 +76,9 @@ func listExternalDrivesText() ([]drive, error) {
 }
 
 type diskInfo struct {
-	name string
-	size string
+	name      string
+	size      string
+	sizeBytes int64
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -88,6 +93,12 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "Disk Size:") {
 			info.size = strings.TrimSpace(strings.TrimPrefix(line, "Disk Size:"))
+			// Parse byte count from e.g. "31.9 GB (31914983424 Bytes)..."
+			if start := strings.Index(info.size, "("); start != -1 {
+				if end := strings.Index(info.size[start:], " Bytes"); end != -1 {
+					fmt.Sscanf(info.size[start+1:start+end], "%d", &info.sizeBytes)
+				}
+			}
 		}
 		if strings.HasPrefix(line, "Device / Media Name:") {
 			info.name = strings.TrimSpace(strings.TrimPrefix(line, "Device / Media Name:"))

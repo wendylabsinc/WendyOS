@@ -10,7 +10,13 @@ type drive struct {
 	RawPath     string
 	Name        string
 	Size        string
+	SizeBytes   int64
 	IsRemovable bool
+}
+
+// listAllDrives is not yet implemented on Windows.
+func listAllDrives() ([]drive, error) {
+	return nil, fmt.Errorf("drive listing is not yet supported on Windows")
 }
 
 // listExternalDrives is not yet implemented on Windows.
