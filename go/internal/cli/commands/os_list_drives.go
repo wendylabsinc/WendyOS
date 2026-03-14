@@ -63,7 +63,14 @@ func newOSListDrivesCmd() *cobra.Command {
 
 			for _, d := range drives {
 				ext := ""
-				if d.IsRemovable {
+				isExternal := d.IsRemovable
+				// When not listing all drives, the lister has already filtered for "external"
+				// devices, which may include non-removable ones (e.g., some USB/hotplug drives).
+				// In that mode, everything returned should be considered external.
+				if !all {
+					isExternal = true
+				}
+				if isExternal {
 					ext = " (external)"
 				}
 				fmt.Printf("  %s  %s  %s%s\n", d.DevicePath, d.Name, d.Size, ext)
