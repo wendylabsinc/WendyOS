@@ -59,9 +59,9 @@ func listDrivesLinux(removableOnly bool) ([]drive, error) {
 		if dev.Type != "disk" {
 			continue
 		}
-		// Only include external drives: USB, NVMe, or SD card transports, or hotpluggable/removable.
+		// Only include external drives: USB or SD card transports, or hotpluggable/removable.
 		isExternal := dev.Removable == "1" || dev.Hotplug == "1" ||
-			dev.Transport == "usb" || dev.Transport == "nvme" || dev.Transport == "mmc"
+			dev.Transport == "usb" || dev.Transport == "mmc"
 		if !isExternal {
 			continue
 		}
