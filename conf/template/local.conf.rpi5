@@ -37,7 +37,7 @@ WENDYOS_USB_GADGET = "1"
 # WENDYOS_PERSIST_JOURNAL_LOGS - Automatically configured per machine:
 #   RPi5: "0" (volatile logs in tmpfs; single partition, no /data)
 # Uncomment to override:
-#WENDYOS_PERSIST_JOURNAL_LOGS = "1"
+WENDYOS_PERSIST_JOURNAL_LOGS = "0"
 
 # WENDYOS_UPDATE_BOOTLOADER - RPi5: "0" (no UEFI capsule/Mender bootloader updates)
 # Uncomment to override:

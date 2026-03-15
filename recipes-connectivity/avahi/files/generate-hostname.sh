@@ -134,7 +134,7 @@ main() {
     echo "${new}" > "${STATE_HOSTNAME_FILE}"
 
     # Note: avahi-daemon starts AFTER this service (Before=avahi-daemon.service)
-    # so no need to restart it here - it will pick up the hostname when it starts
+    # so it will pick up the hostname from gethostname() when it starts.
 
     log "WendyOS hostname generation completed: ${new}"
 }

@@ -34,7 +34,7 @@ WENDYOS_DEBUG_UART = "1"
 # WENDYOS_PERSIST_JOURNAL_LOGS - Automatically configured per machine:
 #   QEMU: "0" (volatile logs in tmpfs; no /data partition)
 # Uncomment to override:
-#WENDYOS_PERSIST_JOURNAL_LOGS = "1"
+WENDYOS_PERSIST_JOURNAL_LOGS = "0"
 
 # Enable UEFI capsule updates (bootloader updates via Mender)
 # Set to "1" to include bootloader updates in OTA deployments

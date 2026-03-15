@@ -4,6 +4,8 @@ PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 inherit packagegroup
 
+# ss(8) for socket/port inspection
+# getent(1) for NSS/DNS lookups
 SUMMARY:${PN} = "Debugging package group"
 RDEPENDS:${PN} = " \
     ${@oe.utils.ifelse( \
@@ -20,6 +22,7 @@ RDEPENDS:${PN} = " \
             sysstat \
             ldd \
             bc  \
+            iproute2-ss \
         ', \
         '' \
         )} \

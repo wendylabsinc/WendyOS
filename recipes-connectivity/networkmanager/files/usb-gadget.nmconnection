@@ -13,7 +13,10 @@ mac-address-blacklist=
 [ipv4]
 method=auto
 dns-search=
-# Uses DHCP to get IP from host computer's internet sharing
+route-metric=700
+# Uses DHCP to get IP from host computer's internet sharing.
+# High route-metric ensures WiFi/eth (auto-metric ~100-600) is preferred as
+# the default internet route when available. usb0 becomes the fallback.
 
 [ipv6]
 method=link-local
