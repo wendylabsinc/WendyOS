@@ -10,7 +10,7 @@ import (
 
 // ProgressUpdateMsg updates the progress bar percentage.
 // Written and Total are optional; when both are non-zero the view renders
-// a byte counter like "4% (420.0 MB / 10.5 GB)".
+// a byte counter like "4.00%  (420.0 MB / 10.5 GB)".
 type ProgressUpdateMsg struct {
 	Percent float64
 	Written int64
