@@ -17,12 +17,12 @@ var (
 	Emerald950 = lipgloss.Color("#022c22")
 
 	// Semantic aliases used across TUI components.
-	ColorPrimary    = Emerald400 // titles, spinners, scanning text
-	ColorAccent     = Emerald500 // progress bar, active indicators
-	ColorHeaderFg   = Emerald50  // table header foreground
-	ColorHeaderBg   = Emerald800 // table header background
-	ColorBorder     = Emerald600 // table borders
-	ColorSelectedBg = Emerald900 // table selection background
-	ColorSelectedFg = Emerald100 // table selection foreground
+	ColorPrimary    = Emerald400            // titles, spinners, scanning text
+	ColorAccent     = Emerald500            // progress bar, active indicators
+	ColorHeaderFg   = Emerald50             // table header foreground
+	ColorHeaderBg   = Emerald800            // table header background
+	ColorBorder     = Emerald600            // table borders
+	ColorSelectedBg = Emerald900            // table selection background
+	ColorSelectedFg = Emerald100            // table selection foreground
 	ColorDim        = lipgloss.Color("240") // muted/hint text (neutral gray)
 )
