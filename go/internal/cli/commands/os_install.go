@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,12 +41,13 @@ func newOSInstallCmd() *cobra.Command {
 
 // pickerDevice is a unified entry for the device selection picker.
 type pickerDevice struct {
-	Name         string
-	Version      string
-	Category     string // e.g. "Linux (arm64)" or "Wendy Lite"
-	IsESP32      bool
-	ESP32Chip    string // e.g. "esp32c6", "esp32c5"
-	ManifestPath string // for Linux devices (GCS)
+	Name       string
+	Version    string // display version (e.g. "0.10.5 (nightly)")
+	RawVersion string // exact version key for manifest lookup
+	Category   string // e.g. "Linux" or "Wendy Lite"
+	IsESP32    bool
+	ESP32Chip  string          // e.g. "esp32c6", "esp32c5"
+	Manifest   *deviceManifest // cached manifest for Linux devices
 }
 
 func runOSInstall(ctx context.Context, nightly bool) error {
@@ -60,25 +64,28 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	deviceMap := make(map[string]pickerDevice)
 
 	for _, dev := range linuxDevices {
-		version := dev.LatestVersion
+		rawVersion := dev.LatestVersion
+		displayVersion := "(" + rawVersion + ")"
 		if nightly && dev.NightlyVersion != "" {
-			version = dev.NightlyVersion + " (nightly)"
+			rawVersion = dev.NightlyVersion
+			displayVersion = "(" + rawVersion + ", nightly)"
 		}
-		if version == "" {
-			version = "available"
+		if rawVersion == "" {
+			continue // skip devices with no available version
 		}
 
 		pd := pickerDevice{
-			Name:         dev.Name,
-			Version:      version,
-			Category:     fmt.Sprintf("Linux (%s)", dev.Architecture),
-			ManifestPath: dev.ManifestPath,
+			Name:       dev.Name,
+			Version:    displayVersion,
+			RawVersion: rawVersion,
+			Category:   "Linux",
+			Manifest:   dev.Manifest,
 		}
 		deviceMap[dev.Key] = pd
 
 		items = append(items, tui.PickerItem{
 			Name:        dev.Name,
-			Description: fmt.Sprintf("%s    %s", version, pd.Category),
+			Description: fmt.Sprintf("%s    %s", displayVersion, pd.Category),
 			Value:       dev.Key,
 		})
 	}
@@ -120,11 +127,11 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, device, nightly)
+	return installLinuxImage(ctx, device)
 }
 
 // installLinuxImage handles the Linux device path: pick drive → download → write.
-func installLinuxImage(ctx context.Context, device pickerDevice, nightly bool) error {
+func installLinuxImage(ctx context.Context, device pickerDevice) error {
 	// List external drives.
 	drives, err := listExternalDrives()
 	if err != nil {
@@ -171,22 +178,65 @@ func installLinuxImage(ctx context.Context, device pickerDevice, nightly bool) e
 
 	// Download image.
 	fmt.Printf("\nDownloading %s image...\n", device.Name)
-	imgInfo, err := getLatestImageInfo(device.ManifestPath, nightly)
+	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	imagePath, err := downloadImage(imgInfo)
+	downloadPath, err := downloadImage(imgInfo)
 	if err != nil {
 		return fmt.Errorf("downloading image: %w", err)
 	}
-	defer os.Remove(imagePath)
+	defer os.Remove(downloadPath)
 
-	// Write image to drive.
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	// Extract .img from .zip if needed.
+	imagePath := downloadPath
+	if strings.HasSuffix(strings.ToLower(imgInfo.DownloadURL), ".zip") {
+		fmt.Println("Extracting image...")
+		extracted, err := extractImageFromZip(downloadPath)
+		if err != nil {
+			return fmt.Errorf("extracting image: %w", err)
+		}
+		defer os.Remove(extracted)
+		imagePath = extracted
+	}
+
+	// Get image size for progress tracking.
+	imgStat, err := os.Stat(imagePath)
+	if err != nil {
+		return fmt.Errorf("stat image: %w", err)
+	}
+	totalSize := imgStat.Size()
+
+	// Pre-authenticate sudo so the password prompt works on the raw terminal
+	// before we start the Bubble Tea TUI.
 	fmt.Println("You may be prompted for your password (sudo is required).")
-	if err := writeImageToDisk(imagePath, targetDrive, nil); err != nil {
-		return fmt.Errorf("writing image: %w", err)
+	if err := exec.Command("sudo", "-v").Run(); err != nil {
+		return fmt.Errorf("sudo authentication failed: %w", err)
+	}
+
+	// Write image to drive with progress bar.
+	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
+	wp := tea.NewProgram(writeProg)
+
+	go func() {
+		writeErr := writeImageToDisk(imagePath, targetDrive, func(written int64) {
+			if totalSize > 0 {
+				wp.Send(tui.ProgressUpdateMsg{Percent: float64(written) / float64(totalSize)})
+			}
+		})
+		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
+	}()
+
+	writeFinal, err := wp.Run()
+	if err != nil {
+		return fmt.Errorf("progress TUI: %w", err)
+	}
+
+	writeModel := writeFinal.(tui.ProgressModel)
+	if writeModel.Err() != nil {
+		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
@@ -263,6 +313,47 @@ func downloadImage(img *imageInfo) (string, error) {
 
 	tmpFile.Close()
 	return tmpFile.Name(), nil
+}
+
+// extractImageFromZip opens a zip archive and extracts the first .img file to a temp file.
+func extractImageFromZip(zipPath string) (string, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", fmt.Errorf("opening zip: %w", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext != ".img" && ext != ".raw" {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return "", fmt.Errorf("opening %s in zip: %w", f.Name, err)
+		}
+		defer rc.Close()
+
+		tmpFile, err := os.CreateTemp("", "wendyos-*.img")
+		if err != nil {
+			return "", fmt.Errorf("creating temp file: %w", err)
+		}
+
+		if _, err := io.Copy(tmpFile, rc); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("extracting %s: %w", f.Name, err)
+		}
+
+		tmpFile.Close()
+		return tmpFile.Name(), nil
+	}
+
+	return "", fmt.Errorf("no .img file found in zip archive")
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
