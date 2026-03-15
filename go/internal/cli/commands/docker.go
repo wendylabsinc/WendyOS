@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
@@ -407,7 +409,7 @@ func findSwiftProduct(dir string) (string, error) {
 		return "", fmt.Errorf("Package.swift declares multiple products (%s); wendy run requires a single executable product", strings.Join(productNames, ", "))
 	}
 
-	// No products — look for a single executable target and suggest adding a product.
+	// No products — look for executable targets.
 	var execTargets []string
 	for _, t := range manifest.Targets {
 		if t.Type == "executable" {
@@ -415,7 +417,7 @@ func findSwiftProduct(dir string) (string, error) {
 		}
 	}
 	if len(execTargets) == 1 {
-		return "", fmt.Errorf("Package.swift has no executable product. Add one to Package.swift:\n\n  products: [\n      .executable(name: %q, targets: [%q]),\n  ]", execTargets[0], execTargets[0])
+		return execTargets[0], nil
 	}
 	if len(execTargets) > 1 {
 		return "", fmt.Errorf("Package.swift has multiple executable targets but no products; add an executable product for the target you want to run")
@@ -672,4 +674,116 @@ func registryHost(host string, port int) string {
 		host = "[" + host + "]"
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a
+// Docker image containing the resulting binary. Returns the Docker image name.
+// This is used by the Docker Desktop provider for Swift projects that do not
+// have a Dockerfile, as an alternative to swift-container-plugin (which only
+// supports pushing to registries).
+func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, error) {
+	arch := runtime.GOARCH
+	sdk, err := findSwiftSDK(arch)
+	if err != nil {
+		return "", fmt.Errorf("finding Swift SDK: %w", err)
+	}
+
+	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
+	buildCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+		"build", "-c", "release", "--swift-sdk="+sdk, "--product", product)
+	buildCmd.Dir = dir
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return "", fmt.Errorf("swift build: %w", err)
+	}
+
+	// Determine the binary output path.
+	showBinCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+		"build", "-c", "release", "--swift-sdk="+sdk, "--show-bin-path")
+	showBinCmd.Dir = dir
+	out, err := showBinCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("swift build --show-bin-path: %w\n%s", err, string(out))
+	}
+	binDir := strings.TrimSpace(string(out))
+	srcBin := filepath.Join(binDir, product)
+
+	// Create a temp directory with the binary and a minimal Dockerfile.
+	tmpDir, err := os.MkdirTemp("", "wendy-swift-docker-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Copy the cross-compiled binary to a fixed name to avoid Dockerfile
+	// issues with special characters in Swift product names.
+	dstBin := filepath.Join(tmpDir, "app")
+	if err := copyBinary(srcBin, dstBin); err != nil {
+		return "", fmt.Errorf("copying binary: %w", err)
+	}
+
+	// Write a minimal Dockerfile using the fixed binary name.
+	dockerfile := fmt.Sprintf("FROM swift:%s-slim\nCOPY app /usr/local/bin/app\nCMD [\"app\"]\n",
+		defaultSwiftVersion)
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
+		return "", fmt.Errorf("writing Dockerfile: %w", err)
+	}
+
+	// Build the Docker image with a sanitised name.
+	imageName := sanitizeDockerImageName(product) + ":latest"
+	dockerCmd := exec.CommandContext(ctx, "docker", "build", "-t", imageName, ".")
+	dockerCmd.Dir = tmpDir
+	dockerCmd.Stdout = os.Stdout
+	dockerCmd.Stderr = os.Stderr
+	if err := dockerCmd.Run(); err != nil {
+		return "", fmt.Errorf("docker build: %w", err)
+	}
+
+	return imageName, nil
+}
+
+// sanitizeDockerImageName produces a valid Docker image reference component
+// from an arbitrary string (e.g. a Swift product name).
+func sanitizeDockerImageName(name string) string {
+	name = strings.ToLower(name)
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	result := strings.Trim(b.String(), "-.")
+	if result == "" {
+		return "wendy-app"
+	}
+	return result
+}
+
+// copyBinary copies a file from src to dst with mode 0755.
+func copyBinary(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	mode := srcInfo.Mode().Perm() | 0o111
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

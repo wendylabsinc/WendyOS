@@ -34,6 +34,7 @@ type runOptions struct {
 	debug                bool
 	deploy               bool
 	detach               bool
+	yes                  bool
 	restartUnlessStopped bool
 	restartOnFailure     bool
 	noRestart            bool
@@ -56,6 +57,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
+	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
 	cmd.Flags().BoolVar(&opts.restartUnlessStopped, "restart-unless-stopped", false, "Restart unless manually stopped")
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
@@ -73,7 +75,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	cfgPath := filepath.Join(cwd, "wendy.json")
-	appCfg, err := ensureAppConfig(cfgPath)
+	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
 		return fmt.Errorf("loading wendy.json: %w", err)
 	}
@@ -103,7 +105,11 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	// Step 2: Resolve the target device.
-	target, err := resolveTarget(ctx)
+	var resolveOpts []resolveOption
+	if opts.yes {
+		resolveOpts = append(resolveOpts, NonInteractive())
+	}
+	target, err := resolveTarget(ctx, resolveOpts...)
 	if err != nil {
 		return err
 	}
@@ -278,9 +284,17 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	// For Swift projects, resolve the actual executable product name from
-	// Package.swift rather than using the wendy.json app ID.
-	if p.CanBuild(projectPath) {
+	projectType := detectProjectType(projectPath)
+
+	// Resolve Swift product name from Package.swift.
+	if projectType == "swift" {
+		swiftProduct, err := findSwiftProduct(projectPath)
+		if err != nil {
+			return fmt.Errorf("could not determine Swift product: %w", err)
+		}
+		product = swiftProduct
+	} else if p.CanBuild(projectPath) {
+		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
 		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
 		} else {
@@ -288,11 +302,30 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		}
 	}
 
-	cliLogln("Building with %s provider...", p.DisplayName())
-	app, err := p.Build(ctx, device, projectPath, product, opts.debug)
-	if err != nil {
-		return fmt.Errorf("provider build: %w", err)
+	var app *providers.BuiltApp
+
+	// Swift projects without a Dockerfile: cross-compile on the host and
+	// build a Docker image, bypassing the provider's normal Build method.
+	if projectType == "swift" {
+		if ib, ok := p.(providers.ImageBuilder); ok {
+			cliLogln("Building Swift project for %s...", p.DisplayName())
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product)
+			if err != nil {
+				return fmt.Errorf("building Swift Docker image: %w", err)
+			}
+			app = ib.BuildFromImage(device, product, imageName)
+		}
 	}
+
+	if app == nil {
+		cliLogln("Building with %s provider...", p.DisplayName())
+		var err error
+		app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		if err != nil {
+			return fmt.Errorf("provider build: %w", err)
+		}
+	}
+
 	cliLogln("Build completed.")
 
 	if opts.deploy {

@@ -34,7 +34,7 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			cfgPath := filepath.Join(cwd, "wendy.json")
-			appCfg, cfgErr := ensureAppConfig(cfgPath)
+			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 
 			target, _ := resolveTarget(cmd.Context())
 

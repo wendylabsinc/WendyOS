@@ -306,6 +306,7 @@ type resolveConfig struct {
 	excludeProviderKeys      map[string]bool
 	excludeBluetooth         bool
 	suppressProvisioningHint bool
+	nonInteractive           bool
 }
 
 // SuppressProvisioningHint prevents connectToAgent from printing the
@@ -313,6 +314,15 @@ type resolveConfig struct {
 func SuppressProvisioningHint() resolveOption {
 	return func(c *resolveConfig) {
 		c.suppressProvisioningHint = true
+	}
+}
+
+// NonInteractive prevents resolveTarget from opening an interactive device
+// picker. When no device is specified in non-interactive mode, a clear error
+// is returned instead of attempting to open a TTY.
+func NonInteractive() resolveOption {
+	return func(c *resolveConfig) {
+		c.nonInteractive = true
 	}
 }
 
@@ -369,6 +379,13 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		}
 	}
 
+	// Check if the device flag matches a discovered device ID (e.g. "adb:emulator-5554").
+	if device != "" {
+		if sel := findDeviceByID(ctx, device); sel != nil {
+			return sel, nil
+		}
+	}
+
 	// If a device hostname was given, connect via gRPC (with mTLS if authenticated).
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
@@ -380,16 +397,37 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	}
 
 	// No device specified — run interactive picker if we have a TTY.
-	if jsonOutput {
+	if jsonOutput || cfg.nonInteractive {
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
 	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 }
 
+// findDeviceByID searches all available providers for a device whose ID
+// matches the given string (e.g. "adb:emulator-5554").
+func findDeviceByID(ctx context.Context, id string) *SelectedDevice {
+	for _, p := range providers.AvailableProviders() {
+		devices, err := p.DiscoverDevices(ctx)
+		if err != nil {
+			continue
+		}
+		for _, d := range devices {
+			if d.ID == id {
+				d := d // copy for stable pointer
+				return &SelectedDevice{
+					External: &d,
+					Provider: p,
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // ensureAppConfig loads wendy.json from cfgPath. If the file does not exist
-// and stdin is a TTY, the user is prompted to create a default one.
-func ensureAppConfig(cfgPath string) (*appconfig.AppConfig, error) {
+// and stdin is a TTY (or autoAccept is true), a default config is created automatically.
+func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, error) {
 	cfg, err := appconfig.LoadFromFile(cfgPath)
 	if err == nil {
 		return cfg, nil
@@ -401,24 +439,26 @@ func ensureAppConfig(cfgPath string) (*appconfig.AppConfig, error) {
 		return nil, err
 	}
 
-	// File doesn't exist. If we're not in an interactive terminal, give a
-	// helpful error message.
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, fmt.Errorf("wendy.json not found; run 'wendy init <app-id>' to create one")
-	}
-
 	dir := filepath.Dir(cfgPath)
 	dirName := filepath.Base(dir)
 
-	fmt.Println("No wendy.json found in current directory.")
-	fmt.Printf("Create one with app ID %q? [Y/n] ", dirName)
+	if !autoAccept {
+		// File doesn't exist. If we're not in an interactive terminal, give a
+		// helpful error message.
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return nil, fmt.Errorf("wendy.json not found; run 'wendy init <app-id>' to create one")
+		}
 
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
+		fmt.Println("No wendy.json found in current directory.")
+		fmt.Printf("Create one with app ID %q? [Y/n] ", dirName)
 
-	if answer != "" && answer != "y" && answer != "yes" {
-		return nil, fmt.Errorf("wendy.json is required; run 'wendy init <app-id>' to create one")
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer != "" && answer != "y" && answer != "yes" {
+			return nil, fmt.Errorf("wendy.json is required; run 'wendy init <app-id>' to create one")
+		}
 	}
 
 	// Detect language from the project files on disk.
