@@ -51,6 +51,25 @@ func ConfigDir() (string, error) {
 	return dir, nil
 }
 
+// CacheDir returns the platform-appropriate cache directory for wendy, creating
+// it if necessary.
+//
+//   - macOS:   ~/Library/Caches/wendy
+//   - Linux:   $XDG_CACHE_HOME/wendy  (falls back to ~/.cache/wendy)
+func CacheDir() (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("determining cache directory: %w", err)
+	}
+
+	cacheDir := filepath.Join(dir, "wendy")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating cache directory: %w", err)
+	}
+
+	return cacheDir, nil
+}
+
 // configPath returns the full path to config.json.
 func configPath() (string, error) {
 	dir, err := ConfigDir()

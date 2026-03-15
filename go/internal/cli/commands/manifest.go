@@ -45,6 +45,7 @@ type deviceInfo struct {
 	Name           string          // human-readable name
 	LatestVersion  string          // latest stable version tag
 	NightlyVersion string          // latest prerelease version tag
+	Stability      string          // "stable" or "experimental"
 	Manifest       *deviceManifest // cached manifest to avoid re-fetching
 }
 
@@ -118,13 +119,20 @@ func getAvailableDevices() ([]deviceInfo, error) {
 			Name:           humanizeDeviceKey(key),
 			LatestVersion:  dev.Latest,
 			NightlyVersion: dev.LatestNightly,
+			Stability:      dev.Stability,
 			Manifest:       dm,
 		}
 
 		devices = append(devices, info)
 	}
 
+	// Stable devices first, then alphabetically within each group.
 	sort.Slice(devices, func(i, j int) bool {
+		si := devices[i].Stability == "stable"
+		sj := devices[j].Stability == "stable"
+		if si != sj {
+			return si
+		}
 		return devices[i].Name < devices[j].Name
 	})
 

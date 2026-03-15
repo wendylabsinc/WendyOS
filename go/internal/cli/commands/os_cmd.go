@@ -19,6 +19,8 @@ func newOSCmd() *cobra.Command {
 	cmd.AddCommand(newOSUpdateCmd())
 	cmd.AddCommand(newOSListDrivesCmd())
 	addOSInstallCmd(cmd)
+	addOSDownloadCmd(cmd)
+	addOSCacheCmd(cmd)
 	return cmd
 }
 
