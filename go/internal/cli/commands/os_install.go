@@ -426,6 +426,11 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 		}
 
 		totalSize := int64(f.UncompressedSize64)
+		if totalSize == 0 {
+			// Some zip writers don't populate UncompressedSize64;
+			// fall back to FileInfo which may use the 32-bit field.
+			totalSize = f.FileInfo().Size()
+		}
 
 		prog := tui.NewProgress("Extracting image...")
 		p := tea.NewProgram(prog)
