@@ -443,7 +443,11 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 		p := tea.NewProgram(prog)
 
 		go func() {
-			buf := make([]byte, 64*1024)
+			// Brief pause so Bubble Tea can initialize the terminal
+			// before we start sending updates. Without this, fast local
+			// I/O can queue all messages before the TUI renders.
+			time.Sleep(50 * time.Millisecond)
+			buf := make([]byte, 1*1024*1024) // 1 MiB chunks for visible progress
 			var extracted int64
 			for {
 				n, readErr := rc.Read(buf)
