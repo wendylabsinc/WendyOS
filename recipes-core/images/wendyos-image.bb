@@ -36,14 +36,16 @@ IMAGE_FEATURES += " \
     package-management \
     "
 
+# wendyos-containerd-registry and wendyos-dev-registry-image are intentionally excluded:
+# wendy-agent now ships a built-in OCI registry on port 5000, superseding the container-based
+# registry. Both packages conflict with wendy-agent at runtime and are no longer needed.
+
 # Common packages for all machines (real hardware and QEMU)
 IMAGE_INSTALL:append = " \
     packagegroup-wendyos-base \
     packagegroup-wendyos-kernel \
     packagegroup-wendyos-debug \
     nerdctl \
-    wendyos-containerd-registry \
-    wendyos-dev-registry-image \
     bluez5 \
     bluez5-obex \
     pipewire \

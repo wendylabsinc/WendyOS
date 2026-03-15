@@ -104,6 +104,8 @@ Environment variables:
   MACHINE   (required) Target machine. Selects conf/template/bblayers.conf.<MACHINE>
             and conf/template/local.conf.<MACHINE>.
             Available machines: jetson, rpi5, qemu
+            Note: for RPi5 NVMe boot, use MACHINE=rpi5 then set
+            MACHINE = "raspberrypi5-nvme-wendyos" in build/conf/local.conf.
 
 Options:
   --help, -h   Show this help message.

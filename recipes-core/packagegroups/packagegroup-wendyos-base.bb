@@ -25,6 +25,7 @@ RDEPENDS:${PN} = " \
     avahi-daemon \
     avahi-wendyos-hostname \
     avahi-utils \
+    jq \
     k3s-agent \
     wendyos-identity \
     wendyos-agent \

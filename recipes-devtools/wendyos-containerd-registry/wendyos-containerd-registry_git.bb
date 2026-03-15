@@ -1,3 +1,8 @@
+# [Deprecated]
+# This recipe is no longer included in the image. wendy-agent now ships a built-in OCI
+# registry on port 5000, superseding the container-based registry. Both this package and
+# wendyos-dev-registry-image conflict with wendy-agent at runtime.
+#
 # [Note]
 # This recipe uses SRCREV = "${AUTOREV}", which always fetches the latest commit
 # from the main branch. This breaks build reproducibility and sstate-cache

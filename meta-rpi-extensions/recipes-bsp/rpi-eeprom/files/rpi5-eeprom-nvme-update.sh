@@ -83,11 +83,11 @@ main() {
     if [ -z "${CURRENT_BOOT_ORDER}" ]; then
         log_message "BOOT_ORDER not found in current configuration, will add it"
         NEEDS_UPDATE=1
-    elif [ "${CURRENT_BOOT_ORDER}" != "0xf416" ]; then
-        log_message "Current BOOT_ORDER=${CURRENT_BOOT_ORDER}, needs update to 0xf416"
+    elif [ "${CURRENT_BOOT_ORDER}" != "0xf461" ]; then
+        log_message "Current BOOT_ORDER=${CURRENT_BOOT_ORDER}, needs update to 0xf461"
         NEEDS_UPDATE=1
     else
-        log_message "BOOT_ORDER already set to 0xf416, no update needed"
+        log_message "BOOT_ORDER already set to 0xf461, no update needed"
     fi
 
     if [ ${NEEDS_UPDATE} -eq 1 ]; then
@@ -124,9 +124,11 @@ main() {
 
         log_message "Using bootloader image: ${FIRMWARE_PATH}"
 
-        # Extract current config to temporary file
-        if ! rpi-eeprom-config "${FIRMWARE_PATH}" --out "${WORK_TMPDIR}/bootconf.txt"; then
-            log_message "ERROR: Failed to extract EEPROM config"
+        # Read config from the live EEPROM (not the firmware binary), so that
+        # settings applied by earlier services (e.g. PSU_MAX_CURRENT=3000) are
+        # preserved when this service creates the new EEPROM image.
+        if ! rpi-eeprom-config --out "${WORK_TMPDIR}/bootconf.txt"; then
+            log_message "ERROR: Failed to read current EEPROM config"
             exit 1
         fi
 
@@ -134,9 +136,10 @@ main() {
         sed -i '/^PCIE_PROBE=/d' "${WORK_TMPDIR}/bootconf.txt"
         echo "PCIE_PROBE=1" >> "${WORK_TMPDIR}/bootconf.txt"
 
-        # Update or add BOOT_ORDER setting (SD=1, NVMe=6, Network=4, restart=f)
+        # Update or add BOOT_ORDER setting: SD(1) first, NVMe(6) second, Network(4), restart(f)
+        # Right-to-left nibble order: 1=SD, 6=NVMe, 4=Network, f=restart
         sed -i '/^BOOT_ORDER=/d' "${WORK_TMPDIR}/bootconf.txt"
-        echo "BOOT_ORDER=0xf416" >> "${WORK_TMPDIR}/bootconf.txt"
+        echo "BOOT_ORDER=0xf461" >> "${WORK_TMPDIR}/bootconf.txt"
 
         # Create new EEPROM image with updated config
         if ! rpi-eeprom-config "${FIRMWARE_PATH}" --config "${WORK_TMPDIR}/bootconf.txt" --out "${WORK_TMPDIR}/pieeprom-new.bin"; then
@@ -156,7 +159,7 @@ main() {
             exit 1
         fi
 
-        log_message "NVMe EEPROM update staged successfully. Rebooting to apply changes..."
+        log_message "EEPROM update staged (PCIE_PROBE=1, BOOT_ORDER=0xf461). Rebooting to apply changes..."
 
         # Create flag file to prevent running again after reboot
         mkdir -p "$(dirname "${FLAGFILE}")"

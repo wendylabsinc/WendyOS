@@ -25,35 +25,19 @@ check_service() {
     fi
 }
 
-# Function to check dev registry (container-based service)
+# Function to check dev registry (served by wendy-agent's built-in OCI registry)
 check_dev_registry() {
-    SERVICE_NAME=$1
-    DISPLAY_NAME=$2
+    DISPLAY_NAME=$1
 
-    # Check if containerd is running first
-    if ! systemctl is-active --quiet containerd.service 2>/dev/null; then
-        # Containerd not running, service can't be up
-        if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-            echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ enabled (not running)${NC}"
-        fi
+    # Only show if wendy-agent is running
+    if ! systemctl is-active --quiet wendyos-agent.service 2>/dev/null; then
         return
     fi
 
-    # Check if the container is actually running
-    if timeout 2 /usr/bin/nerdctl ps --quiet --filter "name=wendyos-dev-registry" 2>/dev/null | grep -q .; then
+    if curl -sf http://localhost:5000/v2/ >/dev/null 2>&1; then
         echo -e "  ${DISPLAY_NAME}: ${GREEN}● running${NC}"
-        return
-    fi
-
-    # Container not running - check if service is active (starting up)
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo -e "  ${DISPLAY_NAME}: ${YELLOW}◐ starting${NC}"
-        return
-    fi
-
-    # Service not active
-    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ enabled (not running)${NC}"
+    else
+        echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ not running${NC}"
     fi
 }
 
@@ -66,6 +50,6 @@ check_service "usb-gadget" "USB Gadget"
 check_service "avahi-daemon" "mDNS"
 check_service "systemd-timesyncd" "Time Sync"
 check_service "wendyos-agent" "Wendy Agent"
-check_dev_registry "wendyos-dev-registry" "Dev Registry"
+check_dev_registry "Dev Registry"
 
 echo
