@@ -270,8 +270,8 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return nil
 	}
 
-	// Download image (or use cached copy).
-	fmt.Printf("\nDownloading %s image...\n", device.Name)
+	// Resolve image (cached or download).
+	fmt.Printf("\nPreparing %s image...\n", device.Name)
 	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
@@ -494,11 +494,19 @@ func osCacheDir() (string, error) {
 // osCachedImagePath returns the expected cache path for a device+version image.
 // Format: <cache>/os-images/<device>-<version>.img
 func osCachedImagePath(deviceKey, version string) (string, error) {
+	// Sanitize to prevent path traversal from user-supplied --version flag.
+	safeDevice := filepath.Base(deviceKey)
+	safeVersion := filepath.Base(version)
+	if safeDevice != deviceKey || safeVersion != version ||
+		strings.Contains(deviceKey, "..") || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid device key or version: %q / %q", deviceKey, version)
+	}
+
 	dir, err := osCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%s.img", deviceKey, version)), nil
+	return filepath.Join(dir, fmt.Sprintf("%s-%s.img", safeDevice, safeVersion)), nil
 }
 
 // resolveOSImage returns the path to a ready-to-write .img file.
@@ -537,8 +545,8 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err := os.Rename(imagePath, cached); err != nil {
 		// Rename fails across filesystems; fall back to copy.
 		if cpErr := copyFile(imagePath, cached); cpErr != nil {
-			// Cache write failed — use the temp file directly.
-			return imagePath, nil
+			os.Remove(imagePath)
+			return "", fmt.Errorf("caching image: %w", cpErr)
 		}
 		os.Remove(imagePath)
 	}

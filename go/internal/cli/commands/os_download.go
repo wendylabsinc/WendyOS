@@ -47,6 +47,12 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		}
 	}
 
+	// Validate version exists in manifest before touching the filesystem.
+	imgInfo, err := getImageInfo(dev.Manifest, version)
+	if err != nil {
+		return fmt.Errorf("getting image info: %w", err)
+	}
+
 	// Check if already cached.
 	cached, err := osCachedImagePath(selectedKey, version)
 	if err != nil {
@@ -72,13 +78,9 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		}
 
 		// Remove stale cache entry before re-downloading.
-		os.Remove(cached)
-	}
-
-	// Download (and extract + cache).
-	imgInfo, err := getImageInfo(dev.Manifest, version)
-	if err != nil {
-		return fmt.Errorf("getting image info: %w", err)
+		if err := os.Remove(cached); err != nil {
+			return fmt.Errorf("removing cached image: %w", err)
+		}
 	}
 
 	fmt.Printf("\nDownloading %s %s...\n", dev.Name, version)
