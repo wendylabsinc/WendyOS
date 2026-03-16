@@ -165,13 +165,13 @@ func TestGeneratePythonDockerfile_FallbackEntrypoint(t *testing.T) {
 	}
 }
 
-func TestEnsureSwiftVersion_Success(t *testing.T) {
+func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
 
-	var gotArgs []string
+	var calls [][]string
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		gotArgs = append([]string{name}, args...)
+		calls = append(calls, append([]string{name}, args...))
 		return exec.CommandContext(ctx, "true")
 	}
 
@@ -179,8 +179,42 @@ func TestEnsureSwiftVersion_Success(t *testing.T) {
 		t.Fatalf("ensureSwiftVersion() unexpected error: %v", err)
 	}
 
-	if len(gotArgs) != 3 || gotArgs[0] != "swiftly" || gotArgs[1] != "install" || gotArgs[2] != defaultSwiftVersion {
-		t.Errorf("expected [swiftly install %s], got %v", defaultSwiftVersion, gotArgs)
+	// When "swiftly which" succeeds, no install should happen.
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call (which), got %d: %v", len(calls), calls)
+	}
+	if calls[0][0] != "swiftly" || calls[0][1] != "which" || calls[0][2] != defaultSwiftVersion {
+		t.Errorf("expected [swiftly which %s], got %v", defaultSwiftVersion, calls[0])
+	}
+}
+
+func TestEnsureSwiftVersion_InstallsWhenMissing(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	var calls [][]string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		call := append([]string{name}, args...)
+		calls = append(calls, call)
+		// "swiftly which" fails (version not installed), "swiftly install" succeeds.
+		if len(args) > 0 && args[0] == "which" {
+			return exec.CommandContext(ctx, "false")
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+
+	if err := ensureSwiftVersion(context.Background()); err != nil {
+		t.Fatalf("ensureSwiftVersion() unexpected error: %v", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls (which + install), got %d: %v", len(calls), calls)
+	}
+	if calls[0][1] != "which" {
+		t.Errorf("first call should be which, got %v", calls[0])
+	}
+	if calls[1][1] != "install" || calls[1][2] != defaultSwiftVersion {
+		t.Errorf("expected [swiftly install %s], got %v", defaultSwiftVersion, calls[1])
 	}
 }
 
