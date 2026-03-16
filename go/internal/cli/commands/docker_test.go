@@ -194,6 +194,46 @@ func TestRegistryHost_IPv6LinkLocalNoZone(t *testing.T) {
 	}
 }
 
+func TestSplitIPv6RegistryAddr_IPv6WithZone(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("[fe80::1%en0]:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want %q", eff, "wendy-registry:5000")
+	}
+	if ip != "fe80::1" {
+		t.Errorf("ipv6IP = %q, want %q (zone stripped)", ip, "fe80::1")
+	}
+}
+
+func TestSplitIPv6RegistryAddr_IPv6NoZone(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("[2001:db8::1]:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want %q", eff, "wendy-registry:5000")
+	}
+	if ip != "2001:db8::1" {
+		t.Errorf("ipv6IP = %q, want %q", ip, "2001:db8::1")
+	}
+}
+
+func TestSplitIPv6RegistryAddr_IPv4Passthrough(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("192.168.1.5:5000")
+	if eff != "192.168.1.5:5000" {
+		t.Errorf("effectiveAddr = %q, want unchanged", eff)
+	}
+	if ip != "" {
+		t.Errorf("ipv6IP = %q, want empty for IPv4", ip)
+	}
+}
+
+func TestSplitIPv6RegistryAddr_HostnamePassthrough(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("wendy-registry:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want unchanged", eff)
+	}
+	if ip != "" {
+		t.Errorf("ipv6IP = %q, want empty for hostname", ip)
+	}
+}
+
 func TestResolveRegistryIP_StripZone(t *testing.T) {
 	got := resolveRegistryIP("fe80::1%eth0")
 	if got != "fe80::1" {

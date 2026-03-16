@@ -498,20 +498,7 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool)
 	// For IPv6 addresses (contain brackets), use a hostname alias to avoid
 	// ']' in the TOML config — the go-toml v1 parser used by both docker
 	// buildx and buildkitd rejects ']' in table-header keys.
-	effectiveAddr = registryAddr
-	var ipv6IP string
-	if idx := strings.Index(registryAddr, "]:"); idx != -1 {
-		raw := registryAddr[1:idx] // bare IP without brackets
-		port := registryAddr[idx+2:]
-		// Strip any residual zone ID — /etc/hosts entries and the builder
-		// container's network namespace don't share the host's interface names.
-		if addr, err := netip.ParseAddr(raw); err == nil {
-			ipv6IP = addr.WithZone("").String()
-		} else {
-			ipv6IP = raw
-		}
-		effectiveAddr = "wendy-registry:" + port
-	}
+	effectiveAddr, ipv6IP := splitIPv6RegistryAddr(registryAddr)
 
 	if !useMTLS {
 		builderName, err = ensurePlaintextBuilder(ctx, configDir, effectiveAddr)
@@ -805,8 +792,8 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 //
 // IPv6 link-local addresses (fe80::/10) contain a zone ID (e.g. %en0) that is
 // meaningful only on the host machine and cannot be used inside a Docker
-// buildkit container. When a link-local address is detected, the function
-// re-resolves the hostname to prefer a routable IPv4 or global IPv6 address.
+// buildkit container. For literal IP inputs the zone ID is stripped; for
+// hostnames the resolver prefers routable IPv4 or global IPv6 addresses.
 func registryHost(host string, port int) string {
 	host = resolveRegistryIP(host)
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
@@ -815,32 +802,45 @@ func registryHost(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-// resolveRegistryIP ensures the host string is a routable IP address suitable
-// for use inside a Docker buildkit container. It handles three cases:
+// splitIPv6RegistryAddr checks if registryAddr is a bracketed IPv6 address
+// (e.g. "[fe80::1%en0]:5000") and, if so, returns a hostname alias
+// ("wendy-registry:<port>") as the effective address and the bare IPv6 IP
+// (zone stripped) for use in /etc/hosts. For non-IPv6 addresses, the input
+// is returned unchanged and ipv6IP is empty.
+func splitIPv6RegistryAddr(registryAddr string) (effectiveAddr, ipv6IP string) {
+	idx := strings.Index(registryAddr, "]:")
+	if idx == -1 {
+		return registryAddr, ""
+	}
+	raw := registryAddr[1:idx]
+	port := registryAddr[idx+2:]
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		ipv6IP = addr.WithZone("").String()
+	} else {
+		ipv6IP = raw
+	}
+	return "wendy-registry:" + port, ipv6IP
+}
+
+// resolveRegistryIP resolves a host string to an IP address suitable for use
+// inside a Docker buildkit container. It prefers routable addresses but may
+// fall back to a zone-less link-local IPv6 address as a last resort.
+//
+// It handles three cases:
 //  1. Hostname — resolved via DNS, preferring IPv4 over IPv6 link-local.
-//  2. IPv6 link-local with zone ID (fe80::…%en0) — net.ParseIP returns nil
-//     for these, so they'd be misidentified as hostnames. We detect them via
-//     netip.ParseAddr and strip the zone ID so the address is at least
-//     syntactically valid for /etc/hosts inside the builder container.
+//  2. IPv6 with zone ID (fe80::…%en0) — detected via netip.ParseAddr and
+//     returned with the zone stripped (zones are host-specific and don't
+//     exist inside the builder container's network namespace).
 //  3. Any other IP — returned as-is.
 func resolveRegistryIP(host string) string {
-	// First, try netip.ParseAddr which handles zone IDs correctly.
+	// netip.ParseAddr handles zone IDs; net.ParseIP does not.
 	if addr, err := netip.ParseAddr(host); err == nil {
-		if addr.Is4() || !addr.IsLinkLocalUnicast() {
-			// IPv4 or global/ULA IPv6 — usable as-is (strip zone just in case).
-			return addr.WithZone("").String()
-		}
-		// IPv6 link-local — strip the zone ID since it's host-specific and
-		// won't exist inside the builder container's network namespace.
 		return addr.WithZone("").String()
 	}
 
 	// Not a bare IP — treat as hostname and resolve.
-	// net.ParseIP also returns nil for zone-bearing addresses, but we already
-	// handled those above via netip.ParseAddr.
 	if net.ParseIP(host) == nil {
-		resolved := resolveHostPreferRoutable(host)
-		if resolved != "" {
+		if resolved := resolveHostPreferRoutable(host); resolved != "" {
 			return resolved
 		}
 	}
