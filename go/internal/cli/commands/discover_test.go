@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +164,187 @@ func TestRenderDeviceTable(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, output)
 		}
+	}
+}
+
+func TestDiscoverDeviceInfo_JSONSingleDevice(t *testing.T) {
+	info := discoverDeviceInfo{
+		Name:    "wendyos-brave-phoenix",
+		Type:    "LAN",
+		Address: "192.168.1.42",
+		Port:    "50051",
+		Version: "2026.03.16-163942",
+	}
+
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if parsed["name"] != "wendyos-brave-phoenix" {
+		t.Errorf("name = %v", parsed["name"])
+	}
+	if parsed["address"] != "192.168.1.42" {
+		t.Errorf("address = %v", parsed["address"])
+	}
+}
+
+func TestDiscoverDeviceInfo_OmitsEmptyFields(t *testing.T) {
+	info := discoverDeviceInfo{
+		Name:    "wendyos-test",
+		Type:    "USB",
+		Address: "192.168.55.100",
+	}
+
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, ok := parsed["port"]; ok {
+		t.Error("empty port should be omitted")
+	}
+	if _, ok := parsed["version"]; ok {
+		t.Error("empty version should be omitted")
+	}
+}
+
+func TestDiscoverDeviceInfo_AllDevicesArray(t *testing.T) {
+	all := []discoverDeviceInfo{
+		{Name: "device-1", Type: "LAN", Address: "192.168.1.1", Port: "50051"},
+		{Name: "device-2", Type: "USB", Address: "192.168.55.100"},
+	}
+
+	data, err := json.MarshalIndent(all, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var parsed []map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(parsed))
+	}
+	if parsed[0]["name"] != "device-1" {
+		t.Errorf("first device name = %v", parsed[0]["name"])
+	}
+}
+
+func TestDiscoverModel_EnterCopiesSelectedDevice(t *testing.T) {
+	orig := clipboardWriter
+	t.Cleanup(func() { clipboardWriter = orig })
+
+	var copied string
+	clipboardWriter = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	m := newDiscoverModel(context.Background(), defaultOpts())
+	updated0, _ := m.Update(usbScanMsg{devices: []models.USBDevice{
+		{DisplayName: "wendyos-test", Hostname: "192.168.1.5"},
+	}})
+	m = updated0.(discoverModel)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(discoverModel)
+
+	if um.flashMessage != "Copied device info as JSON to clipboard." {
+		t.Errorf("flash = %q, want success message", um.flashMessage)
+	}
+	if cmd == nil {
+		t.Error("expected clearFlashAfter cmd")
+	}
+	if !strings.Contains(copied, "wendyos-test") {
+		t.Errorf("clipboard content should contain device name, got %q", copied)
+	}
+
+	// Verify it's valid JSON
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(copied), &parsed); err != nil {
+		t.Fatalf("clipboard content is not valid JSON: %v", err)
+	}
+}
+
+func TestDiscoverModel_ACopiesAllDevices(t *testing.T) {
+	orig := clipboardWriter
+	t.Cleanup(func() { clipboardWriter = orig })
+
+	var copied string
+	clipboardWriter = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	m := newDiscoverModel(context.Background(), defaultOpts())
+	updated0, _ := m.Update(usbScanMsg{devices: []models.USBDevice{
+		{DisplayName: "device-1", Hostname: "10.0.0.1"},
+		{DisplayName: "device-2", Hostname: "10.0.0.2"},
+	}})
+	m = updated0.(discoverModel)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	um := updated.(discoverModel)
+
+	if um.flashMessage != "Copied all devices as JSON to clipboard." {
+		t.Errorf("flash = %q, want all-devices message", um.flashMessage)
+	}
+	if cmd == nil {
+		t.Error("expected clearFlashAfter cmd")
+	}
+
+	var parsed []map[string]interface{}
+	if err := json.Unmarshal([]byte(copied), &parsed); err != nil {
+		t.Fatalf("clipboard content is not valid JSON array: %v", err)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(parsed))
+	}
+}
+
+func TestDiscoverModel_EnterShowsErrorOnClipboardFailure(t *testing.T) {
+	orig := clipboardWriter
+	t.Cleanup(func() { clipboardWriter = orig })
+
+	clipboardWriter = func(text string) error {
+		return fmt.Errorf("xclip not found")
+	}
+
+	m := newDiscoverModel(context.Background(), defaultOpts())
+	updated0, _ := m.Update(usbScanMsg{devices: []models.USBDevice{
+		{DisplayName: "test-device", Hostname: "10.0.0.1"},
+	}})
+	m = updated0.(discoverModel)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(discoverModel)
+
+	if !strings.Contains(um.flashMessage, "Copy failed") {
+		t.Errorf("flash = %q, expected error message", um.flashMessage)
+	}
+}
+
+func TestDiscoverModel_FlashClearMsg(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts())
+	m.flashMessage = "test flash"
+
+	updated, _ := m.Update(flashClearMsg{})
+	um := updated.(discoverModel)
+	if um.flashMessage != "" {
+		t.Errorf("flashMessage should be cleared, got %q", um.flashMessage)
 	}
 }
 
