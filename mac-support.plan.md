@@ -87,6 +87,16 @@ On Linux, containers isolate apps from the host and from each other via kernel n
 
 The demos need to show things that only a Mac can do well — and that clearly benefit from Wendy's deploy-and-manage workflow rather than just running locally.
 
+## Automated Testing
+
+Wendy supports a growing matrix of devices, languages, and features. Testing every combination by hand is not feasible — automated tests are crucial.
+
+AI-driven development adds a second requirement: a **feedback loop**. Spec-driven development (TDD/BDD) provides one — tests *are* the spec, and pass/fail is the signal. Since we need automated end-to-end tests anyway, those same tests can serve as the feedback loop for agentic engineering.
+
+Focusing on end-to-end tests has two further advantages. First, it **forces a scriptable CLI** — structured JSON output, deterministic device targeting, clean error reporting — because the test harness needs to drive the CLI programmatically. Everything that makes the CLI testable also makes it better for AI agents, CI pipelines, shell scripts, and power users. Second, we may be able to **get away with just e2e tests** for a long time. They cover the CLI, the gRPC layer, and the agent in a single shot. If we later need finer-grained feedback, we can add unit tests for specific subsystems — but the e2e suite is the starting point, not a complement to an existing unit-test suite.
+
+The overarching idea: since end-to-end tests are needed anyway, we should extract as much value from them as possible. If done well, the CLI and agent become a **black box** — the tests specify the external behavior, and everything inside is up for the AI to figure out.
+
 ## Plan
 
 **TODO: flesh out.**
