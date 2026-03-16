@@ -450,8 +450,8 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool)
 	effectiveAddr = registryAddr
 	var ipv6IP string
 	if idx := strings.Index(registryAddr, "]:"); idx != -1 {
-		ipv6IP = registryAddr[1:idx]          // bare IP without brackets
-		port := registryAddr[idx+2:]           // port after ]:
+		ipv6IP = registryAddr[1:idx] // bare IP without brackets
+		port := registryAddr[idx+2:] // port after ]:
 		effectiveAddr = "wendy-registry:" + port
 	}
 
