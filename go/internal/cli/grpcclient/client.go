@@ -68,12 +68,15 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 
 // grpcTarget converts a host:port address into a gRPC target string.
 // IPv6 link-local addresses contain a zone ID with a bare "%" (e.g.
-// [fe80::1%en0]:50051) which grpc.NewClient interprets as an invalid
-// URL percent-encoding. Using the passthrough scheme avoids URI parsing
-// entirely and passes the address straight to the dialer.
+// [fe80::1%en0]:50051). grpc.NewClient parses the target as a URL, where
+// "%" starts a percent-encoding sequence — "%en" is invalid hex and fails.
+// We use the passthrough scheme and escape "%" → "%25" so the URL parser
+// accepts the target, and the passthrough resolver passes the decoded
+// address (with the original zone ID) straight to the dialer.
 func grpcTarget(address string) string {
 	if strings.Contains(address, "%") {
-		return "passthrough:///" + address
+		escaped := strings.ReplaceAll(address, "%", "%25")
+		return "passthrough:///" + escaped
 	}
 	return address
 }
