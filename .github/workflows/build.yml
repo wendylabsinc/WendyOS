@@ -871,9 +871,27 @@ jobs:
           $version = "${{ needs.determine-version.outputs.version }}"
           $tag = "${{ needs.determine-version.outputs.tag_name }}"
           $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
+          $token = "${{ secrets.WINGET_GITHUB_TOKEN }}"
+          $amd64 = "$base/wendy-cli-windows-amd64-$version.msi"
+          $arm64 = "$base/wendy-cli-windows-arm64-$version.msi"
 
+          # Try update first; if the package doesn't exist yet, fall back to new
           .\wingetcreate.exe update WendyLabs.Wendy `
             --version $version `
-            --urls "$base/wendy-cli-windows-amd64-$version.msi" "$base/wendy-cli-windows-arm64-$version.msi" `
+            --urls $amd64 $arm64 `
             --submit `
-            --token "${{ secrets.WINGET_GITHUB_TOKEN }}"
+            --token $token
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Update failed, attempting initial submission with 'new'..."
+            .\wingetcreate.exe new $amd64 $arm64 `
+              --version $version `
+              --id WendyLabs.Wendy `
+              --name Wendy `
+              --publisher "Wendy Labs" `
+              --submit `
+              --token $token
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Winget package submission failed (update and new both failed) with exit code $LASTEXITCODE."
+              exit $LASTEXITCODE
+            }
+          }
