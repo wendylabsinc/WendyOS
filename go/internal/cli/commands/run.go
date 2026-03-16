@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"golang.org/x/term"
 )
 
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
@@ -28,6 +29,59 @@ func cliLog(format string, args ...any) {
 
 func cliLogln(format string, args ...any) {
 	fmt.Println(cliStyle.Render(fmt.Sprintf(format, args...)))
+}
+
+// createContainerWithProgress calls CreateContainerWithProgress and prints
+// phase updates so the user sees feedback during long image pulls/unpacks.
+func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	stream, err := svc.CreateContainerWithProgress(ctx, req)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	clearLine := func() {
+		if isTTY {
+			fmt.Print("\033[2K\r")
+		} else {
+			fmt.Println()
+		}
+	}
+
+	completed := false
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			return fmt.Errorf("creating container: %w", recvErr)
+		}
+
+		switch r := resp.GetResponseType().(type) {
+		case *agentpb.CreateContainerProgressResponse_Progress:
+			switch r.Progress.GetPhase() {
+			case agentpb.CreateContainerProgress_UNPACKING:
+				cliLog("Pulling and unpacking image on device...")
+			case agentpb.CreateContainerProgress_CREATING_CONTAINER:
+				clearLine()
+				cliLog("Creating container...")
+			case agentpb.CreateContainerProgress_COMPLETE:
+				clearLine()
+			}
+		case *agentpb.CreateContainerProgressResponse_Completed:
+			completed = true
+		}
+
+		if completed {
+			break
+		}
+	}
+
+	if !completed {
+		return fmt.Errorf("creating container: progress stream ended without completion")
+	}
+	return nil
 }
 
 // runOptions holds the parsed flags for the run command.
@@ -213,10 +267,9 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return nil
 	}
 
-	// Create the container.
-	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+	// Create the container with progress streaming.
+	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
+		return err
 	}
 	cliLogln("Container %s created.", appCfg.AppID)
 
@@ -471,10 +524,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return nil
 	}
 
-	// Create the container.
-	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+	// Create the container with progress streaming.
+	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
+		return err
 	}
 	cliLogln("Container %s created.", appCfg.AppID)
 

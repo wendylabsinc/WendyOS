@@ -427,37 +427,103 @@ func findSwiftProduct(dir string) (string, error) {
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
-// exists and returns its name. When useMTLS is true, the "wendy-mtls" builder
-// is configured with client certs; otherwise the "wendy" builder uses plain HTTP.
-func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (string, error) {
+// exists and returns its name plus the effective registry address to use in
+// image references. For IPv6 addresses, a hostname alias is configured inside
+// the builder container to avoid brackets that break the TOML parser.
+func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (builderName, effectiveAddr string, err error) {
 	// Use separate builders for mTLS and plaintext so switching between
 	// provisioned and unprovisioned devices doesn't recreate builders.
 	const containerCertDir = "/etc/buildkit/certs"
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("finding home directory: %w", err)
+		return "", "", fmt.Errorf("finding home directory: %w", err)
 	}
 	configDir := filepath.Join(home, ".cache", "wendy")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating config directory: %w", err)
+		return "", "", fmt.Errorf("creating config directory: %w", err)
+	}
+
+	// For IPv6 addresses (contain brackets), use a hostname alias to avoid
+	// ']' in the TOML config — the go-toml v1 parser used by both docker
+	// buildx and buildkitd rejects ']' in table-header keys.
+	effectiveAddr = registryAddr
+	var ipv6IP string
+	if idx := strings.Index(registryAddr, "]:"); idx != -1 {
+		ipv6IP = registryAddr[1:idx] // bare IP without brackets
+		port := registryAddr[idx+2:] // port after ]:
+		effectiveAddr = "wendy-registry:" + port
 	}
 
 	if !useMTLS {
-		return ensurePlaintextBuilder(ctx, configDir, registryAddr)
+		builderName, err = ensurePlaintextBuilder(ctx, configDir, effectiveAddr)
+	} else {
+		builderName, err = ensureMTLSBuilder(ctx, configDir, effectiveAddr, containerCertDir)
 	}
-	return ensureMTLSBuilder(ctx, configDir, registryAddr, containerCertDir)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Add a /etc/hosts entry inside the builder container so it can resolve
+	// the alias to the real IPv6 address.
+	if ipv6IP != "" {
+		containerName := "buildx_buildkit_" + builderName + "0"
+		hostsCmd := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c",
+			fmt.Sprintf("if grep -q ' wendy-registry' /etc/hosts; then sed -i 's/^[^#]* wendy-registry$/%s wendy-registry/' /etc/hosts; else echo '%s wendy-registry' >> /etc/hosts; fi", ipv6IP, ipv6IP))
+		if out, cmdErr := hostsCmd.CombinedOutput(); cmdErr != nil {
+			return "", "", fmt.Errorf("adding hosts entry to builder: %s: %w", string(out), cmdErr)
+		}
+	}
+
+	return builderName, effectiveAddr, nil
+}
+
+// buildkitRegistryConfig generates a buildkitd.toml snippet for the given
+// registry address. IPv6 addresses must be passed through the hostname alias
+// (e.g. "wendy-registry:5000") rather than in bracket notation, because the
+// go-toml v1 parser used by buildkitd rejects ']' in table-header keys.
+func buildkitRegistryConfig(registryAddr string, plainHTTP bool, keypair *[2]string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[registry.\"%s\"]\n", registryAddr)
+	if plainHTTP {
+		sb.WriteString("  http = true\n")
+	}
+	sb.WriteString("  insecure = true\n")
+	if keypair != nil {
+		fmt.Fprintf(&sb, "  [[registry.\"%s\".keypair]]\n", registryAddr)
+		fmt.Fprintf(&sb, "    key = %q\n", keypair[0])
+		fmt.Fprintf(&sb, "    cert = %q\n", keypair[1])
+	}
+	return sb.String()
+}
+
+// removeBuilder removes a buildx builder, falling back to deleting the
+// instance file directly when `docker buildx rm` fails (e.g. because the
+// stored config contains IPv6 brackets that the host TOML parser rejects).
+func removeBuilder(ctx context.Context, name string) {
+	rmCmd := exec.CommandContext(ctx, "docker", "buildx", "rm", name)
+	if rmCmd.Run() == nil {
+		return
+	}
+	// Fallback: remove the instance file and kill the container directly.
+	home, err := os.UserHomeDir()
+	if err == nil {
+		os.Remove(filepath.Join(home, ".docker", "buildx", "instances", name))
+		os.Remove(filepath.Join(home, ".docker", "buildx", "activity", name))
+	}
+	exec.CommandContext(ctx, "docker", "rm", "-f", "buildx_buildkit_"+name+"0").Run()
 }
 
 // ensurePlaintextBuilder ensures the "wendy" buildx builder exists with plain
-// HTTP registry config.
+// HTTP registry config. The config is injected into the builder container via
+// docker cp (not --buildkitd-config) to avoid the host-side TOML parser which
+// cannot handle IPv6 brackets in registry addresses.
 func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string) (string, error) {
 	const builderName = "wendy"
 
-	configPath := filepath.Join(configDir, "buildkitd.toml")
 	appliedPath := filepath.Join(configDir, "buildkitd.applied")
 
-	fullConfig := fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
+	fullConfig := buildkitRegistryConfig(registryAddr, true, nil)
 
 	appliedConfig, _ := os.ReadFile(appliedPath)
 	configChanged := string(appliedConfig) != fullConfig
@@ -466,23 +532,24 @@ func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string)
 	builderExists := cmd.Run() == nil
 
 	if builderExists && configChanged {
-		exec.CommandContext(ctx, "docker", "buildx", "rm", builderName).Run()
+		removeBuilder(ctx, builderName)
 		builderExists = false
 	}
 
 	if !builderExists {
-		if err := os.WriteFile(configPath, []byte(fullConfig), 0o644); err != nil {
-			return "", fmt.Errorf("writing buildkitd config: %w", err)
-		}
 		cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
 			"--name", builderName,
 			"--driver", "docker-container",
 			"--driver-opt", "network=host",
-			"--buildkitd-config", configPath,
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 		}
+	}
+
+	// Inject the real config into the builder container and restart.
+	if err := updateBuilderConfig(ctx, builderName, fullConfig); err != nil {
+		return "", fmt.Errorf("updating builder config: %w", err)
 	}
 
 	_ = os.WriteFile(appliedPath, []byte(fullConfig), 0o644)
@@ -494,7 +561,6 @@ func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string)
 func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCertDir string) (string, error) {
 	const builderName = "wendy-mtls"
 
-	configPath := filepath.Join(configDir, "buildkitd-mtls.toml")
 	appliedPath := filepath.Join(configDir, "buildkitd-mtls.applied")
 
 	certInfo := loadCLICert()
@@ -528,11 +594,8 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 		}
 	}
 
-	fullConfig := fmt.Sprintf("[registry.\"%s\"]\n  insecure = true\n  [[registry.\"%s\".keypair]]\n    key=\"%s/client-key.pem\"\n    cert=\"%s/client-cert.pem\"\n",
-		registryAddr, registryAddr, containerCertDir, containerCertDir)
-
-	// Minimal config for builder creation — no cert path references.
-	minimalConfig := fmt.Sprintf("[registry.\"%s\"]\n  http = true\n  insecure = true\n", registryAddr)
+	keypair := &[2]string{containerCertDir + "/client-key.pem", containerCertDir + "/client-cert.pem"}
+	fullConfig := buildkitRegistryConfig(registryAddr, false, keypair)
 
 	appliedConfig, _ := os.ReadFile(appliedPath)
 	configChanged := string(appliedConfig) != fullConfig
@@ -541,19 +604,15 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	builderExists := cmd.Run() == nil
 
 	if builderExists && configChanged {
-		exec.CommandContext(ctx, "docker", "buildx", "rm", builderName).Run()
+		removeBuilder(ctx, builderName)
 		builderExists = false
 	}
 
 	if !builderExists {
-		if err := os.WriteFile(configPath, []byte(minimalConfig), 0o644); err != nil {
-			return "", fmt.Errorf("writing buildkitd config: %w", err)
-		}
 		cmd = exec.CommandContext(ctx, "docker", "buildx", "create",
 			"--name", builderName,
 			"--driver", "docker-container",
 			"--driver-opt", "network=host",
-			"--buildkitd-config", configPath,
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
@@ -594,10 +653,16 @@ func copyCertsToBuilder(ctx context.Context, builderName, hostCertDir, container
 	return nil
 }
 
-// updateBuilderConfig writes a new buildkitd.toml into the builder container
-// and restarts it so the updated configuration (e.g. mTLS keypair paths) takes
-// effect. This must be called after copyCertsToBuilder.
+// updateBuilderConfig bootstraps the buildx builder container (if not already
+// running), writes a new buildkitd.toml into it, and restarts so the updated
+// configuration takes effect.
 func updateBuilderConfig(ctx context.Context, builderName, config string) error {
+	// Bootstrap the builder to ensure the container is running.
+	bootstrapCmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
+	if out, err := bootstrapCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bootstrapping builder: %s: %w", string(out), err)
+	}
+
 	containerName := "buildx_buildkit_" + builderName + "0"
 	const containerConfigPath = "/etc/buildkit/buildkitd.toml"
 
@@ -633,9 +698,14 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 // is conditional: plain HTTP for plaintext devices, and TLS/mTLS for provisioned
 // devices when useMTLS is enabled.
 func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, streamOutput *os.File, useMTLS bool) error {
-	builder, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
+	builder, effectiveAddr, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
 	if err != nil {
 		return err
+	}
+
+	// When an IPv6 alias is in use, rewrite the image reference to match.
+	if effectiveAddr != registryAddr {
+		registryImage = strings.Replace(registryImage, registryAddr, effectiveAddr, 1)
 	}
 
 	home, err := os.UserHomeDir()

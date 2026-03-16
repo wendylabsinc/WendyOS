@@ -313,12 +313,22 @@ func wrapWithDebugpy(args []string) []string {
 // app. It builds an OCI runtime specification from the app config and request
 // parameters, unpacks the image, and registers the container.
 func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
+}
+
+func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	ctx = c.withNamespace(ctx)
 	appName := req.GetAppName()
 	imageName := req.GetImageName()
+
+	report := func(p *agentpb.CreateContainerProgress) {
+		if onProgress != nil {
+			onProgress(p)
+		}
+	}
 
 	c.logger.Info("Creating container",
 		zap.String("app_name", appName),
@@ -362,6 +372,7 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	// For remote images, try the local store first, then pull.
 	var image containerd.Image
 	var err error
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
 	if shouldRefreshImageFromRegistry(imageName) {
 		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
 		image, err = c.client.Pull(ctx, imageName,
@@ -464,6 +475,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		c.applyCDIGPU(spec)
 	}
 
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
+
 	// Build labels for the container.
 	labels := wendyLabels(appName, version, req.GetRestartPolicy())
 
@@ -486,6 +499,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 
 	c.logger.Info("Container created",
 		zap.String("app_name", appName),
