@@ -278,8 +278,17 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 	if err != nil {
 		return recoveryExit
 	}
-	fm := final.(recoveryModel)
+	fm, ok := final.(recoveryModel)
+	if !ok {
+		return recoveryExit
+	}
 	return recoveryChoice(fm.chosen)
+}
+
+// isInteractiveTerminal returns true when both stdin and stdout are TTYs,
+// meaning it is safe to show interactive Bubble Tea prompts.
+func isInteractiveTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 // handleDefaultDeviceRecovery runs the recovery flow after a default device
@@ -320,10 +329,11 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		conn, connErr := connectWithAutoTLS(ctx, addr)
-		if connErr == nil && isDefault {
+		if connErr == nil && isDefault && !conn.IsMTLS {
 			// gRPC plaintext connections are lazy — probe to detect
 			// unreachable default devices early so the recovery menu
 			// can be shown instead of a cryptic error later.
+			// mTLS connections are already probed inside connectWithAutoTLS.
 			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 			cancel()
@@ -334,7 +344,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		}
 		if connErr != nil {
 			// Default device is unreachable — offer interactive recovery.
-			if isDefault && !jsonOutput && term.IsTerminal(int(os.Stdin.Fd())) {
+			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
 				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 				if recErr != nil {
@@ -542,7 +552,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
 		conn, err := connectWithAutoTLS(ctx, addr)
-		if err == nil && isDefault {
+		if err == nil && isDefault && !conn.IsMTLS {
 			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 			cancel()
@@ -553,7 +563,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		}
 		if err != nil {
 			// Default device is unreachable — offer interactive recovery.
-			if isDefault && !jsonOutput && !cfg.nonInteractive {
+			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 				return handleDefaultDeviceRecovery(ctx, device, err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 			}
 			return nil, err
