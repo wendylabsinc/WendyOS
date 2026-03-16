@@ -1,5 +1,5 @@
 .PHONY: build build-cli build-agent test vet proto clean fmt lint install \
-       build-all \
+       build-all docs \
        build-agent-linux-amd64 build-agent-linux-arm64 \
        build-cli-linux-amd64 build-cli-linux-arm64 \
        build-cli-darwin-amd64 build-cli-darwin-arm64 \
@@ -94,3 +94,7 @@ fmt:
 # Lint (requires golangci-lint)
 lint:
 	golangci-lint run ./...
+
+# Generate CLI reference documentation
+docs:
+	go run ./cmd/docgen -out ./docs/cli -format markdown
