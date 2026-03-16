@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,7 +175,7 @@ var wendySDKChecksums = map[string]string{
 
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, architecture string, useMTLS bool) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, host, architecture string, useMTLS bool) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -191,7 +192,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryHost, a
 		"build-container-image",
 		"--from=swift:" + defaultSwiftVersion + "-slim",
 		"--product=" + product,
-		"--repository=" + registryHost + ":5000/" + strings.ToLower(product),
+		"--repository=" + registryHost(host, 5000) + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
 	}
 
@@ -739,7 +740,16 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 
 // registryHost formats a host:port for use in a registry image reference,
 // wrapping IPv6 addresses in brackets as required by RFC 3986.
+// If the host is a hostname (not an IP), it is resolved to an IP address first
+// so that Docker buildx (which runs inside a VM with its own DNS) can reach the
+// device registry even when the hostname is only resolvable via mDNS or
+// Tailscale DNS on the host machine.
 func registryHost(host string, port int) string {
+	if net.ParseIP(host) == nil {
+		if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
+			host = addrs[0]
+		}
+	}
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}

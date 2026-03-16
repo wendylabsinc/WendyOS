@@ -891,7 +891,7 @@ jobs:
               --submit `
               --token $token
             if ($LASTEXITCODE -ne 0) {
-              Write-Error "wingetcreate new failed with exit code $LASTEXITCODE"
+              Write-Error "Winget package submission failed (update and new both failed) with exit code $LASTEXITCODE."
               exit $LASTEXITCODE
             }
           }
