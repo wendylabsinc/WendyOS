@@ -228,6 +228,10 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		architecture = "arm64"
 	}
 
+	if err := ensureSwiftVersion(ctx); err != nil {
+		return err
+	}
+
 	product, err := findSwiftProduct(cwd)
 	if err != nil {
 		return err
@@ -342,6 +346,9 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 
 	// Resolve Swift product name from Package.swift.
 	if projectType == "swift" {
+		if err := ensureSwiftVersion(ctx); err != nil {
+			return err
+		}
 		swiftProduct, err := findSwiftProduct(projectPath)
 		if err != nil {
 			return fmt.Errorf("could not determine Swift product: %w", err)

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -171,6 +172,55 @@ const (
 var wendySDKChecksums = map[string]string{
 	"x86_64":  "b5a4d08ad4d4841043727f6671c6aa004da3a2b7f12dc28101d6770c1dc57eb1",
 	"aarch64": "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e",
+}
+
+// execCommandContext is the function used to create exec commands.
+// It can be overridden in tests.
+var execCommandContext = exec.CommandContext
+
+// ensureSwiftVersion makes sure the required Swift toolchain is installed via swiftly.
+// If the version is already present this is a no-op.
+func ensureSwiftVersion(ctx context.Context) error {
+	// Avoid starting any subprocesses if the context is already canceled.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// First, check whether the requested Swift toolchain is already installed.
+	checkCmd := execCommandContext(ctx, "swiftly", "which", defaultSwiftVersion)
+	// Discard output for the existence check; this is only used as a probe.
+	checkCmd.Stdout = io.Discard
+	checkCmd.Stderr = io.Discard
+	if err := checkCmd.Run(); err == nil {
+		// Toolchain is already installed; nothing to do.
+		return nil
+	} else {
+		// If swiftly itself is missing, surface a helpful error.
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
+		}
+		// If the context was canceled or expired during the check, propagate that rather than starting an install.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		// For other errors (e.g., version not installed), fall through and attempt installation.
+	}
+
+	// Re-check the context before starting installation.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	cmd := execCommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
+		}
+		return fmt.Errorf("installing Swift %s via swiftly: %w", defaultSwiftVersion, err)
+	}
+	return nil
 }
 
 // buildSwiftContainerImage builds a Swift package and pushes the container image
@@ -379,7 +429,7 @@ func installWasmSwiftSDK() error {
 // `swift package dump-package`. Returns an error with a suggestion when
 // no executable product can be determined.
 func findSwiftProduct(dir string) (string, error) {
-	cmd := exec.Command("swift", "package", "dump-package")
+	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
