@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -104,6 +105,68 @@ func TestResolveLANAgentVersionFallsBackAcrossAddresses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("resolveLANAgentVersion() calls = %v, want %v", calls, wantCalls)
+	}
+}
+
+// setTempConfig points HOME at a temp dir and writes cfg via config.Save so
+// the test uses the same serialisation path as production code. t.Setenv
+// automatically restores the original HOME when the test finishes.
+func setTempConfig(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	// config.Save calls ConfigDir() which creates ~/.wendy and writes config.json.
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveDeviceAddress_Flag(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = "my-device.local"
+
+	addr, isDefault, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isDefault {
+		t.Fatal("expected isDefault=false when --device flag is set")
+	}
+	if addr != "my-device.local:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "my-device.local:50051")
+	}
+}
+
+func TestResolveDeviceAddress_DefaultDevice(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = ""
+
+	setTempConfig(t, &config.Config{DefaultDevice: "wendy-thor.local"})
+
+	addr, isDefault, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isDefault {
+		t.Fatal("expected isDefault=true when using default device from config")
+	}
+	if addr != "wendy-thor.local:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "wendy-thor.local:50051")
+	}
+}
+
+func TestResolveDeviceAddress_NoDevice(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = ""
+
+	setTempConfig(t, &config.Config{})
+
+	_, _, err := resolveDeviceAddress()
+	if err == nil {
+		t.Fatal("expected error when no device is specified")
 	}
 }
 

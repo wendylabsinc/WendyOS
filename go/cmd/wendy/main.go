@@ -32,7 +32,7 @@ func main() {
 	analytics.Close()
 
 	if err != nil {
-		if errors.Is(err, commands.ErrUserCancelled) {
+		if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) {
 			os.Exit(0)
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", formatError(err))

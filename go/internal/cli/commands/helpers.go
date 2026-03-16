@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -41,6 +42,10 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (*agent
 
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
 var ErrUserCancelled = errors.New("cancelled")
+
+// ErrDefaultCleared is returned after the user chooses to unset the default
+// device from the recovery menu. main.go treats this as a graceful exit (code 0).
+var ErrDefaultCleared = errors.New("default device cleared")
 
 // hostPort formats a host and port into an address string,
 // wrapping IPv6 addresses in brackets as required by RFC 3986.
@@ -169,19 +174,145 @@ func (s *SelectedDevice) Close() {
 
 // resolveDeviceAddress returns the gRPC address for the target device.
 // It checks the --device flag first, then the default device from config.
-func resolveDeviceAddress() (string, error) {
+// The returned isDefault flag is true when the address came from the saved
+// default device (not the --device flag).
+func resolveDeviceAddress() (addr string, isDefault bool, err error) {
 	hostname := deviceFlag
 	if hostname == "" {
-		cfg, err := config.Load()
-		if err != nil {
-			return "", fmt.Errorf("loading config: %w", err)
+		cfg, loadErr := config.Load()
+		if loadErr != nil {
+			return "", false, fmt.Errorf("loading config: %w", loadErr)
 		}
 		hostname = cfg.DefaultDevice
+		isDefault = hostname != ""
 	}
 	if hostname == "" {
-		return "", fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
+		return "", false, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
-	return hostPort(hostname, defaultAgentPort), nil
+	return hostPort(hostname, defaultAgentPort), isDefault, nil
+}
+
+// recoveryChoice represents the user's selection in the default-device recovery menu.
+type recoveryChoice int
+
+const (
+	recoveryDiscover     recoveryChoice = iota // run device discovery picker
+	recoveryUnsetDefault                       // clear the default device
+	recoveryExit                               // exit with the original error
+)
+
+// recoveryModel is a minimal Bubble Tea model for the default-device recovery menu.
+type recoveryModel struct {
+	choices  []string
+	cursor   int
+	chosen   int
+	hostname string
+	quit     bool
+}
+
+func (m recoveryModel) Init() tea.Cmd { return nil }
+
+func (m recoveryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.choices)-1 {
+				m.cursor++
+			}
+		case "enter":
+			m.chosen = m.cursor
+			return m, tea.Quit
+		case "q", "ctrl+c":
+			m.chosen = len(m.choices) - 1 // treat as Exit
+			m.quit = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m recoveryModel) View() string {
+	if m.quit {
+		return ""
+	}
+
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")) // amber
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selectStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
+
+	var sb strings.Builder
+	sb.WriteString(warnStyle.Render(fmt.Sprintf("Attempting to reach default device %q but it is unavailable.", m.hostname)))
+	sb.WriteString("\n\n")
+	sb.WriteString(dimStyle.Render("Would you like to:"))
+	sb.WriteString("\n")
+
+	for i, choice := range m.choices {
+		if i == m.cursor {
+			sb.WriteString(selectStyle.Render("  > " + choice))
+		} else {
+			sb.WriteString(dimStyle.Render("    " + choice))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// promptDefaultDeviceRecovery shows an interactive menu when the saved default
+// device is unreachable. It returns the user's chosen recovery action.
+func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
+	m := recoveryModel{
+		hostname: hostname,
+		choices: []string{
+			"Discover another device",
+			"Unset the default device",
+			"Exit",
+		},
+	}
+	final, err := tea.NewProgram(m).Run()
+	if err != nil {
+		return recoveryExit
+	}
+	fm, ok := final.(recoveryModel)
+	if !ok {
+		return recoveryExit
+	}
+	return recoveryChoice(fm.chosen)
+}
+
+// isInteractiveTerminal returns true when both stdin and stdout are TTYs,
+// meaning it is safe to show interactive Bubble Tea prompts.
+func isInteractiveTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// handleDefaultDeviceRecovery runs the recovery flow after a default device
+// connection failure. It may return a new connection via the device picker,
+// clear the default, or propagate the original error.
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, origErr error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+	choice := promptDefaultDeviceRecovery(hostname)
+	switch choice {
+	case recoveryDiscover:
+		return pickDevice(ctx, excludeProviders, excludeBluetooth)
+	case recoveryUnsetDefault:
+		cfg, err := config.Load()
+		if err != nil {
+			return nil, fmt.Errorf("loading config: %w", err)
+		}
+		cfg.DefaultDevice = ""
+		if err := config.Save(cfg); err != nil {
+			return nil, fmt.Errorf("saving config: %w", err)
+		}
+		fmt.Println("Default device cleared.")
+		return nil, ErrDefaultCleared
+	default:
+		return nil, origErr
+	}
 }
 
 // connectToAgent establishes a gRPC connection to the target device.
@@ -195,10 +326,32 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		o(&cfg)
 	}
 
-	addr, err := resolveDeviceAddress()
+	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		conn, connErr := connectWithAutoTLS(ctx, addr)
+		if connErr == nil && isDefault && !conn.IsMTLS {
+			// gRPC plaintext connections are lazy — probe to detect
+			// unreachable default devices early so the recovery menu
+			// can be shown instead of a cryptic error later.
+			// mTLS connections are already probed inside connectWithAutoTLS.
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+			cancel()
+			if probeErr != nil {
+				conn.Close()
+				connErr = probeErr
+			}
+		}
 		if connErr != nil {
+			// Default device is unreachable — offer interactive recovery.
+			if isDefault && !jsonOutput && isInteractiveTerminal() {
+				hostname, _, _ := net.SplitHostPort(addr)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				if recErr != nil {
+					return nil, recErr
+				}
+				return connectFromSelectedDevice(target, cfg)
+			}
 			return nil, connErr
 		}
 		if !cfg.suppressProvisioningHint {
@@ -217,6 +370,13 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		return nil, pickErr
 	}
 
+	return connectFromSelectedDevice(target, cfg)
+}
+
+// connectFromSelectedDevice converts a SelectedDevice from the picker into a
+// gRPC AgentConnection. Returns an error if the selected device does not
+// support gRPC.
+func connectFromSelectedDevice(target *SelectedDevice, cfg resolveConfig) (*grpcclient.AgentConnection, error) {
 	if target.Agent != nil {
 		if !cfg.suppressProvisioningHint {
 			suggestProvisioning(target.Agent)
@@ -354,12 +514,14 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		o(&cfg)
 	}
 	device := deviceFlag
+	isDefault := false
 	if device == "" {
-		cfg, err := config.Load()
+		loadedCfg, err := config.Load()
 		if err != nil {
 			return nil, fmt.Errorf("loading config: %w", err)
 		}
-		device = cfg.DefaultDevice
+		device = loadedCfg.DefaultDevice
+		isDefault = device != ""
 	}
 
 	// Check if the device flag matches a known provider key.
@@ -390,7 +552,20 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
 		conn, err := connectWithAutoTLS(ctx, addr)
+		if err == nil && isDefault && !conn.IsMTLS {
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+			cancel()
+			if probeErr != nil {
+				conn.Close()
+				err = probeErr
+			}
+		}
 		if err != nil {
+			// Default device is unreachable — offer interactive recovery.
+			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
+				return handleDefaultDeviceRecovery(ctx, device, err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+			}
 			return nil, err
 		}
 		return &SelectedDevice{Agent: conn}, nil
