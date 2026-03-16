@@ -173,10 +173,14 @@ var wendySDKChecksums = map[string]string{
 	"aarch64": "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e",
 }
 
+// execCommandContext is the function used to create exec commands.
+// It can be overridden in tests.
+var execCommandContext = exec.CommandContext
+
 // ensureSwiftVersion makes sure the required Swift toolchain is installed via swiftly.
 // If the version is already present this is a no-op.
 func ensureSwiftVersion(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
+	cmd := execCommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -394,7 +398,7 @@ func installWasmSwiftSDK() error {
 // `swift package dump-package`. Returns an error with a suggestion when
 // no executable product can be determined.
 func findSwiftProduct(dir string) (string, error) {
-	cmd := exec.Command("swift", "package", "dump-package")
+	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
