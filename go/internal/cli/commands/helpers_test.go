@@ -12,6 +12,38 @@ import (
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
+func TestHostPort_IPv6LinkLocalWithZone(t *testing.T) {
+	got := hostPort("fe80::3ee2:fcc9:fe8e:f69c%en0", 50051)
+	want := "[fe80::3ee2:fcc9:fe8e:f69c%en0]:50051"
+	if got != want {
+		t.Fatalf("hostPort() = %q, want %q", got, want)
+	}
+}
+
+func TestHostPort_IPv6Global(t *testing.T) {
+	got := hostPort("2001:db8::1", 50051)
+	want := "[2001:db8::1]:50051"
+	if got != want {
+		t.Fatalf("hostPort() = %q, want %q", got, want)
+	}
+}
+
+func TestHostPort_IPv4(t *testing.T) {
+	got := hostPort("192.168.1.5", 50051)
+	want := "192.168.1.5:50051"
+	if got != want {
+		t.Fatalf("hostPort() = %q, want %q", got, want)
+	}
+}
+
+func TestHostPort_Hostname(t *testing.T) {
+	got := hostPort("wendyos-otter.local", 50051)
+	want := "wendyos-otter.local:50051"
+	if got != want {
+		t.Fatalf("hostPort() = %q, want %q", got, want)
+	}
+}
+
 func TestLANAgentAddressesPrefersIPAddress(t *testing.T) {
 	dev := models.LANDevice{
 		IPAddress: "192.168.1.23",

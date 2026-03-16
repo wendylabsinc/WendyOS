@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -497,13 +498,7 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool)
 	// For IPv6 addresses (contain brackets), use a hostname alias to avoid
 	// ']' in the TOML config — the go-toml v1 parser used by both docker
 	// buildx and buildkitd rejects ']' in table-header keys.
-	effectiveAddr = registryAddr
-	var ipv6IP string
-	if idx := strings.Index(registryAddr, "]:"); idx != -1 {
-		ipv6IP = registryAddr[1:idx] // bare IP without brackets
-		port := registryAddr[idx+2:] // port after ]:
-		effectiveAddr = "wendy-registry:" + port
-	}
+	effectiveAddr, ipv6IP := splitIPv6RegistryAddr(registryAddr)
 
 	if !useMTLS {
 		builderName, err = ensurePlaintextBuilder(ctx, configDir, effectiveAddr)
@@ -794,16 +789,93 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 // so that Docker buildx (which runs inside a VM with its own DNS) can reach the
 // device registry even when the hostname is only resolvable via mDNS or
 // Tailscale DNS on the host machine.
+//
+// IPv6 link-local addresses (fe80::/10) contain a zone ID (e.g. %en0) that is
+// meaningful only on the host machine and cannot be used inside a Docker
+// buildkit container. For literal IP inputs the zone ID is stripped; for
+// hostnames the resolver prefers routable IPv4 or global IPv6 addresses.
 func registryHost(host string, port int) string {
-	if net.ParseIP(host) == nil {
-		if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
-			host = addrs[0]
-		}
-	}
+	host = resolveRegistryIP(host)
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// splitIPv6RegistryAddr checks if registryAddr is a bracketed IPv6 address
+// (e.g. "[fe80::1%en0]:5000") and, if so, returns a hostname alias
+// ("wendy-registry:<port>") as the effective address and the bare IPv6 IP
+// (zone stripped) for use in /etc/hosts. For non-IPv6 addresses, the input
+// is returned unchanged and ipv6IP is empty.
+func splitIPv6RegistryAddr(registryAddr string) (effectiveAddr, ipv6IP string) {
+	idx := strings.Index(registryAddr, "]:")
+	if idx == -1 {
+		return registryAddr, ""
+	}
+	raw := registryAddr[1:idx]
+	port := registryAddr[idx+2:]
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		ipv6IP = addr.WithZone("").String()
+	} else {
+		ipv6IP = raw
+	}
+	return "wendy-registry:" + port, ipv6IP
+}
+
+// resolveRegistryIP resolves a host string to an IP address suitable for use
+// inside a Docker buildkit container. It prefers routable addresses but may
+// fall back to a zone-less link-local IPv6 address as a last resort.
+//
+// It handles three cases:
+//  1. Hostname — resolved via DNS, preferring IPv4 over IPv6 link-local.
+//  2. IPv6 with zone ID (fe80::…%en0) — detected via netip.ParseAddr and
+//     returned with the zone stripped (zones are host-specific and don't
+//     exist inside the builder container's network namespace).
+//  3. Any other IP — returned as-is.
+func resolveRegistryIP(host string) string {
+	// netip.ParseAddr handles zone IDs; net.ParseIP does not.
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.WithZone("").String()
+	}
+
+	// Not a bare IP — treat as hostname and resolve.
+	if net.ParseIP(host) == nil {
+		if resolved := resolveHostPreferRoutable(host); resolved != "" {
+			return resolved
+		}
+	}
+	return host
+}
+
+// resolveHostPreferRoutable resolves a hostname and returns the best address
+// for use inside a Docker container. It prefers, in order:
+//  1. IPv4 addresses
+//  2. Global/ULA IPv6 addresses
+//  3. Link-local IPv6 (stripped of zone ID, as a last resort)
+func resolveHostPreferRoutable(hostname string) string {
+	addrs, err := net.LookupHost(hostname)
+	if err != nil || len(addrs) == 0 {
+		return ""
+	}
+
+	var fallbackLinkLocal string
+	for _, a := range addrs {
+		addr, parseErr := netip.ParseAddr(a)
+		if parseErr != nil {
+			continue
+		}
+		if addr.Is4() {
+			return a // IPv4 is always preferred
+		}
+		if !addr.IsLinkLocalUnicast() {
+			return addr.WithZone("").String() // global/ULA IPv6
+		}
+		if fallbackLinkLocal == "" {
+			fallbackLinkLocal = addr.WithZone("").String()
+		}
+	}
+
+	return fallbackLinkLocal // link-local without zone as last resort
 }
 
 // buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a

@@ -165,6 +165,89 @@ func TestGeneratePythonDockerfile_FallbackEntrypoint(t *testing.T) {
 	}
 }
 
+func TestRegistryHost_IPv4(t *testing.T) {
+	got := registryHost("192.168.1.5", 5000)
+	if got != "192.168.1.5:5000" {
+		t.Errorf("registryHost IPv4 = %q, want %q", got, "192.168.1.5:5000")
+	}
+}
+
+func TestRegistryHost_IPv6Global(t *testing.T) {
+	got := registryHost("2001:db8::1", 5000)
+	if got != "[2001:db8::1]:5000" {
+		t.Errorf("registryHost IPv6 global = %q, want %q", got, "[2001:db8::1]:5000")
+	}
+}
+
+func TestRegistryHost_IPv6LinkLocalWithZone(t *testing.T) {
+	got := registryHost("fe80::2ecf:67ff:feba:6cca%en0", 5000)
+	// Zone ID must be stripped — it's host-specific and unusable in containers.
+	if got != "[fe80::2ecf:67ff:feba:6cca]:5000" {
+		t.Errorf("registryHost IPv6 link-local+zone = %q, want %q", got, "[fe80::2ecf:67ff:feba:6cca]:5000")
+	}
+}
+
+func TestRegistryHost_IPv6LinkLocalNoZone(t *testing.T) {
+	got := registryHost("fe80::1", 5000)
+	if got != "[fe80::1]:5000" {
+		t.Errorf("registryHost IPv6 link-local no zone = %q, want %q", got, "[fe80::1]:5000")
+	}
+}
+
+func TestSplitIPv6RegistryAddr_IPv6WithZone(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("[fe80::1%en0]:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want %q", eff, "wendy-registry:5000")
+	}
+	if ip != "fe80::1" {
+		t.Errorf("ipv6IP = %q, want %q (zone stripped)", ip, "fe80::1")
+	}
+}
+
+func TestSplitIPv6RegistryAddr_IPv6NoZone(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("[2001:db8::1]:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want %q", eff, "wendy-registry:5000")
+	}
+	if ip != "2001:db8::1" {
+		t.Errorf("ipv6IP = %q, want %q", ip, "2001:db8::1")
+	}
+}
+
+func TestSplitIPv6RegistryAddr_IPv4Passthrough(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("192.168.1.5:5000")
+	if eff != "192.168.1.5:5000" {
+		t.Errorf("effectiveAddr = %q, want unchanged", eff)
+	}
+	if ip != "" {
+		t.Errorf("ipv6IP = %q, want empty for IPv4", ip)
+	}
+}
+
+func TestSplitIPv6RegistryAddr_HostnamePassthrough(t *testing.T) {
+	eff, ip := splitIPv6RegistryAddr("wendy-registry:5000")
+	if eff != "wendy-registry:5000" {
+		t.Errorf("effectiveAddr = %q, want unchanged", eff)
+	}
+	if ip != "" {
+		t.Errorf("ipv6IP = %q, want empty for hostname", ip)
+	}
+}
+
+func TestResolveRegistryIP_StripZone(t *testing.T) {
+	got := resolveRegistryIP("fe80::1%eth0")
+	if got != "fe80::1" {
+		t.Errorf("resolveRegistryIP zone = %q, want %q", got, "fe80::1")
+	}
+}
+
+func TestResolveRegistryIP_IPv4Passthrough(t *testing.T) {
+	got := resolveRegistryIP("10.0.0.1")
+	if got != "10.0.0.1" {
+		t.Errorf("resolveRegistryIP IPv4 = %q, want %q", got, "10.0.0.1")
+	}
+}
+
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })

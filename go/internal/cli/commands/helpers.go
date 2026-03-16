@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,8 +50,10 @@ var ErrDefaultCleared = errors.New("default device cleared")
 
 // hostPort formats a host and port into an address string,
 // wrapping IPv6 addresses in brackets as required by RFC 3986.
+// Uses netip.ParseAddr so IPv6 link-local addresses with zone IDs
+// (e.g. fe80::1%en0) are correctly detected and bracketed.
 func hostPort(host string, port int) string {
-	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+	if addr, err := netip.ParseAddr(host); err == nil && addr.Is6() {
 		return fmt.Sprintf("[%s]:%d", host, port)
 	}
 	return fmt.Sprintf("%s:%d", host, port)
