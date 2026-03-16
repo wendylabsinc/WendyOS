@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -38,6 +39,15 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		return fmt.Errorf("creating container: %w", err)
 	}
 
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	clearLine := func() {
+		if isTTY {
+			fmt.Print("\033[2K\r")
+		} else {
+			fmt.Println()
+		}
+	}
+
 	completed := false
 	for {
 		resp, recvErr := stream.Recv()
@@ -54,10 +64,10 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 			case agentpb.CreateContainerProgress_UNPACKING:
 				cliLog("Pulling and unpacking image on device...")
 			case agentpb.CreateContainerProgress_CREATING_CONTAINER:
-				fmt.Print("\033[2K\r")
+				clearLine()
 				cliLog("Creating container...")
 			case agentpb.CreateContainerProgress_COMPLETE:
-				fmt.Print("\033[2K\r")
+				clearLine()
 			}
 		case *agentpb.CreateContainerProgressResponse_Completed:
 			completed = true

@@ -19,18 +19,19 @@ import (
 // ---------- mock containerd client ----------
 
 type mockContainerdClient struct {
-	containers    []*agentpb.AppContainer
-	listErr       error
-	stopErr       error
-	deleteErr     error
-	layers        []*agentpb.LayerHeader
-	listLayersErr error
-	writeLayerErr error
-	writtenDigest string
-	writtenData   []byte
-	createErr     error
-	startOutputCh chan ContainerOutput
-	startErr      error
+	containers       []*agentpb.AppContainer
+	listErr          error
+	stopErr          error
+	deleteErr        error
+	layers           []*agentpb.LayerHeader
+	listLayersErr    error
+	writeLayerErr    error
+	writtenDigest    string
+	writtenData      []byte
+	createErr        error
+	progressPhases   []agentpb.CreateContainerProgress_Phase
+	startOutputCh    chan ContainerOutput
+	startErr         error
 }
 
 func (m *mockContainerdClient) ListContainers(_ context.Context) ([]*agentpb.AppContainer, error) {
@@ -60,7 +61,12 @@ func (m *mockContainerdClient) AssembleImage(_ context.Context, _ string, _ []*a
 func (m *mockContainerdClient) CreateContainer(_ context.Context, _ *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	return m.createErr
 }
-func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, _ ProgressFunc) error {
+func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error {
+	if onProgress != nil {
+		for _, phase := range m.progressPhases {
+			onProgress(&agentpb.CreateContainerProgress{Phase: phase})
+		}
+	}
 	return m.CreateContainer(ctx, req, appCfg)
 }
 func (m *mockContainerdClient) StartContainer(_ context.Context, _ string) (<-chan ContainerOutput, error) {
@@ -271,5 +277,56 @@ func TestWriteLayer(t *testing.T) {
 	expectedData := append(data, data2...)
 	if string(mock.writtenData) != string(expectedData) {
 		t.Errorf("writtenData = %q; want %q", mock.writtenData, expectedData)
+	}
+}
+
+func TestCreateContainerWithProgress(t *testing.T) {
+	phases := []agentpb.CreateContainerProgress_Phase{
+		agentpb.CreateContainerProgress_UNPACKING,
+		agentpb.CreateContainerProgress_CREATING_CONTAINER,
+		agentpb.CreateContainerProgress_COMPLETE,
+	}
+	mock := &mockContainerdClient{progressPhases: phases}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	stream, err := client.CreateContainerWithProgress(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+	})
+	if err != nil {
+		t.Fatalf("CreateContainerWithProgress: %v", err)
+	}
+
+	var receivedPhases []agentpb.CreateContainerProgress_Phase
+	gotCompleted := false
+
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+
+		switch r := resp.GetResponseType().(type) {
+		case *agentpb.CreateContainerProgressResponse_Progress:
+			receivedPhases = append(receivedPhases, r.Progress.GetPhase())
+		case *agentpb.CreateContainerProgressResponse_Completed:
+			gotCompleted = true
+		}
+	}
+
+	if len(receivedPhases) != len(phases) {
+		t.Fatalf("received %d progress phases; want %d", len(receivedPhases), len(phases))
+	}
+	for i, p := range receivedPhases {
+		if p != phases[i] {
+			t.Errorf("phase[%d] = %v; want %v", i, p, phases[i])
+		}
+	}
+	if !gotCompleted {
+		t.Error("did not receive Completed response")
 	}
 }
