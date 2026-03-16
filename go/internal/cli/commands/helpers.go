@@ -320,6 +320,18 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		conn, connErr := connectWithAutoTLS(ctx, addr)
+		if connErr == nil && isDefault {
+			// gRPC plaintext connections are lazy — probe to detect
+			// unreachable default devices early so the recovery menu
+			// can be shown instead of a cryptic error later.
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+			cancel()
+			if probeErr != nil {
+				conn.Close()
+				connErr = probeErr
+			}
+		}
 		if connErr != nil {
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && term.IsTerminal(int(os.Stdin.Fd())) {
@@ -530,6 +542,15 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
 		conn, err := connectWithAutoTLS(ctx, addr)
+		if err == nil && isDefault {
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+			cancel()
+			if probeErr != nil {
+				conn.Close()
+				err = probeErr
+			}
+		}
 		if err != nil {
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive {
