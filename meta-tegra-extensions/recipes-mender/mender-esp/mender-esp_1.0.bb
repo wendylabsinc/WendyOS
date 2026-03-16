@@ -1,8 +1,7 @@
 
 SUMMARY = "Systemd drop-in so mender-updated waits for /boot/efi"
 LICENSE = "MIT"
-# LIC_FILES_CHKSUM = "file://10-requires-esp.conf;md5=1f3870be274f6c49b3e31a0c6728957f"
-LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=${@bb.utils.md5_file(d.getVar('COMMON_LICENSE_DIR') + '/MIT')}"
+LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 

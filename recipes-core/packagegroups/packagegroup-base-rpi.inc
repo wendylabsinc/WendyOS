@@ -4,7 +4,6 @@ RDEPENDS:${PN}:remove:rpi = " \
     systemd-mount-containerd \
     swapfile-setup \
     wendyos-user \
-    efibootmgr \
     "
 
 # Add RPi5-specific kernel modules

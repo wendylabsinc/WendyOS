@@ -3,6 +3,7 @@
 
 # Tegra-specific tools and hardware support
 RDEPENDS:${PN}:append = " \
+    efibootmgr \
     tegra-flash-reboot \
     tegra-tools-tegrastats \
     "
