@@ -14,13 +14,19 @@ func TestGrpcTarget_IPv4(t *testing.T) {
 
 func TestGrpcTarget_IPv6LinkLocalWithZone(t *testing.T) {
 	got := grpcTarget("[fe80::1%en0]:50051")
-	want := "passthrough:///[fe80::1%25en0]:50051"
+	want := "passthrough://[fe80::1%25en0]:50051"
 	if got != want {
 		t.Fatalf("grpcTarget IPv6+zone = %q, want %q", got, want)
 	}
 	// The target must be parseable as a URL.
-	if _, err := url.Parse(got); err != nil {
+	parsed, err := url.Parse(got)
+	if err != nil {
 		t.Fatalf("grpcTarget produced invalid URL: %v", err)
+	}
+	// url.Parse decodes %25 back to %, so the Host field should have the
+	// original zone ID.
+	if parsed.Host != "[fe80::1%en0]:50051" {
+		t.Fatalf("parsed Host = %q, want original zone ID preserved", parsed.Host)
 	}
 }
 

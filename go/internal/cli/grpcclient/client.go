@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -70,13 +71,13 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 // IPv6 link-local addresses contain a zone ID with a bare "%" (e.g.
 // [fe80::1%en0]:50051). grpc.NewClient parses the target as a URL, where
 // "%" starts a percent-encoding sequence — "%en" is invalid hex and fails.
-// We use the passthrough scheme and escape "%" → "%25" so the URL parser
-// accepts the target, and the passthrough resolver passes the decoded
-// address (with the original zone ID) straight to the dialer.
+// We use the passthrough scheme with url.URL which correctly escapes the
+// zone "%" to "%25". The passthrough resolver decodes it back to the
+// original zone ID before passing it to the dialer.
 func grpcTarget(address string) string {
 	if strings.Contains(address, "%") {
-		escaped := strings.ReplaceAll(address, "%", "%25")
-		return "passthrough:///" + escaped
+		u := &url.URL{Scheme: "passthrough", Host: address}
+		return u.String()
 	}
 	return address
 }
