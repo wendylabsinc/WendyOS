@@ -20,12 +20,23 @@ import (
 type AgentConnection struct {
 	Conn                *grpc.ClientConn
 	Host                string // hostname or IP of the connected agent
+	Hostname            string // mDNS .local hostname, if known (preferred for registry operations)
 	IsMTLS              bool   // true when connected via mutual TLS
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
 	ProvisioningService agentpb.WendyProvisioningServiceClient
 	TelemetryService    agentpb.WendyTelemetryServiceClient
+}
+
+// RegistryHost returns the host to use for the device's container registry.
+// It prefers the .local mDNS hostname (which avoids IPv6 formatting issues)
+// and falls back to the raw IP/host used for the gRPC connection.
+func (c *AgentConnection) RegistryHost() string {
+	if c.Hostname != "" {
+		return c.Hostname
+	}
+	return c.Host
 }
 
 // Connect creates an insecure gRPC connection to the agent at the given address.

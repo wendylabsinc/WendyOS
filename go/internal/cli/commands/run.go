@@ -180,7 +180,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	}
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, conn.Host, architecture, conn.IsMTLS); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, conn.RegistryHost(), architecture, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -426,7 +426,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	// Build and push the Docker image directly to the device's registry.
-	registryAddr := registryHost(conn.Host, 5000)
+	registryAddr := registryHost(conn.RegistryHost(), 5000)
 	repo := strings.ToLower(appCfg.AppID)
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 

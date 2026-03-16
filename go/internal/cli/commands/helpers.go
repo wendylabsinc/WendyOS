@@ -201,6 +201,11 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		if connErr != nil {
 			return nil, connErr
 		}
+		// Preserve the .local mDNS hostname for registry operations so we
+		// avoid IPv6 literal formatting issues when pushing container images.
+		if strings.HasSuffix(conn.Host, ".local") {
+			conn.Hostname = conn.Host
+		}
 		if !cfg.suppressProvisioningHint {
 			suggestProvisioning(conn)
 		}
@@ -392,6 +397,9 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		conn, err := connectWithAutoTLS(ctx, addr)
 		if err != nil {
 			return nil, err
+		}
+		if strings.HasSuffix(conn.Host, ".local") {
+			conn.Hostname = conn.Host
 		}
 		return &SelectedDevice{Agent: conn}, nil
 	}
@@ -717,6 +725,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			}
 			conn, err := connectWithAutoTLS(ctx, addr)
 			if err == nil {
+				conn.Hostname = d.LAN.Hostname
 				return &SelectedDevice{Agent: conn}, nil
 			}
 			// LAN failed — fall back to BLE if available.
