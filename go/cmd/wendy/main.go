@@ -65,6 +65,14 @@ func formatError(err error) error {
 		if isCloudCall {
 			return fmt.Errorf("%sWendy Cloud is unavailable. Please try again later.", prefix)
 		}
+		// Preserve the server's description when it provides actionable
+		// detail (e.g. "WiFi management is not available (nmcli not found)").
+		// Only fall back to the generic message for transport-level errors
+		// that lack a useful desc.
+		if idx := strings.Index(msg, "desc = "); idx >= 0 {
+			desc := msg[idx+len("desc = "):]
+			return fmt.Errorf("%s%s", prefix, desc)
+		}
 		return fmt.Errorf("%sDevice is unavailable.", prefix)
 	case strings.Contains(msg, "code = DeadlineExceeded"):
 		return fmt.Errorf("%sConnection timed out.", prefix)
