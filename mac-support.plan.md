@@ -83,6 +83,51 @@ On Linux, containers isolate apps from the host and from each other via kernel n
 
 4. **`sandbox-exec`** — launch the app under a custom `.sb` sandbox profile. Apple has deprecated this API and encourages App Sandbox instead. The sandbox profile rules are also notoriously tricky to get right.
 
+## Support for Linux Containers on Mac
+
+The previous sections focus on running apps **natively** to exploit Apple Silicon's unique hardware. But real-world deployments rarely consist of a single process — they are compositions of services. A typical edge AI stack might pair a native CoreML inference service with PostgreSQL, Redis, an MQTT broker, or a metrics collector. Those infrastructure components are off-the-shelf Linux software. They do not need GPU access, Metal, or the Neural Engine — they just need to run. Forcing them through the native packaging and dependency story above would be painful for no benefit.
+
+Docker on macOS already solves this: it runs Linux containers inside a lightweight VM with automatic port forwarding and volume sharing. The entire Docker ecosystem — images, Compose files, registries — works unchanged. Rather than reinventing that, the Mac agent can delegate Linux workloads to Docker while keeping native execution for macOS apps.
+
+### Routing: Native vs. Docker
+
+The OCI image config already carries `os` and `architecture` fields. When the Mac agent receives an image, it inspects those fields:
+
+- **`os: darwin`** (or absent) → unpack and run natively, as described in the sections above.
+- **`os: linux`** → delegate to Docker.
+
+This is transparent to the user. `wendy run` builds the image for the correct platform based on the project's Dockerfile and `wendy.json`, uploads it through the existing `WendyContainerService` gRPC path, and the agent routes it to the right backend. No new gRPC services or proto changes required.
+
+### Docker Backend
+
+The agent shells out to the `docker` CLI — the same approach the Go CLI's `DockerProvider` already uses for local Docker Desktop targets. The mapping is straightforward:
+
+1. **Image loading** — the agent assembles the OCI blobs it received via `WriteLayer` into an OCI image tarball and pipes it to `docker load`.
+2. **Container lifecycle** — `docker run`, `docker stop`, `docker rm`, `docker ps` with a `wendy.managed=true` label for tracking.
+3. **Stdout/stderr streaming** — captured from `docker run` (attached mode) and relayed back through the existing gRPC response stream.
+
+Entitlements translate to Docker flags where applicable:
+
+- **`network`** — Docker Desktop on macOS does not support `--network=host`. Instead, ports are mapped explicitly with `-p`. The agent auto-detects exposed ports from the OCI config's `ExposedPorts` field (populated from `EXPOSE` in the Dockerfile), with an optional `ports` array on the network entitlement in `wendy.json` for explicit overrides.
+- **`persist`** — maps to Docker named volumes (`-v wendy-<name>:<path>`).
+- **Hardware entitlements** (`gpu`, `bluetooth`, `audio`, etc.) — not applicable inside a Linux VM; the agent logs a warning and skips them.
+
+### Docker Runtime Options
+
+The agent requires a Docker-compatible CLI in `PATH`. Several options provide one:
+
+1. **Docker Desktop** — the default for most macOS developers. Bundles a VM, the Docker daemon, and the CLI. Commercial use requires a paid license for organizations above 250 employees.
+
+2. **Colima** — a lightweight, open-source (Apache 2.0) alternative built on Lima. It boots a Linux VM using Apple's Virtualization.framework and can expose either a Docker socket (compatible with the standard `docker` CLI) or a raw containerd socket. The Docker CLI approach works with Colima out of the box.
+
+3. **OrbStack** — a commercial Docker Desktop alternative optimized for macOS, with lower resource usage and faster startup. Fully Docker CLI–compatible.
+
+The agent does not need to know which runtime is installed — it only needs `docker` to be functional. A startup check (`docker version`) confirms availability and surfaces a clear error if Docker is missing.
+
+### Future: Managed VM via Virtualization.framework
+
+Long-term, the agent could manage its own Linux VM using Apple's Virtualization.framework (macOS 13+), removing the dependency on an external Docker installation entirely. The VM would boot a minimal Linux image with containerd pre-installed, share storage via VirtioFS, and expose the containerd socket to the agent over vsock. This is a significant undertaking and only worth pursuing once the Docker CLI backend proves the model works.
+
 ## Marketing: Killer Mac (-mini) Demos
 
 The demos need to show things that only a Mac can do well — and that clearly benefit from Wendy's deploy-and-manage workflow rather than just running locally.
