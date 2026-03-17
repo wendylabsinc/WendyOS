@@ -12,35 +12,45 @@ import (
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
-func TestHostPort_IPv6LinkLocalWithZone(t *testing.T) {
-	got := hostPort("fe80::3ee2:fcc9:fe8e:f69c%en0", 50051)
-	want := "[fe80::3ee2:fcc9:fe8e:f69c%en0]:50051"
-	if got != want {
-		t.Fatalf("hostPort() = %q, want %q", got, want)
-	}
-}
+// ── hostPort ────────────────────────────────────────────────────────
 
-func TestHostPort_IPv6Global(t *testing.T) {
-	got := hostPort("2001:db8::1", 50051)
-	want := "[2001:db8::1]:50051"
-	if got != want {
-		t.Fatalf("hostPort() = %q, want %q", got, want)
-	}
-}
+func TestHostPort(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port int
+		want string
+	}{
+		// IPv4
+		{"IPv4", "192.168.1.5", 50051, "192.168.1.5:50051"},
+		{"IPv4 loopback", "127.0.0.1", 50051, "127.0.0.1:50051"},
+		{"IPv4 alt port", "10.0.0.1", 8080, "10.0.0.1:8080"},
 
-func TestHostPort_IPv4(t *testing.T) {
-	got := hostPort("192.168.1.5", 50051)
-	want := "192.168.1.5:50051"
-	if got != want {
-		t.Fatalf("hostPort() = %q, want %q", got, want)
-	}
-}
+		// IPv6 global — must be bracketed
+		{"IPv6 global", "2001:db8::1", 50051, "[2001:db8::1]:50051"},
+		{"IPv6 loopback", "::1", 50051, "[::1]:50051"},
+		{"IPv6 full", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", 50051, "[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:50051"},
 
-func TestHostPort_Hostname(t *testing.T) {
-	got := hostPort("wendyos-otter.local", 50051)
-	want := "wendyos-otter.local:50051"
-	if got != want {
-		t.Fatalf("hostPort() = %q, want %q", got, want)
+		// IPv6 link-local with zone ID — must be bracketed
+		{"IPv6 zone en0", "fe80::3ee2:fcc9:fe8e:f69c%en0", 50051, "[fe80::3ee2:fcc9:fe8e:f69c%en0]:50051"},
+		{"IPv6 zone en24 (USB)", "fe80::8c13:12bf:4df8:b976%en24", 50051, "[fe80::8c13:12bf:4df8:b976%en24]:50051"},
+		{"IPv6 zone eth0 (Linux)", "fe80::1%eth0", 50051, "[fe80::1%eth0]:50051"},
+		{"IPv6 zone numeric", "fe80::1%5", 50051, "[fe80::1%5]:50051"},
+		{"IPv6 zone mTLS port", "fe80::1%en0", 50052, "[fe80::1%en0]:50052"},
+
+		// Hostnames — no brackets
+		{"mDNS hostname", "wendyos-otter.local", 50051, "wendyos-otter.local:50051"},
+		{"plain hostname", "my-device", 50051, "my-device:50051"},
+		{"FQDN", "device.example.com", 50051, "device.example.com:50051"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hostPort(tt.host, tt.port)
+			if got != tt.want {
+				t.Fatalf("hostPort(%q, %d) = %q, want %q", tt.host, tt.port, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -71,6 +81,38 @@ func TestLANAgentAddressesDeduplicatesIdenticalHosts(t *testing.T) {
 
 	got := lanAgentAddresses(dev)
 	want := []string{"192.168.1.23:50051"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lanAgentAddresses() = %v, want %v", got, want)
+	}
+}
+
+func TestLANAgentAddresses_IPv6LinkLocal(t *testing.T) {
+	dev := models.LANDevice{
+		IPAddress: "fe80::8c13:12bf:4df8:b976%en24",
+		Hostname:  "wendyos-otter.local",
+		Port:      defaultAgentPort,
+	}
+
+	got := lanAgentAddresses(dev)
+	want := []string{
+		"[fe80::8c13:12bf:4df8:b976%en24]:50051",
+		"wendyos-otter.local:50051",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lanAgentAddresses() = %v, want %v", got, want)
+	}
+}
+
+func TestLANAgentAddresses_IPv6OnlyNoHostname(t *testing.T) {
+	dev := models.LANDevice{
+		IPAddress: "fe80::1%en0",
+		Port:      defaultAgentPort,
+	}
+
+	got := lanAgentAddresses(dev)
+	want := []string{"[fe80::1%en0]:50051"}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("lanAgentAddresses() = %v, want %v", got, want)
@@ -186,6 +228,70 @@ func TestResolveDeviceAddress_DefaultDevice(t *testing.T) {
 	}
 	if addr != "wendy-thor.local:50051" {
 		t.Fatalf("addr = %q, want %q", addr, "wendy-thor.local:50051")
+	}
+}
+
+func TestResolveDeviceAddress_IPv6ZoneFlag(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = "fe80::8c13:12bf:4df8:b976%en24"
+
+	addr, isDefault, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isDefault {
+		t.Fatal("expected isDefault=false when --device flag is set")
+	}
+	if addr != "[fe80::8c13:12bf:4df8:b976%en24]:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "[fe80::8c13:12bf:4df8:b976%en24]:50051")
+	}
+}
+
+func TestResolveDeviceAddress_IPv6DefaultDevice(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = ""
+
+	setTempConfig(t, &config.Config{DefaultDevice: "fe80::1%en0"})
+
+	addr, isDefault, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isDefault {
+		t.Fatal("expected isDefault=true when using default device from config")
+	}
+	if addr != "[fe80::1%en0]:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "[fe80::1%en0]:50051")
+	}
+}
+
+func TestResolveDeviceAddress_IPv6GlobalFlag(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = "2001:db8::1"
+
+	addr, _, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addr != "[2001:db8::1]:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "[2001:db8::1]:50051")
+	}
+}
+
+func TestResolveDeviceAddress_IPv4Flag(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = "192.168.1.42"
+
+	addr, _, err := resolveDeviceAddress()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addr != "192.168.1.42:50051" {
+		t.Fatalf("addr = %q, want %q", addr, "192.168.1.42:50051")
 	}
 }
 
