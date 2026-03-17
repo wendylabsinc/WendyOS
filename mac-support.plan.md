@@ -1,4 +1,4 @@
-# Mac Support for Wendy
+# Wendy for Mac
 
 This project adds macOS as a supported Wendy target. Apple Silicon's unified memory architecture and MLX/CoreML stack make it a compelling platform for edge AI and embedded workloads — the same class of applications Wendy already supports on Jetson and Raspberry Pi.
 
