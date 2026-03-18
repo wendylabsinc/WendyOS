@@ -30,6 +30,6 @@ DISPLAY_NAME=$(echo "$DEVICE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i
 
 # Update Avahi TXT records in a way that can be safely re-run: replace the
 # full key=VALUE segment regardless of the current value.
-sed -i -E 's|( <txt-record>deviceId=)[^<]*|\1'"$DEVICE_ID"'|' "$SERVICE_FILE"
-sed -i -E 's|( <txt-record>deviceName=)[^<]*|\1'"$DEVICE_NAME"'|' "$SERVICE_FILE"
-sed -i -E 's|( <txt-record>displayName=)[^<]*|\1'"$DISPLAY_NAME"'|' "$SERVICE_FILE"
+sed -i -E 's|( <txt-record>id=)[^<]*|\1'"$DEVICE_ID"'|' "$SERVICE_FILE"
+sed -i -E 's|( <txt-record>name=)[^<]*|\1'"$DEVICE_NAME"'|' "$SERVICE_FILE"
+sed -i -E 's|( <txt-record>displayname=)[^<]*|\1'"$DISPLAY_NAME"'|' "$SERVICE_FILE"
