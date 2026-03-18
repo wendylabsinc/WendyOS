@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -215,13 +216,40 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 // deviceFromBrowse builds a LANDevice from browse results alone, without
 // resolving via dns-sd -L. Used as a fallback when resolve fails (e.g.
 // the service has no TXT records).
+
+var hostnameLabelRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// isValidHostnameLabel reports whether s is a valid RFC1123 hostname label.
+func isValidHostnameLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	return hostnameLabelRegexp.MatchString(s)
+}
+
 func deviceFromBrowse(inst browseResult) models.LANDevice {
-	hostname := inst.instanceName + ".local"
+	displayName := inst.instanceName
+
+	var (
+		id       string
+		hostname string
+		port     int
+	)
+
+	// Only synthesize a hostname/ID when the instance name is already a valid
+	// hostname label. Otherwise, leave Hostname empty and Port zero to avoid
+	// exposing a misleading dialable pair.
+	if isValidHostnameLabel(inst.instanceName) {
+		id = inst.instanceName
+		hostname = inst.instanceName + ".local"
+		port = 50051
+	}
+
 	return models.LANDevice{
-		ID:            inst.instanceName,
-		DisplayName:   inst.instanceName,
+		ID:            id,
+		DisplayName:   displayName,
 		Hostname:      hostname,
-		Port:          50051,
+		Port:          port,
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
 	}
