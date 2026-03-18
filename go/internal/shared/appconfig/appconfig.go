@@ -60,15 +60,15 @@ const (
 
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
-	AppID        string        `json:"appId"`
-	Version      string        `json:"version,omitempty"`
-	Platform     string        `json:"platform,omitempty"`
-	Language     string        `json:"language,omitempty"`
-	Entitlements []Entitlement `json:"entitlements,omitempty"`
+	AppID        string           `json:"appId"`
+	Version      string           `json:"version,omitempty"`
+	Platform     string           `json:"platform,omitempty"`
+	Language     string           `json:"language,omitempty"`
+	Entitlements []Entitlement    `json:"entitlements,omitempty"`
 	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
-	Hooks        *HooksConfig    `json:"hooks,omitempty"`
-	Python       *PythonConfig   `json:"python,omitempty"`
-	Debug        bool            `json:"debug,omitempty"`
+	Hooks        *HooksConfig     `json:"hooks,omitempty"`
+	Python       *PythonConfig    `json:"python,omitempty"`
+	Debug        bool             `json:"debug,omitempty"`
 }
 
 // ReadinessConfig defines a probe the CLI uses to determine when the app is ready.

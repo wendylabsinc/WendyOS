@@ -265,102 +265,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		UserArgs:      opts.userArgs,
 	}
 
-	if opts.deploy {
-		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
-		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
-		}
-		cliLogln("Container %s created (not started).", appCfg.AppID)
-		return nil
-	}
-
-	// Create the container with progress streaming.
-	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
-		return err
-	}
-	cliLogln("Container %s created.", appCfg.AppID)
-
-	if opts.detach {
-		// Start but don't stream output.
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
-		}
-		// Wait for the started confirmation then return.
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
-			return fmt.Errorf("waiting for container start: %w", err)
-		}
-		cliLogln("Application %s running in detached mode.", appCfg.AppID)
-		// Wait for readiness before firing hook.
-		if err := waitForReadiness(ctx, appCfg.Readiness, conn.Host); err != nil {
-			cliLogln("Warning: %v", err)
-		}
-		// Fire-and-forget: post-run outlives the CLI process.
-		startPostStartHook(context.Background(), appCfg, conn.Host)
-		return nil
-	}
-
-	// Start and stream output.
-	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
-
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
-		AppName: appCfg.AppID,
-	})
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
-	}
-
-	cliLogln("Application %s started.", appCfg.AppID)
-
-	// Set up Ctrl+C handler first so readiness polling is cancellable.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	go func() {
-		<-sigCh
-		cliLogln("\nStopping container...")
-		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		runCancel()
-	}()
-
-	// Wait for readiness before firing hook.
-	if err := waitForReadiness(runCtx, appCfg.Readiness, conn.Host); err != nil {
-		if runCtx.Err() == nil {
-			cliLogln("Warning: %v", err)
-		}
-	}
-
-	// Post-start hook tied to runCtx so Ctrl+C kills it.
-	postStartCmd := startPostStartHook(runCtx, appCfg, conn.Host)
-
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			if runCtx.Err() != nil {
-				break
-			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
-		}
-		if out := resp.GetStdoutOutput(); out != nil {
-			_, _ = os.Stdout.Write(out.GetData())
-		}
-		if out := resp.GetStderrOutput(); out != nil {
-			_, _ = os.Stderr.Write(out.GetData())
-		}
-	}
-
-	if postStartCmd != nil {
-		_ = postStartCmd.Wait()
-	}
-	cliLogln("\nApplication %s stopped.", appCfg.AppID)
-	return nil
+	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
 }
 
 // runWithProvider builds and runs via an external device provider.
@@ -545,6 +450,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		UserArgs:      opts.userArgs,
 	}
 
+	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
+}
+
+// startAndStreamContainer handles the deploy/detach/attached lifecycle that is
+// shared between runSwiftWithAgent and runWithAgent. It creates the container,
+// optionally starts it, streams output, and manages readiness + postStart hooks.
+func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
 	if opts.deploy {
 		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
 		if err != nil {
@@ -575,7 +487,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		if err := waitForReadiness(ctx, appCfg.Readiness, conn.Host); err != nil {
 			cliLogln("Warning: %v", err)
 		}
-		// Fire-and-forget: post-run outlives the CLI process.
+		// Fire-and-forget: post-start hook outlives the CLI process.
 		startPostStartHook(context.Background(), appCfg, conn.Host)
 		return nil
 	}
