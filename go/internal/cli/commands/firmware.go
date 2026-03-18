@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"time"
 	"net/url"
+	"os"
 	"path"
+	"time"
 )
 
 // firmwareAsset holds the resolved .bin asset info from the GCS manifest.
