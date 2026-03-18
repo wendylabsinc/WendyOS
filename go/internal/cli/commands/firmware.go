@@ -14,7 +14,7 @@ type firmwareAsset struct {
 	DownloadURL string
 	Size        int64
 	Version     string
-	Checksum    string
+}
 }
 
 // fetchFirmwareFromManifest finds the latest firmware for a chip from the GCS manifest.
