@@ -1,94 +1,74 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 )
 
-const wendyLiteReleasesURL = "https://api.github.com/repos/wendylabsinc/wendy-lite/releases"
-
-// wendyLiteRelease describes a GitHub release for wendy-lite firmware.
-type wendyLiteRelease struct {
-	TagName    string               `json:"tag_name"`
-	Prerelease bool                 `json:"prerelease"`
-	Assets     []githubReleaseAsset `json:"assets"`
-}
-
-// firmwareAsset holds the resolved .bin asset info.
+// firmwareAsset holds the resolved .bin asset info from the GCS manifest.
 type firmwareAsset struct {
 	Name        string
 	DownloadURL string
 	Size        int64
 	Version     string
+	Checksum    string
 }
 
-// fetchWendyLiteRelease finds the latest stable or prerelease from GitHub.
-func fetchWendyLiteRelease(nightly bool) (*wendyLiteRelease, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	if !nightly {
-		// Use the "latest" endpoint for stable releases.
-		resp, err := client.Get(wendyLiteReleasesURL + "/latest")
-		if err != nil {
-			return nil, fmt.Errorf("fetching latest wendy-lite release: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-		}
-
-		var release wendyLiteRelease
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-			return nil, fmt.Errorf("decoding release: %w", err)
-		}
-		return &release, nil
-	}
-
-	// For nightly, list releases and find the latest prerelease.
-	resp, err := client.Get(wendyLiteReleasesURL)
+// fetchFirmwareFromManifest finds the latest firmware for a chip from the GCS manifest.
+func fetchFirmwareFromManifest(chip string, nightly bool) (*firmwareAsset, error) {
+	main, err := fetchMainManifest()
 	if err != nil {
-		return nil, fmt.Errorf("fetching wendy-lite releases: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetching main manifest: %w", err)
 	}
 
-	var releases []wendyLiteRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("decoding releases: %w", err)
+	if main.Firmware == nil {
+		return nil, fmt.Errorf("no firmware entries in manifest")
 	}
 
-	for _, r := range releases {
-		if r.Prerelease {
-			return &r, nil
+	chipEntry, ok := main.Firmware[chip]
+	if !ok {
+		return nil, fmt.Errorf("chip %s not found in manifest", chip)
+	}
+
+	if chipEntry.ManifestPath == "" {
+		return nil, fmt.Errorf("no manifest path for chip %s", chip)
+	}
+
+	fm, err := fetchFirmwareManifest(chipEntry.ManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("fetching firmware manifest for %s: %w", chip, err)
+	}
+
+	// Find the target version
+	var targetVersion string
+	if nightly {
+		targetVersion = chipEntry.LatestNightly
+	} else {
+		targetVersion = chipEntry.Latest
+	}
+
+	if targetVersion == "" {
+		buildType := "stable"
+		if nightly {
+			buildType = "nightly"
 		}
+		return nil, fmt.Errorf("no %s firmware version available for %s", buildType, chip)
 	}
 
-	return nil, fmt.Errorf("no nightly (prerelease) wendy-lite release found")
-}
-
-// findBinAsset returns the .bin asset matching the given chip from a release.
-// chip should be "esp32c6" or "esp32c5".
-func findBinAsset(release *wendyLiteRelease, chip string) (*firmwareAsset, error) {
-	suffix := chip + ".bin" // e.g. "esp32c6.bin"
-	for _, a := range release.Assets {
-		if strings.HasSuffix(a.Name, suffix) {
-			return &firmwareAsset{
-				Name:        a.Name,
-				DownloadURL: a.BrowserDownloadURL,
-				Version:     release.TagName,
-			}, nil
-		}
+	info, err := getFirmwareInfo(fm, targetVersion)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("no %s .bin asset found in release %s", chip, release.TagName)
+
+	return &firmwareAsset{
+		Name:        fmt.Sprintf("wendy-lite-%s.bin", chip),
+		DownloadURL: info.DownloadURL,
+		Size:        info.ImageSize,
+		Version:     targetVersion,
+	}, nil
 }
 
 // downloadFirmware downloads a firmware .bin to a temp file, reporting progress.
@@ -110,6 +90,9 @@ func downloadFirmware(asset *firmwareAsset, progressFn func(downloaded, total in
 	}
 
 	total := resp.ContentLength
+	if asset.Size > 0 && total <= 0 {
+		total = asset.Size
+	}
 	var downloaded int64
 
 	buf := make([]byte, 32*1024)

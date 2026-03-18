@@ -609,17 +609,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, chip string) error 
 
 	fmt.Printf("Found ESP32 at %s\n", serialPort)
 
-	// Fetch release.
 	fmt.Println("Fetching latest Wendy Lite firmware...")
-	release, err := fetchWendyLiteRelease(nightly)
+	asset, err := fetchFirmwareFromManifest(chip, nightly)
 	if err != nil {
-		return fmt.Errorf("fetching release: %w", err)
+		return fmt.Errorf("fetching firmware: %w", err)
 	}
-
-	asset, err := findBinAsset(release, chip)
-	if err != nil {
-		return err
-	}
+	fmt.Printf("Found firmware: %s v%s\n", asset.Name, asset.Version)
 
 	// Download with progress bar.
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s %s...", asset.Name, asset.Version))
