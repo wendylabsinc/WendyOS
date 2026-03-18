@@ -176,7 +176,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	// Wendy Lite devices don't run the WendyOS agent — they can't execute containers.
 	if target.Agent == nil {
-		return fmt.Errorf("selected device is a Wendy Lite device and does not support 'wendy run'; use 'wendy wifi' for provisioning")
+		return fmt.Errorf("selected device is a Wendy Lite device and must be connected to WiFi before running; use 'wendy device wifi connect' to connect")
 	}
 
 	// Agent-based run path (existing gRPC pipeline).
