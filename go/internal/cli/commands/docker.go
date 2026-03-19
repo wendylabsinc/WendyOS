@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"strconv"
+
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -227,7 +229,9 @@ func ensureSwiftVersion(ctx context.Context) error {
 
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
-func buildSwiftContainerImage(ctx context.Context, dir, product, host, architecture string, useMTLS bool) error {
+// registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
+// "host.docker.internal:12345" when proxying).
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -244,7 +248,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, host, architect
 		"build-container-image",
 		"--from=swift:" + defaultSwiftVersion + "-slim",
 		"--product=" + product,
-		"--repository=" + registryHost(host, 5000) + "/" + strings.ToLower(product),
+		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
 	}
 
@@ -801,6 +805,117 @@ func registryHost(host string, port int) string {
 		host = "[" + host + "]"
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// resolveRegistry determines how to reach the device registry from Docker buildx.
+// For routable addresses it returns the direct registry address. For link-local
+// addresses (common with USB-connected devices) it starts a TCP proxy on the
+// host and returns host.docker.internal:<port> so the Docker Desktop VM can push
+// through it — link-local addresses cannot be routed from inside the VM.
+//
+// The returned cleanup function MUST be called when the build is complete to
+// stop the proxy and release the port.
+func resolveRegistry(ctx context.Context, host string, port int) (registryAddr string, cleanup func(), err error) {
+	resolved := resolveRegistryIP(host)
+	if !isLinkLocalIP(resolved) {
+		return registryHost(host, port), func() {}, nil
+	}
+
+	// Link-local address — Docker's VM cannot reach it directly.
+	// Dial via the original hostname so the host's resolver provides the
+	// zone ID (interface scope) needed for link-local routing.
+	target := net.JoinHostPort(host, strconv.Itoa(port))
+	proxy, err := startRegistryProxy(ctx, target)
+	if err != nil {
+		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
+	}
+
+	registryAddr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
+	return registryAddr, proxy.Close, nil
+}
+
+// isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
+// link-local unicast address (fe80::/10 for IPv6, 169.254.0.0/16 for IPv4).
+func isLinkLocalIP(ip string) bool {
+	ip = strings.TrimPrefix(ip, "[")
+	if idx := strings.Index(ip, "]"); idx >= 0 {
+		ip = ip[:idx]
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	return addr.IsLinkLocalUnicast()
+}
+
+// registryProxy forwards TCP connections from a local port to a remote device
+// registry. This bridges the gap between Docker Desktop's VM (which cannot
+// route to link-local addresses) and the host machine (which can).
+type registryProxy struct {
+	listener net.Listener
+	target   string
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+// startRegistryProxy creates a TCP proxy that listens on all interfaces
+// (required for Docker Desktop VM connectivity) and forwards connections to
+// the target address. The target should use the device's mDNS hostname (not a
+// bare link-local IP) so the host's resolver provides the zone ID.
+func startRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return nil, err
+	}
+
+	proxyCtx, cancel := context.WithCancel(ctx)
+	p := &registryProxy{
+		listener: ln,
+		target:   target,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+
+	go p.serve(proxyCtx)
+	return p, nil
+}
+
+// Port returns the ephemeral port the proxy is listening on.
+func (p *registryProxy) Port() int {
+	return p.listener.Addr().(*net.TCPAddr).Port
+}
+
+// Close stops the proxy and waits for the serve loop to exit.
+func (p *registryProxy) Close() {
+	p.cancel()
+	p.listener.Close()
+	<-p.done
+}
+
+func (p *registryProxy) serve(ctx context.Context) {
+	defer close(p.done)
+	for {
+		conn, err := p.listener.Accept()
+		if err != nil {
+			return
+		}
+		go p.forward(ctx, conn)
+	}
+}
+
+func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
+	defer client.Close()
+
+	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.target)
+	if err != nil {
+		return
+	}
+	defer remote.Close()
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(remote, client); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, remote); done <- struct{}{} }()
+	<-done
 }
 
 // splitIPv6RegistryAddr checks if registryAddr is a bracketed IPv6 address
