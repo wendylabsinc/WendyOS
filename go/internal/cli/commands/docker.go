@@ -1137,6 +1137,12 @@ func findIPv4NeighborDarwin(ctx context.Context, ipv6LinkLocal string) string {
 func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 	// Step 1: Find the interface from ip -6 neigh.
 	// Output: "fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff STALE"
+	// Parse the target IPv6 address once and strip any zone.
+	targetAddr, targetErr := netip.ParseAddr(ipv6LinkLocal)
+	if targetErr == nil {
+		targetAddr = targetAddr.WithZone("")
+	}
+
 	neighOut, err := exec.CommandContext(ctx, "ip", "-6", "neigh", "show").Output()
 	if err != nil {
 		return ""
@@ -1144,16 +1150,35 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 
 	var iface string
 	for _, line := range strings.Split(string(neighOut), "\n") {
-		if !strings.Contains(line, ipv6LinkLocal) {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
-		fields := strings.Fields(line)
+
+		// The first field should be the IPv6 neighbor address, possibly with a zone (e.g., "%eth0").
+		addrStr := fields[0]
+		if zoneIdx := strings.Index(addrStr, "%"); zoneIdx >= 0 {
+			addrStr = addrStr[:zoneIdx]
+		}
+
+		parsedAddr, parseErr := netip.ParseAddr(addrStr)
+		if parseErr != nil || !parsedAddr.Is6() || targetErr != nil {
+			continue
+		}
+		parsedAddr = parsedAddr.WithZone("")
+		if parsedAddr != targetAddr {
+			continue
+		}
+
 		for i, f := range fields {
 			if f == "dev" && i+1 < len(fields) {
 				iface = fields[i+1]
+				break
 			}
 		}
-		break
+		if iface != "" {
+			break
+		}
 	}
 	if iface == "" {
 		return ""
