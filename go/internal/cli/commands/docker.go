@@ -1000,9 +1000,10 @@ func resolveHostPreferRoutable(hostname string) string {
 	}
 
 	// DNS returned only link-local IPv6 — this is unroutable from Docker
-	// containers (zone IDs are host-specific). Try to find the device's
-	// IPv4 address by correlating MAC addresses between the NDP and ARP
-	// neighbor tables. This is common for USB-connected devices where
+	// containers (zone IDs are host-specific). As a fallback, try to find
+	// the device's IPv4 address by looking up the interface for its IPv6
+	// link-local neighbor entry, then selecting an IPv4 neighbor on that
+	// same interface. This is common for USB-connected devices where
 	// mDNS only advertises an AAAA record but the device also has an
 	// IPv4 link-local address (169.254.x.x).
 	if fallbackLinkLocal != "" {
