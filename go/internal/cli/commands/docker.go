@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -514,7 +515,7 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool)
 	if ipv6IP != "" {
 		containerName := "buildx_buildkit_" + builderName + "0"
 		hostsCmd := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c",
-			fmt.Sprintf("if grep -q ' wendy-registry' /etc/hosts; then sed -i 's/^[^#]* wendy-registry$/%s wendy-registry/' /etc/hosts; else echo '%s wendy-registry' >> /etc/hosts; fi", ipv6IP, ipv6IP))
+			fmt.Sprintf("if grep -q ' wendy-registry' /etc/hosts; then sed -i 's/^[^#]* wendy-registry$/%s wendy-registry/' /etc/hosts; else printf '\\n%s wendy-registry\\n' >> /etc/hosts; fi", ipv6IP, ipv6IP))
 		if out, cmdErr := hostsCmd.CombinedOutput(); cmdErr != nil {
 			return "", "", fmt.Errorf("adding hosts entry to builder: %s: %w", string(out), cmdErr)
 		}
@@ -849,9 +850,10 @@ func resolveRegistryIP(host string) string {
 
 // resolveHostPreferRoutable resolves a hostname and returns the best address
 // for use inside a Docker container. It prefers, in order:
-//  1. IPv4 addresses
+//  1. IPv4 addresses (from DNS)
 //  2. Global/ULA IPv6 addresses
-//  3. Link-local IPv6 (stripped of zone ID, as a last resort)
+//  3. IPv4 discovered via ARP/NDP correlation (when DNS only returns link-local IPv6)
+//  4. Link-local IPv6 (stripped of zone ID, as a last resort)
 func resolveHostPreferRoutable(hostname string) string {
 	addrs, err := net.LookupHost(hostname)
 	if err != nil || len(addrs) == 0 {
@@ -875,7 +877,141 @@ func resolveHostPreferRoutable(hostname string) string {
 		}
 	}
 
+	// DNS returned only link-local IPv6 — this is unroutable from Docker
+	// containers (zone IDs are host-specific). Try to find the device's
+	// IPv4 address by correlating MAC addresses between the NDP and ARP
+	// neighbor tables. This is common for USB-connected devices where
+	// mDNS only advertises an AAAA record but the device also has an
+	// IPv4 link-local address (169.254.x.x).
+	if fallbackLinkLocal != "" {
+		if ipv4 := findIPv4ViaNeighborTable(fallbackLinkLocal); ipv4 != "" {
+			return ipv4
+		}
+	}
+
 	return fallbackLinkLocal // link-local without zone as last resort
+}
+
+// findIPv4ViaNeighborTable tries to find the IPv4 address of a device known
+// by its IPv6 link-local address. It correlates MAC addresses between the
+// IPv6 neighbor table (NDP) and the IPv4 neighbor table (ARP).
+// Returns "" if no IPv4 address can be found.
+func findIPv4ViaNeighborTable(ipv6LinkLocal string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	switch runtime.GOOS {
+	case "darwin":
+		return findIPv4NeighborDarwin(ctx, ipv6LinkLocal)
+	case "linux":
+		return findIPv4NeighborLinux(ctx, ipv6LinkLocal)
+	default:
+		return ""
+	}
+}
+
+// findIPv4NeighborDarwin looks up the IPv4 address for a device on macOS.
+// It finds the device's MAC address from the NDP table, then searches
+// the ARP table for an IPv4 entry with the same MAC on the same interface.
+func findIPv4NeighborDarwin(ctx context.Context, ipv6LinkLocal string) string {
+	// Step 1: Find MAC address and interface from NDP table.
+	// ndp -an output: "fe80::1%en6  aa:bb:cc:dd:ee:ff  en6  23h49m  S  R"
+	ndpOut, err := exec.CommandContext(ctx, "ndp", "-an").Output()
+	if err != nil {
+		return ""
+	}
+
+	var mac, iface string
+	for _, line := range strings.Split(string(ndpOut), "\n") {
+		if !strings.Contains(line, ipv6LinkLocal) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			mac = fields[1]
+			iface = fields[2]
+		}
+		break
+	}
+	if mac == "" || mac == "(incomplete)" || iface == "" {
+		return ""
+	}
+
+	// Step 2: Find IPv4 with the same MAC in ARP table on the same interface.
+	// arp -an -i en6 output: "? (169.254.189.250) at aa:bb:cc:dd:ee:ff on en6 ..."
+	arpOut, err := exec.CommandContext(ctx, "arp", "-an", "-i", iface).Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, line := range strings.Split(string(arpOut), "\n") {
+		if !strings.Contains(line, mac) {
+			continue
+		}
+		start := strings.Index(line, "(")
+		end := strings.Index(line, ")")
+		if start >= 0 && end > start {
+			ip := line[start+1 : end]
+			if parsed, parseErr := netip.ParseAddr(ip); parseErr == nil && parsed.Is4() {
+				return ip
+			}
+		}
+	}
+
+	return ""
+}
+
+// findIPv4NeighborLinux looks up the IPv4 address for a device on Linux.
+// It finds the device's MAC and interface from the IPv6 neighbor table,
+// then searches the IPv4 neighbor table for a matching MAC.
+func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
+	// Step 1: Find MAC and interface from ip -6 neigh.
+	// Output: "fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff STALE"
+	neighOut, err := exec.CommandContext(ctx, "ip", "-6", "neigh", "show").Output()
+	if err != nil {
+		return ""
+	}
+
+	var mac, iface string
+	for _, line := range strings.Split(string(neighOut), "\n") {
+		if !strings.Contains(line, ipv6LinkLocal) {
+			continue
+		}
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "lladdr" && i+1 < len(fields) {
+				mac = fields[i+1]
+			}
+			if f == "dev" && i+1 < len(fields) {
+				iface = fields[i+1]
+			}
+		}
+		break
+	}
+	if mac == "" || iface == "" {
+		return ""
+	}
+
+	// Step 2: Find IPv4 with same MAC on the same interface.
+	// Output: "169.254.189.250 dev usb0 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+	arpOut, err := exec.CommandContext(ctx, "ip", "-4", "neigh", "show", "dev", iface).Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, line := range strings.Split(string(arpOut), "\n") {
+		if !strings.Contains(line, mac) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			if parsed, parseErr := netip.ParseAddr(fields[0]); parseErr == nil && parsed.Is4() {
+				return fields[0]
+			}
+		}
+	}
+
+	return ""
 }
 
 // buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a

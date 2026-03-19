@@ -248,6 +248,14 @@ func TestResolveRegistryIP_IPv4Passthrough(t *testing.T) {
 	}
 }
 
+func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
+	// Should return empty for an address not in any neighbor table.
+	got := findIPv4ViaNeighborTable("fe80::dead:beef:cafe:1234")
+	if got != "" {
+		t.Errorf("findIPv4ViaNeighborTable unknown addr = %q, want empty", got)
+	}
+}
+
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
