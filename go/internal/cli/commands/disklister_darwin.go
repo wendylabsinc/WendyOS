@@ -31,9 +31,10 @@ func listExternalDrives() ([]drive, error) {
 	return listDrivesText()
 }
 
-// listDrivesText parses the text output of `diskutil list` to find writable
-// external drives. It checks both external and internal physical disks because
-// built-in SD card readers present media as internal on macOS.
+// listDrivesText parses the text output of `diskutil list external physical`
+// and `diskutil list internal physical` to find writable external/removable
+// drives. It checks both external and internal physical disks because built-in
+// SD card readers present media as internal on macOS.
 func listDrivesText() ([]drive, error) {
 	out, err := exec.Command("diskutil", "list", "external", "physical").Output()
 	if err != nil {
