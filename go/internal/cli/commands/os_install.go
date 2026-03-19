@@ -417,7 +417,7 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext != ".img" && ext != ".raw" {
+		if ext != ".img" && ext != ".raw" && ext != ".wic" {
 			continue
 		}
 
@@ -494,7 +494,7 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 		return tmpFile.Name(), nil
 	}
 
-	return "", fmt.Errorf("no .img file found in zip archive")
+	return "", fmt.Errorf("no .img, .raw, or .wic file found in zip archive")
 }
 
 // osCacheDir returns the OS image cache directory, e.g.
