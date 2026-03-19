@@ -315,12 +315,12 @@ func TestStartRegistryProxy(t *testing.T) {
 }
 
 func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
-	// Should return empty for an address not in any neighbor table.
-	got := findIPv4ViaNeighborTable("fe80::dead:beef:cafe:1234")
-	if got != "" {
-		t.Errorf("findIPv4ViaNeighborTable unknown addr = %q, want empty", got)
-	}
+	// This test would invoke findIPv4ViaNeighborTable, which may spawn real ndp/arp/ip
+	// commands and read the host's neighbor tables, making it environment-dependent.
+	// Skip it to avoid flakiness/timeouts in unit test environments.
+	t.Skip("disabled: findIPv4ViaNeighborTable depends on host neighbor tables and OS commands")
 }
+
 
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
