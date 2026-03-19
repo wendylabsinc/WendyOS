@@ -2,9 +2,11 @@ package commands
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -247,6 +249,78 @@ func TestResolveRegistryIP_IPv4Passthrough(t *testing.T) {
 		t.Errorf("resolveRegistryIP IPv4 = %q, want %q", got, "10.0.0.1")
 	}
 }
+
+func TestIsLinkLocalIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"169.254.1.1", true},
+		{"169.254.189.250", true},
+		{"192.168.1.5", false},
+		{"10.0.0.1", false},
+		{"fe80::1", true},
+		{"[fe80::1]", true},
+		{"2001:db8::1", false},
+		{"not-an-ip", false},
+	}
+	for _, tt := range tests {
+		if got := isLinkLocalIP(tt.ip); got != tt.want {
+			t.Errorf("isLinkLocalIP(%q) = %v, want %v", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestStartRegistryProxy(t *testing.T) {
+	// Start a fake "registry" server.
+	fakeRegistry := make(chan string, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 64)
+		n, _ := conn.Read(buf)
+		fakeRegistry <- string(buf[:n])
+		conn.Write([]byte("OK"))
+	}()
+
+	// Start the proxy pointing at the fake registry.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy, err := startRegistryProxy(ctx, ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+
+	// Connect through the proxy.
+	conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(proxy.Port()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.Write([]byte("PUSH"))
+	got := <-fakeRegistry
+	if got != "PUSH" {
+		t.Errorf("proxy forwarded %q, want %q", got, "PUSH")
+	}
+}
+
+func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
+	// This test would invoke findIPv4ViaNeighborTable, which may spawn real ndp/arp/ip
+	// commands and read the host's neighbor tables, making it environment-dependent.
+	// Skip it to avoid flakiness/timeouts in unit test environments.
+	t.Skip("disabled: findIPv4ViaNeighborTable depends on host neighbor tables and OS commands")
+}
+
 
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext

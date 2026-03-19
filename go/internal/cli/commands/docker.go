@@ -10,13 +10,23 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
+
+	"strconv"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
+
+// neighborExecCommandContext is an overridable wrapper around exec.CommandContext
+// used by neighbor-table helpers. Tests can replace this variable to stub
+// command execution and outputs.
+var neighborExecCommandContext = exec.CommandContext
 
 // requireRegistryAuth checks whether the device's registry requires mTLS
 // authentication and verifies the CLI has the necessary certs.
@@ -226,7 +236,9 @@ func ensureSwiftVersion(ctx context.Context) error {
 
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
-func buildSwiftContainerImage(ctx context.Context, dir, product, host, architecture string, useMTLS bool) error {
+// registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
+// "host.docker.internal:12345" when proxying).
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -243,7 +255,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, host, architect
 		"build-container-image",
 		"--from=swift:" + defaultSwiftVersion + "-slim",
 		"--product=" + product,
-		"--repository=" + registryHost(host, 5000) + "/" + strings.ToLower(product),
+		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
 	}
 
@@ -514,7 +526,7 @@ func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool)
 	if ipv6IP != "" {
 		containerName := "buildx_buildkit_" + builderName + "0"
 		hostsCmd := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c",
-			fmt.Sprintf("if grep -q ' wendy-registry' /etc/hosts; then sed -i 's/^[^#]* wendy-registry$/%s wendy-registry/' /etc/hosts; else echo '%s wendy-registry' >> /etc/hosts; fi", ipv6IP, ipv6IP))
+			fmt.Sprintf("if grep -q ' wendy-registry' /etc/hosts; then sed -i 's/^[^#]* wendy-registry$/%s wendy-registry/' /etc/hosts; else printf '\\n%s wendy-registry\\n' >> /etc/hosts; fi", ipv6IP, ipv6IP))
 		if out, cmdErr := hostsCmd.CombinedOutput(); cmdErr != nil {
 			return "", "", fmt.Errorf("adding hosts entry to builder: %s: %w", string(out), cmdErr)
 		}
@@ -802,6 +814,117 @@ func registryHost(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
+// resolveRegistry determines how to reach the device registry from Docker buildx.
+// For routable addresses it returns the direct registry address. For link-local
+// addresses (common with USB-connected devices) it starts a TCP proxy on the
+// host and returns host.docker.internal:<port> so the Docker Desktop VM can push
+// through it — link-local addresses cannot be routed from inside the VM.
+//
+// The returned cleanup function MUST be called when the build is complete to
+// stop the proxy and release the port.
+func resolveRegistry(ctx context.Context, host string, port int) (registryAddr string, cleanup func(), err error) {
+	resolved := resolveRegistryIP(host)
+	if !isLinkLocalIP(resolved) {
+		return registryHost(host, port), func() {}, nil
+	}
+
+	// Link-local address — Docker's VM cannot reach it directly.
+	// Dial via the original hostname so the host's resolver provides the
+	// zone ID (interface scope) needed for link-local routing.
+	target := net.JoinHostPort(host, strconv.Itoa(port))
+	proxy, err := startRegistryProxy(ctx, target)
+	if err != nil {
+		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
+	}
+
+	registryAddr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
+	return registryAddr, proxy.Close, nil
+}
+
+// isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
+// link-local unicast address (fe80::/10 for IPv6, 169.254.0.0/16 for IPv4).
+func isLinkLocalIP(ip string) bool {
+	ip = strings.TrimPrefix(ip, "[")
+	if idx := strings.Index(ip, "]"); idx >= 0 {
+		ip = ip[:idx]
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	return addr.IsLinkLocalUnicast()
+}
+
+// registryProxy forwards TCP connections from a local port to a remote device
+// registry. This bridges the gap between Docker Desktop's VM (which cannot
+// route to link-local addresses) and the host machine (which can).
+type registryProxy struct {
+	listener net.Listener
+	target   string
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+// startRegistryProxy creates a TCP proxy that listens on all interfaces
+// (required for Docker Desktop VM connectivity) and forwards connections to
+// the target address. The target should use the device's mDNS hostname (not a
+// bare link-local IP) so the host's resolver provides the zone ID.
+func startRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return nil, err
+	}
+
+	proxyCtx, cancel := context.WithCancel(ctx)
+	p := &registryProxy{
+		listener: ln,
+		target:   target,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+
+	go p.serve(proxyCtx)
+	return p, nil
+}
+
+// Port returns the ephemeral port the proxy is listening on.
+func (p *registryProxy) Port() int {
+	return p.listener.Addr().(*net.TCPAddr).Port
+}
+
+// Close stops the proxy and waits for the serve loop to exit.
+func (p *registryProxy) Close() {
+	p.cancel()
+	p.listener.Close()
+	<-p.done
+}
+
+func (p *registryProxy) serve(ctx context.Context) {
+	defer close(p.done)
+	for {
+		conn, err := p.listener.Accept()
+		if err != nil {
+			return
+		}
+		go p.forward(ctx, conn)
+	}
+}
+
+func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
+	defer client.Close()
+
+	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.target)
+	if err != nil {
+		return
+	}
+	defer remote.Close()
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(remote, client); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, remote); done <- struct{}{} }()
+	<-done
+}
+
 // splitIPv6RegistryAddr checks if registryAddr is a bracketed IPv6 address
 // (e.g. "[fe80::1%en0]:5000") and, if so, returns a hostname alias
 // ("wendy-registry:<port>") as the effective address and the bare IPv6 IP
@@ -849,9 +972,10 @@ func resolveRegistryIP(host string) string {
 
 // resolveHostPreferRoutable resolves a hostname and returns the best address
 // for use inside a Docker container. It prefers, in order:
-//  1. IPv4 addresses
+//  1. IPv4 addresses (from DNS)
 //  2. Global/ULA IPv6 addresses
-//  3. Link-local IPv6 (stripped of zone ID, as a last resort)
+//  3. IPv4 discovered via ARP/NDP correlation (when DNS only returns link-local IPv6)
+//  4. Link-local IPv6 (stripped of zone ID, as a last resort)
 func resolveHostPreferRoutable(hostname string) string {
 	addrs, err := net.LookupHost(hostname)
 	if err != nil || len(addrs) == 0 {
@@ -875,7 +999,224 @@ func resolveHostPreferRoutable(hostname string) string {
 		}
 	}
 
+	// DNS returned only link-local IPv6 — this is unroutable from Docker
+	// containers (zone IDs are host-specific). As a fallback, try to find
+	// the device's IPv4 address by looking up the interface for its IPv6
+	// link-local neighbor entry, then selecting an IPv4 neighbor on that
+	// same interface. This is common for USB-connected devices where
+	// mDNS only advertises an AAAA record but the device also has an
+	// IPv4 link-local address (169.254.x.x).
+	if fallbackLinkLocal != "" {
+		if ipv4 := findIPv4ViaNeighborTable(fallbackLinkLocal); ipv4 != "" {
+			return ipv4
+		}
+	}
+
 	return fallbackLinkLocal // link-local without zone as last resort
+}
+
+// findIPv4ViaNeighborTable tries to find the IPv4 address of a device known
+// by its IPv6 link-local address. It looks up the network interface from the
+// NDP table, then finds any IPv4 neighbor on that same interface. This works
+// because USB point-to-point links typically have only one peer.
+//
+// Note: MAC correlation is not used because USB RNDIS/ECM adapters often
+// assign different MACs to the IPv4 and IPv6 virtual interfaces.
+// Returns "" if no IPv4 address can be found.
+func findIPv4ViaNeighborTable(ipv6LinkLocal string) string {
+	// Use a context that is canceled on interrupt signals (e.g., Ctrl+C),
+	// while still enforcing a maximum 2-second timeout for the lookup.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(sigCtx, 2*time.Second)
+	defer cancel()
+
+	var candidate string
+	switch runtime.GOOS {
+	case "darwin":
+		candidate = findIPv4NeighborDarwin(ctx, ipv6LinkLocal)
+	case "linux":
+		candidate = findIPv4NeighborLinux(ctx, ipv6LinkLocal)
+	default:
+		return ""
+	}
+
+	if candidate == "" {
+		return ""
+	}
+
+	addr, err := netip.ParseAddr(candidate)
+	if err != nil || !addr.Is4() {
+		return ""
+	}
+
+	// Only accept IPv4 link-local (169.254.0.0/16) addresses here to reduce
+	// the risk of correlating the IPv6 link-local to the wrong peer on
+	// multi-peer interfaces (e.g., Wi-Fi/Ethernet).
+	linkLocalPrefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{169, 254, 0, 0}), 16)
+	if !linkLocalPrefix.Contains(addr) {
+		return ""
+	}
+
+	return addr.String()
+}
+
+// findIPv4NeighborDarwin looks up the IPv4 address for a device on macOS.
+// It finds the interface from the NDP table, then returns the first IPv4
+// neighbor on that interface that isn't a local address.
+func findIPv4NeighborDarwin(ctx context.Context, ipv6LinkLocal string) string {
+	// Step 1: Find the interface from the NDP table.
+	// ndp -an output: "fe80::1%en6  aa:bb:cc:dd:ee:ff  en6  23h49m  S  R"
+	ndpOut, err := neighborExecCommandContext(ctx, "ndp", "-an").Output()
+	if err != nil {
+		return ""
+	}
+
+	var iface string
+	for _, line := range strings.Split(string(ndpOut), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		addrField := fields[0]
+		if idx := strings.Index(addrField, "%"); idx >= 0 {
+			addrField = addrField[:idx]
+		}
+		if addrField != ipv6LinkLocal {
+			continue
+		}
+		iface = fields[2]
+		break
+	}
+	if iface == "" {
+		return ""
+	}
+
+	// Build a set of local IPv4 addresses on this interface so we can
+	// skip them. The ARP table includes "permanent" entries for the
+	// host's own addresses which must not be returned as the device IP.
+	localAddrs := make(map[string]bool)
+	if netIface, ifErr := net.InterfaceByName(iface); ifErr == nil {
+		if addrs, addrErr := netIface.Addrs(); addrErr == nil {
+			for _, a := range addrs {
+				if ipNet, ok := a.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+					localAddrs[ipNet.IP.String()] = true
+				}
+			}
+		}
+	}
+
+	// Step 2: Find a non-local IPv4 neighbor on the same interface.
+	// arp -an -i en6 output: "? (169.254.189.250) at aa:bb:cc:dd:ee:ff on en6 ..."
+	arpOut, err := neighborExecCommandContext(ctx, "arp", "-an", "-i", iface).Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, line := range strings.Split(string(arpOut), "\n") {
+		start := strings.Index(line, "(")
+		end := strings.Index(line, ")")
+		if start >= 0 && end > start {
+			ip := line[start+1 : end]
+			if localAddrs[ip] {
+				continue
+			}
+			if parsed, parseErr := netip.ParseAddr(ip); parseErr == nil && parsed.Is4() {
+				return ip
+			}
+		}
+	}
+
+	return ""
+}
+
+// findIPv4NeighborLinux looks up the IPv4 address for a device on Linux.
+// It finds the interface from the IPv6 neighbor table, then returns the
+// first non-local IPv4 neighbor on that interface.
+func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
+	// Step 1: Find the interface from ip -6 neigh.
+	// Output: "fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff STALE"
+	// Parse the target IPv6 address once and strip any zone.
+	targetAddr, targetErr := netip.ParseAddr(ipv6LinkLocal)
+	if targetErr == nil {
+		targetAddr = targetAddr.WithZone("")
+	}
+
+	neighOut, err := exec.CommandContext(ctx, "ip", "-6", "neigh", "show").Output()
+	if err != nil {
+		return ""
+	}
+
+	var iface string
+	for _, line := range strings.Split(string(neighOut), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		// The first field should be the IPv6 neighbor address, possibly with a zone (e.g., "%eth0").
+		addrStr := fields[0]
+		if zoneIdx := strings.Index(addrStr, "%"); zoneIdx >= 0 {
+			addrStr = addrStr[:zoneIdx]
+		}
+
+		parsedAddr, parseErr := netip.ParseAddr(addrStr)
+		if parseErr != nil || !parsedAddr.Is6() || targetErr != nil {
+			continue
+		}
+		parsedAddr = parsedAddr.WithZone("")
+		if parsedAddr != targetAddr {
+			continue
+		}
+
+		for i, f := range fields {
+			if f == "dev" && i+1 < len(fields) {
+				iface = fields[i+1]
+				break
+			}
+		}
+		if iface != "" {
+			break
+		}
+	}
+	if iface == "" {
+		return ""
+	}
+
+	// Build a set of local IPv4 addresses on this interface.
+	localAddrs := make(map[string]bool)
+	if netIface, ifErr := net.InterfaceByName(iface); ifErr == nil {
+		if addrs, addrErr := netIface.Addrs(); addrErr == nil {
+			for _, a := range addrs {
+				if ipNet, ok := a.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+					localAddrs[ipNet.IP.String()] = true
+				}
+			}
+		}
+	}
+
+	// Step 2: Find a non-local IPv4 neighbor on the same interface.
+	// Output: "169.254.189.250 dev usb0 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+	arpOut, err := exec.CommandContext(ctx, "ip", "-4", "neigh", "show", "dev", iface).Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, line := range strings.Split(string(arpOut), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			ip := fields[0]
+			if localAddrs[ip] {
+				continue
+			}
+			if parsed, parseErr := netip.ParseAddr(ip); parseErr == nil && parsed.Is4() {
+				return ip
+			}
+		}
+	}
+
+	return ""
 }
 
 // buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a
