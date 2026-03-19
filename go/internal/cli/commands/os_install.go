@@ -403,8 +403,8 @@ func downloadImage(img *imageInfo) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-// extractImageFromZipWithProgress opens a zip archive, extracts the first .img
-// file to a temp file, and displays a progress bar.
+// extractImageFromZipWithProgress opens a zip archive, extracts the first .img,
+// .raw, or .wic file to a temp file, and displays a progress bar.
 func extractImageFromZipWithProgress(zipPath string) (string, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
