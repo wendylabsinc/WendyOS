@@ -321,7 +321,6 @@ func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
 	t.Skip("disabled: findIPv4ViaNeighborTable depends on host neighbor tables and OS commands")
 }
 
-
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
