@@ -31,13 +31,35 @@ func listExternalDrives() ([]drive, error) {
 	return listDrivesText()
 }
 
-// listDrivesText parses the text output of `diskutil list external physical`.
+// listDrivesText parses the text output of `diskutil list` to find writable
+// external drives. It checks both external and internal physical disks because
+// built-in SD card readers present media as internal on macOS.
 func listDrivesText() ([]drive, error) {
 	out, err := exec.Command("diskutil", "list", "external", "physical").Output()
 	if err != nil {
 		return nil, fmt.Errorf("running diskutil: %w", err)
 	}
 
+	seen := make(map[string]bool)
+	drives := parseDiskutilOutput(out, seen, true)
+
+	// Also check internal physical disks for removable media
+	// (e.g., built-in SD card readers show as "internal" on macOS).
+	if internalOut, err := exec.Command("diskutil", "list", "internal", "physical").Output(); err == nil {
+		for _, d := range parseDiskutilOutput(internalOut, seen, false) {
+			if d.IsRemovable {
+				drives = append(drives, d)
+			}
+		}
+	}
+
+	return drives, nil
+}
+
+// parseDiskutilOutput extracts drive entries from diskutil list output.
+// When isExternal is true, all drives are marked removable. When false,
+// removability is determined from diskutil info (Removable Media / Ejectable).
+func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []drive {
 	var drives []drive
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
@@ -49,19 +71,27 @@ func listDrivesText() ([]drive, error) {
 
 		parts := strings.SplitN(line, " ", 2)
 		devPath := strings.TrimSuffix(parts[0], ":")
+		if seen[devPath] {
+			continue
+		}
+		seen[devPath] = true
 		rawPath := strings.Replace(devPath, "/dev/disk", "/dev/rdisk", 1)
 
-		// Get disk info for size and name.
+		// Get disk info for size, name, and removability.
 		info, infoErr := getDiskInfo(devPath)
 		name := devPath
 		size := ""
 		var sizeBytes int64
+		removable := isExternal
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
 			}
 			size = info.size
 			sizeBytes = info.sizeBytes
+			if !isExternal {
+				removable = info.removable || info.ejectable
+			}
 		}
 
 		drives = append(drives, drive{
@@ -70,17 +100,18 @@ func listDrivesText() ([]drive, error) {
 			Name:        name,
 			Size:        size,
 			SizeBytes:   sizeBytes,
-			IsRemovable: true,
+			IsRemovable: removable,
 		})
 	}
-
-	return drives, nil
+	return drives
 }
 
 type diskInfo struct {
 	name      string
 	size      string
 	sizeBytes int64
+	removable bool // "Removable Media: Removable"
+	ejectable bool // "Ejectable: Yes"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -107,6 +138,14 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 		}
 		if strings.HasPrefix(line, "Device / Media Name:") {
 			info.name = strings.TrimSpace(strings.TrimPrefix(line, "Device / Media Name:"))
+		}
+		if strings.HasPrefix(line, "Removable Media:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "Removable Media:"))
+			info.removable = strings.HasPrefix(strings.ToLower(val), "removable")
+		}
+		if strings.HasPrefix(line, "Ejectable:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "Ejectable:"))
+			info.ejectable = strings.EqualFold(val, "yes")
 		}
 	}
 	return info, nil
