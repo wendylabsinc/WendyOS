@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -11,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"golang.org/x/term"
 )
 
 func newWifiCmd() *cobra.Command {
@@ -112,6 +115,17 @@ func newWifiConnectCmd() *cobra.Command {
 					return pickErr
 				}
 				ssid = picked
+			}
+
+			// If no password was provided via flag, prompt for one.
+			if !cmd.Flags().Changed("password") {
+				fmt.Print("Password (leave empty for open networks): ")
+				passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if readErr != nil {
+					return fmt.Errorf("reading password: %w", readErr)
+				}
+				password = strings.TrimSpace(string(passwordBytes))
 			}
 
 			// BLE WendyOS agent path (protobuf over L2CAP)
