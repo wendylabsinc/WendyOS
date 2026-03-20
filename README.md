@@ -45,6 +45,10 @@ make flash-to-external  # Flash to external NVMe/USB drive
 - [Advanced Configuration](#advanced-configuration)
   - [Custom Variables in bootstrap.sh](#custom-variables-in-bootstrapsh)
   - [Build Configuration Variables](#build-configuration-variables)
+- [Raspberry Pi 5](#raspberry-pi-5)
+  - [Supported Machines](#supported-machines)
+  - [Build](#build)
+  - [Flash the Image](#flash-the-image)
 - [Architecture Notes](#architecture-notes)
 - [License](#license)
 
@@ -150,11 +154,19 @@ make build MACHINE=jetson-orin-nano-devkit-wendyos
 
 2. **Run the bootstrap script**:
 
-   Switch back to working folder and run the `bootstrap` script:
+   Switch back to working folder and run the `bootstrap` script, setting
+   the `MACHINE` environment variable to the target machine:
 
    ```bash
    cd /path/to/project
-   ./meta-wendyos/bootstrap.sh
+   MACHINE=<machine> ./meta-wendyos/bootstrap.sh
+   ```
+
+   Supported machines: `jetson`, `rpi5`, `qemu`. For example:
+
+   ```bash
+   MACHINE=jetson ./meta-wendyos/bootstrap.sh
+   MACHINE=rpi5 ./meta-wendyos/bootstrap.sh
    ```
 
    The bootstrap script will:
@@ -654,6 +666,83 @@ In `build/conf/local.conf`:
 - `WENDYOS_PERSIST_JOURNAL_LOGS` - Persist logs to storage (default: 0)
 
 **Note**: Choose `WENDYOS_FLASH_IMAGE_SIZE` based on your target storage device capacity and expected rootfs size. Larger images provide more space for root filesystems and future updates.
+
+## Raspberry Pi 5
+
+WendyOS supports the **Raspberry Pi 5** as an alternative target. The RPi5 build uses
+[meta-raspberrypi](https://git.yoctoproject.org/meta-raspberrypi) as its BSP layer and
+produces a `.wic` disk image (SD card or NVMe). Mender OTA is not supported on RPi5.
+
+### Supported Machines
+
+| Machine | Boot device | WKS file |
+|---------|-------------|----------|
+| `raspberrypi5-wendyos` | SD card (default) | `rpi-partuuid.wks` |
+| `raspberrypi5-nvme-wendyos` | NVMe via passive PCIe adapter | `rpi-nvme-partuuid.wks` |
+
+Both machines include Wi-Fi, Bluetooth, and USB gadget (NCM) support. UART console is
+enabled on `ttyAMA0` at 115200 baud.
+
+### Build
+
+1. **Bootstrap** the build environment for RPi5:
+
+   ```bash
+   cd /path/to/project
+   MACHINE=rpi5 ./meta-wendyos/bootstrap.sh
+   ```
+
+   This copies `conf/template/bblayers.conf.rpi5` and `conf/template/local.conf.rpi5`
+   into `build/conf/`. The default BitBake machine is `raspberrypi5-wendyos` (SD card).
+   To target NVMe, edit `build/conf/local.conf` and change:
+
+   ```
+   MACHINE = "raspberrypi5-nvme-wendyos"
+   ```
+
+2. **Build the image** inside the Docker container:
+
+   ```bash
+   cd ./docker
+   ./docker-util.sh run
+
+   # Inside the container:
+   cd ./wendyos
+   . ./repos/poky/oe-init-build-env build
+   bitbake wendyos-image
+   ```
+
+   The build produces:
+   ```
+   build/tmp/deploy/images/<machine>/wendyos-image-<machine>.rootfs.wic
+   build/tmp/deploy/images/<machine>/wendyos-image-<machine>.rootfs.wic.bmap
+   ```
+
+### Flash the Image
+
+Use `bmaptool` (faster, recommended) or `dd` to write the `.wic` image to the target
+storage device.
+
+**With bmaptool:**
+```bash
+sudo bmaptool copy wendyos-image-<machine>.rootfs.wic /dev/sdX
+```
+
+**With dd:**
+```bash
+sudo dd if=wendyos-image-<machine>.rootfs.wic of=/dev/sdX bs=4M status=progress conv=fsync
+sync
+```
+
+Replace `/dev/sdX` with the actual device (e.g., `/dev/sdb` for SD card, `/dev/nvme0n1`
+for NVMe).
+
+**Warning**: This will erase all data on the target device!
+
+For SD card builds, insert the flashed card into the RPi5 and power on. For NVMe builds,
+ensure the NVMe drive is connected via a PCIe adapter and that the EEPROM boot order is
+configured to boot from NVMe (see `rpi-eeprom-nvme-config` package included in the NVMe
+machine).
 
 ## Architecture Notes
 

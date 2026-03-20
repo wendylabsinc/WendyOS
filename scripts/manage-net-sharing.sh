@@ -302,6 +302,8 @@ enable_sharing() {
         # Create a new connection
         conn_name="usb-gadget-sharing"
         info "Create '${conn_name}' connection..."
+        # Remove any stale connection with the same name to avoid duplicates
+        execute "sudo nmcli connection delete '${conn_name}' 2>/dev/null || true"
         local cmd="sudo nmcli connection add \
             type ethernet \
             ifname '${gadget_iface}' \

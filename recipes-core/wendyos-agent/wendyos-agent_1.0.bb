@@ -1,3 +1,16 @@
+
+# [Note]
+# This recipe fetches the wendyos-agent binary from GitHub at build time
+# inside do_compile using wget/curl, bypassing SRC_URI checksums and breaking
+# build reproducibility (two builds may produce different binaries).
+# It also uses 'SRCREV = "${AUTOREV}"'' for the source repo.
+#
+# [Fix]
+# Pin the binary download URL and its sha256sum in SRC_URI, or use a proper
+# recipe with SRC_URI[sha256sum].
+# Runtime self-update should remain in wendyos-agent-updater.service,
+# not at build time.
+
 SUMMARY = "WendyOS Agent"
 DESCRIPTION = "WendyOS agent binary for device management"
 LICENSE = "MIT"
@@ -28,8 +41,9 @@ do_compile() {
         bbfatal "Failed to fetch latest release from GitHub"
 
     # Extract download URL for aarch64 binary (match .tar.gz files only)
+    # Asset naming: wendy-agent-linux-arm64-*.tar.gz (formerly wendy-agent-linux-static-musl-aarch64)
     DOWNLOAD_URL=$(cat ${B}/release.json | \
-        grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-static-musl-aarch64[^"]*\.tar\.gz[^"]*"' | \
+        grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-arm64[^"]*\.tar\.gz[^"]*"' | \
         head -1 | cut -d'"' -f4)
 
     if [ -z "${DOWNLOAD_URL}" ]; then

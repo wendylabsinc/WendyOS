@@ -30,3 +30,6 @@ do_install:append() {
 CONFFILES:${PN} += "${sysconfdir}/hosts"
 
 hostname:pn-base-files = "wendyos"
+
+# RPi5-specific extensions — isolated so Tegra/QEMU builds are unaffected
+require ${@'rpi-base-files.inc' if 'rpi' in d.getVar('MACHINEOVERRIDES').split(':') else ''}

@@ -7,9 +7,7 @@ inherit packagegroup
 SUMMARY:${PN} = "Base support"
 RDEPENDS:${PN} = " \
     packagegroup-core-boot \
-    tegra-flash-reboot \
     bash \
-    efibootmgr \
     coreutils \
     libstdc++ \
     file \
@@ -26,24 +24,30 @@ RDEPENDS:${PN} = " \
     avahi-daemon \
     avahi-wendyos-hostname \
     avahi-utils \
+    jq \
     k3s-agent \
     wendyos-identity \
-    wendyos-etc-binds \
     wendyos-agent \
     wendyos-user \
     wendyos-motd \
     systemd-mount-containerd \
     swapfile-setup \
+    wendyos-etc-binds \
     containerd-config \
-    tegra-tools-tegrastats \
     "
 
 RDEPENDS:${PN}:append = " \
     ${@oe.utils.ifelse( \
         d.getVar('WENDYOS_DEBUG') == '1', \
         ' \
-            \
+            tcpdump \
+            gzip \
         ', \
         '' \
         )} \
     "
+
+# Include hardware-specific packagegroup configuration
+require ${@'qemu-packagegroup-base.inc'  if 'qemuall' in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'tegra-packagegroup-base.inc' if 'tegra'   in d.getVar('MACHINEOVERRIDES').split(':') else ''}
+require ${@'packagegroup-base-rpi.inc'   if 'rpi'     in d.getVar('MACHINEOVERRIDES').split(':') else ''}

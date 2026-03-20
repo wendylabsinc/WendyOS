@@ -1,3 +1,8 @@
+# [Deprecated]
+# This recipe is no longer included in the image. It provided the offline container image
+# tarball consumed by wendyos-containerd-registry-import.service. Both are superseded by
+# wendy-agent's built-in OCI registry. See wendyos-containerd-registry_git.bb for details.
+
 SUMMARY = "WendyOS Development Container Registry Image"
 DESCRIPTION = "Pre-built container image for the WendyOS development registry"
 LICENSE = "MIT"

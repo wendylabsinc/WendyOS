@@ -16,7 +16,7 @@ Environment=LISTEN_ADDRESS=0.0.0.0:5000
 ExecStartPre=/bin/sh -c '\
   if ! /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images ls | /bin/grep -q ${REGISTRY_IMAGE}; then \
     echo "Registry image not found, importing from archive..."; \
-    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry-latest.tar; \
+    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry-arm64.tar; \
     /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images tag wendyos/containerd-registry:v1.0.7 wendyos/containerd-registry:latest || true; \
     echo "Registry image imported successfully"; \
   fi'

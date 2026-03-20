@@ -1,0 +1,51 @@
+
+MACHINE = "qemuarm64-wendyos"
+DL_DIR = "${TOPDIR}/../downloads"
+SSTATE_DIR = "${TOPDIR}/../sstate-cache"
+#TMPDIR = "${TOPDIR}/tmp"
+DISTRO = "wendyos"
+#EXTRA_IMAGE_FEATURES ?= "debug-tweaks"
+USER_CLASSES = "buildstats"
+PATCHRESOLVE = "noop"
+
+BB_DISKMON_DIRS ??= "\
+    STOPTASKS,${TMPDIR},1G,100K \
+    STOPTASKS,${DL_DIR},1G,100K \
+    STOPTASKS,${SSTATE_DIR},1G,100K \
+    STOPTASKS,/tmp,100M,100K \
+    HALT,${TMPDIR},100M,1K \
+    HALT,${DL_DIR},100M,1K \
+    HALT,${SSTATE_DIR},100M,1K \
+    HALT,/tmp,10M,1K"
+
+PACKAGECONFIG:append:pn-qemu-system-native = " sdl"
+CONF_VERSION = "2"
+
+#GADGET_FUNC_ORDER="ecm ncm"
+
+WENDYOS_DEBUG = "1"
+WENDYOS_DEBUG_UART = "1"
+
+# USB gadget support:
+#   QEMU: "0" (uses virtio-net instead of hardware USB gadget)
+# Uncomment to override:
+#WENDYOS_USB_GADGET = "1"
+
+# WENDYOS_PERSIST_JOURNAL_LOGS - Automatically configured per machine:
+#   QEMU: "0" (volatile logs in tmpfs; no /data partition)
+# Uncomment to override:
+WENDYOS_PERSIST_JOURNAL_LOGS = "0"
+
+# Enable UEFI capsule updates (bootloader updates via Mender)
+# Set to "1" to include bootloader updates in OTA deployments
+WENDYOS_UPDATE_BOOTLOADER = "0"
+
+
+# QEMU rootfs size (only applies to QEMU builds, in KB)
+# Default: (automatically set for QEMU in qemu-image.inc
+# Uncomment to override:
+# QEMU_ROOTFS_SIZE = "1048576"  # 1GB
+# QEMU_ROOTFS_SIZE ?= "2097152"  # 2GB
+# QEMU_ROOTFS_SIZE ?= "4194304"  # 4GB (default)
+QEMU_ROOTFS_SIZE = "4194304"
+

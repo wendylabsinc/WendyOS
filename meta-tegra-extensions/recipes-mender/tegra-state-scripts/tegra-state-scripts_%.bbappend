@@ -14,9 +14,6 @@ SRC_URI += " \
 
 RDEPENDS:${PN} = "tegra-bootcontrol-overlay"
 
-# Package our additional verification script
-FILES:${PN} += "${datadir}/mender/modules/v3/ArtifactVerifyReboot_50_verify-bootloader-update"
-
 do_compile:prepend() {
     # Verify our custom switch-rootfs is being used
     if grep -q "^WENDYOS_SWITCH_ROOTFS_VERSION=" ${WORKDIR}/switch-rootfs
@@ -28,11 +25,13 @@ do_compile:prepend() {
     fi
 }
 
-# Append our verify-bootloader-update installation to upstream's do_install
-do_install:append() {
-    # Add comprehensive bootloader verification script (ArtifactVerifyReboot)
-    # This supplements upstream's verify-slot (ArtifactCommit) with version+ESRT checks
-    mkdir -p ${D}${datadir}/mender/modules/v3
-    install -m 0755 ${WORKDIR}/verify-bootloader-update \
-        ${D}${datadir}/mender/modules/v3/ArtifactVerifyReboot_50_verify-bootloader-update
+do_compile:append() {
+    # Bundle verify-bootloader-update as an artifact-level ArtifactCommit_Enter script.
+    # - Follows the same pattern as upstream's ArtifactCommit_Leave_50_verify-slot
+    # - The mender-state-scripts bbclass picks up Artifact* scripts from
+    #   MENDER_STATE_SCRIPTS_DIR during do_deploy and bundles them in the .mender artifact
+    # - ArtifactCommit_Enter runs before commit (after reboot to new slot); non-zero
+    #   return triggers Mender rollback
+    cp ${WORKDIR}/verify-bootloader-update \
+        ${MENDER_STATE_SCRIPTS_DIR}/ArtifactCommit_Enter_50_verify-bootloader-update
 }

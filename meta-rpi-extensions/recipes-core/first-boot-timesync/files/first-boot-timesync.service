@@ -1,0 +1,15 @@
+[Unit]
+Description=Force time sync on first boot
+After=network-online.target
+Wants=network-online.target
+Before=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'timedatectl set-ntp true && systemctl restart systemd-timesyncd'
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=time-sync.target

@@ -4,6 +4,8 @@ PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 inherit packagegroup
 
+# ss(8) for socket/port inspection
+# getent(1) for NSS/DNS lookups
 SUMMARY:${PN} = "Debugging package group"
 RDEPENDS:${PN} = " \
     ${@oe.utils.ifelse( \
@@ -20,8 +22,17 @@ RDEPENDS:${PN} = " \
             sysstat \
             ldd \
             bc  \
-            python3-jetson-stats \
+            iproute2-ss \
         ', \
+        '' \
+        )} \
+    "
+
+# Tegra-specific debug tools (Jetson hardware only)
+RDEPENDS:${PN}:append:tegra = " \
+    ${@oe.utils.ifelse( \
+        d.getVar('WENDYOS_DEBUG') == '1', \
+        'python3-jetson-stats', \
         '' \
         )} \
     "

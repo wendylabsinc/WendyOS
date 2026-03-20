@@ -8,3 +8,12 @@
 
 PACKAGECONFIG:remove = "polkit"
 
+# Disable debug source package splitting to avoid pseudo uid lookup failures.
+# do_package hardlinks source files (owned by uid 1000 / build user) into PKGD.
+# OEOuthashBasic then calls getpwuid(1000) via pseudo, which redirects to the
+# target rootfs /etc/passwd — which has no uid 1000 — causing a KeyError fatal.
+# Debug packages are not deployed to the target image, so this has no runtime impact.
+INHIBIT_PACKAGE_DEBUG_SPLIT = "1"
+
+# RPi5-specific systemd extensions — isolated so Tegra/QEMU builds are unaffected
+require ${@'rpi-systemd.inc' if 'rpi' in d.getVar('MACHINEOVERRIDES').split(':') else ''}

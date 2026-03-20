@@ -25,6 +25,22 @@ check_service() {
     fi
 }
 
+# Function to check dev registry (served by wendy-agent's built-in OCI registry)
+check_dev_registry() {
+    DISPLAY_NAME=$1
+
+    # Only show if wendy-agent is running
+    if ! systemctl is-active --quiet wendyos-agent.service 2>/dev/null; then
+        return
+    fi
+
+    if curl -sf http://localhost:5000/v2/ >/dev/null 2>&1; then
+        echo -e "  ${DISPLAY_NAME}: ${GREEN}● running${NC}"
+    else
+        echo -e "  ${DISPLAY_NAME}: ${YELLOW}○ not running${NC}"
+    fi
+}
+
 # Check critical services
 check_service "sshd" "SSH"
 check_service "ssh" "SSH"  # Some systems use 'ssh' instead of 'sshd'
@@ -34,6 +50,6 @@ check_service "usb-gadget" "USB Gadget"
 check_service "avahi-daemon" "mDNS"
 check_service "systemd-timesyncd" "Time Sync"
 check_service "wendyos-agent" "Wendy Agent"
-check_service "wendyos-dev-registry" "Dev Registry"
+check_dev_registry "Dev Registry"
 
 echo

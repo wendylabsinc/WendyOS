@@ -75,6 +75,7 @@ SRCREV_TEGRA_COMM="241d1073ba8e610ef8da3fe8470b0a4d0567521f"
 SRCREV_VIRT="f92518e20530edfebca45e4170e11460949a5303"
 SRCREV_MENDER="76404a7b914676a57d76ccb5fe12149112c05c03"
 SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"
+SRCREV_RPI="3afc9728b1f4ba0f5be1af34883d6582966133a1"
 
 declare -Ar repos=(
     [0]="1|git://git.yoctoproject.org/poky.git||${SRCREV_POKY}"
@@ -84,6 +85,7 @@ declare -Ar repos=(
     [4]="1|git://git.yoctoproject.org/meta-virtualization.git||${SRCREV_VIRT}"
     [5]="1|https://github.com/mendersoftware/meta-mender.git||${SRCREV_MENDER}"
     [6]="1|https://github.com/mendersoftware/meta-mender-community.git||${SRCREV_MENDER_COMM}"
+    [7]="1|https://github.com/agherzan/meta-raspberrypi.git||${SRCREV_RPI}"
 )
 
 
@@ -91,9 +93,22 @@ declare -Ar repos=(
 # display help
 usage() {
     cat <<EOF
-  $(basename "${0}") [options]
+Usage:
+  MACHINE=<machine> $(basename "${0}") [options]
+
+Example:
+  MACHINE=rpi5 $(basename "${0}")
+  MACHINE=jetson $(basename "${0}")
+
+Environment variables:
+  MACHINE   (required) Target machine. Selects conf/template/bblayers.conf.<MACHINE>
+            and conf/template/local.conf.<MACHINE>.
+            Available machines: jetson, rpi5, qemu
+            Note: for RPi5 NVMe boot, use MACHINE=rpi5 then set
+            MACHINE = "raspberrypi5-nvme-wendyos" in build/conf/local.conf.
 
 Options:
+  --help, -h   Show this help message.
 
 EOF
 }
@@ -109,6 +124,28 @@ trim() {
 
     printf '%s' "${s}"
 }
+
+###
+# Parse command-line arguments
+for arg in "$@"; do
+    case "${arg}" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            printf "Unknown argument: %s\n" "${arg}" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${MACHINE:-}" ]]; then
+    printf "ERROR: MACHINE environment variable is required.\n" >&2
+    usage
+    exit 1
+fi
 
 invalid_folder_structure() {
     local -r work_dir="${1}"
@@ -314,16 +351,36 @@ printf "\nPrepare the Yocto build environment...\n"
 cd "${PROJECT_DIR}"
 mkdir -p "${YOCTO_BUILD_DIR}/conf"
 
+# Resolve template file names based on MACHINE environment variable
+BBLAYERS_SRC="${META_LAYER_DIR}/conf/template/bblayers.conf.${MACHINE}"
+LOCAL_SRC="${META_LAYER_DIR}/conf/template/local.conf.${MACHINE}"
+
+if [[ ! -f "${BBLAYERS_SRC}" ]] || [[ ! -f "${LOCAL_SRC}" ]]; then
+    printf "ERROR: No template files found for machine '%s'.\n" "${MACHINE}" >&2
+    printf "  Expected:\n" >&2
+    printf "    %s\n" "${BBLAYERS_SRC}" >&2
+    printf "    %s\n" "${LOCAL_SRC}" >&2
+    printf "  Available machines:\n" >&2
+    for f in "${META_LAYER_DIR}/conf/template/bblayers.conf."*; do
+        suffix="${f##*.conf.}"
+        if [[ -f "${META_LAYER_DIR}/conf/template/local.conf.${suffix}" ]]; then
+            printf "    %s\n" "${suffix}" >&2
+        fi
+    done
+    exit 1
+fi
+
 # use the template only if the corresponding one in build/conf doesn't exist
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/bblayers.conf" ]]
 then
-    cp "${META_LAYER_DIR}/conf/template/bblayers.conf" "./${YOCTO_BUILD_DIR}/conf"
+    cp "${BBLAYERS_SRC}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
     sed -i.bak "s|%META-REPO%|${image_name}|g" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
+    rm -f "./${YOCTO_BUILD_DIR}/conf/bblayers.conf.bak"
 fi
 
 if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/local.conf" ]]
 then
-    cp "${META_LAYER_DIR}/conf/template/local.conf" "./${YOCTO_BUILD_DIR}/conf"
+    cp "${LOCAL_SRC}" "./${YOCTO_BUILD_DIR}/conf/local.conf"
 fi
 
 printf "\nDirectory structure:\n"
@@ -337,6 +394,7 @@ copy_dir "${META_LAYER_DIR}/scripts/docker" "${docker_path}"
 
 sed -i.bak "s|%HOST_DIR%|${PROJECT_DIR}|g" "${docker_path}/dockerfile.config"
 sed -i.bak "s|%OS_NAME%|${IMAGE_NAME}|g" "${docker_path}/dockerfile.config"
+rm -f "${docker_path}/dockerfile.config.bak"
 
 cd "${PROJECT_DIR}/docker"
 ./docker-util.sh create
@@ -345,11 +403,11 @@ cd "${WORK_DIR}"
 cat <<EOF
 
 Run the following command(s):
-   # start the docker container
+   # start the Docker container
    cd ./docker
    ./docker-util.sh run
 
-   # (within container)
+   # (within Docker container)
    cd ./${IMAGE_NAME}
    . ./repos/poky/oe-init-build-env ${YOCTO_BUILD_DIR}
    bitbake wendyos-image

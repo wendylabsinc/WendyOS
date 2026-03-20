@@ -1,0 +1,7 @@
+[Unit]
+Description=Unbind USB Gadget
+After=gadget-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "" > /sys/kernel/config/usb_gadget/wendyos_device/UDC 2>/dev/null || true'

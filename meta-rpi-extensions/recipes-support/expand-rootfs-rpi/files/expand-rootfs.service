@@ -1,0 +1,12 @@
+[Unit]
+Description=WendyOS First Boot Rootfs Resize
+After=local-fs.target
+ConditionPathExists=!/var/lib/expand-rootfs.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/expand-rootfs.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspberry Pi 5 EEPROM Power Configuration
+After=multi-user.target
+ConditionPathExists=!/var/lib/wendyos/eeprom-updated
+ConditionPathExists=/proc/device-tree/model
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rpi5-eeprom-update.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

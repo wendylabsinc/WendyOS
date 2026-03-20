@@ -21,4 +21,5 @@ BBLAYERS ?= " \
     ${TOPDIR}/../repos/poky/meta-poky \
     ${TOPDIR}/../repos/poky/meta-yocto-bsp \
     ${TOPDIR}/../%META-REPO% \
+    ${TOPDIR}/../%META-REPO%/meta-tegra-extensions \
     "
