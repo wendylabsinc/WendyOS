@@ -11,8 +11,65 @@ on:
         description: 'Comma-separated test names (empty = all applicable)'
         required: false
         default: ''
+      jobs:
+        description: 'Jobs to run: all, discover, integration, gpu (default: all)'
+        required: false
+        default: 'all'
 
 jobs:
+  discover:
+    name: Discover (${{ matrix.runner.name }})
+    if: inputs.jobs == 'all' || inputs.jobs == 'discover'
+    runs-on: [self-hosted, '${{ matrix.runner.os }}', '${{ matrix.runner.arch }}']
+    concurrency:
+      group: discover-${{ matrix.runner.name }}
+      cancel-in-progress: false
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - { name: macOS, os: macOS, arch: ARM64 }
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run wendy discover
+        run: |
+          RESULT=$(./bin/wendy discover --json --timeout 10s 2>&1)
+          echo "$RESULT" | jq .
+
+          EXPECTED=(
+            "wendyos-keen-channel.local"
+            "wendyos-robust-cloud.local"
+            "wendyos-dynamic-cosmos.local"
+            "wendy-SER9.local"
+          )
+
+          FAIL=0
+          for host in "${EXPECTED[@]}"; do
+            if echo "$RESULT" | jq -e --arg h "$host" \
+              '.lanDevices[] | select(.hostname == $h)' > /dev/null 2>&1; then
+              echo "FOUND: $host"
+            else
+              echo "MISSING: $host"
+              FAIL=1
+            fi
+          done
+
+          [ $FAIL -eq 0 ] || exit 1
+
   integration-test:
     name: Integration (${{ matrix.os }})
     runs-on: [self-hosted, wendy-agent, '${{ matrix.os }}']
@@ -85,9 +142,10 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     if: >-
-      github.event_name == 'schedule' ||
+      (inputs.jobs == 'all' || inputs.jobs == 'gpu') &&
+      (github.event_name == 'schedule' ||
       inputs.tests == '' ||
-      contains(inputs.tests, 'python-gpu')
+      contains(inputs.tests, 'python-gpu'))
     defaults:
       run:
         working-directory: go
@@ -120,13 +178,21 @@ jobs:
   summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [integration-test, integration-test-gpu]
+    needs: [discover, integration-test, integration-test-gpu]
     if: always()
     steps:
       - name: Check results
         run: |
           echo "## Hardware Integration Test Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.discover.result }}" == "success" ]]; then
+            echo "- Device discovery (macOS + Linux): passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.discover.result }}" == "skipped" ]]; then
+            echo "- Device discovery: skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Device discovery (macOS + Linux): ${{ needs.discover.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           if [[ "${{ needs.integration-test.result }}" == "success" ]]; then
             echo "- Platform tests (macOS + Linux): passed" >> "$GITHUB_STEP_SUMMARY"
@@ -144,8 +210,8 @@ jobs:
             echo "- GPU test: ${{ needs.integration-test-gpu.result }} (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
+          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test.result }}" == "failure" ]]; then
             echo ""
-            echo "Platform integration tests failed."
+            echo "One or more blocking tests failed."
             exit 1
           fi
