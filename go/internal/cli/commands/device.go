@@ -1100,7 +1100,9 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
-				fmt.Println("Detecting device architecture...")
+				if !jsonOutput {
+					fmt.Println("Detecting device architecture...")
+				}
 				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 				if err != nil {
 					return fmt.Errorf("getting device info: %w", err)
@@ -1110,19 +1112,25 @@ func newDeviceUpdateCmd() *cobra.Command {
 				if arch == "" {
 					return fmt.Errorf("device did not report CPU architecture; use --binary to provide the binary manually")
 				}
-				fmt.Printf("Device architecture: %s\n", arch)
+				if !jsonOutput {
+					fmt.Printf("Device architecture: %s\n", arch)
+				}
 
 				releaseType := "stable"
 				if nightly {
 					releaseType = "nightly"
 				}
-				fmt.Printf("Fetching latest %s release...\n", releaseType)
+				if !jsonOutput {
+					fmt.Printf("Fetching latest %s release...\n", releaseType)
+				}
 
 				release, err := fetchAgentRelease(nightly)
 				if err != nil {
 					return fmt.Errorf("fetching release: %w", err)
 				}
-				fmt.Printf("Found release: %s\n", release.TagName)
+				if !jsonOutput {
+					fmt.Printf("Found release: %s\n", release.TagName)
+				}
 
 				// Find matching asset: wendy-agent-linux-{arch}-*.tar.gz
 				assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
@@ -1137,7 +1145,9 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("no asset found for linux/%s in release %s", arch, release.TagName)
 				}
 
-				fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+				if !jsonOutput {
+					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+				}
 				binaryData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
 					return fmt.Errorf("downloading binary: %w", err)
@@ -1148,26 +1158,49 @@ func newDeviceUpdateCmd() *cobra.Command {
 			h := sha256.Sum256(binaryData)
 			sha256Hash := hex.EncodeToString(h[:])
 
-			s := tui.NewSpinner("Uploading agent binary...")
-			p := tea.NewProgram(s)
+			if isInteractiveTerminal() && !jsonOutput {
+				s := tui.NewSpinner("Uploading agent binary...")
+				p := tea.NewProgram(s)
 
-			go func() {
-				uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
-				p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
-			}()
+				go func() {
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
+				}()
 
-			finalModel, runErr := p.Run()
-			if runErr != nil {
-				return fmt.Errorf("TUI error: %w", runErr)
+				finalModel, runErr := p.Run()
+				if runErr != nil {
+					return fmt.Errorf("TUI error: %w", runErr)
+				}
+
+				model := finalModel.(tui.SpinnerModel)
+				_, updateErr := model.Result()
+				if updateErr != nil {
+					return updateErr
+				}
+			} else if !jsonOutput {
+				fmt.Println("Uploading agent binary...")
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+					return err
+				}
+			} else {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+					return err
+				}
 			}
 
-			model := finalModel.(tui.SpinnerModel)
-			_, updateErr := model.Result()
-			if updateErr != nil {
-				return updateErr
+			if jsonOutput {
+				resp := map[string]string{
+					"status":  "success",
+					"message": "Agent updated successfully.",
+				}
+				b, err := json.Marshal(resp)
+				if err != nil {
+					return fmt.Errorf("failed to marshal JSON response: %w", err)
+				}
+				fmt.Println(string(b))
+			} else {
+				fmt.Println("Agent updated successfully.")
 			}
-
-			fmt.Println("Agent updated successfully.")
 			return nil
 		},
 	}
