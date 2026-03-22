@@ -26,6 +26,7 @@ import (
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
+	var cfgFlags osInstallConfigFlags
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -37,20 +38,28 @@ When called with positional arguments, skips interactive prompts:
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 2 {
-				return runOSInstallDirect(args[0], args[1], force)
+				return runOSInstallDirect(args[0], args[1], force, cfgFlags)
 			}
-			return runOSInstall(cmd.Context(), nightly)
+			return runOSInstall(cmd.Context(), nightly, cfgFlags)
 		},
 	}
 
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().StringVar(&cfgFlags.Hostname, "hostname", "", "Set the installed device hostname (for example: wendyos-sunny-otter)")
+	cmd.Flags().StringArrayVar(&cfgFlags.WiFi, "wifi", nil, "Preconfigure Wi-Fi as SSID or SSID=password (repeatable)")
+	cmd.Flags().StringVar(&cfgFlags.AgentBinary, "agent-binary", "", "Inject a wendy-agent binary into the installed image")
+	cmd.Flags().StringVar(&cfgFlags.CertsZip, "certs-zip", "", "Inject provisioned wendy-agent certificate material from a zip file")
+	cmd.Flags().StringVar(&cfgFlags.SSHMode, "ssh", "", "Configure SSH: default, disable, password, or key")
+	cmd.Flags().StringVar(&cfgFlags.SSHUser, "ssh-user", "", "SSH username used with --ssh password or --ssh key")
+	cmd.Flags().StringVar(&cfgFlags.SSHPassword, "ssh-password", "", "SSH password used with --ssh password")
+	cmd.Flags().StringVar(&cfgFlags.SSHKeyFile, "ssh-key-file", "", "Public key file used with --ssh key")
 
 	return cmd
 }
 
 // runOSInstallDirect writes a local image file to the specified drive without interactive prompts.
-func runOSInstallDirect(imagePath string, driveID string, force bool) error {
+func runOSInstallDirect(imagePath string, driveID string, force bool, cfgFlags osInstallConfigFlags) error {
 	// Verify the image file exists.
 	if _, err := os.Stat(imagePath); err != nil {
 		return fmt.Errorf("image file: %w", err)
@@ -73,8 +82,16 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 		return fmt.Errorf("drive %s not found", driveID)
 	}
 
+	installCfg, err := resolveOSInstallConfig(cfgFlags, false)
+	if err != nil {
+		return err
+	}
+
 	if !force {
 		reader := bufio.NewReader(os.Stdin)
+		if installCfg != nil {
+			fmt.Println(renderOSInstallConfigSummary(installCfg))
+		}
 		fmt.Printf("Writing will ERASE ALL DATA on %s (%s). Continue? [y/N] ", targetDrive.Name, targetDrive.DevicePath)
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -86,9 +103,15 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 		}
 	}
 
+	preparedImagePath, cleanup, err := promptOSInstallImageCustomization(imagePath, installCfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	fmt.Println("You may be prompted for your password (sudo is required).")
-	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
+	if err := writeImageToDisk(preparedImagePath, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 
@@ -105,6 +128,31 @@ type pickerDevice struct {
 	IsESP32    bool
 	ESP32Chip  string          // e.g. "esp32c6", "esp32c5"
 	Manifest   *deviceManifest // cached manifest for Linux devices
+}
+
+func linuxDeviceRecommendation(deviceKey string) string {
+	switch deviceKey {
+	case "jetson-orin-nano":
+		return "NVMe recommended"
+	case "raspberry-pi-5":
+		return "microSD or NVMe"
+	default:
+		return ""
+	}
+}
+
+func renderLinuxImageAdvisory(deviceKey string, deviceName string, img *imageInfo) string {
+	switch deviceKey {
+	case "jetson-orin-nano":
+		if img != nil && strings.Contains(strings.ToLower(img.DownloadURL), "nvme") {
+			return fmt.Sprintf("%s install uses the current NVMe image. Wendy highly recommends NVMe on Jetson Orin Nano. Use the recovery tegraflash flow only for legacy SD or break-glass recovery.", deviceName)
+		}
+		return fmt.Sprintf("Wendy highly recommends NVMe on %s. Use the recovery tegraflash flow only for legacy SD or break-glass recovery.", deviceName)
+	case "raspberry-pi-5":
+		return fmt.Sprintf("%s images can be written to either microSD or NVMe. NVMe is recommended when available.", deviceName)
+	default:
+		return ""
+	}
 }
 
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
@@ -125,9 +173,13 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 			continue
 		}
 		deviceMap[dev.Key] = dev
+		description := fmt.Sprintf("(latest: %s)", dev.LatestVersion)
+		if note := linuxDeviceRecommendation(dev.Key); note != "" {
+			description = fmt.Sprintf("%s  %s", description, note)
+		}
 		items = append(items, tui.PickerItem{
 			Name:        dev.Name,
-			Description: fmt.Sprintf("(latest: %s)", dev.LatestVersion),
+			Description: description,
 			Value:       dev.Key,
 		})
 	}
@@ -144,7 +196,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool) error {
+func runOSInstall(ctx context.Context, nightly bool, cfgFlags osInstallConfigFlags) error {
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -177,9 +229,13 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 		}
 		deviceMap[dev.Key] = pd
 
+		description := fmt.Sprintf("%s    %s", displayVersion, pd.Category)
+		if note := linuxDeviceRecommendation(dev.Key); note != "" {
+			description = fmt.Sprintf("%s    %s", description, note)
+		}
 		items = append(items, tui.PickerItem{
 			Name:        dev.Name,
-			Description: fmt.Sprintf("%s    %s", displayVersion, pd.Category),
+			Description: description,
 			Value:       dev.Key,
 		})
 	}
@@ -221,11 +277,11 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device)
+	return installLinuxImage(ctx, selected, device, cfgFlags)
 }
 
 // installLinuxImage handles the Linux device path: pick drive → download → write.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, cfgFlags osInstallConfigFlags) error {
 	// List external drives.
 	drives, err := listExternalDrives()
 	if err != nil {
@@ -258,8 +314,25 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 	targetDrive := driveMap[sel]
 
+	installCfg, err := resolveOSInstallConfig(cfgFlags, isInteractiveTerminal())
+	if err != nil {
+		return err
+	}
+	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
+	if err != nil {
+		return fmt.Errorf("getting image info: %w", err)
+	}
+
 	// Confirm destructive write.
 	reader := bufio.NewReader(os.Stdin)
+	if advisory := renderLinuxImageAdvisory(deviceKey, device.Name, imgInfo); advisory != "" {
+		fmt.Println()
+		fmt.Println(advisory)
+	}
+	if installCfg != nil {
+		fmt.Println()
+		fmt.Println(renderOSInstallConfigSummary(installCfg))
+	}
 	fmt.Printf("\nWriting will ERASE ALL DATA on %s (%s). Continue? [y/N] ", targetDrive.Name, targetDrive.DevicePath)
 	line, err := reader.ReadString('\n')
 	if err != nil {
@@ -272,15 +345,15 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	// Resolve image (cached or download).
 	fmt.Printf("\nPreparing %s image...\n", device.Name)
-	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
-	if err != nil {
-		return fmt.Errorf("getting image info: %w", err)
-	}
-
 	imagePath, err := resolveOSImage(deviceKey, imgInfo)
 	if err != nil {
 		return fmt.Errorf("resolving OS image: %w", err)
 	}
+	imagePath, cleanup, err := promptOSInstallImageCustomization(imagePath, installCfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	// Get image size for progress tracking.
 	imgStat, err := os.Stat(imagePath)
