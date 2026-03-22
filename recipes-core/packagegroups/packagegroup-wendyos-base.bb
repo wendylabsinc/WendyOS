@@ -28,6 +28,7 @@ RDEPENDS:${PN} = " \
     k3s-agent \
     wendyos-identity \
     wendyos-agent \
+    wendyos-install-config \
     wendyos-user \
     wendyos-motd \
     systemd-mount-containerd \

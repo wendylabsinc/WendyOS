@@ -1,0 +1,15 @@
+[Unit]
+Description=WendyOS installer payload import
+DefaultDependencies=no
+After=local-fs.target data.mount home.mount wendyos-etc-binds.service
+Before=wendyos-device-name-generate.service wendyos-user-setup.service wendyos-hostname.service NetworkManager.service ssh.service sshd.service wendyos-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/wendyos-install-config.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target
