@@ -12,6 +12,28 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
+// flexBool unmarshals a JSON value that may be a boolean (true/false) or a
+// numeric string ("0"/"1"). Older lsblk versions emit "0"/"1" while newer
+// versions (util-linux ≥ 2.37) emit native JSON booleans.
+type flexBool bool
+
+func (f *flexBool) UnmarshalJSON(data []byte) error {
+	// Try bool first (true / false).
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		*f = flexBool(b)
+		return nil
+	}
+
+	// Fall back to string ("0" / "1").
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("flexBool: cannot unmarshal %s", string(data))
+	}
+	*f = flexBool(s == "1")
+	return nil
+}
+
 // drive represents an external disk suitable for image writing.
 type drive struct {
 	DevicePath  string // e.g. /dev/sdb
@@ -31,23 +53,26 @@ type lsblkDevice struct {
 	Name       string      `json:"name"`
 	Size       json.Number `json:"size"`
 	Type       string      `json:"type"`
-	Removable  string      `json:"rm"`
-	Hotplug    string      `json:"hotplug"`
+	Removable  flexBool    `json:"rm"`
+	Hotplug    flexBool    `json:"hotplug"`
 	Transport  string      `json:"tran"`
 	Mountpoint string      `json:"mountpoint"`
 }
 
-// listAllDrives lists external physical drives (USB, NVMe, SD) on Linux.
+// listAllDrives lists external physical drives (USB, SD, hotplug) on Linux.
 func listAllDrives() ([]drive, error) {
-	return listDrivesLinux(false)
+	return listDrivesLinux()
 }
 
-// listExternalDrives lists removable external drives on Linux.
+// listExternalDrives lists external drives on Linux.
+// A drive is considered external when it is removable, hotpluggable, or
+// connected via USB/MMC. This intentionally includes USB-attached SSDs
+// which report rm=false but are still external.
 func listExternalDrives() ([]drive, error) {
-	return listDrivesLinux(true)
+	return listDrivesLinux()
 }
 
-func listDrivesLinux(removableOnly bool) ([]drive, error) {
+func listDrivesLinux() ([]drive, error) {
 	out, err := exec.Command("lsblk", "--json", "--bytes", "-o", "NAME,SIZE,TYPE,RM,HOTPLUG,TRAN,MOUNTPOINT").Output()
 	if err != nil {
 		return nil, fmt.Errorf("running lsblk: %w", err)
@@ -64,12 +89,9 @@ func listDrivesLinux(removableOnly bool) ([]drive, error) {
 			continue
 		}
 		// Only include external drives: USB or SD card transports, or hotpluggable/removable.
-		isExternal := dev.Removable == "1" || dev.Hotplug == "1" ||
+		isExternal := bool(dev.Removable) || bool(dev.Hotplug) ||
 			dev.Transport == "usb" || dev.Transport == "mmc"
 		if !isExternal {
-			continue
-		}
-		if removableOnly && dev.Removable != "1" {
 			continue
 		}
 
