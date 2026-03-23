@@ -207,6 +207,27 @@ fi
 echo "$UDC" > UDC
 log_info "UDC activated: $UDC"
 
+# On tegra-xudc the UDC relies on a usb_phy notifier chain fed by the
+# padctl role switch (phy-tegra-xusb → fusb301 → tegra_xudc).  If that
+# chain has not fired yet (e.g. FUSB301 probed before padctl ports were
+# ready, or cable was connected before boot), the UDC sits in "default"
+# state and never enters device mode.  Force the role explicitly so the
+# usb_phy notifier fires and XUDC enters device mode regardless of the
+# CC-chip state machine.  The padctl exposes the role switch at:
+#   /sys/class/usb_role/usb2-0-role-switch/role
+# (name comes from dev_set_name(&port->dev, "usb2-0") in xusb.c and
+#  dev_set_name(&sw->dev, "%s-role-switch", dev_name(parent)) in roles/class.c)
+if [ "$USB_CONTROLLER" = "tegra-xudc" ]; then
+    ROLE_SW_PATH="/sys/class/usb_role/usb2-0-role-switch/role"
+    if [ -f "$ROLE_SW_PATH" ]; then
+        echo "device" > "$ROLE_SW_PATH" 2>/dev/null && \
+            log_info "Forced USB role switch to device" || \
+            log_warning "Failed to force USB role switch to device"
+    else
+        log_warning "tegra-xudc: USB role switch not found at $ROLE_SW_PATH — XUDC may stay in default state"
+    fi
+fi
+
 udevadm settle -t 20 || log_warning "udevadm settle timed out — gadget may not be fully enumerated"
 log_info "USB gadget initialised"
 

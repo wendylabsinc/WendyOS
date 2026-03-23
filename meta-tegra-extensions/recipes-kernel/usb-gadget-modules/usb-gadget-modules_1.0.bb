@@ -17,6 +17,7 @@ do_install() {
 # Ensure the module packages are present.
 RDEPENDS:${PN} += " \
     kernel-modules \
+    kernel-module-tegra-xudc \
     "
 
 # kernel-module-libcomposite
