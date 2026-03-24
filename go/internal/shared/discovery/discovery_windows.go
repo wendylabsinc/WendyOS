@@ -30,6 +30,13 @@ func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice
 		defer close(done)
 		seen := make(map[string]bool)
 		for entry := range entriesCh {
+			// Filter out entries that don't match the queried service type.
+			// hashicorp/mdns can return unrelated mDNS responders (e.g. iPhones
+			// advertising _remotepairing._tcp).
+			if !strings.Contains(entry.Name, wendyServiceType) {
+				continue
+			}
+
 			hostname := strings.TrimSuffix(entry.Host, ".")
 
 			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
@@ -132,6 +139,12 @@ func BrowseMDNSServices(ctx context.Context, serviceType string, timeout time.Du
 		defer close(done)
 		seen := make(map[string]bool)
 		for entry := range entriesCh {
+			// Filter out entries that don't match the queried service type.
+			// hashicorp/mdns can return unrelated mDNS responders.
+			if !strings.Contains(entry.Name, serviceType) {
+				continue
+			}
+
 			hostname := strings.TrimSuffix(entry.Host, ".")
 
 			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
