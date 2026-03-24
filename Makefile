@@ -167,8 +167,8 @@ build: _check-setup _ensure-volumes
 			-e "LANG=C.UTF-8" \
 			-v $(PROJECT_DIR):$(DOCKER_WORKDIR) \
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
-			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/build/sstate-cache \
-			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/build/downloads \
+			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
+			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -209,8 +209,8 @@ build-sdk: _check-setup _ensure-volumes
 			-e "LANG=C.UTF-8" \
 			-v $(PROJECT_DIR):$(DOCKER_WORKDIR) \
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
-			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/build/sstate-cache \
-			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/build/downloads \
+			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
+			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -258,6 +258,10 @@ distclean:
 	@read -p "Are you sure? [y/N] " confirm && \
 		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
 			rm -rf $(PROJECT_DIR)/build $(PROJECT_DIR)/downloads $(PROJECT_DIR)/sstate-cache; \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) 2>/dev/null || true; \
+				printf "  Removed Docker volumes.\n"; \
+			fi; \
 			printf "$(GREEN)Distclean complete.$(NC)\n"; \
 		else \
 			printf "Cancelled.\n"; \
