@@ -342,7 +342,13 @@ func downloadImage(img *imageInfo) (string, error) {
 		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
-	tmpFile, err := os.CreateTemp("", "wendyos-*.img")
+	// Write directly into the OS cache directory so we never land in /tmp
+	// (which is often a size-limited tmpfs on Linux).
+	cacheDir, err := osCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving cache dir: %w", err)
+	}
+	tmpFile, err := os.CreateTemp(cacheDir, "wendyos-*.img")
 	if err != nil {
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
@@ -427,7 +433,13 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 		}
 		defer rc.Close()
 
-		tmpFile, err := os.CreateTemp("", "wendyos-*.img")
+		// Write directly into the OS cache directory so we never land in
+		// /tmp (which is often a size-limited tmpfs on Linux).
+		cacheDir, err := osCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving cache dir: %w", err)
+		}
+		tmpFile, err := os.CreateTemp(cacheDir, "wendyos-*.img")
 		if err != nil {
 			return "", fmt.Errorf("creating temp file: %w", err)
 		}
@@ -561,37 +573,14 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		imagePath = extracted
 	}
 
-	// Move into cache.
+	// Move into cache. Both files are in the same cache directory so
+	// Rename is always a same-filesystem operation.
 	if err := os.Rename(imagePath, cached); err != nil {
-		// Rename fails across filesystems; fall back to copy.
-		if cpErr := copyFile(imagePath, cached); cpErr != nil {
-			os.Remove(imagePath)
-			return "", fmt.Errorf("caching image: %w", cpErr)
-		}
 		os.Remove(imagePath)
+		return "", fmt.Errorf("caching image: %w", err)
 	}
 
 	return cached, nil
-}
-
-// copyFile copies src to dst.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
