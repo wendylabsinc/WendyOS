@@ -25,9 +25,12 @@ do_install:append() {
     install -d ${D}${sbindir}
     install -m 0755 ${WORKDIR}/generate-hostname.sh ${D}${sbindir}/
 
-    # Install Avahi service file
+    # Install Avahi service file with platform substitution
     install -d ${D}${sysconfdir}/avahi/services
-    install -m 0644 ${WORKDIR}/wendyos-mdns.service ${D}${sysconfdir}/avahi/services/
+    sed 's|@WENDYOS_PLATFORM@|${MACHINE}|' \
+        ${WORKDIR}/wendyos-mdns.service \
+        > ${D}${sysconfdir}/avahi/services/wendyos-mdns.service
+    chmod 0644 ${D}${sysconfdir}/avahi/services/wendyos-mdns.service
 
     # Install systemd service for hostname setup
     install -d ${D}${systemd_system_unitdir}
@@ -51,8 +54,20 @@ do_install:append() {
         # Enable D-Bus support for proper service publishing
         sed -i 's/^#*enable-dbus=.*/enable-dbus=yes/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
 
-        # Enable mDNS reflector for better discovery
+        # Enable mDNS reflector for cross-interface discovery
         sed -i 's/^#*enable-reflector=.*/enable-reflector=yes/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
+
+        # Restrict Avahi to specific interfaces if configured
+        # Empty WENDYOS_MDNS_INTERFACES means all interfaces (no restriction)
+        if [ -n "${WENDYOS_MDNS_INTERFACES}" ]; then
+            if grep -q '^allow-interfaces=' "${D}${sysconfdir}/avahi/avahi-daemon.conf"; then
+                sed -i "s/^allow-interfaces=.*/allow-interfaces=${WENDYOS_MDNS_INTERFACES}/" \
+                    "${D}${sysconfdir}/avahi/avahi-daemon.conf"
+            else
+                sed -i '/^\[server\]/a allow-interfaces=${WENDYOS_MDNS_INTERFACES}' \
+                    "${D}${sysconfdir}/avahi/avahi-daemon.conf"
+            fi
+        fi
 
         # Set proper hostname behavior
         sed -i 's/^#*use-ipv4=.*/use-ipv4=yes/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
