@@ -54,6 +54,23 @@ do_install:append() {
         </partition>' \
         ${WORKDIR}/${layout_file}.tmp1
 
+    # 2.5. Add wendy_config partition (id=16) BEFORE mender_data (id=17)
+    #      64 MB FAT32, Microsoft Basic Data GUID → macOS auto-mounts as /Volumes/WENDYCONFIG
+    sed -i '/<partition name="mender_data" id="17"/i\
+        <partition name="wendy_config" id="16" type="data">\
+            <allocation_policy> sequential </allocation_policy>\
+            <filesystem_type> basic </filesystem_type>\
+            <size> 67108864 </size>\
+            <file_system_attribute> 0 </file_system_attribute>\
+            <allocation_attribute> 0x8 </allocation_attribute>\
+            <partition_type_guid> EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 </partition_type_guid>\
+            <percent_reserved> 0 </percent_reserved>\
+            <align_boundary> 16384 </align_boundary>\
+            <filename> wendy-config.fat32.img </filename>\
+            <description> WendyOS first-boot config partition (FAT32, 64 MB). </description>\
+        </partition>' \
+        ${WORKDIR}/${layout_file}.tmp1
+
     # 3. Remove DATAFILE filename from UDA partition
     #    Prevent flash error when dataimg is larger than UDA partition
     #    UDA is not used by WendyOS (mender_data is used instead)

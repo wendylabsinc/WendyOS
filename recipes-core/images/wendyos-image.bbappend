@@ -1,3 +1,5 @@
+EXTRA_IMAGEDEPENDS:append:tegra = " wendy-config-partition"
+
 # Replace placeholders in external-flash.xml.in for NVMe flash images
 # This ensures DTB_FILE, DATAFILE, and APPFILE are replaced with actual filenames
 # Uses the tegraflash_custom_post hook which runs after XML creation but before archiving
