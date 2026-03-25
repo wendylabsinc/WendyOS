@@ -375,10 +375,10 @@ flash-to-external:
 				/bin/bash -c '\
 					cd /flash && \
 					sudo ./doexternal.sh -s $(FLASH_IMAGE_SIZE) /output/wendyos.img \
-				'; \
+				' || { rm -rf $(PROJECT_DIR)/deploy/flash-work; printf "\n$(RED)Image creation FAILED. Check doexternal.sh output above.$(NC)\n"; exit 1; }; \
 		else \
 			cd $(PROJECT_DIR)/deploy/flash-work && \
-			sudo ./doexternal.sh -s $(FLASH_IMAGE_SIZE) $(PROJECT_DIR)/deploy/wendyos.img; \
+			sudo ./doexternal.sh -s $(FLASH_IMAGE_SIZE) $(PROJECT_DIR)/deploy/wendyos.img || { rm -rf $(PROJECT_DIR)/deploy/flash-work; printf "\n$(RED)Image creation FAILED. Check doexternal.sh output above.$(NC)\n"; exit 1; }; \
 		fi; \
 		rm -rf $(PROJECT_DIR)/deploy/flash-work; \
 		printf "\n$(GREEN)Image created: $(PROJECT_DIR)/deploy/wendyos.img$(NC)\n\n"; \
