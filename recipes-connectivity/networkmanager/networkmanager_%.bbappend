@@ -36,22 +36,27 @@ do_install:append() {
     install -m 0644 ${WORKDIR}/10-usb-gadget.conf ${D}${sysconfdir}/NetworkManager/conf.d/10-usb-gadget.conf
     install -m 0644 ${WORKDIR}/99-interface-metrics.conf ${D}${sysconfdir}/NetworkManager/conf.d/99-interface-metrics.conf
 
-    # Install system connections (USB gadget profile)
-    # Substitute @USB_NET_MODE@ placeholder with the NM method for WENDYOS_USB_NET_MODE
-    install -d ${D}${sysconfdir}/NetworkManager/system-connections
+    # Install distro-managed connection profile to /usr/lib (read-only on rootfs).
+    # NM 1.46+ natively reads /usr/lib/NetworkManager/system-connections/ as a
+    # read-only keyfile path. User modifications via nmcli create a writable copy
+    # in /etc/NetworkManager/system-connections/ (persisted on /data) which takes
+    # priority. This ensures OTA updates always deliver the latest distro profile
+    # without overwriting user customizations.
+    install -d ${D}${nonarch_libdir}/NetworkManager/system-connections
     sed 's|@USB_NET_MODE@|${@usb_net_nm_method(d)}|' \
         ${WORKDIR}/usb-gadget.nmconnection \
-        > ${D}${sysconfdir}/NetworkManager/system-connections/usb-gadget.nmconnection
-    chmod 0600 ${D}${sysconfdir}/NetworkManager/system-connections/usb-gadget.nmconnection
+        > ${D}${nonarch_libdir}/NetworkManager/system-connections/usb-gadget.nmconnection
+    chmod 0600 ${D}${nonarch_libdir}/NetworkManager/system-connections/usb-gadget.nmconnection
 }
 
 # Make sure our config files are packaged
+# Note: usb-gadget.nmconnection is in ${nonarch_libdir}/NetworkManager/system-connections/
+# which is already covered by upstream FILES:${PN}-daemon
 FILES:${PN} += " \
     ${sysconfdir}/NetworkManager/NetworkManager.conf \
     ${sysconfdir}/NetworkManager/conf.d/00-manage-usb0.conf \
     ${sysconfdir}/NetworkManager/conf.d/10-usb-gadget.conf \
     ${sysconfdir}/NetworkManager/conf.d/99-interface-metrics.conf \
-    ${sysconfdir}/NetworkManager/system-connections/usb-gadget.nmconnection \
     "
 
 # Ensure NetworkManager starts after USB gadget is set up

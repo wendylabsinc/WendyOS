@@ -18,7 +18,7 @@ SRC_URI = " \
 SYSTEMD_SERVICE:${PN} = "wendyos-etc-binds.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-RDEPENDS:${PN} += "bash"
+RDEPENDS:${PN} += "bash coreutils"
 
 do_install() {
     # Install systemd service unit

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # Manage internet sharing to devices connected via USB gadget
+# (the host machine runs a DHCP server)
 #
 
 set -e
