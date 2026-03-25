@@ -178,7 +178,7 @@ build: _check-setup _ensure-volumes
 	else \
 		cd $(DOCKER_DIR) && docker run \
 			--rm \
-			-v /tmp/.X11-unix:/tmp/.X11-unix \
+			-v /tmp:/tmp \
 			--network host \
 			--privileged \
 			-e "TERM=xterm-256color" \

@@ -13,7 +13,7 @@ jobs:
     runs-on:
       - runs-on
       - family=c7a.8xlarge
-      - hdd=500
+      - hdd=1000
       - run-id=${{ github.run_id }}
     strategy:
       fail-fast: false
