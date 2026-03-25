@@ -26,4 +26,17 @@ tegraflash_custom_post:append() {
         bberror "Current directory: $(pwd)"
         bberror "Files present: $(ls -la)"
     fi
+
+    # Copy wendy-config FAT32 image into the tegraflash package directory so
+    # tegraparser_v2 can find it when processing external-flash.xml.in.
+    # create_tegraflash_pkg never auto-includes files from DEPLOY_DIR_IMAGE
+    # just because they are referenced in a partition layout XML — each file
+    # must be copied explicitly.
+    if [ -f "${DEPLOY_DIR_IMAGE}/wendy-config.fat32.img" ]; then
+        cp "${DEPLOY_DIR_IMAGE}/wendy-config.fat32.img" ./wendy-config.fat32.img
+        bbnote "Copied wendy-config.fat32.img into tegraflash package"
+    else
+        bberror "wendy-config.fat32.img not found in DEPLOY_DIR_IMAGE (${DEPLOY_DIR_IMAGE})"
+        bberror "Ensure wendy-config-partition is listed in EXTRA_IMAGEDEPENDS and has run do_deploy"
+    fi
 }
