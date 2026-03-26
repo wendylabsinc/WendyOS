@@ -13,7 +13,7 @@
 # Note: On macOS, build artifacts are stored in Docker volumes (case-sensitive)
 # rather than the host filesystem to work around macOS case-insensitivity.
 
-.PHONY: help setup bootstrap docker-create docker-run docker-remove shell build build-sdk clean distclean volumes-create volumes-remove deploy flash-to-external
+.PHONY: help setup bootstrap docker-create docker-run docker-remove shell build build-sdk clean distclean volumes-create volumes-remove deploy flash-to-external _check-machine _check-setup _ensure-volumes
 
 # Configuration
 SHELL := /bin/bash
@@ -23,7 +23,6 @@ DOCKER_TAG := scarthgap
 DOCKER_USER := dev
 DOCKER_WORKDIR := /home/$(DOCKER_USER)/$(IMAGE_NAME)
 BUILD_DIR := build
-MACHINE ?= jetson-orin-nano-devkit-nvme-wendyos
 IMAGE_TARGET ?= wendyos-image
 
 # Flash configuration
@@ -156,7 +155,7 @@ shell:
 #
 # Build Commands
 #
-build: _check-setup _ensure-volumes
+build: _check-machine _check-setup _ensure-volumes
 	@printf "$(CYAN)Building $(IMAGE_TARGET) for $(MACHINE)...$(NC)\n"
 	@printf "$(YELLOW)This may take several hours on first build.$(NC)\n"
 	@printf "\n"
@@ -201,7 +200,7 @@ build: _check-setup _ensure-volumes
 		printf "Image location: $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
 	fi
 
-build-sdk: _check-setup _ensure-volumes
+build-sdk: _check-machine _check-setup _ensure-volumes
 	@printf "$(CYAN)Building SDK for $(MACHINE)...$(NC)\n"
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		docker run \
@@ -302,7 +301,7 @@ volumes-remove:
 #
 # Deploy tegraflash tarball (macOS)
 #
-deploy:
+deploy: _check-machine
 	@if [ "$$(uname)" != "Darwin" ]; then \
 		printf "Images are already on host filesystem at:\n"; \
 		printf "  $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
@@ -329,7 +328,7 @@ deploy:
 #
 # Flash Commands
 #
-flash-to-external:
+flash-to-external: _check-machine
 	@printf "$(CYAN)WendyOS Flash Tool$(NC)\n"
 	@printf "$(CYAN)==================$(NC)\n\n"
 	@OS_TYPE=$$(uname); \
@@ -475,6 +474,19 @@ flash-to-external:
 #
 # Internal Targets
 #
+_check-machine:
+	@if [ -z "$(MACHINE)" ]; then \
+		printf "$(RED)Error: MACHINE is required.$(NC)\n\n"; \
+		printf "Usage:\n"; \
+		printf "  make $(MAKECMDGOALS) MACHINE=<machine>\n\n"; \
+		printf "Available machines:\n"; \
+		for m in $(MAKEFILE_DIR)/conf/machine/*.conf; do \
+			printf "  %s\n" "$$(basename $$m .conf)"; \
+		done; \
+		printf "\n"; \
+		exit 1; \
+	fi
+
 _check-setup:
 	@if [ ! -d "$(DOCKER_DIR)" ]; then \
 		printf "$(RED)Error: Build environment not set up.$(NC)\n"; \
