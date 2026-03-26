@@ -26,18 +26,6 @@ machines automatically since they share `partuuid-rpi.bbclass`.
 variant is verified once an M.2 HAT is available — both WKS changes go in the
 same commit regardless.
 
-> **⚠️ Team check required before starting Phase 2**
->
-> This plan uses the partition order **p1=boot, p2=WENDYCONFIG, p3=root**
-> instead of the originally assumed p1=boot, p2=root, p3=WENDYCONFIG.
->
-> Root is still found at runtime via `findmnt` + sysfs (no hardcoded partition
-> numbers anywhere in expand-rootfs.sh), and the bootloader references root by
-> PARTUUID — so the number shift from p2→p3 is transparent to both the
-> bootloader and the resize logic. However, confirm with the team that nothing
-> else in the stack (U-Boot env, CI tooling, documentation, Go CLI assumptions)
-> expects root to always be p2 before we cut the WKS change.
-
 Files we will touch:
 
 | File | Change |
@@ -313,6 +301,22 @@ hardware verification. The same three checks apply:
 - UUID in `diskutil info` matches the deploy conf ✓
 
 **Checkpoint 5:** Both machine variants confirmed working. PR is ready.
+
+---
+
+## PR review sign-off
+
+> **⚠️ Confirm with the team before merging**
+>
+> This plan uses the partition order **p1=boot, p2=WENDYCONFIG, p3=root**
+> instead of the originally assumed p1=boot, p2=root, p3=WENDYCONFIG.
+>
+> Root is still found at runtime via `findmnt` + sysfs (no hardcoded partition
+> numbers anywhere in expand-rootfs.sh), and the bootloader references root by
+> PARTUUID — so the number shift from p2→p3 is transparent to both the
+> bootloader and the resize logic. However, confirm with the team that nothing
+> else in the stack (U-Boot env, CI tooling, documentation, Go CLI assumptions)
+> expects root to always be p2.
 
 ---
 
