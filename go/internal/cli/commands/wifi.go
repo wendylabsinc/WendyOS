@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -122,11 +123,9 @@ func newWifiConnectCmd() *cobra.Command {
 			if password == "" && term.IsTerminal(int(os.Stdin.Fd())) {
 				if supportsKeychainLookup {
 					fmt.Printf("Look up password for '%s' from keychain? (macOS will ask for permission) [Y/n] ", ssid)
-					var answer string
-					if _, err := fmt.Scanln(&answer); err != nil {
-						answer = "n"
-					}
-					answer = strings.TrimSpace(strings.ToLower(answer))
+					reader := bufio.NewReader(os.Stdin)
+					line, _ := reader.ReadString('\n')
+					answer := strings.TrimSpace(strings.ToLower(line))
 
 					if answer == "" || answer == "y" || answer == "yes" {
 						if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
