@@ -307,23 +307,41 @@ deploy: _check-machine
 		printf "  $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
 		exit 0; \
 	fi
-	@printf "$(CYAN)Copying tegraflash tarball from Docker volume...$(NC)\n"
 	@mkdir -p $(PROJECT_DIR)/deploy
 	@rm -f $(PROJECT_DIR)/deploy/wendyos.img
-	@docker run --rm -t \
-		-v $(VOLUME_BUILD):/build-volume:ro \
-		-v $(PROJECT_DIR)/deploy:/output \
-		$(DOCKER_REPO):$(DOCKER_TAG) \
-		/bin/bash -c '\
-			TARBALL="/build-volume/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).tegraflash.tar.gz"; \
-			if [ -f "$$TARBALL" ]; then \
-				rsync -ahL --progress "$$TARBALL" /output/; \
-			else \
-				echo "Error: tegraflash tarball not found. Run make build first."; \
-				exit 1; \
-			fi \
-		'
-	@printf "$(GREEN)Tegraflash tarball copied to: $(PROJECT_DIR)/deploy/$(NC)\n"
+	@if echo "$(MACHINE)" | grep -q "raspberrypi"; then \
+		printf "$(CYAN)Copying WIC image from Docker volume...$(NC)\n"; \
+		docker run --rm -t \
+			-v $(VOLUME_BUILD):/build-volume:ro \
+			-v $(PROJECT_DIR)/deploy:/output \
+			$(DOCKER_REPO):$(DOCKER_TAG) \
+			/bin/bash -c '\
+				WIC="/build-volume/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).rootfs.wic"; \
+				if [ -f "$$WIC" ]; then \
+					rsync -ahL --progress "$$WIC" /output/wendyos.img; \
+				else \
+					echo "Error: WIC image not found in Docker volume. Run make build first."; \
+					exit 1; \
+				fi \
+			'; \
+		printf "$(GREEN)RPi5 WIC image copied to: $(PROJECT_DIR)/deploy/wendyos.img$(NC)\n"; \
+	else \
+		printf "$(CYAN)Copying tegraflash tarball from Docker volume...$(NC)\n"; \
+		docker run --rm -t \
+			-v $(VOLUME_BUILD):/build-volume:ro \
+			-v $(PROJECT_DIR)/deploy:/output \
+			$(DOCKER_REPO):$(DOCKER_TAG) \
+			/bin/bash -c '\
+				TARBALL="/build-volume/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).tegraflash.tar.gz"; \
+				if [ -f "$$TARBALL" ]; then \
+					rsync -ahL --progress "$$TARBALL" /output/; \
+				else \
+					echo "Error: tegraflash tarball not found. Run make build first."; \
+					exit 1; \
+				fi \
+			'; \
+		printf "$(GREEN)Tegraflash tarball copied to: $(PROJECT_DIR)/deploy/$(NC)\n"; \
+	fi
 
 #
 # Flash Commands
@@ -337,14 +355,32 @@ flash-to-external: _check-machine
 		IMG_SIZE=$$(ls -lh "$(PROJECT_DIR)/deploy/wendyos.img" | awk '{print $$5}'); \
 		printf "Using existing image: $(PROJECT_DIR)/deploy/wendyos.img ($$IMG_SIZE)\n\n"; \
 	elif echo "$(MACHINE)" | grep -q "raspberrypi"; then \
-		WIC_IMG="$(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).rootfs.wic"; \
-		if [ ! -f "$$WIC_IMG" ]; then \
-			printf "$(RED)Error: WIC image not found: $$WIC_IMG$(NC)\n"; \
-			printf "Run 'make build MACHINE=$(MACHINE)' first.\n"; \
-			exit 1; \
-		fi; \
 		mkdir -p "$(PROJECT_DIR)/deploy"; \
-		cp "$$WIC_IMG" "$(PROJECT_DIR)/deploy/wendyos.img"; \
+		if [ "$$OS_TYPE" = "Darwin" ]; then \
+			printf "$(CYAN)Copying WIC image from Docker volume...$(NC)\n"; \
+			docker run --rm -t \
+				-v $(VOLUME_BUILD):/build-volume:ro \
+				-v $(PROJECT_DIR)/deploy:/output \
+				$(DOCKER_REPO):$(DOCKER_TAG) \
+				/bin/bash -c '\
+					WIC="/build-volume/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).rootfs.wic"; \
+					if [ -f "$$WIC" ]; then \
+						rsync -ahL --progress "$$WIC" /output/wendyos.img; \
+					else \
+						echo "Error: WIC image not found in Docker volume."; \
+						echo "Run '\''make build MACHINE=$(MACHINE)'\'' first."; \
+						exit 1; \
+					fi \
+				'; \
+		else \
+			WIC_IMG="$(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/$(IMAGE_TARGET)-$(MACHINE).rootfs.wic"; \
+			if [ ! -f "$$WIC_IMG" ]; then \
+				printf "$(RED)Error: WIC image not found: $$WIC_IMG$(NC)\n"; \
+				printf "Run 'make build MACHINE=$(MACHINE)' first.\n"; \
+				exit 1; \
+			fi; \
+			cp "$$WIC_IMG" "$(PROJECT_DIR)/deploy/wendyos.img"; \
+		fi; \
 		printf "$(GREEN)RPi5 WIC image ready: $(PROJECT_DIR)/deploy/wendyos.img$(NC)\n\n"; \
 	else \
 		if [ "$$OS_TYPE" = "Darwin" ]; then \
