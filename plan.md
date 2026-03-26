@@ -11,6 +11,21 @@ automatically — no pre-built image blob, no XML injection) and the
 trailing partition and grows freely to 100% — no changes to expand-rootfs
 needed.
 
+There are two RPi5 machine variants, both need the same partition change:
+
+| Machine | WKS file | Device |
+|---|---|---|
+| `raspberrypi5-wendyos` | `wic/rpi-partuuid.wks` | `mmcblk0` (microSD) |
+| `raspberrypi5-nvme-wendyos` | `wic/rpi-nvme-partuuid.wks` | `nvme0n1` (NVMe HAT) |
+
+The WKS changes are identical except for the `--ondisk` device name, which is
+already different between the two files. The bbclass change covers both
+machines automatically since they share `partuuid-rpi.bbclass`.
+
+**Testing split:** microSD variant is tested now with available hardware. NVMe
+variant is verified once an M.2 HAT is available — both WKS changes go in the
+same commit regardless.
+
 > **⚠️ Team check required before starting Phase 2**
 >
 > This plan uses the partition order **p1=boot, p2=WENDYCONFIG, p3=root**
@@ -27,7 +42,8 @@ Files we will touch:
 
 | File | Change |
 |---|---|
-| `wic/rpi-nvme-partuuid.wks` | Insert WENDYCONFIG as p2 (64 MB FAT32); root becomes p3 |
+| `wic/rpi-partuuid.wks` | Insert WENDYCONFIG as p2 (64 MB FAT32, `mmcblk0`); root becomes p3 |
+| `wic/rpi-nvme-partuuid.wks` | Insert WENDYCONFIG as p2 (64 MB FAT32, `nvme0n1`); root becomes p3 |
 | `classes/partuuid-rpi.bbclass` | Add `WENDYOS_CONFIG_PARTUUID` in cache read, cache write, `do_generate_partuuids`, and `WICVARS` |
 
 `expand-rootfs.sh` is **not touched** — it locates root via `findmnt` and
@@ -46,14 +62,14 @@ If there is a recent build, we can read the partition table directly without
 rebuilding. From outside the Docker container:
 
 ```bash
-WIC=build/tmp/deploy/images/raspberrypi5-nvme-wendyos/wendyos-image-raspberrypi5-nvme-wendyos.rootfs.wic
+WIC=build/tmp/deploy/images/raspberrypi5-wendyos/wendyos-image-raspberrypi5-wendyos.rootfs.wic
 fdisk -l "$WIC"
 ```
 
 If there is no build yet, or the image is stale, kick off a build first:
 
 ```bash
-make build MACHINE=raspberrypi5-nvme-wendyos
+make build MACHINE=raspberrypi5-wendyos
 ```
 
 Share: the full `fdisk -l` output. We want to see the two existing partitions —
@@ -64,36 +80,45 @@ p3 yet.
 
 ---
 
-## Phase 2 — Add WENDYCONFIG to the WKS and rebuild
+## Phase 2 — Add WENDYCONFIG to both WKS files and rebuild
 
-### 2.1 — Add the partition line to the WKS
+### 2.1 — Add the partition line to both WKS files
 
-Edit `wic/rpi-nvme-partuuid.wks`. Insert WENDYCONFIG **between** boot and root,
-using a temporary hardcoded UUID for now (the bbclass integration comes in
-Phase 4). Generate one with `uuidgen`:
+Insert WENDYCONFIG **between** boot and root in both files, using a temporary
+hardcoded UUID for now (the bbclass integration comes in Phase 4). Generate
+one with `uuidgen` — use the same UUID in both files for now.
 
+`wic/rpi-partuuid.wks` (microSD):
 ```
 bootloader --ptable gpt
-part /boot  --source bootimg-partition --ondisk nvme0n1 --fstype=vfat --label boot        --active --align 4096 --size 128M   --uuid "${WENDYOS_BOOT_PARTUUID}"
-part                                   --ondisk nvme0n1 --fstype=vfat  --label WENDYCONFIG --align 4096 --size 64M    --uuid "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-part /      --source rootfs            --ondisk nvme0n1 --fstype=ext4  --label root        --align 4096 --size 8192M  --uuid "${WENDYOS_ROOT_PARTUUID}"
+part /boot  --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot        --active --align 4096 --size 128M  --uuid "${WENDYOS_BOOT_PARTUUID}"
+part                                   --ondisk mmcblk0 --fstype=vfat  --label WENDYCONFIG --align 4096 --size 64M   --uuid "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+part /      --source rootfs            --ondisk mmcblk0 --fstype=ext4  --label root        --align 4096 --size 8192M --uuid "${WENDYOS_ROOT_PARTUUID}"
 ```
 
-Result: p1=boot, p2=WENDYCONFIG, p3=root (trailing, grows freely).
+`wic/rpi-nvme-partuuid.wks` (NVMe):
+```
+bootloader --ptable gpt
+part /boot  --source bootimg-partition --ondisk nvme0n1 --fstype=vfat --label boot        --active --align 4096 --size 128M  --uuid "${WENDYOS_BOOT_PARTUUID}"
+part                                   --ondisk nvme0n1 --fstype=vfat  --label WENDYCONFIG --align 4096 --size 64M   --uuid "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+part /      --source rootfs            --ondisk nvme0n1 --fstype=ext4  --label root        --align 4096 --size 8192M --uuid "${WENDYOS_ROOT_PARTUUID}"
+```
+
+Result in both cases: p1=boot, p2=WENDYCONFIG, p3=root (trailing, grows freely).
 
 The `--label WENDYCONFIG` is what sets the FAT32 volume label — the same flag
 that makes `/boot` show up as `boot` on macOS today.
 
-### 2.2 — Rebuild
+### 2.2 — Rebuild (microSD)
 
 ```bash
-make build MACHINE=raspberrypi5-nvme-wendyos
+make build MACHINE=raspberrypi5-wendyos
 ```
 
 ### 2.3 — Inspect the new partition table
 
 ```bash
-WIC=build/tmp/deploy/images/raspberrypi5-nvme-wendyos/wendyos-image-raspberrypi5-nvme-wendyos.rootfs.wic
+WIC=build/tmp/deploy/images/raspberrypi5-wendyos/wendyos-image-raspberrypi5-wendyos.rootfs.wic
 fdisk -l "$WIC"
 ```
 
@@ -135,16 +160,16 @@ is writable, and detaches cleanly.
 
 ---
 
-## Phase 3 — Flash and verify on hardware
+## Phase 3 — Flash and verify on hardware (microSD)
 
 ### 3.1 — Flash
 
 ```bash
-make flash-to-external MACHINE=raspberrypi5-nvme-wendyos
-# when prompted: pick the NVMe disk
+make flash-to-external MACHINE=raspberrypi5-wendyos
+# when prompted: pick the microSD card
 ```
 
-### 3.2 — Plug the NVMe into the Mac and check the partition table
+### 3.2 — Plug the microSD into the Mac and check the partition table
 
 Share:
 
@@ -181,7 +206,7 @@ diskutil unmount /Volumes/WENDYCONFIG
 
 ### 3.5 — Boot the RPi5 and verify expand-rootfs
 
-Put the NVMe back in the RPi5 and boot. SSH in. Share:
+Insert the microSD into the RPi5 and boot. SSH in. Share:
 
 ```bash
 lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT
@@ -190,7 +215,7 @@ cat /var/log/expand-rootfs.log
 ```
 
 We want:
-- p3 (root) sized to fill the remaining NVMe space (NVMe size minus 128 MB
+- p3 (root) sized to fill the remaining card space (card size minus 128 MB
   boot minus 64 MB WENDYCONFIG, roughly)
 - `/` df output showing the expanded space
 - Log showing the `growpart` or `parted 100%` path succeeded cleanly
@@ -225,33 +250,39 @@ Four locations:
 4. **`WICVARS` append** — add `WENDYOS_CONFIG_PARTUUID` to the extra string so
    WIC receives it as a variable.
 
-### 4.2 — Update `wic/rpi-nvme-partuuid.wks`
+### 4.2 — Update both WKS files
 
-Replace the temporary hardcoded UUID with the variable:
+Replace the temporary hardcoded UUID with the variable in both files:
 
+`wic/rpi-partuuid.wks`:
+```
+part  --ondisk mmcblk0 --fstype=vfat --label WENDYCONFIG --align 4096 --size 64M --uuid "${WENDYOS_CONFIG_PARTUUID}"
+```
+
+`wic/rpi-nvme-partuuid.wks`:
 ```
 part  --ondisk nvme0n1 --fstype=vfat --label WENDYCONFIG --align 4096 --size 64M --uuid "${WENDYOS_CONFIG_PARTUUID}"
 ```
 
-### 4.3 — Rebuild
+### 4.3 — Rebuild (microSD)
 
 ```bash
-make build MACHINE=raspberrypi5-nvme-wendyos
+make build MACHINE=raspberrypi5-wendyos
 ```
 
 Share the deploy conf file that the bbclass writes — it should now contain
 all three UUIDs:
 
 ```bash
-cat build/tmp/deploy/images/raspberrypi5-nvme-wendyos/partuuids-wendyos-image-raspberrypi5-nvme-wendyos.conf
+cat build/tmp/deploy/images/raspberrypi5-wendyos/partuuids-wendyos-image-raspberrypi5-wendyos.conf
 ```
 
 Confirm `WENDYOS_CONFIG_PARTUUID` is present and a valid UUID4.
 
-### 4.4 — Flash and do a final end-to-end verification
+### 4.4 — Flash and do a final end-to-end verification (microSD)
 
 ```bash
-make flash-to-external MACHINE=raspberrypi5-nvme-wendyos
+make flash-to-external MACHINE=raspberrypi5-wendyos
 ```
 
 Repeat the checks from Phase 3:
@@ -265,12 +296,32 @@ tracked partition UUID. Ready to commit.
 
 ---
 
+## Phase 5 — Verify NVMe variant *(pending M.2 HAT)*
+
+Once an M.2 HAT is available, rebuild and repeat the hardware checks from
+Phases 3 and 4 for the NVMe machine:
+
+```bash
+make build MACHINE=raspberrypi5-nvme-wendyos
+make flash-to-external MACHINE=raspberrypi5-nvme-wendyos
+```
+
+The WKS and bbclass changes are already in place — this phase is purely
+hardware verification. The same three checks apply:
+- WENDYCONFIG auto-mounts on macOS after `dd` ✓
+- Root expands on first boot ✓
+- UUID in `diskutil info` matches the deploy conf ✓
+
+**Checkpoint 5:** Both machine variants confirmed working. PR is ready.
+
+---
+
 ## Done
 
 At this point we have:
-- WENDYCONFIG present in every RPi5 NVMe image as p2 (64 MB FAT32)
+- WENDYCONFIG present in both RPi5 images (microSD and NVMe) as p2 (64 MB FAT32)
 - Root as p3, trailing, expanding freely on first boot — no changes to
   `expand-rootfs.sh`
-- Confirmed macOS auto-mount behaviour after `dd`
+- Confirmed macOS auto-mount behaviour after `dd` on both variants
 - A stable partition UUID generated and cached by `partuuid-rpi.bbclass`
 - Two clean commits ready for the PR
