@@ -428,6 +428,9 @@ flash-to-external: _check-machine
 		printf "$(YELLOW)Available external disks:$(NC)\n\n"; \
 		if [ "$$OS_TYPE" = "Darwin" ]; then \
 			diskutil list external physical 2>/dev/null || printf "No external disks found.\n"; \
+			printf "\n$(YELLOW)NOTE: The built-in SD card slot on Apple laptops does not appear in the list above.\n"; \
+			printf "If you want to flash to it, run 'diskutil list' in another terminal to find its disk number.\n"; \
+			printf "Double-check it is the SD card you intend to write to — dd will erase it without further warning.$(NC)\n\n"; \
 		else \
 			lsblk -d -o NAME,SIZE,MODEL,TRAN 2>/dev/null | grep -E "usb|sata|nvme" || \
 			lsblk -d -o NAME,SIZE,MODEL 2>/dev/null | grep -vE "^(loop|sr|ram)" | head -20; \
