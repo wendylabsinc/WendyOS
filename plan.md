@@ -64,7 +64,7 @@ Share: the full `fdisk -l` output. We want to see the two existing partitions �
 boot (p1, FAT32, 128 MB) and root (p2, ext4, 8 GB) — and confirm there is no
 p3 yet.
 
-**Checkpoint 1:** The existing WIC image is boot + root, no third partition.
+**Checkpoint 1:** The existing WIC image is boot + root, no third partition. ✅
 
 ---
 
@@ -144,7 +144,11 @@ hdiutil detach /dev/diskX   # the disk device hdiutil reported for WENDYCONFIG i
 
 **Checkpoint 2:** The new WIC image has three partitions in the correct order.
 The WENDYCONFIG partition auto-mounts on macOS under `/Volumes/WENDYCONFIG`,
-is writable, and detaches cleanly.
+is writable, and detaches cleanly. ✅
+
+> Note: partition comes up as FAT16 (not FAT32) — expected for 64 MB,
+> `mkfs.vfat` picks FAT16 at this size. macOS mounts and labels it correctly;
+> no impact on Go CLI usage.
 
 ---
 
@@ -211,7 +215,12 @@ We want:
 
 **Checkpoint 3:** WENDYCONFIG auto-mounts on macOS after a real `dd` flash,
 is writable, and unmounts cleanly. Root expands to fill the remaining disk on
-first boot. All three partitions are intact.
+first boot. All three partitions are intact. ✅
+
+> Verified on hardware (117 GB microSD): p3 root expanded from 11.2 GB →
+> 116.8 GB on first boot. `expand-rootfs` found root at mmcblk0p3 (Part=3)
+> automatically via sysfs — the p2→p3 shift was completely transparent.
+> SSH as root (no password) confirmed the device is healthy.
 
 ---
 
