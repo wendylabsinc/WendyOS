@@ -40,6 +40,7 @@ DOCKER_DIR := $(PROJECT_DIR)/docker
 VOLUME_BUILD := wendyos-build-tmp
 VOLUME_SSTATE := wendyos-sstate-cache
 VOLUME_DOWNLOADS := wendyos-downloads
+VOLUME_CACHE := wendyos-build-cache
 
 # Colors for output
 CYAN := \033[0;36m
@@ -169,6 +170,7 @@ build: _check-setup _ensure-volumes
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
 			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
 			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
+			-v $(VOLUME_CACHE):$(DOCKER_WORKDIR)/build/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -211,6 +213,7 @@ build-sdk: _check-setup _ensure-volumes
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
 			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
 			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
+			-v $(VOLUME_CACHE):$(DOCKER_WORKDIR)/build/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -259,7 +262,7 @@ distclean:
 		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
 			rm -rf $(PROJECT_DIR)/build $(PROJECT_DIR)/downloads $(PROJECT_DIR)/sstate-cache; \
 			if [ "$$(uname)" = "Darwin" ]; then \
-				docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) 2>/dev/null || true; \
+				docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) $(VOLUME_CACHE) 2>/dev/null || true; \
 				printf "  Removed Docker volumes.\n"; \
 			fi; \
 			printf "$(GREEN)Distclean complete.$(NC)\n"; \
@@ -279,6 +282,7 @@ volumes-create:
 	@docker volume create $(VOLUME_BUILD) >/dev/null && printf "  Created $(VOLUME_BUILD)\n"
 	@docker volume create $(VOLUME_SSTATE) >/dev/null && printf "  Created $(VOLUME_SSTATE)\n"
 	@docker volume create $(VOLUME_DOWNLOADS) >/dev/null && printf "  Created $(VOLUME_DOWNLOADS)\n"
+	@docker volume create $(VOLUME_CACHE) >/dev/null && printf "  Created $(VOLUME_CACHE)\n"
 	@printf "$(GREEN)Volumes created.$(NC)\n"
 
 volumes-remove:
@@ -289,7 +293,7 @@ volumes-remove:
 	@printf "$(RED)WARNING: This will delete all build data in Docker volumes.$(NC)\n"
 	@read -p "Are you sure? [y/N] " confirm && \
 		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-			docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) 2>/dev/null || true; \
+			docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) $(VOLUME_CACHE) 2>/dev/null || true; \
 			printf "$(GREEN)Volumes removed.$(NC)\n"; \
 		else \
 			printf "Cancelled.\n"; \
@@ -488,10 +492,12 @@ _ensure-volumes:
 		docker volume inspect $(VOLUME_BUILD) >/dev/null 2>&1 || docker volume create $(VOLUME_BUILD) >/dev/null; \
 		docker volume inspect $(VOLUME_SSTATE) >/dev/null 2>&1 || docker volume create $(VOLUME_SSTATE) >/dev/null; \
 		docker volume inspect $(VOLUME_DOWNLOADS) >/dev/null 2>&1 || docker volume create $(VOLUME_DOWNLOADS) >/dev/null; \
+		docker volume inspect $(VOLUME_CACHE) >/dev/null 2>&1 || docker volume create $(VOLUME_CACHE) >/dev/null; \
 		docker run --rm \
 			-v $(VOLUME_BUILD):/vol/build \
 			-v $(VOLUME_SSTATE):/vol/sstate \
 			-v $(VOLUME_DOWNLOADS):/vol/downloads \
+			-v $(VOLUME_CACHE):/vol/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
-			/bin/bash -c 'sudo chown -R $$(id -u):$$(id -g) /vol/build /vol/sstate /vol/downloads' 2>/dev/null || true; \
+			/bin/bash -c 'sudo chown -R $$(id -u):$$(id -g) /vol/build /vol/sstate /vol/downloads /vol/cache' 2>/dev/null || true; \
 	fi
