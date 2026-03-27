@@ -13,7 +13,6 @@ jobs:
     runs-on:
       - runs-on
       - family=c7a.8xlarge
-      - hdd=1000
       - run-id=${{ github.run_id }}
     strategy:
       fail-fast: false
@@ -27,6 +26,12 @@ jobs:
             publisher_device: jetson-orin-nano
 
     steps:
+      - name: Restore build cache
+        uses: runs-on/snapshot@v1
+        with:
+          path: ${{ github.workspace }}
+          volume_size: 500
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
