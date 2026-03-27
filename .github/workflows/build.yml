@@ -3,8 +3,6 @@ name: Build WendyOS Images
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -12,7 +10,7 @@ jobs:
     name: Build ${{ matrix.device }}
     runs-on:
       - runs-on
-      - family=c7a.8xlarge
+      - family=c7a.16xlarge
       - run-id=${{ github.run_id }}
     strategy:
       fail-fast: false
@@ -83,6 +81,7 @@ jobs:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
           MACHINE: ${{ matrix.machine }}
           PUBLISHER_DEVICE: ${{ matrix.publisher_device }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
         run: |
           VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
           TOKEN=$(gcloud auth print-access-token)
