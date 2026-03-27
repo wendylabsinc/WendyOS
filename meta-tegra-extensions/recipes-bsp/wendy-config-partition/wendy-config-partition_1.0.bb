@@ -8,7 +8,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 DEPENDS = "dosfstools-native"
 
-COMPATIBLE_MACHINE = "(jetson-orin-nano-devkit-nvme-wendyos|jetson-agx-orin-devkit-nvme-wendyos)"
+COMPATIBLE_MACHINE = "(jetson-orin-nano-devkit-nvme-wendyos|jetson-agx-orin-devkit-nvme-wendyos|jetson-orin-nano-devkit-wendyos)"
 
 inherit deploy nopackages
 

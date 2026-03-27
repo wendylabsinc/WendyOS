@@ -6,32 +6,29 @@ EXTRA_IMAGEDEPENDS:append:tegra = " wendy-config-partition"
 
 tegraflash_custom_post:append() {
     if [ -f "external-flash.xml.in" ]; then
-        # Get the actual DTB filename
+        # NVMe: replace placeholders in the external partition layout XML
         DTB_NAME="$(basename ${KERNEL_DEVICETREE})"
-
-        # Replace placeholders with actual filenames
         sed -i \
             -e "s,DTB_FILE,${DTB_NAME}," \
             -e "s,DATAFILE,${IMAGE_LINK_NAME}.dataimg," \
             -e "s,APPFILE_b,${IMAGE_BASENAME}.ext4," \
             -e "s,APPFILE,${IMAGE_BASENAME}.ext4," \
             external-flash.xml.in
-
         bbnote "Replaced placeholders in external-flash.xml.in"
         bbnote "  DTB_FILE -> ${DTB_NAME}"
         bbnote "  DATAFILE -> ${IMAGE_LINK_NAME}.dataimg"
         bbnote "  APPFILE -> ${IMAGE_BASENAME}.ext4"
     else
-        bberror "external-flash.xml.in not found in tegraflash_custom_post"
-        bberror "Current directory: $(pwd)"
-        bberror "Files present: $(ls -la)"
+        # SD card: partition layout lives in flash.xml.in (the template XML);
+        # placeholder replacement for that file is handled by the base bbclass.
+        bbnote "No external-flash.xml.in (SD card machine — wendy_config is in template XML)"
     fi
 
     # Copy wendy-config FAT32 image into the tegraflash package directory so
-    # tegraparser_v2 can find it when processing external-flash.xml.in.
+    # tegraparser_v2 can find it when processing the partition layout XML.
     # create_tegraflash_pkg never auto-includes files from DEPLOY_DIR_IMAGE
     # just because they are referenced in a partition layout XML — each file
-    # must be copied explicitly.
+    # must be copied explicitly.  Required for both NVMe and SD card builds.
     if [ -f "${DEPLOY_DIR_IMAGE}/wendy-config.fat32.img" ]; then
         cp "${DEPLOY_DIR_IMAGE}/wendy-config.fat32.img" ./wendy-config.fat32.img
         bbnote "Copied wendy-config.fat32.img into tegraflash package"
