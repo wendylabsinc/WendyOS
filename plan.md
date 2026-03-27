@@ -289,7 +289,13 @@ Repeat the checks from Phase 3:
   `WENDYOS_CONFIG_PARTUUID` in the deploy conf ✓
 
 **Checkpoint 4:** The full implementation is working end-to-end with a stable,
-tracked partition UUID. Ready to commit.
+tracked partition UUID. Ready to commit. ✅
+
+> Verified on hardware (117 GB microSD): WENDYCONFIG auto-mounts on macOS after
+> `dd` flash at `/Volumes/WENDYCONFIG`, writable, UUID `f996c253-7632-47fb-af71-b320768977d9`
+> matches the deploy conf exactly. Root (p3) expanded from 11 GB → 116.8 GB on
+> first boot. `expand-rootfs` found root at `mmcblk0p3 Part=3` via sysfs —
+> the p2→p3 shift was completely transparent.
 
 ---
 
