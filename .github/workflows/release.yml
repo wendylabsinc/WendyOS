@@ -1,0 +1,110 @@
+name: Release WendyOS Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.device }}
+    permissions:
+      contents: read
+      id-token: write
+    runs-on:
+      - runs-on
+      - family=c7i-flex.8xlarge
+      - spot=false
+      - volume=200gb:gp3
+      - run-id=${{ github.run_id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: rpi5
+            machine: raspberrypi5-wendyos
+            publisher_device: raspberry-pi-5
+          - device: jetson
+            machine: jetson-orin-nano-devkit-nvme-wendyos
+            publisher_device: jetson-orin-nano
+
+    steps:
+      - name: Restore build cache
+        uses: runs-on/snapshot@v1
+        with:
+          path: ${{ github.workspace }}
+          volume_size: 500
+
+      - name: Fix workspace permissions
+        run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: wendyos
+
+      - name: Bootstrap build environment
+        working-directory: ${{ github.workspace }}
+        run: MACHINE=${{ matrix.device }} ./wendyos/bootstrap.sh
+
+      - name: Fix workspace permissions for Docker
+        run: chmod -R a+rwX ${{ github.workspace }} 2>/dev/null || true
+
+      - name: Build image
+        working-directory: ${{ github.workspace }}/wendyos
+        run: make build MACHINE=${{ matrix.machine }}
+
+      # --- Publish release ---
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Checkout publisher
+        uses: actions/checkout@v4
+        with:
+          repository: wendylabsinc/wendy-os-publisher
+          path: wendy-os-publisher
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: wendy-os-publisher/go.mod
+
+      - name: Publish release to GCS
+        env:
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
+          MACHINE: ${{ matrix.machine }}
+          PUBLISHER_DEVICE: ${{ matrix.publisher_device }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+        run: |
+          TOKEN=$(gcloud auth print-access-token)
+
+          # Select the main image artifact per device type
+          if [[ "$MACHINE" == raspberry* ]]; then
+            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
+          else
+            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
+          fi
+
+          ARGS=(
+            --device "$PUBLISHER_DEVICE"
+            --version "$RELEASE_VERSION"
+            --file "$IMAGE_FILE"
+            --access-token "$TOKEN"
+          )
+
+          # Include Mender OTA artifact if the build produced one
+          OTA_FILE=$(find "$DEPLOY_DIR" -maxdepth 1 -name "wendyos-image-${MACHINE}*.mender" -print -quit 2>/dev/null || true)
+          if [[ -n "$OTA_FILE" ]]; then
+            ARGS+=(--ota-update "$OTA_FILE")
+          fi
+
+          cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
+          go run upload_and_manifest.go "${ARGS[@]}"
