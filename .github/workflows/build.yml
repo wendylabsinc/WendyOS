@@ -29,6 +29,12 @@ jobs:
             publisher_device: jetson-orin-nano
 
     steps:
+      - name: Restore Docker image cache
+        uses: runs-on/snapshot@v1
+        with:
+          path: /var/lib/docker
+          volume_size: 50
+
       - name: Restore build cache
         uses: runs-on/snapshot@v1
         with:
