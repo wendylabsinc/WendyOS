@@ -24,7 +24,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN apt-get update && \
     apt-get -qy upgrade && \
     apt-get -qy install \
-        gawk wget git-core diffstat unzip texinfo gcc-multilib \
+        gawk wget git-core diffstat unzip texinfo \
         build-essential chrpath socat cpio \
         python3 python3-pip python3-pexpect python3-venv python3-git \
         xz-utils bzip2 libxml2-utils debianutils iputils-ping \
@@ -36,6 +36,11 @@ RUN apt-get update && \
         libncurses5-dev libncursesw5-dev bison flex patchutils \
         libssl-dev ca-certificates locales sudo mc quilt vim pkg-config \
         gdisk dosfstools bmap-tools && \
+    # gcc-multilib provides 32-bit x86 multilib headers and is only available
+    # on amd64. Skip it on arm64 (e.g. Apple Silicon Docker Desktop).
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        apt-get -qy install gcc-multilib; \
+    fi && \
     apt-get -qy clean
 
 # By default, Ubuntu uses dash as an alias for sh.
