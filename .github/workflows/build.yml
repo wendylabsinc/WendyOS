@@ -32,6 +32,9 @@ jobs:
           path: ${{ github.workspace }}
           volume_size: 500
 
+      - name: Fix workspace permissions
+        run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
