@@ -1,6 +1,4 @@
 
-#MACHINE = "jetson-orin-nano-devkit-wendyos"
-MACHINE = "jetson-orin-nano-devkit-nvme-wendyos"
 DL_DIR = "${TOPDIR}/../downloads"
 SSTATE_DIR = "${TOPDIR}/../sstate-cache"
 #TMPDIR = "${TOPDIR}/tmp"
