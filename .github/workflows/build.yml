@@ -45,7 +45,7 @@ jobs:
         run: MACHINE=${{ matrix.device }} ./wendyos/bootstrap.sh
 
       - name: Fix workspace permissions for Docker
-        run: chmod -R a+rwX ${{ github.workspace }}
+        run: chmod -R a+rwX ${{ github.workspace }} 2>/dev/null || true
 
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
