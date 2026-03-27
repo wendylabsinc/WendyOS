@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,15 +118,35 @@ func newWifiConnectCmd() *cobra.Command {
 				ssid = picked
 			}
 
-			// If no password was provided via flag, prompt for one.
-			if !cmd.Flags().Changed("password") {
-				fmt.Print("Password (leave empty for open networks): ")
-				passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-				fmt.Println()
-				if readErr != nil {
-					return fmt.Errorf("reading password: %w", readErr)
+			// If no password provided and terminal is interactive, offer keychain
+			// lookup (macOS only) or fall back to manual entry.
+			if !cmd.Flags().Changed("password") && term.IsTerminal(int(os.Stdin.Fd())) {
+				if supportsKeychainLookup {
+					fmt.Printf("Look up password for '%s' from keychain? (macOS will ask for permission) [Y/n] ", ssid)
+					reader := bufio.NewReader(os.Stdin)
+					line, _ := reader.ReadString('\n')
+					answer := strings.TrimSpace(strings.ToLower(line))
+
+					if answer == "" || answer == "y" || answer == "yes" {
+						if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
+							fmt.Println("Using saved password from keychain.")
+							password = kp
+						} else {
+							fmt.Println("Password not available from keychain.")
+						}
+					}
 				}
-				password = strings.TrimSpace(string(passwordBytes))
+
+				// If still no password, prompt for manual entry.
+				if password == "" {
+					fmt.Print("Password (leave empty for open networks): ")
+					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+					fmt.Println()
+					if readErr != nil {
+						return fmt.Errorf("reading password: %w", readErr)
+					}
+					password = strings.TrimSpace(string(passwordBytes))
+				}
 			}
 
 			// BLE WendyOS agent path (protobuf over L2CAP)

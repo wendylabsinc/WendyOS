@@ -57,3 +57,10 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 
 	return networks, nil
 }
+
+const supportsKeychainLookup = false
+
+// lookupKeychainPassword is not supported on Linux.
+func lookupKeychainPassword(_ string) (string, error) {
+	return "", nil
+}
