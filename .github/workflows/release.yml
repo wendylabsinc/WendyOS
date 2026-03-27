@@ -54,6 +54,9 @@ jobs:
         working-directory: ${{ github.workspace }}/wendyos
         run: make build MACHINE=${{ matrix.machine }}
 
+      - name: Fix deploy directory permissions
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/build/tmp/deploy" 2>/dev/null || true
+
       # --- Publish release ---
 
       - name: Authenticate to Google Cloud
