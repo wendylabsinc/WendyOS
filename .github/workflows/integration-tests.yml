@@ -22,7 +22,9 @@ jobs:
   discover:
     name: Discover (${{ matrix.runner.name }})
     if: github.event_name == 'push' || inputs.jobs == 'all' || inputs.jobs == 'discover'
-    runs-on: [self-hosted, '${{ matrix.runner.os }}', '${{ matrix.runner.arch }}']
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, '${{ matrix.runner.os }}', '${{ matrix.runner.arch }}']
     concurrency:
       group: discover-${{ matrix.runner.name }}
       cancel-in-progress: false
