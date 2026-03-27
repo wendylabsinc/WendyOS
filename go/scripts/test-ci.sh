@@ -113,6 +113,7 @@ if [[ "$WENDY" != "wendy" ]]; then
         echo -e "${RED}ERROR: wendy binary not found or not executable at $WENDY${RESET}"
         exit 1
     fi
+    WENDY="$(cd "$(dirname "$WENDY")" && pwd)/$(basename "$WENDY")"
 else
     if ! command -v wendy &>/dev/null; then
         echo -e "${RED}ERROR: 'wendy' not found on PATH${RESET}"
