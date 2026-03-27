@@ -1,10 +1,9 @@
-# The USB gadget NM connection uses ipv4.method=auto (DHCP client mode).
-# NM does not spawn dnsmasq in this mode; dnsmasq is present as a dependency
-# of NetworkManager itself. DBus support is enabled for NM integration in case
-# method=shared is used on other interfaces.
-# NOTE: if method=auto is used exclusively, the dbus PACKAGECONFIG can be removed.
+# dnsmasq configuration for NetworkManager integration.
+# dnsmasq is pulled into the image only when WENDYOS_USB_NET_MODE = "dhcp-server"
+# (via RDEPENDS in networkmanager_%.bbappend). This bbappend configures it for
+# NM's method=shared mode: DBus support is required for NM to manage dnsmasq.
 PACKAGECONFIG:append = " dbus"
 
 # Disable the system-wide dnsmasq.service so it does not conflict with
-# any NM-managed dnsmasq instances
+# the NM-managed dnsmasq instance
 SYSTEMD_AUTO_ENABLE = "disable"

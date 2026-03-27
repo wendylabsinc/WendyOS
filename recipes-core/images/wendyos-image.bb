@@ -78,8 +78,8 @@ IMAGE_INSTALL:append = " \
         )} \
     "
 
-# Note: gadget-network-config (standalone dnsmasq) removed
-# NetworkManager's connection sharing provides DHCP via dnsmasq with DBus support
+# Note: gadget-network-config (standalone dnsmasq) removed.
+# USB gadget IPv4 mode is controlled by WENDYOS_USB_NET_MODE (see wendyos.conf).
 
 IMAGE_ROOTFS_SIZE ?= "8192"
 IMAGE_ROOTFS_EXTRA_SPACE:append = "${@bb.utils.contains("DISTRO_FEATURES", "systemd", " + 4096", "", d)}"
@@ -90,6 +90,8 @@ BUILDCFG_VARS += " \
     WENDYOS_DEBUG \
     WENDYOS_DEBUG_UART \
     WENDYOS_USB_GADGET \
+    WENDYOS_USB_NET_MODE \
+    WENDYOS_MDNS_INTERFACES \
     WENDYOS_PERSIST_JOURNAL_LOGS \
     WENDYOS_UPDATE_BOOTLOADER \
     WENDYOS_DEEPSTREAM \

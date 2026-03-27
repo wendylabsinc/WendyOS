@@ -69,33 +69,108 @@ fi
 # PHASE 2:
 log_info "Phase 2: Setting up NetworkManager user connections persistence"
 
-# Create directory structure for NetworkManager connections
+# Create directory structure for NetworkManager user connections
+# Note: distro-managed profiles (usb-gadget.nmconnection) live in
+# /usr/lib/NetworkManager/system-connections/ (read-only, on rootfs).
+# This directory is only for user-added connections (WiFi, VPN, etc.)
+# which NM writes to /etc/NetworkManager/system-connections/.
 if [ ! -d "${DATA_ETC}/${NM_CONNECTIONS}" ]
 then
-    log_info "Creating ${DATA_ETC}/${NM_CONNECTIONS}/ for persistent WiFi configs"
+    log_info "Creating ${DATA_ETC}/${NM_CONNECTIONS}/ for persistent user connections"
     mkdir -p "${DATA_ETC}/${NM_CONNECTIONS}"
     chmod 755 "${DATA_ETC}/${NM_CONNECTIONS}"
+fi
 
-    # Copy initial connection profiles from rootfs (e.g., usb-gadget.nmconnection)
-    if [ -d "/etc/${NM_CONNECTIONS}" ]
-    then
-        # Check if there are any files to copy
-        if ls "/etc/${NM_CONNECTIONS}"/*.nmconnection >/dev/null 2>&1
+# Migration: sync distro-managed profiles between /usr/lib and /data.
+#
+# Distro profiles live in /usr/lib/NetworkManager/system-connections/ (rootfs,
+# read-only, updated on every OTA). User-added/modified profiles live in
+# /data/etc/NetworkManager/system-connections/ (persistent, bind-mounted to /etc).
+# NM gives /etc priority over /usr/lib for same-named files.
+#
+# Problem: if /data has a stale distro copy, it shadows the /usr/lib version
+# and blocks OTA updates from taking effect. But if the user intentionally
+# modified the profile via nmcli, we must preserve their changes.
+#
+# Solution: track the distro version hash (like dpkg conffiles). On each boot:
+#   - If /data file hash matches the stored distro hash → not user-modified → remove
+#   - If /data file hash differs from stored hash → user modified → keep
+#   - Update the stored hash from the current /usr/lib version
+#
+NM_LIB_CONNECTIONS="/usr/lib/NetworkManager/system-connections"
+NM_HASH_DIR="${DATA_ETC}/${NM_CONNECTIONS}/.distro-hashes"
+
+# Migration runs with set +e so failures (disk full, I/O error) never abort the
+# script before the bind mounts below are established. Migration is best-effort;
+# bind mounts are critical for device operation.
+if [ -d "${NM_LIB_CONNECTIONS}" ] && [ -d "${DATA_ETC}/${NM_CONNECTIONS}" ]
+then
+    set +e
+    mkdir -p "${NM_HASH_DIR}" 2>/dev/null
+
+    for lib_file in "${NM_LIB_CONNECTIONS}"/*.nmconnection
+    do
+        [ -f "${lib_file}" ] || continue
+        local_name=$(basename "${lib_file}")
+        data_file="${DATA_ETC}/${NM_CONNECTIONS}/${local_name}"
+        hash_file="${NM_HASH_DIR}/${local_name}.sha256"
+
+        if [ -f "${data_file}" ]
         then
-            log_info "Copying initial NetworkManager connections from rootfs"
-            cp -a "/etc/${NM_CONNECTIONS}"/*.nmconnection \
-                "${DATA_ETC}/${NM_CONNECTIONS}/" 2>/dev/null || true
+            stored_hash=""
+            if [ -f "${hash_file}" ]
+            then
+                stored_hash=$(cat "${hash_file}" 2>/dev/null) || stored_hash=""
+            fi
 
-            # Ensure correct permissions (NetworkManager requires 0600)
-            chmod 600 "${DATA_ETC}/${NM_CONNECTIONS}"/*.nmconnection 2>/dev/null || true
-        else
-            log_info "No initial connection profiles found in rootfs"
+            if [ -n "${stored_hash}" ]
+            then
+                # Hash file exists and is valid: compare /data file against
+                # the stored distro hash. If they match, the user never
+                # modified it → safe to remove.
+                data_hash=$(sha256sum "${data_file}" 2>/dev/null | awk '{print $1}') || data_hash=""
+                if [ -n "${data_hash}" ] && [ "${data_hash}" = "${stored_hash}" ]
+                then
+                    log_info "Removing stale distro profile from /data: ${local_name}"
+                    rm -f "${data_file}"
+                    rm -f "${data_file}.backup" "${data_file}~" "${data_file}.un~" \
+                          "${DATA_ETC}/${NM_CONNECTIONS}/.${local_name}.un~"
+                else
+                    log_info "Keeping user-modified profile in /data: ${local_name}"
+                fi
+            else
+                # No valid hash: first migration from the old system, or
+                # hash file was corrupted (e.g., power loss during write).
+                # The /data copy was originally installed by setup-etc-binds
+                # (not user-created), so it is safe to remove.
+                log_info "First migration — removing old distro profile from /data: ${local_name}"
+                rm -f "${data_file}"
+                rm -f "${data_file}.backup" "${data_file}~" "${data_file}.un~" \
+                      "${DATA_ETC}/${NM_CONNECTIONS}/.${local_name}.un~"
+            fi
         fi
-    fi
+
+        # Update the stored hash from the current /usr/lib version so the next
+        # boot can detect whether the user has modified the profile.
+        # Atomic write: write to temp file then rename to avoid corruption on
+        # power failure.
+        if sha256sum "${lib_file}" 2>/dev/null | awk '{print $1}' > "${hash_file}.tmp" 2>/dev/null
+        then
+            mv "${hash_file}.tmp" "${hash_file}" 2>/dev/null || \
+                log_error "Failed to update hash for ${local_name}"
+        else
+            log_error "Failed to compute hash for ${local_name} (disk full?)"
+            rm -f "${hash_file}.tmp" 2>/dev/null
+        fi
+    done
+
+    set -e
 fi
 
 # Bind-mount NetworkManager system-connections directory
-# This allows user-configured WiFi/VPN connections to persist across OTA updates
+# This persists user-added connections (WiFi, VPN) across OTA updates.
+# Distro profiles in /usr/lib/NetworkManager/system-connections/ are not
+# affected — they come from the rootfs and are updated on every OTA.
 if ! mountpoint -q "/etc/${NM_CONNECTIONS}"
 then
     log_info "Bind-mounting ${DATA_ETC}/${NM_CONNECTIONS} → /etc/${NM_CONNECTIONS}"

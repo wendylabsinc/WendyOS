@@ -11,6 +11,8 @@ This repository provides the meta-layer and build flow to build **WendyOS** for 
 | Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-wendyos` | eMMC/SD |
 | Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-nvme-wendyos` | NVMe |
 | Jetson AGX Orin DevKit | Tegra234 | 64GB | `jetson-agx-orin-devkit-nvme-wendyos` | NVMe |
+| Raspberry Pi 5 | Broadcom BCM2712 | 8GB | `raspberrypi5-wendyos` | SD |
+| Raspberry Pi 5 | Broadcom BCM2712 | 8GB | `raspberrypi5-nvme-wendyos` | NVMe |
 
 ## TL;DR
 
@@ -33,6 +35,7 @@ make flash-to-external  # Flash to external NVMe/USB drive
     - [Flashing the .img File](#flashing-the-img-file)
     - [Alternative: Flashing with initrd-flash (USB Recovery Mode)](#alternative-flashing-with-initrd-flash-usb-recovery-mode)
   - [Available Images](#available-images)
+- [USB Gadget Networking](#usb-gadget-networking)
 - [Mender OTA Updates](#mender-ota-updates)
   - [Partition Layout](#partition-layout)
   - [Manual Update](#manual-update)
@@ -49,6 +52,12 @@ make flash-to-external  # Flash to external NVMe/USB drive
   - [Supported Machines](#supported-machines)
   - [Build](#build)
   - [Flash the Image](#flash-the-image)
+- [QEMU (ARM64)](#qemu-arm64)
+  - [Prerequisites](#qemu-prerequisites)
+  - [Build](#qemu-build)
+  - [Run](#run)
+  - [Networking](#networking)
+  - [Cleanup](#cleanup)
 - [Architecture Notes](#architecture-notes)
 - [License](#license)
 
@@ -132,15 +141,22 @@ make shell
 
 **Build for different targets:**
 ```bash
-# Build for Orin Nano NVMe (default)
+# Jetson (Orin Nano NVMe — default)
+make setup MACHINE=jetson
 make build
 
-# Build for AGX Orin 64GB (NVMe)
-make build MACHINE=jetson-agx-orin-devkit-nvme-wendyos
+# Raspberry Pi 5
+make setup MACHINE=rpi5
+make build
 
-# Build for Orin Nano SD card/eMMC
-make build MACHINE=jetson-orin-nano-devkit-wendyos
+# QEMU (ARM64, for development)
+make setup MACHINE=qemu
+make build
 ```
+
+> To build for a different Jetson variant (e.g., AGX Orin or eMMC/SD card), run
+> `make setup MACHINE=jetson` then edit `build/conf/local.conf` to set the desired
+> `MACHINE` value before running `make build`.
 
 #### Option B: Manual Steps
 
@@ -503,6 +519,53 @@ The build produces multiple image formats:
 - `dataimg` - Data partition image
 - `ext4` - Raw rootfs (for debugging)
 
+## USB Gadget Networking
+
+When a Jetson running WendyOS is connected via USB-C, it exposes a composite USB gadget
+(NCM network + ACM serial). The Jetson configures `usb0` as a **DHCP client** — it does
+not assign its own address. The host must provide an IP via DHCP.
+
+### Linux host
+
+Use `scripts/manage-net-sharing.sh` from this repository:
+
+```bash
+# List detected WendyOS gadget devices:
+./scripts/manage-net-sharing.sh list
+
+# Auto-detect interface and enable internet sharing:
+./scripts/manage-net-sharing.sh enable
+
+# Check status (shows host IP and board IP once connected):
+./scripts/manage-net-sharing.sh status
+
+# Test connectivity:
+./scripts/manage-net-sharing.sh test
+
+# Disable sharing:
+./scripts/manage-net-sharing.sh disable
+```
+
+The script auto-detects the Jetson by USB manufacturer/product string or USB ID
+(`1d6b:0104`). It uses NetworkManager `method=shared`, which assigns `10.42.0.1` to the
+host, starts dnsmasq for DHCP, and enables NAT so the Jetson can reach the internet
+through the host.
+
+### macOS host
+
+Enable **Internet Sharing** in **System Settings → General → Sharing → Internet Sharing**:
+- Share connection from: **Wi-Fi** (or whichever interface has internet)
+- To computers using: the Jetson's USB NCM interface (shown as "RNDIS/Ethernet Gadget"
+  or "Ethernet Adapter" depending on macOS version)
+
+macOS assigns itself `192.168.2.1` and hands the Jetson an address in `192.168.2.x`.
+
+> **Note:** QEMU networking (`10.43.0.0/24`) is independent of Jetson USB gadget
+> networking (`10.42.0.0/24`). Both can be active simultaneously without conflict.
+
+For a detailed explanation of the full USB-C enumeration stack, see
+[`docs/usb-gadget-vbus-notification-deep-dive.md`](docs/usb-gadget-vbus-notification-deep-dive.md).
+
 ## Mender OTA Updates
 
 The system includes Mender for Over-The-Air updates with A/B partition redundancy.
@@ -693,12 +756,9 @@ enabled on `ttyAMA0` at 115200 baud.
    ```
 
    This copies `conf/template/bblayers.conf.rpi5` and `conf/template/local.conf.rpi5`
-   into `build/conf/`. The default BitBake machine is `raspberrypi5-wendyos` (SD card).
-   To target NVMe, edit `build/conf/local.conf` and change:
-
-   ```
-   MACHINE = "raspberrypi5-nvme-wendyos"
-   ```
+   into `build/conf/`. The default machine is `raspberrypi5-wendyos` (SD card boot).
+   The NVMe variant (`raspberrypi5-nvme-wendyos`) is also supported and can be selected
+   by editing `build/conf/local.conf`.
 
 2. **Build the image** inside the Docker container:
 
@@ -743,6 +803,88 @@ For SD card builds, insert the flashed card into the RPi5 and power on. For NVMe
 ensure the NVMe drive is connected via a PCIe adapter and that the EEPROM boot order is
 configured to boot from NVMe (see `rpi-eeprom-nvme-config` package included in the NVMe
 machine).
+
+## QEMU (ARM64)
+
+QEMU provides a virtual ARM64 machine for development and testing without physical hardware.
+It runs the same WendyOS image as physical devices but uses `virtio-net` instead of the USB
+gadget for networking.
+
+### QEMU Prerequisites
+
+Install `qemu-system-aarch64` on your host:
+
+```bash
+# Debian/Ubuntu
+sudo apt install qemu-system-arm
+
+# Fedora/RHEL
+sudo dnf install qemu-system-aarch64
+
+# Arch
+sudo pacman -S qemu-system-aarch64
+```
+
+### QEMU Build
+
+```bash
+make setup MACHINE=qemu
+make build
+```
+
+The build produces:
+```
+build/tmp/deploy/images/qemuarm64-wendyos/wendyos-image-qemuarm64-wendyos.rootfs.ext4
+build/tmp/deploy/images/qemuarm64-wendyos/Image
+```
+
+### Run
+
+Run the QEMU image directly from the **host** (not inside the Docker container):
+
+```bash
+./scripts/run-qemu.sh
+```
+
+**Options:**
+```bash
+./scripts/run-qemu.sh --build-dir /path/to/build   # custom build directory
+./scripts/run-qemu.sh --usb 1234:5678               # pass through a USB device
+./scripts/run-qemu.sh --dry-run                     # show what would run without executing
+```
+
+To exit QEMU: press **Ctrl-A**, then **X**.
+
+### Networking
+
+`run-qemu.sh` automatically sets up host networking on first run by calling
+`scripts/manage-qemu-network-host.sh setup`. This creates:
+
+- A TAP interface `tap-wendyos` and bridge `br-wendyos` on the host
+- Host IP `10.43.0.1/24`, QEMU guest receives an address in `10.43.0.10–10.43.0.250` via dnsmasq
+- NAT via iptables for internet access from inside the VM
+
+You may be prompted for your `sudo` password since creating network interfaces requires
+elevated privileges.
+
+> **Note:** QEMU networking (`10.43.0.0/24`) is independent of Jetson USB gadget networking
+> (`10.42.0.0/24`). Both can be active simultaneously on the same host without conflict.
+> Use `scripts/manage-net-sharing.sh` to manage internet sharing for a connected Jetson device.
+
+### Cleanup
+
+The bridge and TAP interface persist after QEMU exits (so subsequent runs start faster).
+When you no longer need the QEMU network, remove it:
+
+```bash
+sudo ./scripts/manage-qemu-network-host.sh cleanup
+```
+
+To check the current state:
+
+```bash
+./scripts/manage-qemu-network-host.sh status
+```
 
 ## Architecture Notes
 

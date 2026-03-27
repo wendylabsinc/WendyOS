@@ -11,10 +11,10 @@ wait-device-timeout=60000
 mac-address-blacklist=
 
 [ipv4]
-method=auto
+method=@USB_NET_MODE@
 dns-search=
 route-metric=700
-# Uses DHCP to get IP from host computer's internet sharing.
+# IPv4 mode is set at build time via WENDYOS_USB_NET_MODE (see wendyos.conf).
 # High route-metric ensures WiFi/eth (auto-metric ~100-600) is preferred as
 # the default internet route when available. usb0 becomes the fallback.
 
