@@ -56,6 +56,21 @@ The device entitlement allows the container to access the device's hardware.
 
 The mounts entitlement allows the container to access the device's filesystem.
 
+## Input
+
+The input entitlement allows the container to access HID input devices such as barcode scanners, keyboards, and other devices that appear under `/dev/input/`. This is separate from the USB entitlement — USB covers `/dev/bus/usb` (raw USB access), while input covers the higher-level Linux input subsystem.
+
+```json
+{
+    "type": "input"
+}
+```
+
+The container receives:
+- A bind mount of `/dev/input/` (including `by-id/` symlinks for stable device identification)
+- Membership in the `input` group (GID 105) for device permissions
+- A cgroup device rule allowing access to input devices (major 13)
+
 ## USB
 
 The USB entitlement allows the container to access USB devices.
