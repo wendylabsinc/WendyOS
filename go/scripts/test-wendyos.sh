@@ -150,6 +150,11 @@ for example in "${EXAMPLES[@]}"; do
             continue
         fi
 
+        # Generate wendy.json via wendy init if missing (swift/python only)
+        case "$lang" in
+            swift|python) ensure_wendy_json "$dir" "$lang" "wendyos" "$WENDY" ;;
+        esac
+
         # Check wendy.json exists
         if [[ ! -f "$dir/wendy.json" ]]; then
             skip_test "$test_name (no wendy.json)"
@@ -181,6 +186,9 @@ for example in "${EXAMPLES[@]}"; do
         # Post-cleanup: stop and remove
         "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
         "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+
+        # Clean up generated wendy.json
+        cleanup_generated_wendy_json "$dir"
     done
 
     echo ""

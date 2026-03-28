@@ -102,19 +102,23 @@ echo -e "${BOLD}==> Phase 4: Swift samples${RESET}"
 
 FOUND=0
 
-while IFS= read -r wendy_json; do
-    dir="$(dirname "$wendy_json")"
-
-    # Only run Swift projects (must have Package.swift)
-    if [[ ! -f "$dir/Package.swift" ]]; then
-        continue
-    fi
+while IFS= read -r package_swift; do
+    dir="$(dirname "$package_swift")"
 
     # Extract test name relative to samples dir
     test_name="${dir#"$SAMPLES_DIR/"}"
 
+    # Generate wendy.json via wendy init if missing
+    ensure_wendy_json "$dir" "swift" "wendy-lite" "$WENDY"
+
+    # Still need wendy.json to proceed
+    if [[ ! -f "$dir/wendy.json" ]]; then
+        skip_test "$test_name (no wendy.json)"
+        continue
+    fi
+
     # Extract appId
-    app_id=$(jq -r '.appId' "$wendy_json" 2>/dev/null)
+    app_id=$(jq -r '.appId' "$dir/wendy.json" 2>/dev/null)
     if [[ -z "$app_id" || "$app_id" == "null" ]]; then
         skip_test "$test_name (no appId)"
         continue
@@ -133,7 +137,10 @@ while IFS= read -r wendy_json; do
     "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
     "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
 
-done < <(find "$SAMPLES_DIR" -name wendy.json -type f 2>/dev/null | sort)
+    # Clean up generated wendy.json
+    cleanup_generated_wendy_json "$dir"
+
+done < <(find "$SAMPLES_DIR" -name Package.swift -type f 2>/dev/null | sort)
 
 if [[ $FOUND -eq 0 ]]; then
     echo -e "${YELLOW}No Swift samples found in repo.${RESET}"
