@@ -216,3 +216,46 @@ func TestNewAuthCmd(t *testing.T) {
 		}
 	}
 }
+
+func makeELFHeader(machine uint16) []byte {
+	hdr := make([]byte, 20)
+	hdr[0], hdr[1], hdr[2], hdr[3] = 0x7f, 'E', 'L', 'F'
+	hdr[4] = 2 // 64-bit
+	hdr[5] = 1 // little-endian
+	hdr[18] = byte(machine)
+	hdr[19] = byte(machine >> 8)
+	return hdr
+}
+
+func TestCheckELFArchitecture(t *testing.T) {
+	amd64ELF := makeELFHeader(62)
+	arm64ELF := makeELFHeader(183)
+	notELF := []byte("#!/bin/sh\necho hi\n")
+
+	cases := []struct {
+		name       string
+		data       []byte
+		deviceArch string
+		wantErr    bool
+	}{
+		{"amd64 binary on amd64 device", amd64ELF, "amd64", false},
+		{"arm64 binary on arm64 device", arm64ELF, "arm64", false},
+		{"amd64 binary on arm64 device", amd64ELF, "arm64", true},
+		{"arm64 binary on amd64 device", arm64ELF, "amd64", true},
+		{"non-ELF accepted on any device", notELF, "arm64", false},
+		{"too short data accepted", []byte{0x7f, 'E'}, "amd64", false},
+		{"unsupported device arch rejected", amd64ELF, "riscv64", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkELFArchitecture(tc.data, tc.deviceArch)
+			if tc.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
