@@ -206,9 +206,10 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 
 		// Mount a resolv.conf from the host so DNS works inside the container.
 		// The container has its own mount namespace, so its rootfs resolv.conf
-		// may be empty. We prefer systemd-resolved's upstream file because
-		// /etc/resolv.conf on systemd hosts often points to 127.0.0.53 (the
-		// stub resolver), which is not reachable from the container. When
+		// may be empty. Prefer systemd-resolved's upstream file, since on
+		// systemd hosts /etc/resolv.conf often points to the 127.0.0.53 stub
+		// listener; using the upstream file avoids depending on that stub in
+		// environments where the container has its own network namespace. When
 		// systemd-resolved is not in use, fall back to the host's /etc/resolv.conf.
 		const resolvedConf = "/run/systemd/resolve/resolv.conf"
 		alreadyMounted := false
