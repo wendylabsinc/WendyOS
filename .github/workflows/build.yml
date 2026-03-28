@@ -29,17 +29,17 @@ jobs:
             publisher_device: jetson-orin-nano
 
     steps:
-      - name: Restore Docker image cache
-        uses: runs-on/snapshot@v1
-        with:
-          path: /var/lib/docker
-          volume_size: 50
-
       - name: Restore build cache
         uses: runs-on/snapshot@v1
         with:
           path: ${{ github.workspace }}
           volume_size: 500
+
+      - name: Restore Docker image cache
+        uses: runs-on/snapshot@v1
+        with:
+          path: /var/lib/docker
+          volume_size: 50
 
       - name: Fix workspace permissions
         run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
