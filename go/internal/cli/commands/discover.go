@@ -681,7 +681,7 @@ func deviceInfoFromRow(row bubbleTable.Row) discoverDeviceInfo {
 		Name:    row[0],
 		Type:    row[1],
 		Address: row[2],
-		Version: row[3],
+		Version: strings.TrimPrefix(row[3], "* "),
 	}
 }
 

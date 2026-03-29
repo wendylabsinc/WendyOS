@@ -304,7 +304,7 @@ func handleDefaultDeviceRecovery(ctx context.Context, hostname string, origErr e
 	choice := promptDefaultDeviceRecovery(hostname)
 	switch choice {
 	case recoveryDiscover:
-		return pickDevice(ctx, excludeProviders, excludeBluetooth)
+		return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
 	case recoveryUnsetDefault:
 		cfg, err := config.Load()
 		if err != nil {
@@ -363,10 +363,12 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		if !cfg.suppressProvisioningHint {
 			suggestProvisioning(conn)
 		}
-		var updateErr error
-		conn, updateErr = checkAndOfferUpdate(ctx, conn)
-		if updateErr != nil {
-			return nil, updateErr
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
 		}
 		return conn, nil
 	}
@@ -376,7 +378,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 	if pickErr != nil {
 		return nil, pickErr
 	}
@@ -449,8 +451,9 @@ func suggestProvisioning(conn *grpcclient.AgentConnection) {
 // checkAndOfferUpdate probes the agent version and, when the agent is behind
 // the CLI, either warns (non-interactive) or prompts [Y/n] (interactive). If
 // the user accepts, it downloads the latest release, uploads it, and waits for
-// the agent to restart, returning a fresh connection. On decline or any error
-// during the update the original conn is returned unchanged.
+// the agent to restart, returning a fresh connection. On decline, or if the
+// upload fails, the original conn is returned unchanged. If the upload succeeds
+// but the agent does not come back, conn is closed and an error is returned.
 func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
 	if jsonOutput {
 		return conn, nil
@@ -465,6 +468,10 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	agentVer := resp.GetVersion()
 	// Dev CLI builds skip the update check entirely.
 	if version.Version == "dev" {
+		return conn, nil
+	}
+	// Unknown agent version — skip to avoid spurious update prompts.
+	if agentVer == "" {
 		return conn, nil
 	}
 	if version.CompareVersions(version.Version, agentVer) <= 0 {
@@ -600,7 +607,17 @@ type resolveConfig struct {
 	excludeProviderKeys      map[string]bool
 	excludeBluetooth         bool
 	suppressProvisioningHint bool
+	suppressUpdateCheck      bool
 	nonInteractive           bool
+}
+
+// SuppressUpdateCheck prevents connectToAgent from running the automatic
+// agent-version check. Use this for commands that manage updates explicitly
+// (e.g. "wendy device update") to avoid a double-prompt.
+func SuppressUpdateCheck() resolveOption {
+	return func(c *resolveConfig) {
+		c.suppressUpdateCheck = true
+	}
 }
 
 // SuppressProvisioningHint prevents connectToAgent from printing the
@@ -702,10 +719,12 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 			}
 			return nil, err
 		}
-		var updateErr error
-		conn, updateErr = checkAndOfferUpdate(ctx, conn)
-		if updateErr != nil {
-			return nil, updateErr
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
 		}
 		return &SelectedDevice{Agent: conn}, nil
 	}
@@ -715,7 +734,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 }
 
 // findDeviceByID searches all available providers for a device whose ID
@@ -868,7 +887,7 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 // LAN discovery runs continuously so devices that come online after the
 // initial scan still appear in the picker.
 // excludeProviders hides the named provider keys from the picker.
-func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	picker := tui.NewPicker()
 	picker.MergeItem = mergePickerItem
 	p := tea.NewProgram(picker)
@@ -1031,10 +1050,12 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			}
 			conn, err := connectWithAutoTLS(ctx, addr)
 			if err == nil {
-				var updateErr error
-				conn, updateErr = checkAndOfferUpdate(ctx, conn)
-				if updateErr != nil {
-					return nil, updateErr
+				if !suppressUpdateCheck {
+					var updateErr error
+					conn, updateErr = checkAndOfferUpdate(ctx, conn)
+					if updateErr != nil {
+						return nil, updateErr
+					}
 				}
 				return &SelectedDevice{Agent: conn}, nil
 			}
