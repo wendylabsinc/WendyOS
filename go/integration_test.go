@@ -180,6 +180,10 @@ func (m *statefulContainerdClient) StartContainer(_ context.Context, appName str
 	return ch, nil
 }
 
+func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader) (<-chan services.ContainerOutput, error) {
+	return m.StartContainer(context.Background(), appName)
+}
+
 // getLayerData returns the data stored for a given digest, for test assertions.
 func (m *statefulContainerdClient) getLayerData(digest string) ([]byte, bool) {
 	m.mu.Lock()

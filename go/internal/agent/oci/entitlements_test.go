@@ -100,6 +100,47 @@ func TestApplyEntitlements_Network_Host(t *testing.T) {
 	}
 }
 
+func TestApplyEntitlements_Network_Host_ResolvConf(t *testing.T) {
+	const resolvedConf = "/run/systemd/resolve/resolv.conf"
+	_, errSystemd := os.Stat(resolvedConf)
+	_, errHost := os.Stat("/etc/resolv.conf")
+	if errSystemd != nil && errHost != nil {
+		t.Skip("no resolv.conf on host; skipping DNS mount assertion")
+	}
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementNetwork, Mode: "host"},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// A container with host networking but its own mount namespace needs
+	// /etc/resolv.conf bind-mounted from the host; otherwise the container
+	// rootfs may have an empty file and all DNS lookups fail.
+	if !hasMountDest(spec, "/etc/resolv.conf") {
+		t.Fatal("host network entitlement did not mount /etc/resolv.conf")
+	}
+
+	for _, m := range spec.Mounts {
+		if m.Destination == "/etc/resolv.conf" {
+			if m.Source != resolvedConf && m.Source != "/etc/resolv.conf" {
+				t.Errorf("/etc/resolv.conf source = %q, want %q or %q",
+					m.Source, resolvedConf, "/etc/resolv.conf")
+			}
+			if m.Type != "bind" {
+				t.Errorf("/etc/resolv.conf mount type = %q, want \"bind\"", m.Type)
+			}
+			break
+		}
+	}
+}
+
 func TestApplyEntitlements_Network_Default(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
@@ -376,6 +417,64 @@ func TestApplyEntitlements_Multiple(t *testing.T) {
 	// Persist
 	if !hasMountDest(spec, "/models") {
 		t.Error("missing /models mount")
+	}
+}
+
+func TestApplyEntitlements_Input(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementInput},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// Should add input group GID 105.
+	if !hasGID(spec, 105) {
+		t.Error("input entitlement did not add GID 105")
+	}
+
+	// Should mount /dev/input.
+	if !hasMountDest(spec, "/dev/input") {
+		t.Error("input entitlement did not add /dev/input mount")
+	}
+
+	// Verify mount options.
+	for _, m := range spec.Mounts {
+		if m.Destination == "/dev/input" {
+			if m.Source != "/dev/input" {
+				t.Errorf("input mount source = %q, want %q", m.Source, "/dev/input")
+			}
+			if m.Type != "bind" {
+				t.Errorf("input mount type = %q, want %q", m.Type, "bind")
+			}
+			if !slices.Contains(m.Options, "rbind") {
+				t.Error("input mount missing rbind option")
+			}
+			if !slices.Contains(m.Options, "nosuid") {
+				t.Error("input mount missing nosuid option")
+			}
+			if !slices.Contains(m.Options, "noexec") {
+				t.Error("input mount missing noexec option")
+			}
+			break
+		}
+	}
+
+	// Should add a cgroup rule for input devices (major 13).
+	foundInputRule := false
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Major != nil && *d.Major == 13 && d.Allow {
+			foundInputRule = true
+			break
+		}
+	}
+	if !foundInputRule {
+		t.Error("input entitlement did not add cgroup device rule (major 13)")
 	}
 }
 

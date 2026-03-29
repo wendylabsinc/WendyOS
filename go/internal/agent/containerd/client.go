@@ -612,6 +612,71 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	return outputCh, nil
 }
 
+// StartContainerWithStdin is like StartContainer but attaches the provided
+// stdin reader to the container's standard input.
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	c.deleteStaleTask(ctx, container, appName)
+
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			c.logger.Warn("Orphaned task detected, force-deleting and recreating container", zap.String("app_name", appName))
+			c.forceDeleteTask(ctx, appName)
+			if rerr := c.recreateContainer(ctx, container, appName); rerr != nil {
+				c.logger.Error("Failed to recreate container", zap.Error(rerr))
+			} else {
+				container, err = c.client.LoadContainer(ctx, appName)
+				if err == nil {
+					task, err = container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+				}
+			}
+		}
+		if err != nil {
+			stdoutR.Close()
+			stdoutW.Close()
+			stderrR.Close()
+			stderrW.Close()
+			return nil, fmt.Errorf("creating task for %q: %w", appName, err)
+		}
+	}
+
+	exitStatusCh, err := task.Wait(ctx)
+	if err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+
+	outputCh := make(chan services.ContainerOutput, 64)
+	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
+
+	return outputCh, nil
+}
+
 // deleteStaleTask attempts to load and force-delete any existing task for the
 // container. It handles both the normal case (task loadable) and the edge case
 // where the task exists in containerd but container.Task() can't load it.

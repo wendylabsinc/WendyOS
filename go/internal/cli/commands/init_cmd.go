@@ -86,6 +86,7 @@ var wendyOSEntitlementQuestions = []entitlementQuestion{
 	{"Does your app need I2C bus access?", appconfig.EntitlementI2C, "I2C bus devices"},
 	{"Does your app need audio input/output?", appconfig.EntitlementAudio, "Microphone and speaker access"},
 	{"Does your app need camera access?", appconfig.EntitlementCamera, "Camera device access"},
+	{"Does your app need HID input device access (barcode scanners, keyboards)?", appconfig.EntitlementInput, "HID input devices"},
 	{"Does your app need persistent storage?", appconfig.EntitlementPersist, "Data persisted across restarts"},
 }
 

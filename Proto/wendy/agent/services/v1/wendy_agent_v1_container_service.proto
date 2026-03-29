@@ -11,6 +11,7 @@ service WendyContainerService {
     rpc CreateContainerWithProgress(CreateContainerRequest) returns (stream CreateContainerProgressResponse);
     rpc RunContainer(RunContainerLayersRequest) returns (stream RunContainerLayersResponse);
     rpc StartContainer(StartContainerRequest) returns (stream RunContainerLayersResponse);
+    rpc AttachContainer(stream AttachContainerRequest) returns (stream RunContainerLayersResponse);
     rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
     rpc DeleteContainer(DeleteContainerRequest) returns (DeleteContainerResponse);
     rpc ListContainers(ListContainersRequest) returns (stream ListContainersResponse);
@@ -100,6 +101,15 @@ message CreateContainerProgressResponse {
 
 message StartContainerRequest {
     string app_name = 1;
+}
+
+// AttachContainerRequest is the client-to-server message for AttachContainer.
+// The first message must set app_name; subsequent messages carry stdin data.
+message AttachContainerRequest {
+    oneof request_type {
+        string app_name = 1;
+        bytes stdin_data = 2;
+    }
 }
 
 message RunContainerLayerHeader {

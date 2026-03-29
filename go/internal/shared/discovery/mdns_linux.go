@@ -151,6 +151,7 @@ func browseMDNSHashicorp(ctx context.Context, serviceType string, timeout time.D
 func queryInterfaceMDNS(_ context.Context, iface *net.Interface, serviceType string, timeout time.Duration) []MDNSService {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
 	var services []MDNSService
+	seen := make(map[string]bool)
 
 	done := make(chan struct{})
 	go func() {
@@ -158,11 +159,17 @@ func queryInterfaceMDNS(_ context.Context, iface *net.Interface, serviceType str
 		for entry := range entriesCh {
 			// Filter out entries that don't match the queried service type.
 			// hashicorp/mdns can return unrelated mDNS responders.
-			if !strings.Contains(entry.Name, serviceType) {
+			if !mdnsEntryMatchesServiceType(entry.Name, serviceType) {
 				continue
 			}
 
 			hostname := strings.TrimSuffix(entry.Host, ".")
+
+			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 
 			ipAddr := ""
 			if entry.AddrV4 != nil {

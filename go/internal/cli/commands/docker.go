@@ -841,6 +841,31 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 	return registryAddr, proxy.Close, nil
 }
 
+// resolveRegistryForSwift is like resolveRegistry but for the Swift container
+// plugin, which runs on the host (not inside a Docker VM). Because the host
+// can resolve mDNS hostnames directly, we pass the original hostname through
+// rather than resolving it to an IP. Only link-local addresses (USB) still
+// need the TCP proxy.
+func resolveRegistryForSwift(ctx context.Context, host string, port int) (registryAddr string, cleanup func(), err error) {
+	resolved := resolveRegistryIP(host)
+	if !isLinkLocalIP(resolved) {
+		// Use the original hostname (or bare IP) directly — mDNS-resolvable on the host.
+		addr := host
+		if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+			addr = "[" + addr + "]"
+		}
+		return fmt.Sprintf("%s:%d", addr, port), func() {}, nil
+	}
+
+	// Link-local: same proxy approach as resolveRegistry.
+	target := net.JoinHostPort(host, strconv.Itoa(port))
+	proxy, err := startRegistryProxy(ctx, target)
+	if err != nil {
+		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
+	}
+	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+}
+
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
 // link-local unicast address (fe80::/10 for IPv6, 169.254.0.0/16 for IPv4).
 func isLinkLocalIP(ip string) bool {

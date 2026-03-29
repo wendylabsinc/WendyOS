@@ -4,10 +4,12 @@ package commands
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type localWifiNetwork struct {
@@ -82,4 +84,26 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 	}
 
 	return networks, nil
+}
+
+const supportsKeychainLookup = true
+
+// lookupKeychainPassword attempts to retrieve a saved WiFi password from the
+// macOS System Keychain using the `security` command. Returns ("", nil) if the
+// SSID is not found or the user denies the authorization prompt.
+func lookupKeychainPassword(ssid string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password",
+		"-D", "AirPort network password",
+		"-a", ssid,
+		"-w",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		// Not found or user denied — not an error we need to surface.
+		return "", nil
+	}
+	return strings.TrimSpace(string(output)), nil
 }

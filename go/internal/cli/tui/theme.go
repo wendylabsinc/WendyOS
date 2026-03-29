@@ -16,6 +16,9 @@ const (
 	Emerald900 = lipgloss.Color("#064e3b")
 	Emerald950 = lipgloss.Color("#022c22")
 
+	// Amber color palette.
+	Amber500 = lipgloss.Color("#f59e0b")
+
 	// Semantic aliases used across TUI components.
 	ColorPrimary    = Emerald400            // titles, spinners, scanning text
 	ColorAccent     = Emerald500            // progress bar, active indicators
@@ -25,4 +28,5 @@ const (
 	ColorSelectedBg = Emerald900            // table selection background
 	ColorSelectedFg = Emerald100            // table selection foreground
 	ColorDim        = lipgloss.Color("240") // muted/hint text (neutral gray)
+	ColorNotice     = Amber500              // informational notices
 )

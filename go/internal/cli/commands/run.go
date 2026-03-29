@@ -16,16 +16,73 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
-	"golang.org/x/term"
 )
 
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
+var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+
+// containerOutputStream is satisfied by both the bidi AttachContainer stream
+// and the server-streaming StartContainer stream.
+type containerOutputStream interface {
+	Recv() (*agentpb.RunContainerLayersResponse, error)
+}
+
+// openContainerStream opens an AttachContainer bidi stream and starts a
+// goroutine that pumps local stdin to the remote process. If the stream cannot
+// be opened (e.g. the agent is too old and returns Unimplemented), it logs a
+// notice and falls back to a plain StartContainer stream. Returns the output
+// stream and whether stdin is being forwarded.
+func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) (containerOutputStream, bool, error) {
+	attachStream, attachErr := svc.AttachContainer(ctx)
+	if attachErr == nil {
+		attachErr = attachStream.Send(&agentpb.AttachContainerRequest{
+			RequestType: &agentpb.AttachContainerRequest_AppName{AppName: appName},
+		})
+		if attachErr != nil {
+			_ = attachStream.CloseSend()
+		}
+	}
+	if attachErr != nil {
+		cliNotice("Notice: stdin not attached (%v)", attachErr)
+		startStream, startErr := svc.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appName,
+		})
+		if startErr != nil {
+			return nil, false, fmt.Errorf("starting container: %w", startErr)
+		}
+		return startStream, false, nil
+	}
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := os.Stdin.Read(buf)
+			if n > 0 {
+				if sendErr := attachStream.Send(&agentpb.AttachContainerRequest{
+					RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: buf[:n]},
+				}); sendErr != nil {
+					cliNotice("Notice: stdin detached (%v)", sendErr)
+					_ = attachStream.CloseSend()
+					return
+				}
+			}
+			if readErr != nil {
+				_ = attachStream.CloseSend()
+				return
+			}
+		}
+	}()
+	return attachStream, true, nil
+}
 
 func cliLog(format string, args ...any) {
 	fmt.Print(cliStyle.Render(fmt.Sprintf(format, args...)))
@@ -33,6 +90,10 @@ func cliLog(format string, args ...any) {
 
 func cliLogln(format string, args ...any) {
 	fmt.Println(cliStyle.Render(fmt.Sprintf(format, args...)))
+}
+
+func cliNotice(format string, args ...any) {
+	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 // createContainerWithProgress calls CreateContainerWithProgress and prints
@@ -255,7 +316,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, 5000)
+	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, 5000)
 	if err != nil {
 		return err
 	}
@@ -307,8 +368,6 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
 		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
-		} else {
-			cliLogln("Warning: could not determine Swift product: %v", err)
 		}
 	}
 
@@ -520,15 +579,13 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		return nil
 	}
 
-	// Start and stream output.
+	// Start and stream output using AttachContainer so stdin is forwarded.
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
-		AppName: appCfg.AppID,
-	})
+	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID)
 	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+		return err
 	}
 
 	cliLogln("Application %s started.", appCfg.AppID)
@@ -555,8 +612,9 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	// Post-start hook tied to runCtx so Ctrl+C kills it.
 	postStartCmd := startPostStartHook(runCtx, appCfg, conn.Host)
 
+	gotFirstResponse := false
 	for {
-		resp, recvErr := stream.Recv()
+		resp, recvErr := outStream.Recv()
 		if recvErr == io.EOF {
 			break
 		}
@@ -564,8 +622,23 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if runCtx.Err() != nil {
 				break
 			}
+			// If the bidi stream returned Unimplemented before any response,
+			// the container was never started — fall back silently to StartContainer.
+			if stdinAttempted && !gotFirstResponse && status.Code(recvErr) == codes.Unimplemented {
+				cliNotice("Notice: stdin not attached (not supported by agent)")
+				startStream, startErr := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+					AppName: appCfg.AppID,
+				})
+				if startErr != nil {
+					return fmt.Errorf("starting container: %w", startErr)
+				}
+				outStream = startStream
+				stdinAttempted = false
+				continue
+			}
 			return fmt.Errorf("receiving container output: %w", recvErr)
 		}
+		gotFirstResponse = true
 		if out := resp.GetStdoutOutput(); out != nil {
 			_, _ = os.Stdout.Write(out.GetData())
 		}

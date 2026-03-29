@@ -216,18 +216,26 @@ func discoverLANMDNS(ctx context.Context, timeout time.Duration) ([]models.LANDe
 func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Duration) []models.LANDevice {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
 	var devices []models.LANDevice
+	seen := make(map[string]bool)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for entry := range entriesCh {
 			// Filter out entries that don't match the queried service type.
-			// hashicorp/mdns can return unrelated mDNS responders.
-			if !strings.Contains(entry.Name, wendyServiceType) {
+			// hashicorp/mdns can return unrelated mDNS responders (e.g. iPhones
+			// advertising _remotepairing._tcp).
+			if !mdnsEntryMatchesServiceType(entry.Name, wendyServiceType) {
 				continue
 			}
 
 			hostname := strings.TrimSuffix(entry.Host, ".")
+
+			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 
 			displayName := strings.TrimSuffix(hostname, ".local")
 
