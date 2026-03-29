@@ -15,7 +15,7 @@ jobs:
       - runs-on
       - family=c7i-flex.8xlarge
       - spot=false
-      - volume=200gb:gp3
+      - volume=400gb:gp3
       - run-id=${{ github.run_id }}
     strategy:
       fail-fast: false
