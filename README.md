@@ -48,7 +48,7 @@ go build -o wendy-agent ./cmd/wendy-agent
 
 ## Setting Up the Device
 
-The device needs to run the `wendy-agent`. We provide pre-built [WendyOS](https://wendyos.io) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
+The device needs to run the `wendy-agent`. We provide pre-built [WendyOS](https://wendy.sh) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
 
 ### Network Manager Support
 
