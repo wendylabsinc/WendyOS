@@ -29,11 +29,12 @@ jobs:
             publisher_device: jetson-orin-nano
 
     steps:
-      - name: Restore build cache
-        uses: runs-on/snapshot@v1
-        with:
-          path: ${{ github.workspace }}
-          volume_size: 500
+      # Disabled: build caching is flaky for mender builds
+      # - name: Restore build cache
+      #   uses: runs-on/snapshot@v1
+      #   with:
+      #     path: ${{ github.workspace }}
+      #     volume_size: 500
 
       - name: Fix workspace permissions
         run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
