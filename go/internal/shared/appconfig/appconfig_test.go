@@ -181,11 +181,53 @@ func TestValidate_AllEntitlementTypes(t *testing.T) {
 			{Type: EntitlementUSB},
 			{Type: EntitlementI2C, Device: "i2c-1"},
 			{Type: EntitlementGPIO, Pins: []int{7}},
+			{Type: EntitlementInput},
 		},
 	}
 
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidate_InputEntitlement(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Entitlements: []Entitlement{
+			{Type: EntitlementInput},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error for input entitlement: %v", err)
+	}
+}
+
+func TestValidateJSON_InputNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "input"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Errorf("ValidateJSON() got %d warnings for valid input entitlement, want 0", len(warnings))
+	}
+}
+
+func TestValidateJSON_InputUnknownKeys(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "input", "device": "/dev/input/event4"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for unknown key on input entitlement, got none")
 	}
 }
 

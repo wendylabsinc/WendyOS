@@ -278,7 +278,7 @@ func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
 	}
 
 	inputFile := filepath.Join(tempDir, "stdin.txt")
-	if err := os.WriteFile(inputFile, []byte("y\nn\nn\nn\nn\nn\nn\nn\n"), 0o644); err != nil {
+	if err := os.WriteFile(inputFile, []byte("y\nn\nn\nn\nn\nn\nn\nn\nn\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := os.Open(inputFile)
@@ -307,6 +307,89 @@ func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
 	}
 	if !cfg.HasEntitlement(appconfig.EntitlementGPU) {
 		t.Fatalf("expected interactive prompts to run and include %q entitlement, got %+v", appconfig.EntitlementGPU, cfg.Entitlements)
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_Input(t *testing.T) {
+	entitlements, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		entitlementsSet: true,
+		entitlements:    []string{"input"},
+	})
+	if err != nil {
+		t.Fatalf("buildInitEntitlementsFromFlags: %v", err)
+	}
+
+	gotTypes := map[string]bool{}
+	for _, ent := range entitlements {
+		gotTypes[ent.Type] = true
+	}
+
+	for _, want := range []string{
+		appconfig.EntitlementNetwork,
+		appconfig.EntitlementInput,
+	} {
+		if !gotTypes[want] {
+			t.Fatalf("expected entitlement %q in %+v", want, entitlements)
+		}
+	}
+}
+
+func TestInitCommand_NonInteractiveInput(t *testing.T) {
+	tempDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(prevWD)
+	})
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{
+		"--app-id", "scanner-app",
+		"--target", "wendyos",
+		"--language", "swift",
+		"--entitlement", "input",
+		"--assistant", "skip",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	cfg, err := appconfig.LoadFromFile(filepath.Join(tempDir, "wendy.json"))
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+
+	if !cfg.HasEntitlement(appconfig.EntitlementInput) {
+		t.Fatalf("expected input entitlement in %+v", cfg.Entitlements)
+	}
+}
+
+func TestEntitlementDescriptions_IncludesInput(t *testing.T) {
+	desc, ok := entitlementDescriptions[appconfig.EntitlementInput]
+	if !ok {
+		t.Fatal("entitlementDescriptions missing EntitlementInput entry")
+	}
+	if desc == "" {
+		t.Fatal("entitlementDescriptions[EntitlementInput] is empty")
+	}
+}
+
+func TestWendyOSEntitlementQuestions_IncludesInput(t *testing.T) {
+	found := false
+	for _, q := range wendyOSEntitlementQuestions {
+		if q.entitlement == appconfig.EntitlementInput {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("wendyOSEntitlementQuestions missing EntitlementInput entry")
 	}
 }
 

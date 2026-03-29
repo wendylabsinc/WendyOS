@@ -22,6 +22,7 @@ const (
 	EntitlementUSB       = "usb"
 	EntitlementI2C       = "i2c"
 	EntitlementGPIO      = "gpio"
+	EntitlementInput     = "input"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -36,6 +37,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementUSB,
 	EntitlementI2C,
 	EntitlementGPIO,
+	EntitlementInput,
 }
 
 // allowedKeys maps each entitlement type to the set of JSON keys that are valid for it.
@@ -50,6 +52,7 @@ var allowedKeys = map[string][]string{
 	EntitlementUSB:       {"type"},
 	EntitlementI2C:       {"type", "device"},
 	EntitlementGPIO:      {"type", "pins"},
+	EntitlementInput:     {"type"},
 }
 
 // Platform constants identify the target hardware family.

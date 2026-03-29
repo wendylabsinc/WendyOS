@@ -17,6 +17,8 @@ const (
 	audioGroupGID uint32 = 29
 	// videoGroupGID is the standard video group GID.
 	videoGroupGID uint32 = 44
+	// inputGroupGID is the standard input group GID (for /dev/input devices).
+	inputGroupGID uint32 = 105
 )
 
 // ApplyOptions configures optional behavior for entitlement application.
@@ -62,6 +64,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applyI2C(spec, ent)
 		case appconfig.EntitlementGPIO:
 			applyGPIO(spec, ent)
+		case appconfig.EntitlementInput:
+			applyInput(spec)
 		}
 	}
 	return nil
@@ -435,6 +439,29 @@ func applyGPIO(spec *Spec, ent appconfig.Entitlement) {
 	})
 
 	_ = ent.Pins // Pins are used for documentation/validation; access is chip-level.
+}
+
+// applyInput adds HID input device access (barcode scanners, keyboards, etc.).
+func applyInput(spec *Spec) {
+	// Add input group for /dev/input device permissions.
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, inputGroupGID)
+
+	// Mount /dev/input for HID event devices.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/dev/input",
+		Source:      "/dev/input",
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
+
+	// Allow input devices (major 13).
+	major := int64(13)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
 }
 
 // appendUnique appends a value to a slice only if it is not already present.
