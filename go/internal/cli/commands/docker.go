@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,10 +223,13 @@ func ensureSwiftVersion(ctx context.Context) error {
 		return err
 	}
 
+	out := &dimWriter{}
 	cmd := execCommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	out.Flush()
+	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
 		}
@@ -406,9 +410,13 @@ func installWendySwiftSDK(sdkArch string) error {
 
 	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", checksum)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	if err := cmd.Run(); err != nil {
+		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
+			return fmt.Errorf("installing Swift SDK from %s: %w\n%s", url, err, out)
+		}
 		return fmt.Errorf("installing Swift SDK from %s: %w", url, err)
 	}
 
@@ -428,9 +436,13 @@ func installWasmSwiftSDK() error {
 
 	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", "394040ecd5260e68bb02f6c20aeede733b9b90702c2204e178f3e42413edad2a")
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	if err := cmd.Run(); err != nil {
+		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
+			return fmt.Errorf("installing Swift WASM SDK from %s: %w\n%s", url, err, out)
+		}
 		return fmt.Errorf("installing Swift WASM SDK from %s: %w", url, err)
 	}
 

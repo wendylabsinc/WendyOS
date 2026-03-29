@@ -31,6 +31,31 @@ import (
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
 
+// dimWriter writes each line rendered through cliStyle (dim/background).
+// Incomplete lines are buffered until a newline or Flush is called.
+type dimWriter struct {
+	buf strings.Builder
+}
+
+func (w *dimWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			fmt.Println(cliStyle.Render(w.buf.String()))
+			w.buf.Reset()
+		} else {
+			w.buf.WriteByte(b)
+		}
+	}
+	return len(p), nil
+}
+
+func (w *dimWriter) Flush() {
+	if w.buf.Len() > 0 {
+		fmt.Println(cliStyle.Render(w.buf.String()))
+		w.buf.Reset()
+	}
+}
+
 // containerOutputStream is satisfied by both the bidi AttachContainer stream
 // and the server-streaming StartContainer stream.
 type containerOutputStream interface {

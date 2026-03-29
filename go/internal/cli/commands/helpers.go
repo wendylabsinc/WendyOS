@@ -3,6 +3,8 @@ package commands
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"golang.org/x/term"
 )
@@ -301,7 +304,7 @@ func handleDefaultDeviceRecovery(ctx context.Context, hostname string, origErr e
 	choice := promptDefaultDeviceRecovery(hostname)
 	switch choice {
 	case recoveryDiscover:
-		return pickDevice(ctx, excludeProviders, excludeBluetooth)
+		return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
 	case recoveryUnsetDefault:
 		cfg, err := config.Load()
 		if err != nil {
@@ -360,6 +363,13 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		if !cfg.suppressProvisioningHint {
 			suggestProvisioning(conn)
 		}
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+		}
 		return conn, nil
 	}
 
@@ -368,7 +378,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 	if pickErr != nil {
 		return nil, pickErr
 	}
@@ -438,6 +448,134 @@ func suggestProvisioning(conn *grpcclient.AgentConnection) {
 	fmt.Fprintf(os.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
 }
 
+// checkAndOfferUpdate probes the agent version and, when the agent is behind
+// the CLI, either warns (non-interactive) or prompts [Y/n] (interactive). If
+// the user accepts, it downloads the latest release, uploads it, and waits for
+// the agent to restart, returning a fresh connection. On decline, or if the
+// upload fails, the original conn is returned unchanged. If the upload succeeds
+// but the agent does not come back, conn is closed and an error is returned.
+func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
+	if jsonOutput {
+		return conn, nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+	cancel()
+	if err != nil {
+		return conn, nil
+	}
+
+	agentVer := resp.GetVersion()
+	// Dev CLI builds skip the update check entirely.
+	if version.Version == "dev" {
+		return conn, nil
+	}
+	// Unknown agent version — skip to avoid spurious update prompts.
+	if agentVer == "" {
+		return conn, nil
+	}
+	if version.CompareVersions(version.Version, agentVer) <= 0 {
+		return conn, nil
+	}
+
+	if !isInteractiveTerminal() {
+		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
+		return conn, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] ", agentVer, version.Version)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "" && answer != "y" && answer != "yes" {
+		return conn, nil
+	}
+
+	arch := resp.GetCpuArchitecture()
+	addr := hostPort(conn.Host, defaultAgentPort)
+
+	if err := performAgentUpdate(ctx, conn, arch); err != nil {
+		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
+		return conn, nil
+	}
+
+	conn.Close()
+
+	fmt.Fprintf(os.Stderr, "Waiting for agent to restart...")
+	newConn, err := waitForAgentRestart(ctx, addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, " failed.\n")
+		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, " ready.\n")
+	return newConn, nil
+}
+
+// performAgentUpdate downloads the latest stable release for the given arch and
+// uploads it to conn. The agent will restart after this returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string) error {
+	if arch == "" {
+		return fmt.Errorf("device did not report CPU architecture")
+	}
+	fmt.Fprintf(os.Stderr, "Fetching latest release...\n")
+	release, err := fetchAgentRelease(false)
+	if err != nil {
+		return fmt.Errorf("fetching release: %w", err)
+	}
+
+	assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
+	var matchedAsset *githubReleaseAsset
+	for _, a := range release.Assets {
+		if strings.HasPrefix(a.Name, assetPrefix) && strings.HasSuffix(a.Name, ".tar.gz") {
+			matchedAsset = &a
+			break
+		}
+	}
+	if matchedAsset == nil {
+		return fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)
+	}
+
+	fmt.Fprintf(os.Stderr, "Downloading %s...\n", matchedAsset.Name)
+	binaryData, err := downloadAgentBinary(*matchedAsset)
+	if err != nil {
+		return fmt.Errorf("downloading binary: %w", err)
+	}
+
+	h := sha256.Sum256(binaryData)
+	sha256Hash := hex.EncodeToString(h[:])
+
+	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
+	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+}
+
+// waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers
+// GetAgentVersion or 60 s elapse. Returns a fresh connection on success.
+func waitForAgentRestart(ctx context.Context, addr string) (*grpcclient.AgentConnection, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	time.Sleep(time.Second) // give the agent a moment to begin shutdown
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		conn, err := connectWithAutoTLS(ctx, addr)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr == nil {
+			return conn, nil
+		}
+		conn.Close()
+		time.Sleep(time.Second)
+	}
+	return nil, fmt.Errorf("timed out waiting for agent to restart")
+}
+
 // loadCLICert returns the first available certificate from the CLI config, or nil.
 func loadCLICert() *config.CertificateInfo {
 	auth := loadCLIAuth()
@@ -469,7 +607,17 @@ type resolveConfig struct {
 	excludeProviderKeys      map[string]bool
 	excludeBluetooth         bool
 	suppressProvisioningHint bool
+	suppressUpdateCheck      bool
 	nonInteractive           bool
+}
+
+// SuppressUpdateCheck prevents connectToAgent from running the automatic
+// agent-version check. Use this for commands that manage updates explicitly
+// (e.g. "wendy device update") to avoid a double-prompt.
+func SuppressUpdateCheck() resolveOption {
+	return func(c *resolveConfig) {
+		c.suppressUpdateCheck = true
+	}
 }
 
 // SuppressProvisioningHint prevents connectToAgent from printing the
@@ -571,6 +719,13 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 			}
 			return nil, err
 		}
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+		}
 		return &SelectedDevice{Agent: conn}, nil
 	}
 
@@ -579,7 +734,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 }
 
 // findDeviceByID searches all available providers for a device whose ID
@@ -732,7 +887,7 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 // LAN discovery runs continuously so devices that come online after the
 // initial scan still appear in the picker.
 // excludeProviders hides the named provider keys from the picker.
-func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	picker := tui.NewPicker()
 	picker.MergeItem = mergePickerItem
 	p := tea.NewProgram(picker)
@@ -895,6 +1050,13 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			}
 			conn, err := connectWithAutoTLS(ctx, addr)
 			if err == nil {
+				if !suppressUpdateCheck {
+					var updateErr error
+					conn, updateErr = checkAndOfferUpdate(ctx, conn)
+					if updateErr != nil {
+						return nil, updateErr
+					}
+				}
 				return &SelectedDevice{Agent: conn}, nil
 			}
 			// LAN failed — fall back to BLE if available.
