@@ -80,6 +80,19 @@ jobs:
         with:
           go-version-file: wendy-os-publisher/go.mod
 
+      - name: Generate flashable image (Jetson only)
+        if: matrix.device == 'jetson'
+        env:
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          TEGRAFLASH_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
+          FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
+          mkdir -p "$FLASH_WORKDIR"
+          tar -xzf "$TEGRAFLASH_FILE" -C "$FLASH_WORKDIR"
+          cd "$FLASH_WORKDIR"
+          sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img"
+
       - name: Publish release to GCS
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
@@ -90,11 +103,10 @@ jobs:
         run: |
           TOKEN=$(gcloud auth print-access-token)
 
-          # Select the main image artifact per device type
           if [[ "$MACHINE" == raspberry* ]]; then
             IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
           else
-            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
           fi
 
           ARGS=(
@@ -103,6 +115,11 @@ jobs:
             --file "$IMAGE_FILE"
             --access-token "$TOKEN"
           )
+
+          # For Jetson, include the tegraflash as the recovery file
+          if [[ "$MACHINE" != raspberry* ]]; then
+            ARGS+=(--recovery-file "$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz")
+          fi
 
           # Include Mender OTA artifact if the build produced one
           OTA_FILE=$(find "$DEPLOY_DIR" -maxdepth 1 -name "wendyos-image-${MACHINE}*.mender" -print -quit 2>/dev/null || true)
