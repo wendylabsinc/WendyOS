@@ -8,7 +8,7 @@
     <type>_ssh._tcp</type>
     <port>22</port>
     <txt-record>model=WendyOS</txt-record>
-    <txt-record>platform=Jetson Orin Nano</txt-record>
+    <txt-record>platform=@WENDYOS_PLATFORM@</txt-record>
   </service>
 
   <!-- Device Info Service -->

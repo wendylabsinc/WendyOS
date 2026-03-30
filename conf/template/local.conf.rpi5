@@ -34,6 +34,19 @@ WENDYOS_DEBUG_UART = "1"
 #   QEMU: "0" (uses virtio-net instead)
 WENDYOS_USB_GADGET = "1"
 
+# USB gadget network mode (requires WENDYOS_USB_GADGET = "1"):
+#   "link-local"  - Self-assigned 169.254.x.x, discovery via mDNS/Avahi (default)
+#   "dhcp-client" - Device is DHCP client, host must run DHCP server
+#   "dhcp-server" - Device runs DHCP server (NM shared mode, requires dnsmasq)
+# Uncomment to override:
+#WENDYOS_USB_NET_MODE = "link-local"
+
+# Avahi mDNS interface restriction:
+#   "usb0" - Only discoverable via USB (default)
+#   ""     - Discoverable on all interfaces (including LAN)
+# Uncomment to override:
+#WENDYOS_MDNS_INTERFACES = "usb0"
+
 # WENDYOS_PERSIST_JOURNAL_LOGS - Automatically configured per machine:
 #   RPi5: "0" (volatile logs in tmpfs; single partition, no /data)
 # Uncomment to override:

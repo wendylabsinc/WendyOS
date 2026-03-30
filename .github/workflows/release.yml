@@ -1,9 +1,9 @@
-name: Build WendyOS Images
+name: Release WendyOS Images
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -19,7 +19,6 @@ jobs:
       - run-id=${{ github.run_id }}
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         include:
           - device: rpi5
@@ -36,12 +35,6 @@ jobs:
       #   with:
       #     path: ${{ github.workspace }}
       #     volume_size: 500
-
-      # - name: Restore Docker image cache
-      #   uses: runs-on/snapshot@v1
-      #   with:
-      #     path: /var/lib/docker
-      #     volume_size: 50
 
       - name: Fix workspace permissions
         run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
@@ -65,34 +58,30 @@ jobs:
       - name: Fix deploy directory permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/build/tmp/deploy" 2>/dev/null || true
 
-      # --- Publish nightly (main branch and manual dispatch only) ---
+      # --- Publish release ---
 
       - name: Authenticate to Google Cloud
-        if: github.event_name != 'pull_request'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: github.event_name != 'pull_request'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Checkout publisher
-        if: github.event_name != 'pull_request'
         uses: actions/checkout@v4
         with:
           repository: wendylabsinc/wendy-os-publisher
           path: wendy-os-publisher
 
       - name: Set up Go
-        if: github.event_name != 'pull_request'
         uses: actions/setup-go@v5
         with:
           go-version-file: wendy-os-publisher/go.mod
 
       - name: Generate flashable image (Jetson only)
-        if: github.event_name != 'pull_request' && matrix.device == 'jetson'
+        if: matrix.device == 'jetson'
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
           MACHINE: ${{ matrix.machine }}
@@ -104,15 +93,14 @@ jobs:
           cd "$FLASH_WORKDIR"
           sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img"
 
-      - name: Publish nightly to GCS
-        if: github.event_name != 'pull_request'
+      - name: Publish release to GCS
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
           MACHINE: ${{ matrix.machine }}
           PUBLISHER_DEVICE: ${{ matrix.publisher_device }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
         run: |
-          VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
           TOKEN=$(gcloud auth print-access-token)
 
           if [[ "$MACHINE" == raspberry* ]]; then
@@ -123,9 +111,8 @@ jobs:
 
           ARGS=(
             --device "$PUBLISHER_DEVICE"
-            --version "${VERSION}-nightly"
+            --version "$RELEASE_VERSION"
             --file "$IMAGE_FILE"
-            --nightly
             --access-token "$TOKEN"
           )
 

@@ -13,7 +13,7 @@
 # Note: On macOS, build artifacts are stored in Docker volumes (case-sensitive)
 # rather than the host filesystem to work around macOS case-insensitivity.
 
-.PHONY: help setup bootstrap docker-create docker-run docker-remove shell build build-sdk clean distclean volumes-create volumes-remove deploy flash-to-external
+.PHONY: help setup bootstrap docker-create docker-run docker-remove shell build build-sdk clean distclean volumes-create volumes-remove deploy flash-to-external _check-machine _check-setup _ensure-volumes
 
 # Configuration
 SHELL := /bin/bash
@@ -23,7 +23,6 @@ DOCKER_TAG := scarthgap
 DOCKER_USER := dev
 DOCKER_WORKDIR := /home/$(DOCKER_USER)/$(IMAGE_NAME)
 BUILD_DIR := build
-MACHINE ?= jetson-orin-nano-devkit-nvme-wendyos
 IMAGE_TARGET ?= wendyos-image
 
 # Flash configuration
@@ -40,6 +39,7 @@ DOCKER_DIR := $(PROJECT_DIR)/docker
 VOLUME_BUILD := wendyos-build-tmp
 VOLUME_SSTATE := wendyos-sstate-cache
 VOLUME_DOWNLOADS := wendyos-downloads
+VOLUME_CACHE := wendyos-build-cache
 
 # Colors for output
 CYAN := \033[0;36m
@@ -155,7 +155,7 @@ shell:
 #
 # Build Commands
 #
-build: _check-setup _ensure-volumes
+build: _check-machine _check-setup _ensure-volumes
 	@printf "$(CYAN)Building $(IMAGE_TARGET) for $(MACHINE)...$(NC)\n"
 	@printf "$(YELLOW)This may take several hours on first build.$(NC)\n"
 	@printf "\n"
@@ -169,6 +169,7 @@ build: _check-setup _ensure-volumes
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
 			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
 			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
+			-v $(VOLUME_CACHE):$(DOCKER_WORKDIR)/build/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -199,7 +200,7 @@ build: _check-setup _ensure-volumes
 		printf "Image location: $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
 	fi
 
-build-sdk: _check-setup _ensure-volumes
+build-sdk: _check-machine _check-setup _ensure-volumes
 	@printf "$(CYAN)Building SDK for $(MACHINE)...$(NC)\n"
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		docker run \
@@ -211,6 +212,7 @@ build-sdk: _check-setup _ensure-volumes
 			-v $(VOLUME_BUILD):$(DOCKER_WORKDIR)/build/tmp \
 			-v $(VOLUME_SSTATE):$(DOCKER_WORKDIR)/sstate-cache \
 			-v $(VOLUME_DOWNLOADS):$(DOCKER_WORKDIR)/downloads \
+			-v $(VOLUME_CACHE):$(DOCKER_WORKDIR)/build/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
 			/bin/bash -c '\
 				cd $(DOCKER_WORKDIR) && \
@@ -259,7 +261,7 @@ distclean:
 		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
 			rm -rf $(PROJECT_DIR)/build $(PROJECT_DIR)/downloads $(PROJECT_DIR)/sstate-cache; \
 			if [ "$$(uname)" = "Darwin" ]; then \
-				docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) 2>/dev/null || true; \
+				docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) $(VOLUME_CACHE) 2>/dev/null || true; \
 				printf "  Removed Docker volumes.\n"; \
 			fi; \
 			printf "$(GREEN)Distclean complete.$(NC)\n"; \
@@ -279,6 +281,7 @@ volumes-create:
 	@docker volume create $(VOLUME_BUILD) >/dev/null && printf "  Created $(VOLUME_BUILD)\n"
 	@docker volume create $(VOLUME_SSTATE) >/dev/null && printf "  Created $(VOLUME_SSTATE)\n"
 	@docker volume create $(VOLUME_DOWNLOADS) >/dev/null && printf "  Created $(VOLUME_DOWNLOADS)\n"
+	@docker volume create $(VOLUME_CACHE) >/dev/null && printf "  Created $(VOLUME_CACHE)\n"
 	@printf "$(GREEN)Volumes created.$(NC)\n"
 
 volumes-remove:
@@ -289,7 +292,7 @@ volumes-remove:
 	@printf "$(RED)WARNING: This will delete all build data in Docker volumes.$(NC)\n"
 	@read -p "Are you sure? [y/N] " confirm && \
 		if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-			docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) 2>/dev/null || true; \
+			docker volume rm $(VOLUME_BUILD) $(VOLUME_SSTATE) $(VOLUME_DOWNLOADS) $(VOLUME_CACHE) 2>/dev/null || true; \
 			printf "$(GREEN)Volumes removed.$(NC)\n"; \
 		else \
 			printf "Cancelled.\n"; \
@@ -298,7 +301,7 @@ volumes-remove:
 #
 # Deploy tegraflash tarball (macOS)
 #
-deploy:
+deploy: _check-machine
 	@if [ "$$(uname)" != "Darwin" ]; then \
 		printf "Images are already on host filesystem at:\n"; \
 		printf "  $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
@@ -325,7 +328,7 @@ deploy:
 #
 # Flash Commands
 #
-flash-to-external:
+flash-to-external: _check-machine
 	@printf "$(CYAN)WendyOS Flash Tool$(NC)\n"
 	@printf "$(CYAN)==================$(NC)\n\n"
 	@OS_TYPE=$$(uname); \
@@ -471,6 +474,19 @@ flash-to-external:
 #
 # Internal Targets
 #
+_check-machine:
+	@if [ -z "$(MACHINE)" ]; then \
+		printf "$(RED)Error: MACHINE is required.$(NC)\n\n"; \
+		printf "Usage:\n"; \
+		printf "  make $(MAKECMDGOALS) MACHINE=<machine>\n\n"; \
+		printf "Available machines:\n"; \
+		for m in $(MAKEFILE_DIR)/conf/machine/*.conf; do \
+			printf "  %s\n" "$$(basename $$m .conf)"; \
+		done; \
+		printf "\n"; \
+		exit 1; \
+	fi
+
 _check-setup:
 	@if [ ! -d "$(DOCKER_DIR)" ]; then \
 		printf "$(RED)Error: Build environment not set up.$(NC)\n"; \
@@ -488,10 +504,12 @@ _ensure-volumes:
 		docker volume inspect $(VOLUME_BUILD) >/dev/null 2>&1 || docker volume create $(VOLUME_BUILD) >/dev/null; \
 		docker volume inspect $(VOLUME_SSTATE) >/dev/null 2>&1 || docker volume create $(VOLUME_SSTATE) >/dev/null; \
 		docker volume inspect $(VOLUME_DOWNLOADS) >/dev/null 2>&1 || docker volume create $(VOLUME_DOWNLOADS) >/dev/null; \
+		docker volume inspect $(VOLUME_CACHE) >/dev/null 2>&1 || docker volume create $(VOLUME_CACHE) >/dev/null; \
 		docker run --rm \
 			-v $(VOLUME_BUILD):/vol/build \
 			-v $(VOLUME_SSTATE):/vol/sstate \
 			-v $(VOLUME_DOWNLOADS):/vol/downloads \
+			-v $(VOLUME_CACHE):/vol/cache \
 			$(DOCKER_REPO):$(DOCKER_TAG) \
-			/bin/bash -c 'sudo chown -R $$(id -u):$$(id -g) /vol/build /vol/sstate /vol/downloads' 2>/dev/null || true; \
+			/bin/bash -c 'sudo chown -R $$(id -u):$$(id -g) /vol/build /vol/sstate /vol/downloads /vol/cache' 2>/dev/null || true; \
 	fi
