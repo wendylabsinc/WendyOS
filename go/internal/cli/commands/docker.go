@@ -1019,7 +1019,9 @@ func resolveHostPreferRoutable(hostname string) string {
 		return ""
 	}
 
-	var fallbackLinkLocal string
+	// Scan all addresses before returning — IPv4 may appear after global IPv6
+	// in the list (e.g. net.LookupHost on macOS returns AAAA records first).
+	var globalIPv6, fallbackLinkLocal string
 	for _, a := range addrs {
 		addr, parseErr := netip.ParseAddr(a)
 		if parseErr != nil {
@@ -1029,11 +1031,16 @@ func resolveHostPreferRoutable(hostname string) string {
 			return a // IPv4 is always preferred
 		}
 		if !addr.IsLinkLocalUnicast() {
-			return addr.WithZone("").String() // global/ULA IPv6
-		}
-		if fallbackLinkLocal == "" {
+			if globalIPv6 == "" {
+				globalIPv6 = addr.WithZone("").String()
+			}
+		} else if fallbackLinkLocal == "" {
 			fallbackLinkLocal = addr.WithZone("").String()
 		}
+	}
+
+	if globalIPv6 != "" {
+		return globalIPv6
 	}
 
 	// DNS returned only link-local IPv6 — this is unroutable from Docker
