@@ -1,0 +1,18 @@
+[Unit]
+Description=WendyOS first-boot provisioning from WENDYCONFIG partition
+Documentation=https://github.com/wendylabsinc/WendyOS
+DefaultDependencies=no
+ConditionPathExists=!/var/lib/wendy-config.done
+After=local-fs.target systemd-udev-settle.service
+Before=basic.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/wendy-config.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target
