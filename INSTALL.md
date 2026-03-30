@@ -44,6 +44,18 @@ Arch Linux (AUR):
 yay -S wendy
 ```
 
+### Windows (Winget)
+
+```powershell
+winget install WendyLabs.Wendy
+```
+
+To update:
+
+```powershell
+winget upgrade WendyLabs.Wendy
+```
+
 ## Agent
 
 ### Linux
@@ -64,18 +76,6 @@ Arch Linux (AUR):
 
 ```sh
 yay -S wendy-agent
-```
-
-### Windows (Winget)
-
-```powershell
-winget install WendyLabs.Wendy
-```
-
-To update:
-
-```powershell
-winget upgrade WendyLabs.Wendy
 ```
 
 ## Pre-built Binaries
