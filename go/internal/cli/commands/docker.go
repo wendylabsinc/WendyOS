@@ -759,6 +759,12 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 		return fmt.Errorf("restarting builder: %s: %w", string(out), err)
 	}
 
+	// Wait for buildkitd to come back up and create its socket after restart.
+	bootstrapAfterRestart := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
+	if out, err := bootstrapAfterRestart.CombinedOutput(); err != nil {
+		return fmt.Errorf("waiting for builder after restart: %s: %w", string(out), err)
+	}
+
 	return nil
 }
 
