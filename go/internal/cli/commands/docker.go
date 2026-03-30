@@ -764,6 +764,21 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 		return fmt.Errorf("docker cp config: %s: %w", string(out), err)
 	}
 
+	// Inject a clean Docker config without credsStore so buildkitd (running on
+	// Linux inside Colima) does not call docker-credential-osxkeychain, which
+	// is a macOS binary that does not exist on Linux and causes "signal: killed"
+	// errors when pulling public base images (e.g. python:3.11-slim).
+	fmt.Fprintf(os.Stderr, "[buildx] injecting clean docker config into container %q\n", containerName)
+	injectCmd := exec.CommandContext(ctx, "docker", "exec", containerName,
+		"sh", "-c", `mkdir -p /root/.docker && printf '{"auths":{}}' > /root/.docker/config.json`)
+	if out, err := injectCmd.CombinedOutput(); err != nil {
+		// Non-fatal: log the error but proceed. The credential helper may still
+		// fail for private images, but public images will work without credentials.
+		fmt.Fprintf(os.Stderr, "[buildx] warning: could not inject docker config: %s\n", string(out))
+	} else {
+		fmt.Fprintf(os.Stderr, "[buildx] docker config injected\n")
+	}
+
 	fmt.Fprintf(os.Stderr, "[buildx] restarting container %q\n", containerName)
 	cmd = exec.CommandContext(ctx, "docker", "restart", containerName)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -807,6 +822,38 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		return fmt.Errorf("creating cache directory: %w", err)
 	}
 
+	// Use a clean Docker config without a credsStore credential helper.
+	// On macOS, the default config has "credsStore":"osxkeychain". When
+	// docker buildx forwards credentials to buildkitd via the build session,
+	// it calls the credential helper on the host. In CI (launchd agent context),
+	// the Keychain is inaccessible and the helper is killed → "signal: killed".
+	// Public images (e.g. python:3.11-slim) need no credentials; anonymous
+	// pull works fine with an empty auths map.
+	//
+	// We only replace config.json; everything else (cli-plugins, buildx builder
+	// instances, contexts) is symlinked from the original Docker config so that
+	// buildx and the "wendy" builder remain discoverable.
+	origDockerConfig := os.Getenv("DOCKER_CONFIG")
+	if origDockerConfig == "" {
+		origDockerConfig = filepath.Join(home, ".docker")
+	}
+	cleanDockerConfigDir := filepath.Join(home, ".cache", "wendy", "docker-config")
+	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
+		return fmt.Errorf("creating clean docker config directory: %w", err)
+	}
+	cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
+	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
+		return fmt.Errorf("writing clean docker config: %w", err)
+	}
+	// Symlink subdirs that docker/buildx need to find plugins and builder state.
+	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		dst := filepath.Join(cleanDockerConfigDir, subdir)
+		if _, err := os.Lstat(dst); err != nil {
+			// best-effort: ignore if source doesn't exist or symlink fails
+			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		}
+	}
+
 	args := []string{
 		"buildx", "build",
 		"--builder", builder,
@@ -822,6 +869,16 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	cmd.Dir = dir
 	cmd.Stdout = streamOutput
 	cmd.Stderr = streamOutput
+	// Override DOCKER_CONFIG so the buildx client does not call the host
+	// credential helper (osxkeychain) when setting up the build session.
+	// Filter any existing DOCKER_CONFIG first so our value takes effect.
+	baseEnv := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+			baseEnv = append(baseEnv, e)
+		}
+	}
+	cmd.Env = append(baseEnv, "DOCKER_CONFIG="+cleanDockerConfigDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker buildx build failed: %w", err)
