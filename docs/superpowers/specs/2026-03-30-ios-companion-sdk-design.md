@@ -195,8 +195,8 @@ SDK-native value types, mapped from both transport responses (protobuf types are
 - `WiFiStatus` — `connected: Bool`, `ssid: String?`
 - `BluetoothDevice` — `name`, `address`, `rssi: Int?`, `paired`, `connected`, `trusted`, `deviceType`
 - `AgentVersion` — `version`, `osVersion: String?`, `os`, `cpuArchitecture`, `featureset: [String]`
-- `HardwareCapability` — `category`, `devicePath`, `description`, `properties: [String: String]`
-- `AudioDevice` — `id`, `name`, `description`, `type: AudioDeviceType`, `isDefault`
+- `HardwareCapability` — `category`, `devicePath`, `details`, `properties: [String: String]`
+- `AudioDevice` — `id`, `name`, `details`, `type: AudioDeviceType`, `isDefault`
 - `AudioLevel` — `peakDB`, `rmsDB`, `timestampNS`
 - `AudioChunk` — `pcmData`, `timestampNS`, `sampleRate`, `channels`
 - `ConsoleOutput` — `data: Data`, `stream: ConsoleStream` (stdout/stderr)
@@ -221,14 +221,18 @@ enum WendyError: Error {
 
 ## Testing
 
-Each service takes a `WendyTransport` protocol rather than a concrete type, enabling mock injection in unit tests:
+Each service is backed by a per-service protocol, enabling mock injection in unit tests without touching the transport layer directly. For example:
 
 ```swift
-protocol WendyTransport {
-    func send(_ command: BluetoothCommand) async throws -> BluetoothResponse
+protocol AppsTransporting {
+    func listApps() async throws -> [App]
+    func stopApp(named: String) async throws
+    func removeApp(named: String, purgeImage: Bool) async throws
+    func startApp(named: String, onOutput: (ConsoleOutput) async throws -> Void) async throws
+    func attachApp(named: String, onOutput: (ConsoleOutput) async throws -> Void) async throws
 }
 ```
 
-The gRPC transport is testable via grpc-swift's own test channel utilities.
+`BLETransport` and `GRPCTransport` both conform to the per-service protocols. Tests inject a mock conforming type. The gRPC transport is additionally testable via grpc-swift's own in-process test channel utilities.
 
 Unit tests cover service logic with mock transports. Integration tests (requiring a real device) live in a separate `WendyCompanionSDKIntegrationTests` target and are not run by default.
