@@ -8,6 +8,12 @@ Install or update the `wendy` CLI on macOS or Linux (x86_64 and ARM64):
 curl -fsSL https://install.wendy.sh/cli.sh | bash
 ```
 
+On Windows:
+
+```powershell
+winget install WendyLabs.Wendy
+```
+
 Also available via [Homebrew, .deb, .rpm, and AUR](INSTALL.md).
 
 ## Installing the Agent

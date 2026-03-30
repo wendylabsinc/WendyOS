@@ -66,6 +66,18 @@ Arch Linux (AUR):
 yay -S wendy-agent
 ```
 
+### Windows (Winget)
+
+```powershell
+winget install WendyLabs.Wendy
+```
+
+To update:
+
+```powershell
+winget upgrade WendyLabs.Wendy
+```
+
 ## Pre-built Binaries
 
 Pre-built CLI binaries for Linux, macOS, and Windows, and agent binaries for Linux, are available on the [Releases](https://github.com/wendylabsinc/wendy-agent/releases) page.
