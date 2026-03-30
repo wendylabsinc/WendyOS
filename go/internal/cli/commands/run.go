@@ -5,23 +5,109 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
-var cliStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
+var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+
+// dimWriter writes each line rendered through cliStyle (dim/background).
+// Incomplete lines are buffered until a newline or Flush is called.
+type dimWriter struct {
+	buf strings.Builder
+}
+
+func (w *dimWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			fmt.Println(cliStyle.Render(w.buf.String()))
+			w.buf.Reset()
+		} else {
+			w.buf.WriteByte(b)
+		}
+	}
+	return len(p), nil
+}
+
+func (w *dimWriter) Flush() {
+	if w.buf.Len() > 0 {
+		fmt.Println(cliStyle.Render(w.buf.String()))
+		w.buf.Reset()
+	}
+}
+
+// containerOutputStream is satisfied by both the bidi AttachContainer stream
+// and the server-streaming StartContainer stream.
+type containerOutputStream interface {
+	Recv() (*agentpb.RunContainerLayersResponse, error)
+}
+
+// openContainerStream opens an AttachContainer bidi stream and starts a
+// goroutine that pumps local stdin to the remote process. If the stream cannot
+// be opened (e.g. the agent is too old and returns Unimplemented), it logs a
+// notice and falls back to a plain StartContainer stream. Returns the output
+// stream and whether stdin is being forwarded.
+func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) (containerOutputStream, bool, error) {
+	attachStream, attachErr := svc.AttachContainer(ctx)
+	if attachErr == nil {
+		attachErr = attachStream.Send(&agentpb.AttachContainerRequest{
+			RequestType: &agentpb.AttachContainerRequest_AppName{AppName: appName},
+		})
+		if attachErr != nil {
+			_ = attachStream.CloseSend()
+		}
+	}
+	if attachErr != nil {
+		cliNotice("Notice: stdin not attached (%v)", attachErr)
+		startStream, startErr := svc.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appName,
+		})
+		if startErr != nil {
+			return nil, false, fmt.Errorf("starting container: %w", startErr)
+		}
+		return startStream, false, nil
+	}
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := os.Stdin.Read(buf)
+			if n > 0 {
+				if sendErr := attachStream.Send(&agentpb.AttachContainerRequest{
+					RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: buf[:n]},
+				}); sendErr != nil {
+					cliNotice("Notice: stdin detached (%v)", sendErr)
+					_ = attachStream.CloseSend()
+					return
+				}
+			}
+			if readErr != nil {
+				_ = attachStream.CloseSend()
+				return
+			}
+		}
+	}()
+	return attachStream, true, nil
+}
 
 func cliLog(format string, args ...any) {
 	fmt.Print(cliStyle.Render(fmt.Sprintf(format, args...)))
@@ -31,11 +117,69 @@ func cliLogln(format string, args ...any) {
 	fmt.Println(cliStyle.Render(fmt.Sprintf(format, args...)))
 }
 
+func cliNotice(format string, args ...any) {
+	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
+}
+
+// createContainerWithProgress calls CreateContainerWithProgress and prints
+// phase updates so the user sees feedback during long image pulls/unpacks.
+func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	stream, err := svc.CreateContainerWithProgress(ctx, req)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	clearLine := func() {
+		if isTTY {
+			fmt.Print("\033[2K\r")
+		} else {
+			fmt.Println()
+		}
+	}
+
+	completed := false
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			return fmt.Errorf("creating container: %w", recvErr)
+		}
+
+		switch r := resp.GetResponseType().(type) {
+		case *agentpb.CreateContainerProgressResponse_Progress:
+			switch r.Progress.GetPhase() {
+			case agentpb.CreateContainerProgress_UNPACKING:
+				cliLog("Pulling and unpacking image on device...")
+			case agentpb.CreateContainerProgress_CREATING_CONTAINER:
+				clearLine()
+				cliLog("Creating container...")
+			case agentpb.CreateContainerProgress_COMPLETE:
+				clearLine()
+			}
+		case *agentpb.CreateContainerProgressResponse_Completed:
+			completed = true
+		}
+
+		if completed {
+			break
+		}
+	}
+
+	if !completed {
+		return fmt.Errorf("creating container: progress stream ended without completion")
+	}
+	return nil
+}
+
 // runOptions holds the parsed flags for the run command.
 type runOptions struct {
 	debug                bool
 	deploy               bool
 	detach               bool
+	yes                  bool
 	restartUnlessStopped bool
 	restartOnFailure     bool
 	noRestart            bool
@@ -58,6 +202,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
+	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
 	cmd.Flags().BoolVar(&opts.restartUnlessStopped, "restart-unless-stopped", false, "Restart unless manually stopped")
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
@@ -75,7 +220,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	cfgPath := filepath.Join(cwd, "wendy.json")
-	appCfg, err := ensureAppConfig(cfgPath)
+	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
 		return fmt.Errorf("loading wendy.json: %w", err)
 	}
@@ -84,9 +229,10 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("invalid wendy.json: %w", err)
 	}
 
-	// Debug mode requires host networking for remote debugger access (gdb/lldb).
-	// Python apps also need host networking for debugpy.
-	if opts.debug || appCfg.Language == "python" {
+	// Debug mode requires host networking for remote debugger access
+	// (gdb/lldb for native apps, debugpy for Python apps).
+	if opts.debug {
+		appCfg.Debug = true
 		foundNetwork := false
 		for i, e := range appCfg.Entitlements {
 			if e.Type == appconfig.EntitlementNetwork {
@@ -104,7 +250,11 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 
 	// Step 2: Resolve the target device.
-	target, err := resolveTarget(ctx)
+	var resolveOpts []resolveOption
+	if opts.yes {
+		resolveOpts = append(resolveOpts, NonInteractive())
+	}
+	target, err := resolveTarget(ctx, resolveOpts...)
 	if err != nil {
 		return err
 	}
@@ -114,9 +264,23 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, opts)
 	}
 
-	// Wendy Lite devices don't run the WendyOS agent — they can't execute containers.
+	// Devices without a reachable WendyOS agent can't execute containers.
 	if target.Agent == nil {
-		return fmt.Errorf("selected device is a Wendy Lite device and does not support 'wendy run'; use 'wendy wifi' for provisioning")
+		// SelectedDevice sets exactly one of Agent/Bluetooth/External.
+		// At this point we've already handled the External+Provider case above,
+		// so a nil Agent here typically means we're talking to the device over BLE.
+		if target.Bluetooth != nil {
+			if target.Bluetooth.IsWendyAgent() {
+				// Full WendyOS device reachable only over Bluetooth: instruct user
+				// to get it onto WiFi / LAN so the agent can be reached.
+				return fmt.Errorf("selected device is currently reachable only over Bluetooth. To run apps on it, first connect it to WiFi or ensure it has a LAN address, then retry 'wendy run'")
+			}
+			// BLE-only Wendy Lite device: these cannot run containers.
+			return fmt.Errorf("selected device is a Wendy Lite device, which does not support 'wendy run'. To provision it, first connect it to WiFi using 'wendy device wifi connect'")
+		}
+
+		// Fallback: no agent and no Bluetooth/External path we can use.
+		return fmt.Errorf("selected device does not have a reachable WendyOS agent and cannot run 'wendy run'")
 	}
 
 	// Agent-based run path (existing gRPC pipeline).
@@ -169,10 +333,24 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	}
 
 	regPort := registryPort(agentOS)
-	product := findSwiftProduct(cwd)
+
+	if err := ensureSwiftVersion(ctx); err != nil {
+		return err
+	}
+
+	product, err := findSwiftProduct(cwd)
+	if err != nil {
+		return err
+	}
+
+	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, regPort)
+	if err != nil {
+		return err
+	}
+	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, conn.Host, architecture, regPort); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -196,83 +374,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		UserArgs:      opts.userArgs,
 	}
 
-	if opts.deploy {
-		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
-		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
-		}
-		cliLogln("Container %s created (not started).", appCfg.AppID)
-		return nil
-	}
-
-	// Create the container.
-	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
-	}
-	cliLogln("Container %s created.", appCfg.AppID)
-
-	if opts.detach {
-		// Start but don't stream output.
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
-		}
-		// Wait for the started confirmation then return.
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
-			return fmt.Errorf("waiting for container start: %w", err)
-		}
-		cliLogln("Application %s running in detached mode.", appCfg.AppID)
-		return nil
-	}
-
-	// Start and stream output.
-	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
-
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
-		AppName: appCfg.AppID,
-	})
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
-	}
-
-	cliLogln("Application %s started.", appCfg.AppID)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	go func() {
-		<-sigCh
-		cliLogln("\nStopping container...")
-		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		runCancel()
-	}()
-
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			if runCtx.Err() != nil {
-				break
-			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
-		}
-		if out := resp.GetStdoutOutput(); out != nil {
-			_, _ = os.Stdout.Write(out.GetData())
-		}
-		if out := resp.GetStderrOutput(); out != nil {
-			_, _ = os.Stderr.Write(out.GetData())
-		}
-	}
-
-	cliLogln("\nApplication %s stopped.", appCfg.AppID)
-	return nil
+	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
 }
 
 // runMacOSWithAgent builds a Swift project locally, packages it as an OCI
@@ -291,7 +393,10 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return fmt.Errorf("architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
 
-	product := findSwiftProduct(cwd)
+	product, err := findSwiftProduct(cwd)
+	if err != nil {
+		return err
+	}
 
 	// Build locally.
 	cliLogln("Building Swift project locally...")
@@ -418,19 +523,49 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	// For Swift projects, resolve the actual executable product name from
-	// Package.swift rather than using the wendy.json app ID.
-	if p.CanBuild(projectPath) {
-		if swiftProduct := findSwiftProduct(projectPath); swiftProduct != "" {
+	projectType := detectProjectType(projectPath)
+
+	// Resolve Swift product name from Package.swift.
+	if projectType == "swift" {
+		if err := ensureSwiftVersion(ctx); err != nil {
+			return err
+		}
+		swiftProduct, err := findSwiftProduct(projectPath)
+		if err != nil {
+			return fmt.Errorf("could not determine Swift product: %w", err)
+		}
+		product = swiftProduct
+	} else if p.CanBuild(projectPath) {
+		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
+		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
 			product = swiftProduct
 		}
 	}
 
-	cliLogln("Building with %s provider...", p.DisplayName())
-	app, err := p.Build(ctx, device, projectPath, product, opts.debug)
-	if err != nil {
-		return fmt.Errorf("provider build: %w", err)
+	var app *providers.BuiltApp
+
+	// Swift projects without a Dockerfile: cross-compile on the host and
+	// build a Docker image, bypassing the provider's normal Build method.
+	if projectType == "swift" {
+		if ib, ok := p.(providers.ImageBuilder); ok {
+			cliLogln("Building Swift project for %s...", p.DisplayName())
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product)
+			if err != nil {
+				return fmt.Errorf("building Swift Docker image: %w", err)
+			}
+			app = ib.BuildFromImage(device, product, imageName)
+		}
 	}
+
+	if app == nil {
+		cliLogln("Building with %s provider...", p.DisplayName())
+		var err error
+		app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		if err != nil {
+			return fmt.Errorf("provider build: %w", err)
+		}
+	}
+
 	cliLogln("Build completed.")
 
 	if opts.deploy {
@@ -537,20 +672,28 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 
 	// Build and push the Docker image directly to the device's registry.
 	regPort := registryPort(agentOS)
-	registryAddr := registryHost(conn.Host, regPort)
+	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
+	// to the host so buildx can reach the device.
+	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
+	if err != nil {
+		return err
+	}
+	defer proxyCleanup()
+
+
 	repo := strings.ToLower(appCfg.AppID)
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
 
 	// Inject debugpy for Python remote debugging.
-	if appCfg.Language == "python" {
+	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}
@@ -573,6 +716,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		UserArgs:      opts.userArgs,
 	}
 
+	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
+}
+
+// startAndStreamContainer handles the deploy/detach/attached lifecycle that is
+// shared between runSwiftWithAgent and runWithAgent. It creates the container,
+// optionally starts it, streams output, and manages readiness + postStart hooks.
+func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
 	if opts.deploy {
 		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
 		if err != nil {
@@ -582,10 +732,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return nil
 	}
 
-	// Create the container.
-	_, err = conn.ContainerService.CreateContainer(ctx, createReq)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+	// Create the container with progress streaming.
+	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
+		return err
 	}
 	cliLogln("Container %s created.", appCfg.AppID)
 
@@ -600,22 +749,27 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
 		cliLogln("Application %s running in detached mode.", appCfg.AppID)
+		// Wait for readiness before firing hook.
+		if err := waitForReadiness(ctx, appCfg.Readiness, conn.Host); err != nil {
+			cliLogln("Warning: %v", err)
+		}
+		// Fire-and-forget: post-start hook outlives the CLI process.
+		startPostStartHook(context.Background(), appCfg, conn.Host)
 		return nil
 	}
 
-	// Start and stream output.
+	// Start and stream output using AttachContainer so stdin is forwarded.
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
-		AppName: appCfg.AppID,
-	})
+	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID)
 	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+		return err
 	}
 
 	cliLogln("Application %s started.", appCfg.AppID)
 
+	// Set up Ctrl+C handler first so readiness polling is cancellable.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
@@ -627,8 +781,19 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		runCancel()
 	}()
 
+	// Wait for readiness before firing hook.
+	if err := waitForReadiness(runCtx, appCfg.Readiness, conn.Host); err != nil {
+		if runCtx.Err() == nil {
+			cliLogln("Warning: %v", err)
+		}
+	}
+
+	// Post-start hook tied to runCtx so Ctrl+C kills it.
+	postStartCmd := startPostStartHook(runCtx, appCfg, conn.Host)
+
+	gotFirstResponse := false
 	for {
-		resp, recvErr := stream.Recv()
+		resp, recvErr := outStream.Recv()
 		if recvErr == io.EOF {
 			break
 		}
@@ -636,8 +801,23 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			if runCtx.Err() != nil {
 				break
 			}
+			// If the bidi stream returned Unimplemented before any response,
+			// the container was never started — fall back silently to StartContainer.
+			if stdinAttempted && !gotFirstResponse && status.Code(recvErr) == codes.Unimplemented {
+				cliNotice("Notice: stdin not attached (not supported by agent)")
+				startStream, startErr := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+					AppName: appCfg.AppID,
+				})
+				if startErr != nil {
+					return fmt.Errorf("starting container: %w", startErr)
+				}
+				outStream = startStream
+				stdinAttempted = false
+				continue
+			}
 			return fmt.Errorf("receiving container output: %w", recvErr)
 		}
+		gotFirstResponse = true
 		if out := resp.GetStdoutOutput(); out != nil {
 			_, _ = os.Stdout.Write(out.GetData())
 		}
@@ -646,8 +826,97 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		}
 	}
 
+	// Cancel runCtx to terminate the postStart hook if it's still running,
+	// then wait for it to exit so we don't leave orphan processes.
+	runCancel()
+	if postStartCmd != nil {
+		_ = postStartCmd.Wait()
+	}
 	cliLogln("\nApplication %s stopped.", appCfg.AppID)
 	return nil
+}
+
+// waitForReadiness polls the readiness probe until it passes or the context is
+// cancelled. Returns nil on success, the parent context error on cancellation,
+// or a timeout error if the probe deadline expires.
+func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string) error {
+	if cfg == nil || cfg.TCPSocket == nil {
+		return nil
+	}
+
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", cfg.TCPSocket.Port))
+	cliLogln("Waiting for %s to be ready...", addr)
+
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		conn, err := dialer.DialContext(probeCtx, "tcp", addr)
+		if err == nil {
+			conn.Close()
+			cliLogln("Ready.")
+			return nil
+		}
+
+		select {
+		case <-probeCtx.Done():
+			// Distinguish parent cancellation (Ctrl+C) from probe timeout.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("readiness probe timed out after %s waiting for %s", timeout, addr)
+		case <-ticker.C:
+		}
+	}
+}
+
+// shellCommand returns the platform-appropriate shell and flag for running a
+// command string. On Windows it uses cmd.exe /C; everywhere else sh -c.
+func shellCommand() (string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd.exe", "/C"
+	}
+	return "sh", "-c"
+}
+
+// startPostStartHook expands environment variables in the postStart CLI hook
+// and spawns it as a child process. The returned *exec.Cmd can be used to wait
+// on or kill the process. Returns nil if there is no postStart CLI hook.
+func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname string) *exec.Cmd {
+	if appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil || appCfg.Hooks.PostStart.CLI == "" {
+		return nil
+	}
+
+	expanded := os.Expand(appCfg.Hooks.PostStart.CLI, func(key string) string {
+		switch key {
+		case "WENDY_HOSTNAME":
+			return hostname
+		case "WENDY_APP_ID":
+			return appCfg.AppID
+		default:
+			return os.Getenv(key)
+		}
+	})
+
+	shell, flag := shellCommand()
+	cmd := execCommandContext(ctx, shell, flag, expanded)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		cliLogln("Warning: postStart hook failed to start: %v", err)
+		return nil
+	}
+	cliLogln("Hook postStart: %s", expanded)
+	return cmd
 }
 
 // resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.

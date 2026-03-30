@@ -239,6 +239,7 @@ jobs:
           mkdir -p pkgroot/wendy/usr/bin
           mkdir -p pkgroot/wendy-agent/usr/bin
           mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
+          mkdir -p pkgroot/wendy-agent/usr/lib/wendy-agent
           mkdir -p pkgroot/wendy-agent/etc/default
           mkdir -p pkgroot/wendy-agent/etc/wendy-agent
           mkdir -p pkgroot/wendy-agent/etc/avahi/services
@@ -255,6 +256,8 @@ jobs:
             pkgroot/wendy-agent/etc/default/wendy-agent
           install -m644 packaging/linux/avahi/wendy-agent.service \
             pkgroot/wendy-agent/etc/avahi/services/wendy-agent.service
+          install -m755 packaging/linux/fpm/wendy-agent-setup-mdns.sh \
+            pkgroot/wendy-agent/usr/lib/wendy-agent/setup-mdns.sh
 
           # Placeholder config created at install time by package manager.
           printf "{}\n" > pkgroot/wendy-agent/etc/wendy-agent/config.json
@@ -567,11 +570,38 @@ jobs:
           git tag -fa latest "$TARGET_SHA" -m "Latest prerelease: $TAG"
           git push -f origin refs/tags/latest
 
+      # Discord notification for nightly prereleases
+      - name: Notify Discord (nightly)
+        if: needs.determine-version.outputs.is_prerelease == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.tag_name }}"
+          REPO="${{ github.repository }}"
+          URL="https://github.com/${REPO}/releases/tag/${VERSION}"
+
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            DESC=$'## Update the agent on your device\n```\nwendy device update --nightly\n```'
+            PAYLOAD=$(jq -n \
+              --arg content "🌙 **New nightly build**: **${VERSION}**" \
+              --arg title "Nightly ${VERSION}" \
+              --arg url "$URL" \
+              --arg desc "$DESC" \
+              --arg footer "${REPO} • ${VERSION}" \
+              '{content: $content, embeds: [{title: $title, url: $url, description: $desc, color: 8421504, footer: {text: $footer}}]}')
+            curl -sS -X POST -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "$DISCORD_WEBHOOK_URL" && echo "Discord nightly notification sent" || echo "Discord nightly notification failed"
+          else
+            echo "DISCORD_NIGHTLY_WEBHOOK_URL not configured, skipping notification"
+          fi
+
       # Discord notification for stable releases
       - name: Notify Discord
         if: needs.determine-version.outputs.is_prerelease == 'false'
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.determine-version.outputs.tag_name }}"
@@ -765,6 +795,7 @@ jobs:
             --head "ci/bump-wendy-${VERSION}" \
             --base main \
             --title "wendy: bump to ${VERSION}" \
+            --label pr-pull \
             --body "Automated bump from release ${VERSION}
 
           This PR updates the wendy formula to version ${VERSION}.
@@ -870,9 +901,91 @@ jobs:
           $version = "${{ needs.determine-version.outputs.version }}"
           $tag = "${{ needs.determine-version.outputs.tag_name }}"
           $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
+          $token = "${{ secrets.WINGET_GITHUB_TOKEN }}"
+          $amd64Url = "$base/wendy-cli-windows-amd64-$version.msi"
+          $arm64Url = "$base/wendy-cli-windows-arm64-$version.msi"
 
+          # Try update first (works once the package exists in winget-pkgs)
           .\wingetcreate.exe update WendyLabs.Wendy `
             --version $version `
-            --urls "$base/wendy-cli-windows-amd64-$version.msi" "$base/wendy-cli-windows-arm64-$version.msi" `
+            --urls $amd64Url $arm64Url `
             --submit `
-            --token "${{ secrets.WINGET_GITHUB_TOKEN }}"
+            --token $token
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Winget package updated successfully."
+            exit 0
+          }
+
+          Write-Host "Update failed (package may not exist yet). Generating initial manifest..."
+
+          # Download installers to compute SHA256 hashes
+          Invoke-WebRequest -Uri $amd64Url -OutFile amd64.msi
+          Invoke-WebRequest -Uri $arm64Url -OutFile arm64.msi
+          $amd64Hash = (Get-FileHash -Algorithm SHA256 amd64.msi).Hash
+          $arm64Hash = (Get-FileHash -Algorithm SHA256 arm64.msi).Hash
+
+          # Generate the three manifest YAML files required by winget-pkgs
+          $manifestDir = "manifests\w\WendyLabs\Wendy\$version"
+          New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
+
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
+          PackageIdentifier: WendyLabs.Wendy
+          PackageVersion: $version
+          DefaultLocale: en-US
+          ManifestType: version
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^          ', '' | Set-Content "$manifestDir\WendyLabs.Wendy.yaml" -Encoding utf8
+
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+          PackageIdentifier: WendyLabs.Wendy
+          PackageVersion: $version
+          Platform:
+          - Windows.Desktop
+          MinimumOSVersion: 10.0.17763.0
+          InstallerType: msi
+          UpgradeBehavior: install
+          ReleaseDate: $(Get-Date -Format 'yyyy-MM-dd')
+          Installers:
+          - Architecture: x64
+            InstallerUrl: $amd64Url
+            InstallerSha256: $amd64Hash
+          - Architecture: arm64
+            InstallerUrl: $arm64Url
+            InstallerSha256: $arm64Hash
+          ManifestType: installer
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^          ', '' | Set-Content "$manifestDir\WendyLabs.Wendy.installer.yaml" -Encoding utf8
+
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+          PackageIdentifier: WendyLabs.Wendy
+          PackageVersion: $version
+          PackageLocale: en-US
+          Publisher: Wendy Labs
+          PublisherUrl: https://github.com/wendylabsinc
+          PublisherSupportUrl: https://github.com/wendylabsinc/wendy-agent/issues
+          PackageName: Wendy
+          PackageUrl: https://github.com/wendylabsinc/wendy-agent
+          License: Proprietary
+          ShortDescription: CLI for building and deploying apps to WendyOS edge devices.
+          Tags:
+          - cli
+          - edge-computing
+          - iot
+          - developer-tools
+          ManifestType: defaultLocale
+          ManifestVersion: 1.9.0
+          "@ -replace '(?m)^          ', '' | Set-Content "$manifestDir\WendyLabs.Wendy.locale.en-US.yaml" -Encoding utf8
+
+          # Submit the generated manifest
+          .\wingetcreate.exe submit `
+            --prtitle "New package: WendyLabs.Wendy version $version" `
+            --token $token `
+            $manifestDir
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Winget manifest submission failed with exit code $LASTEXITCODE."
+            exit $LASTEXITCODE
+          }
+          Write-Host "Initial Winget manifest submitted successfully."

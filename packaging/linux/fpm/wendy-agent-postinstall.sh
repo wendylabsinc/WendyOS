@@ -23,5 +23,12 @@ systemctl disable wendyos-dev-registry >/dev/null 2>&1 || true
 systemctl stop wendyos-dev-registry-import >/dev/null 2>&1 || true
 systemctl disable wendyos-dev-registry-import >/dev/null 2>&1 || true
 
+# Populate avahi service TXT records with device-specific values
+if [ -x /usr/lib/wendy-agent/setup-mdns.sh ]; then
+  if ! /usr/lib/wendy-agent/setup-mdns.sh; then
+    echo "warning: /usr/lib/wendy-agent/setup-mdns.sh failed; mDNS TXT records may not be updated" >&2
+  fi
+fi
+
 # Reload avahi-daemon so it picks up the new service file
 systemctl try-restart avahi-daemon >/dev/null 2>&1 || true

@@ -7,11 +7,11 @@ import (
 )
 
 var (
-	tableHeaderForeground = lipgloss.Color("230")
-	tableHeaderBackground = lipgloss.Color("29")
-	tableBorderColor      = lipgloss.Color("36")
-	tableSelectedBg       = lipgloss.Color("22")
-	tableSelectedFg       = lipgloss.Color("230")
+	tableHeaderForeground = ColorHeaderFg
+	tableHeaderBackground = ColorHeaderBg
+	tableBorderColor      = ColorBorder
+	tableSelectedBg       = ColorSelectedBg
+	tableSelectedFg       = ColorSelectedFg
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).

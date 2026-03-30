@@ -22,6 +22,7 @@ const (
 	EntitlementUSB       = "usb"
 	EntitlementI2C       = "i2c"
 	EntitlementGPIO      = "gpio"
+	EntitlementInput     = "input"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -36,6 +37,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementUSB,
 	EntitlementI2C,
 	EntitlementGPIO,
+	EntitlementInput,
 }
 
 // allowedKeys maps each entitlement type to the set of JSON keys that are valid for it.
@@ -50,6 +52,7 @@ var allowedKeys = map[string][]string{
 	EntitlementUSB:       {"type"},
 	EntitlementI2C:       {"type", "device"},
 	EntitlementGPIO:      {"type", "pins"},
+	EntitlementInput:     {"type"},
 }
 
 // Platform constants identify the target hardware family.
@@ -60,12 +63,37 @@ const (
 
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
-	AppID        string        `json:"appId"`
-	Version      string        `json:"version,omitempty"`
-	Platform     string        `json:"platform,omitempty"`
-	Language     string        `json:"language,omitempty"`
-	Entitlements []Entitlement `json:"entitlements,omitempty"`
-	Python       *PythonConfig `json:"python,omitempty"`
+	AppID        string           `json:"appId"`
+	Version      string           `json:"version,omitempty"`
+	Platform     string           `json:"platform,omitempty"`
+	Language     string           `json:"language,omitempty"`
+	Entitlements []Entitlement    `json:"entitlements,omitempty"`
+	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
+	Hooks        *HooksConfig     `json:"hooks,omitempty"`
+	Python       *PythonConfig    `json:"python,omitempty"`
+	Debug        bool             `json:"debug,omitempty"`
+}
+
+// ReadinessConfig defines a probe the CLI uses to determine when the app is ready.
+type ReadinessConfig struct {
+	TCPSocket      *TCPSocketProbe `json:"tcpSocket,omitempty"`
+	TimeoutSeconds int             `json:"timeoutSeconds,omitempty"` // Default 30
+}
+
+// TCPSocketProbe checks readiness by dialing a TCP port.
+type TCPSocketProbe struct {
+	Port int `json:"port"`
+}
+
+// HooksConfig holds optional lifecycle hook commands.
+type HooksConfig struct {
+	PostStart *HookCommand `json:"postStart,omitempty"`
+}
+
+// HookCommand holds CLI and agent-side commands for a lifecycle hook.
+type HookCommand struct {
+	CLI   string `json:"cli,omitempty"`   // Command to run on the developer's machine
+	Agent string `json:"agent,omitempty"` // Command to run on the device
 }
 
 // PythonConfig holds Python-specific configuration.
@@ -147,6 +175,18 @@ func (c *AppConfig) Validate() error {
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		}
+	}
+
+	if c.Readiness != nil {
+		if c.Readiness.TCPSocket != nil {
+			port := c.Readiness.TCPSocket.Port
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("readiness.tcpSocket.port must be between 1 and 65535, got %d", port)
+			}
+		}
+		if c.Readiness.TimeoutSeconds < 0 {
+			return fmt.Errorf("readiness.timeoutSeconds must not be negative, got %d", c.Readiness.TimeoutSeconds)
 		}
 	}
 

@@ -56,3 +56,26 @@ type RunOutput struct {
 	Type RunOutputType
 	Data []byte
 }
+
+// ImageBuilder is optionally implemented by providers that can create a
+// BuiltApp from a pre-built container image (e.g. after cross-compilation).
+type ImageBuilder interface {
+	BuildFromImage(device models.ExternalDevice, product, imageName string) *BuiltApp
+}
+
+// ContainerManager is optionally implemented by providers that support
+// managing container lifecycle (list, start, stop, remove).
+type ContainerManager interface {
+	ListContainers(ctx context.Context) ([]ContainerInfo, error)
+	StartContainer(ctx context.Context, name string) error
+	StopContainer(ctx context.Context, name string) error
+	RemoveContainer(ctx context.Context, name string) error
+}
+
+// ContainerInfo describes a container managed by a provider.
+type ContainerInfo struct {
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	State  string `json:"state"`
+	Status string `json:"status"`
+}

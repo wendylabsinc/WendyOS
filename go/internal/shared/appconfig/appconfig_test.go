@@ -181,9 +181,230 @@ func TestValidate_AllEntitlementTypes(t *testing.T) {
 			{Type: EntitlementUSB},
 			{Type: EntitlementI2C, Device: "i2c-1"},
 			{Type: EntitlementGPIO, Pins: []int{7}},
+			{Type: EntitlementInput},
 		},
 	}
 
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidate_InputEntitlement(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Entitlements: []Entitlement{
+			{Type: EntitlementInput},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error for input entitlement: %v", err)
+	}
+}
+
+func TestValidateJSON_InputNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "input"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Errorf("ValidateJSON() got %d warnings for valid input entitlement, want 0", len(warnings))
+	}
+}
+
+func TestValidateJSON_InputUnknownKeys(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "input", "device": "/dev/input/event4"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for unknown key on input entitlement, got none")
+	}
+}
+
+func TestLoadFromFile_WithHooksPostStart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "com.example.webapp",
+		"entitlements": [{"type": "network"}],
+		"hooks": {
+			"postStart": {
+				"cli": "open http://${WENDY_HOSTNAME}:3000",
+				"agent": "xdg-open http://localhost:3000"
+			}
+		}
+	}`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile() error = %v", err)
+	}
+
+	if cfg.Hooks == nil {
+		t.Fatal("Hooks is nil, expected non-nil")
+	}
+	if cfg.Hooks.PostStart == nil {
+		t.Fatal("Hooks.PostStart is nil, expected non-nil")
+	}
+	if cfg.Hooks.PostStart.CLI != "open http://${WENDY_HOSTNAME}:3000" {
+		t.Errorf("Hooks.PostStart.CLI = %q, want %q", cfg.Hooks.PostStart.CLI, "open http://${WENDY_HOSTNAME}:3000")
+	}
+	if cfg.Hooks.PostStart.Agent != "xdg-open http://localhost:3000" {
+		t.Errorf("Hooks.PostStart.Agent = %q, want %q", cfg.Hooks.PostStart.Agent, "xdg-open http://localhost:3000")
+	}
+}
+
+func TestLoadFromFile_WithoutHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "com.example.app",
+		"entitlements": [{"type": "gpu"}]
+	}`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile() error = %v", err)
+	}
+
+	if cfg.Hooks != nil {
+		t.Errorf("Hooks = %+v, want nil", cfg.Hooks)
+	}
+}
+
+func TestLoadFromFile_HooksPostStartCLIOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "com.example.app",
+		"hooks": {
+			"postStart": {
+				"cli": "echo hello"
+			}
+		}
+	}`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile() error = %v", err)
+	}
+
+	if cfg.Hooks == nil || cfg.Hooks.PostStart == nil {
+		t.Fatal("Hooks.PostStart is nil")
+	}
+	if cfg.Hooks.PostStart.CLI != "echo hello" {
+		t.Errorf("Hooks.PostStart.CLI = %q, want %q", cfg.Hooks.PostStart.CLI, "echo hello")
+	}
+	if cfg.Hooks.PostStart.Agent != "" {
+		t.Errorf("Hooks.PostStart.Agent = %q, want empty", cfg.Hooks.PostStart.Agent)
+	}
+}
+
+func TestLoadFromFile_WithReadiness(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "com.example.app",
+		"readiness": {
+			"tcpSocket": { "port": 3002 },
+			"timeoutSeconds": 15
+		}
+	}`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile() error = %v", err)
+	}
+
+	if cfg.Readiness == nil {
+		t.Fatal("Readiness is nil")
+	}
+	if cfg.Readiness.TCPSocket == nil {
+		t.Fatal("Readiness.TCPSocket is nil")
+	}
+	if cfg.Readiness.TCPSocket.Port != 3002 {
+		t.Errorf("Readiness.TCPSocket.Port = %d, want 3002", cfg.Readiness.TCPSocket.Port)
+	}
+	if cfg.Readiness.TimeoutSeconds != 15 {
+		t.Errorf("Readiness.TimeoutSeconds = %d, want 15", cfg.Readiness.TimeoutSeconds)
+	}
+}
+
+func TestValidate_ReadinessInvalidPort(t *testing.T) {
+	tests := []struct {
+		name string
+		port int
+	}{
+		{"zero port", 0},
+		{"negative port", -1},
+		{"port too high", 70000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &AppConfig{
+				AppID: "com.example.app",
+				Readiness: &ReadinessConfig{
+					TCPSocket: &TCPSocketProbe{Port: tt.port},
+				},
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Error("Validate() expected error for invalid port, got nil")
+			}
+		})
+	}
+}
+
+func TestValidate_ReadinessNegativeTimeout(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Readiness: &ReadinessConfig{
+			TCPSocket:      &TCPSocketProbe{Port: 3000},
+			TimeoutSeconds: -5,
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() expected error for negative timeout, got nil")
+	}
+}
+
+func TestValidate_ReadinessValidConfig(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Readiness: &ReadinessConfig{
+			TCPSocket:      &TCPSocketProbe{Port: 3002},
+			TimeoutSeconds: 30,
+		},
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
 	}

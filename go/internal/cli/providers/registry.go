@@ -15,7 +15,6 @@ func init() {
 	allProviders = []DeviceProvider{
 		&LocalProvider{},
 		&DockerProvider{},
-		&AndroidProvider{},
 		&MicroWendyProvider{},
 	}
 }

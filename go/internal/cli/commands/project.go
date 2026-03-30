@@ -27,6 +27,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementUSB:       "Access USB peripherals",
 	appconfig.EntitlementI2C:       "Access I2C bus devices",
 	appconfig.EntitlementGPIO:      "Access GPIO pins",
+	appconfig.EntitlementInput:     "Access HID input devices (barcode scanners, keyboards)",
 }
 
 func newProjectCmd() *cobra.Command {

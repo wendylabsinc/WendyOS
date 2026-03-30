@@ -51,6 +51,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceDashboardCmd(),
 		newDeviceTelemetryStreamCmd(),
 		newWifiCmd(),
+		newAppsCmd(),
 	)
 
 	return cmd
@@ -140,7 +141,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 // pickDeviceForDefault runs the interactive device picker and returns a
 // hostname or provider key suitable for storing as the default device.
 func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false)
+	selected, err := pickDevice(ctx, nil, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -369,10 +370,32 @@ func scanWiFiNetworks(ctx context.Context, conn *grpcclient.AgentConnection) ([]
 	return resp.GetNetworks(), nil
 }
 
+// parseSeverityLevel converts a severity name (e.g. "trace", "info") to its
+// OpenTelemetry severity number. Returns 0 if the name is not recognized.
+func parseSeverityLevel(name string) int32 {
+	switch strings.ToLower(name) {
+	case "trace":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_TRACE)
+	case "debug":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_DEBUG)
+	case "info":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_INFO)
+	case "warn", "warning":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_WARN)
+	case "error":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_ERROR)
+	case "fatal":
+		return int32(otelpb.SeverityNumber_SEVERITY_NUMBER_FATAL)
+	default:
+		return 0
+	}
+}
+
 func newDeviceLogsCmd() *cobra.Command {
 	var appName string
 	var serviceName string
 	var minSeverity int32
+	var level string
 
 	cmd := &cobra.Command{
 		Use:   "logs",
@@ -384,6 +407,15 @@ func newDeviceLogsCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
+
+			// --level takes precedence over --min-severity when both are set.
+			if level != "" {
+				if sev := parseSeverityLevel(level); sev > 0 {
+					minSeverity = sev
+				} else {
+					return fmt.Errorf("unknown log level %q (use trace, debug, info, warn, error, or fatal)", level)
+				}
+			}
 
 			req := &agentpb.StreamLogsRequest{}
 			if appName != "" {
@@ -434,21 +466,22 @@ func newDeviceLogsCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&appName, "app", "", "Filter by application name")
 	cmd.Flags().StringVar(&serviceName, "service", "", "Filter by service name")
-	cmd.Flags().Int32Var(&minSeverity, "min-severity", 0, "Minimum log severity level")
+	cmd.Flags().Int32Var(&minSeverity, "min-severity", 0, "Minimum log severity number")
+	cmd.Flags().StringVar(&level, "level", "", "Minimum log level (trace, debug, info, warn, error, fatal)")
 
 	return cmd
 }
 
 var (
-	logTraceStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	logTraceStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 	logDebugStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	logInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
+	logInfoStyle  = lipgloss.NewStyle().Foreground(tui.Emerald400)
 	logWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	logErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	logFatalStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	logTimeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	logAppStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	logMetaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	logTimeStyle  = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	logAppStyle   = lipgloss.NewStyle().Foreground(tui.Emerald300)
+	logMetaStyle  = lipgloss.NewStyle().Foreground(tui.ColorDim)
 )
 
 func severityLabel(sev otelpb.SeverityNumber) (string, lipgloss.Style) {
@@ -558,11 +591,21 @@ func printLogRecord(service string, lr *otelpb.LogRecord) {
 func newDeviceTelemetryStreamCmd() *cobra.Command {
 	var appName string
 	var serviceName string
+	var enableLogs bool
+	var enableMetrics bool
+	var enableTraces bool
 
 	cmd := &cobra.Command{
 		Use:   "telemetry-stream",
-		Short: "Stream all telemetry data (logs, metrics, traces) as JSONL",
+		Short: "Stream telemetry data (logs, metrics, traces) as JSONL",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// If no flags were explicitly set, enable all streams.
+			if !cmd.Flags().Changed("logs") && !cmd.Flags().Changed("metrics") && !cmd.Flags().Changed("traces") {
+				enableLogs = true
+				enableMetrics = true
+				enableTraces = true
+			}
+
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
 			if err != nil {
@@ -582,161 +625,168 @@ func newDeviceTelemetryStreamCmd() *cobra.Command {
 			var wg sync.WaitGroup
 			errc := make(chan error, 3)
 
-			// Stream logs.
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				logReq := &agentpb.StreamLogsRequest{}
-				if appName != "" {
-					logReq.AppName = &appName
-				}
-				if serviceName != "" {
-					logReq.ServiceName = &serviceName
-				}
-				stream, err := conn.TelemetryService.StreamLogs(ctx, logReq)
-				if err != nil {
-					errc <- fmt.Errorf("starting log stream: %w", err)
-					return
-				}
-				for {
-					resp, err := stream.Recv()
-					if err == io.EOF {
-						return
+			if enableLogs {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					logReq := &agentpb.StreamLogsRequest{}
+					if appName != "" {
+						logReq.AppName = &appName
 					}
+					if serviceName != "" {
+						logReq.ServiceName = &serviceName
+					}
+					stream, err := conn.TelemetryService.StreamLogs(ctx, logReq)
 					if err != nil {
-						errc <- fmt.Errorf("receiving logs: %w", err)
+						errc <- fmt.Errorf("starting log stream: %w", err)
 						return
 					}
-					logs := resp.GetLogs()
-					if logs == nil {
-						continue
-					}
-					for _, rl := range logs.GetResourceLogs() {
-						res := kvMapFromResource(rl.GetResource())
-						svc := res["service.name"]
-						for _, sl := range rl.GetScopeLogs() {
-							for _, lr := range sl.GetLogRecords() {
-								sev, sevNum := severityTextAndNumber(lr.GetSeverityNumber())
-								emit(telemetryLogEntry{
-									Type:           "log",
-									Timestamp:      formatNanoUTC(lr.GetTimeUnixNano()),
-									TimestampNano:  lr.GetTimeUnixNano(),
-									Severity:       sev,
-									SeverityNumber: sevNum,
-									Service:        svc,
-									Resource:       res,
-									Body:           anyValueString(lr.GetBody()),
-									Attributes:     kvMapFromKeyValues(lr.GetAttributes()),
-								})
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							return
+						}
+						if err != nil {
+							errc <- fmt.Errorf("receiving logs: %w", err)
+							return
+						}
+						logs := resp.GetLogs()
+						if logs == nil {
+							continue
+						}
+						for _, rl := range logs.GetResourceLogs() {
+							res := kvMapFromResource(rl.GetResource())
+							svc := res["service.name"]
+							for _, sl := range rl.GetScopeLogs() {
+								for _, lr := range sl.GetLogRecords() {
+									sev, sevNum := severityTextAndNumber(lr.GetSeverityNumber())
+									emit(telemetryLogEntry{
+										Type:           "log",
+										Timestamp:      formatNanoUTC(lr.GetTimeUnixNano()),
+										TimestampNano:  lr.GetTimeUnixNano(),
+										Severity:       sev,
+										SeverityNumber: sevNum,
+										Service:        svc,
+										Resource:       res,
+										Body:           anyValueString(lr.GetBody()),
+										Attributes:     kvMapFromKeyValues(lr.GetAttributes()),
+									})
+								}
 							}
 						}
 					}
-				}
-			}()
+				}()
+			}
 
-			// Stream metrics.
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				metricReq := &agentpb.StreamMetricsRequest{}
-				if appName != "" {
-					metricReq.AppName = &appName
-				}
-				if serviceName != "" {
-					metricReq.ServiceName = &serviceName
-				}
-				stream, err := conn.TelemetryService.StreamMetrics(ctx, metricReq)
-				if err != nil {
-					errc <- fmt.Errorf("starting metrics stream: %w", err)
-					return
-				}
-				for {
-					resp, err := stream.Recv()
-					if err == io.EOF {
-						return
+			if enableMetrics {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					metricReq := &agentpb.StreamMetricsRequest{}
+					if appName != "" {
+						metricReq.AppName = &appName
 					}
+					if serviceName != "" {
+						metricReq.ServiceName = &serviceName
+					}
+					stream, err := conn.TelemetryService.StreamMetrics(ctx, metricReq)
 					if err != nil {
-						errc <- fmt.Errorf("receiving metrics: %w", err)
+						errc <- fmt.Errorf("starting metrics stream: %w", err)
 						return
 					}
-					metrics := resp.GetMetrics()
-					if metrics == nil {
-						continue
-					}
-					for _, rm := range metrics.GetResourceMetrics() {
-						res := kvMapFromResource(rm.GetResource())
-						svc := res["service.name"]
-						for _, sm := range rm.GetScopeMetrics() {
-							for _, m := range sm.GetMetrics() {
-								emit(telemetryMetricEntry{
-									Type:        "metric",
-									Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-									Service:     svc,
-									Resource:    res,
-									Name:        m.GetName(),
-									Description: m.GetDescription(),
-									Unit:        m.GetUnit(),
-								})
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							return
+						}
+						if err != nil {
+							errc <- fmt.Errorf("receiving metrics: %w", err)
+							return
+						}
+						metrics := resp.GetMetrics()
+						if metrics == nil {
+							continue
+						}
+						for _, rm := range metrics.GetResourceMetrics() {
+							res := kvMapFromResource(rm.GetResource())
+							svc := res["service.name"]
+							for _, sm := range rm.GetScopeMetrics() {
+								for _, m := range sm.GetMetrics() {
+									emitMetricDataPoints(emit, m, svc, res)
+								}
 							}
 						}
 					}
-				}
-			}()
+				}()
+			}
 
-			// Stream traces.
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				traceReq := &agentpb.StreamTracesRequest{}
-				if appName != "" {
-					traceReq.AppName = &appName
-				}
-				if serviceName != "" {
-					traceReq.ServiceName = &serviceName
-				}
-				stream, err := conn.TelemetryService.StreamTraces(ctx, traceReq)
-				if err != nil {
-					errc <- fmt.Errorf("starting traces stream: %w", err)
-					return
-				}
-				for {
-					resp, err := stream.Recv()
-					if err == io.EOF {
-						return
+			if enableTraces {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					traceReq := &agentpb.StreamTracesRequest{}
+					if appName != "" {
+						traceReq.AppName = &appName
 					}
+					if serviceName != "" {
+						traceReq.ServiceName = &serviceName
+					}
+					stream, err := conn.TelemetryService.StreamTraces(ctx, traceReq)
 					if err != nil {
-						errc <- fmt.Errorf("receiving traces: %w", err)
+						errc <- fmt.Errorf("starting traces stream: %w", err)
 						return
 					}
-					traces := resp.GetTraces()
-					if traces == nil {
-						continue
-					}
-					for _, rs := range traces.GetResourceSpans() {
-						res := kvMapFromResource(rs.GetResource())
-						svc := res["service.name"]
-						for _, ss := range rs.GetScopeSpans() {
-							for _, span := range ss.GetSpans() {
-								emit(telemetryTraceEntry{
-									Type:             "trace",
-									Timestamp:        formatNanoUTC(span.GetStartTimeUnixNano()),
-									TimestampNano:    span.GetStartTimeUnixNano(),
-									EndTimestamp:     formatNanoUTC(span.GetEndTimeUnixNano()),
-									EndTimestampNano: span.GetEndTimeUnixNano(),
-									Service:          svc,
-									Resource:         res,
-									Name:             span.GetName(),
-									Kind:             span.GetKind().String(),
-									TraceID:          hex.EncodeToString(span.GetTraceId()),
-									SpanID:           hex.EncodeToString(span.GetSpanId()),
-									ParentSpanID:     hex.EncodeToString(span.GetParentSpanId()),
-									Attributes:       kvMapFromKeyValues(span.GetAttributes()),
-								})
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							return
+						}
+						if err != nil {
+							errc <- fmt.Errorf("receiving traces: %w", err)
+							return
+						}
+						traces := resp.GetTraces()
+						if traces == nil {
+							continue
+						}
+						for _, rs := range traces.GetResourceSpans() {
+							res := kvMapFromResource(rs.GetResource())
+							svc := res["service.name"]
+							for _, ss := range rs.GetScopeSpans() {
+								for _, span := range ss.GetSpans() {
+									startNano := span.GetStartTimeUnixNano()
+									endNano := span.GetEndTimeUnixNano()
+									durationMs := float64(endNano-startNano) / 1e6
+
+									status := telemetryTraceStatus{Code: "UNSET"}
+									if s := span.GetStatus(); s != nil {
+										status.Code = s.GetCode().String()
+										status.Message = s.GetMessage()
+									}
+
+									emit(telemetryTraceEntry{
+										Type:          "span",
+										TraceID:       hex.EncodeToString(span.GetTraceId()),
+										SpanID:        hex.EncodeToString(span.GetSpanId()),
+										ParentSpanID:  hex.EncodeToString(span.GetParentSpanId()),
+										Name:          span.GetName(),
+										Kind:          span.GetKind().String(),
+										StartTime:     formatNanoUTC(startNano),
+										EndTime:       formatNanoUTC(endNano),
+										StartTimeNano: startNano,
+										EndTimeNano:   endNano,
+										DurationMs:    durationMs,
+										Status:        status,
+										Service:       svc,
+										Attributes:    kvMapFromKeyValues(span.GetAttributes()),
+										Resource:      res,
+									})
+								}
 							}
 						}
 					}
-				}
-			}()
+				}()
+			}
 
 			// Wait for all goroutines, return first error if any.
 			go func() {
@@ -756,6 +806,9 @@ func newDeviceTelemetryStreamCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&appName, "app", "", "Filter by application name")
 	cmd.Flags().StringVar(&serviceName, "service", "", "Filter by service name")
+	cmd.Flags().BoolVar(&enableLogs, "logs", false, "Include logs")
+	cmd.Flags().BoolVar(&enableMetrics, "metrics", false, "Include metrics")
+	cmd.Flags().BoolVar(&enableTraces, "traces", false, "Include traces")
 
 	return cmd
 }
@@ -773,29 +826,111 @@ type telemetryLogEntry struct {
 }
 
 type telemetryMetricEntry struct {
-	Type        string            `json:"type"`
-	Timestamp   string            `json:"timestamp"`
-	Service     string            `json:"service"`
-	Resource    map[string]string `json:"resource"`
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Unit        string            `json:"unit,omitempty"`
+	Type       string            `json:"type"`
+	Timestamp  string            `json:"timestamp"`
+	Service    string            `json:"service"`
+	Resource   map[string]string `json:"resource,omitempty"`
+	Name       string            `json:"name"`
+	Value      float64           `json:"value"`
+	MetricType string            `json:"metricType"`
+	Unit       string            `json:"unit,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+type telemetryTraceStatus struct {
+	Code    string `json:"code"`
+	Message string `json:"message,omitempty"`
 }
 
 type telemetryTraceEntry struct {
-	Type             string            `json:"type"`
-	Timestamp        string            `json:"timestamp"`
-	TimestampNano    uint64            `json:"timestampNano"`
-	EndTimestamp     string            `json:"endTimestamp"`
-	EndTimestampNano uint64            `json:"endTimestampNano"`
-	Service          string            `json:"service"`
-	Resource         map[string]string `json:"resource"`
-	Name             string            `json:"name"`
-	Kind             string            `json:"kind"`
-	TraceID          string            `json:"traceId"`
-	SpanID           string            `json:"spanId"`
-	ParentSpanID     string            `json:"parentSpanId,omitempty"`
-	Attributes       map[string]string `json:"attributes"`
+	Type          string               `json:"type"`
+	TraceID       string               `json:"traceId"`
+	SpanID        string               `json:"spanId"`
+	ParentSpanID  string               `json:"parentSpanId,omitempty"`
+	Name          string               `json:"name"`
+	Kind          string               `json:"kind"`
+	StartTime     string               `json:"startTime"`
+	EndTime       string               `json:"endTime"`
+	StartTimeNano uint64               `json:"startTimeNano"`
+	EndTimeNano   uint64               `json:"endTimeNano"`
+	DurationMs    float64              `json:"durationMs"`
+	Status        telemetryTraceStatus `json:"status"`
+	Service       string               `json:"service"`
+	Attributes    map[string]string    `json:"attributes,omitempty"`
+	Resource      map[string]string    `json:"resource,omitempty"`
+}
+
+// emitMetricDataPoints extracts the latest value from a metric and emits one
+// telemetryMetricEntry per metric (using the last data point's value).
+func emitMetricDataPoints(emit func(any), m *otelpb.Metric, svc string, res map[string]string) {
+	var value float64
+	var metricType string
+	var attrs map[string]string
+
+	switch {
+	case m.GetGauge() != nil:
+		metricType = "gauge"
+		dps := m.GetGauge().GetDataPoints()
+		if len(dps) > 0 {
+			dp := dps[len(dps)-1]
+			value = numberDataPointValue(dp)
+			attrs = kvMapFromKeyValues(dp.GetAttributes())
+		}
+	case m.GetSum() != nil:
+		metricType = "sum"
+		dps := m.GetSum().GetDataPoints()
+		if len(dps) > 0 {
+			dp := dps[len(dps)-1]
+			value = numberDataPointValue(dp)
+			attrs = kvMapFromKeyValues(dp.GetAttributes())
+		}
+	case m.GetHistogram() != nil:
+		metricType = "histogram"
+		dps := m.GetHistogram().GetDataPoints()
+		if len(dps) > 0 {
+			dp := dps[len(dps)-1]
+			if dp.GetSum() != 0 && dp.GetCount() != 0 {
+				value = dp.GetSum() / float64(dp.GetCount())
+			}
+			attrs = kvMapFromKeyValues(dp.GetAttributes())
+		}
+	case m.GetSummary() != nil:
+		metricType = "summary"
+		dps := m.GetSummary().GetDataPoints()
+		if len(dps) > 0 {
+			dp := dps[len(dps)-1]
+			if dp.GetCount() != 0 {
+				value = dp.GetSum() / float64(dp.GetCount())
+			}
+			attrs = kvMapFromKeyValues(dp.GetAttributes())
+		}
+	default:
+		metricType = "unknown"
+	}
+
+	emit(telemetryMetricEntry{
+		Type:       "metric",
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+		Service:    svc,
+		Resource:   res,
+		Name:       m.GetName(),
+		Value:      value,
+		MetricType: metricType,
+		Unit:       m.GetUnit(),
+		Attributes: attrs,
+	})
+}
+
+// numberDataPointValue extracts the numeric value from a NumberDataPoint.
+func numberDataPointValue(dp *otelpb.NumberDataPoint) float64 {
+	switch dp.GetValue().(type) {
+	case *otelpb.NumberDataPoint_AsDouble:
+		return dp.GetAsDouble()
+	case *otelpb.NumberDataPoint_AsInt:
+		return float64(dp.GetAsInt())
+	default:
+		return 0
+	}
 }
 
 func formatNanoUTC(nanos uint64) string {
@@ -950,7 +1085,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth())
+			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth(), SuppressUpdateCheck())
 			if err != nil {
 				return err
 			}
@@ -963,9 +1098,23 @@ func newDeviceUpdateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("reading binary: %w", err)
 				}
+
+				// Validate the binary's ELF architecture against the device.
+				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+				if err != nil {
+					return fmt.Errorf("could not query device architecture to verify binary: %w", err)
+				}
+				deviceArch := versionResp.GetCpuArchitecture()
+				if deviceArch != "" {
+					if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
+						return err
+					}
+				}
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
-				fmt.Println("Detecting device architecture...")
+				if !jsonOutput {
+					fmt.Println("Detecting device architecture...")
+				}
 				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 				if err != nil {
 					return fmt.Errorf("getting device info: %w", err)
@@ -975,19 +1124,25 @@ func newDeviceUpdateCmd() *cobra.Command {
 				if arch == "" {
 					return fmt.Errorf("device did not report CPU architecture; use --binary to provide the binary manually")
 				}
-				fmt.Printf("Device architecture: %s\n", arch)
+				if !jsonOutput {
+					fmt.Printf("Device architecture: %s\n", arch)
+				}
 
 				releaseType := "stable"
 				if nightly {
 					releaseType = "nightly"
 				}
-				fmt.Printf("Fetching latest %s release...\n", releaseType)
+				if !jsonOutput {
+					fmt.Printf("Fetching latest %s release...\n", releaseType)
+				}
 
 				release, err := fetchAgentRelease(nightly)
 				if err != nil {
 					return fmt.Errorf("fetching release: %w", err)
 				}
-				fmt.Printf("Found release: %s\n", release.TagName)
+				if !jsonOutput {
+					fmt.Printf("Found release: %s\n", release.TagName)
+				}
 
 				// Find matching asset: wendy-agent-linux-{arch}-*.tar.gz
 				assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
@@ -1002,7 +1157,9 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("no asset found for linux/%s in release %s", arch, release.TagName)
 				}
 
-				fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+				if !jsonOutput {
+					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+				}
 				binaryData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
 					return fmt.Errorf("downloading binary: %w", err)
@@ -1013,26 +1170,49 @@ func newDeviceUpdateCmd() *cobra.Command {
 			h := sha256.Sum256(binaryData)
 			sha256Hash := hex.EncodeToString(h[:])
 
-			s := tui.NewSpinner("Uploading agent binary...")
-			p := tea.NewProgram(s)
+			if isInteractiveTerminal() && !jsonOutput {
+				s := tui.NewSpinner("Uploading agent binary...")
+				p := tea.NewProgram(s)
 
-			go func() {
-				uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
-				p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
-			}()
+				go func() {
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
+				}()
 
-			finalModel, runErr := p.Run()
-			if runErr != nil {
-				return fmt.Errorf("TUI error: %w", runErr)
+				finalModel, runErr := p.Run()
+				if runErr != nil {
+					return fmt.Errorf("TUI error: %w", runErr)
+				}
+
+				model := finalModel.(tui.SpinnerModel)
+				_, updateErr := model.Result()
+				if updateErr != nil {
+					return updateErr
+				}
+			} else if !jsonOutput {
+				fmt.Println("Uploading agent binary...")
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+					return err
+				}
+			} else {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+					return err
+				}
 			}
 
-			model := finalModel.(tui.SpinnerModel)
-			_, updateErr := model.Result()
-			if updateErr != nil {
-				return updateErr
+			if jsonOutput {
+				resp := map[string]string{
+					"status":  "success",
+					"message": "Agent updated successfully.",
+				}
+				b, err := json.Marshal(resp)
+				if err != nil {
+					return fmt.Errorf("failed to marshal JSON response: %w", err)
+				}
+				fmt.Println(string(b))
+			} else {
+				fmt.Println("Agent updated successfully.")
 			}
-
-			fmt.Println("Agent updated successfully.")
 			return nil
 		},
 	}
@@ -1043,7 +1223,61 @@ func newDeviceUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-// deviceUpdateUpload streams the binary data to the agent's UpdateAgent RPC.
+// checkELFArchitecture reads the ELF e_machine field from data and returns an
+// error if it does not match the device's reported GOARCH (e.g. "amd64", "arm64").
+// Non-ELF binaries (e.g. scripts) are accepted without complaint.
+func checkELFArchitecture(data []byte, deviceArch string) error {
+	// Only amd64 and arm64 are supported targets.
+	switch deviceArch {
+	case "amd64", "arm64":
+		// supported, continue
+	default:
+		return fmt.Errorf("device reports unsupported architecture %q; only amd64 and arm64 are supported", deviceArch)
+	}
+
+	// ELF magic + header fields up to e_machine occupy 20 bytes.
+	if len(data) < 20 {
+		return nil
+	}
+	if data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' {
+		return nil // not an ELF binary — skip check
+	}
+
+	// Respect EI_DATA (byte 5) when reading the 2-byte e_machine field at offset 18.
+	const (
+		elfDataLittle = 1 // ELFDATA2LSB
+		elfDataBig    = 2 // ELFDATA2MSB
+
+		emX86_64  = 62  // EM_X86_64  → amd64
+		emAArch64 = 183 // EM_AARCH64 → arm64
+	)
+
+	var machine uint16
+	switch data[5] {
+	case elfDataLittle:
+		machine = uint16(data[18]) | uint16(data[19])<<8
+	case elfDataBig:
+		machine = uint16(data[18])<<8 | uint16(data[19])
+	default:
+		return nil // unknown ELF endianness — skip check
+	}
+
+	var binaryArch string
+	switch machine {
+	case emX86_64:
+		binaryArch = "amd64"
+	case emAArch64:
+		binaryArch = "arm64"
+	default:
+		return nil // unrecognised ELF machine type — let the device decide
+	}
+
+	if binaryArch != deviceArch {
+		return fmt.Errorf("binary is %s but device is %s; provide the correct binary with --binary", binaryArch, deviceArch)
+	}
+	return nil
+}
+
 func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {

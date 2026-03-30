@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -28,7 +27,7 @@ func newCacheListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List cached items",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cacheDir, err := getCacheDir()
+			cacheDir, err := config.CacheDir()
 			if err != nil {
 				return err
 			}
@@ -65,7 +64,7 @@ func newCacheClearCmd() *cobra.Command {
 		Use:   "clear",
 		Short: "Clear the local cache",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cacheDir, err := getCacheDir()
+			cacheDir, err := config.CacheDir()
 			if err != nil {
 				return err
 			}
@@ -78,12 +77,4 @@ func newCacheClearCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func getCacheDir() (string, error) {
-	cfgDir, err := config.ConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(cfgDir, "cache"), nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
@@ -277,16 +278,16 @@ func (m dashboardModel) logsWidth() int {
 }
 
 var (
-	dashTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	dashHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	dashDimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	dashMetricName  = lipgloss.NewStyle().Foreground(lipgloss.Color("229"))
-	dashMetricVal   = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))
-	dashMetricUnit  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	dashMetricTime  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	dashFooterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	dashDotGreen    = lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Render("●")
-	dashDotBlue     = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render("●")
+	dashTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
+	dashHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(tui.Emerald300)
+	dashDimStyle    = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	dashMetricName  = lipgloss.NewStyle().Foreground(tui.Emerald200)
+	dashMetricVal   = lipgloss.NewStyle().Foreground(tui.Emerald400)
+	dashMetricUnit  = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	dashMetricTime  = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	dashFooterStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	dashDotGreen    = lipgloss.NewStyle().Foreground(tui.Emerald400).Render("●")
+	dashDotBlue     = lipgloss.NewStyle().Foreground(tui.Emerald300).Render("●")
 )
 
 func truncateVisible(s string, maxWidth int) string {

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -68,14 +69,34 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 
 // grpcTarget converts a host:port address into a gRPC target string.
 // IPv6 link-local addresses contain a zone ID with a bare "%" (e.g.
-// [fe80::1%en0]:50051) which grpc.NewClient interprets as an invalid
-// URL percent-encoding. Using the passthrough scheme avoids URI parsing
-// entirely and passes the address straight to the dialer.
+// [fe80::1%en0]:50051). grpc.NewClient parses the target as a URL, where
+// "%" starts a percent-encoding sequence — "%en" is invalid hex and fails.
+// We use the passthrough scheme with url.URL which correctly escapes the
+// zone "%" to "%25". The passthrough resolver decodes it back to the
+// original zone ID before passing it to the dialer.
+//
+// The address MUST be bracketed for IPv6 (e.g. [fe80::1%en0]:50051).
+// As a safety net, if an unbracketed IPv6 address is received, we add
+// brackets before constructing the URL so the host is unambiguous.
 func grpcTarget(address string) string {
-	if strings.Contains(address, "%") {
-		return "passthrough:///" + address
+	if !strings.Contains(address, "%") {
+		return address
 	}
-	return address
+
+	// Ensure IPv6 address is properly bracketed. net.SplitHostPort
+	// handles [host]:port but fails for bare IPv6 like
+	// fe80::1%en0:50051 where the colons are ambiguous.
+	if _, _, err := net.SplitHostPort(address); err != nil && !strings.HasPrefix(address, "[") {
+		// Zone IDs (interface names) never contain colons, so the
+		// port follows the last ":".
+		if i := strings.LastIndex(address, ":"); i > 0 {
+			host, port := address[:i], address[i+1:]
+			address = net.JoinHostPort(host, port)
+		}
+	}
+
+	u := &url.URL{Scheme: "passthrough", Path: "/" + address}
+	return u.String()
 }
 
 // hostFromAddress extracts the hostname/IP from a host:port address string.

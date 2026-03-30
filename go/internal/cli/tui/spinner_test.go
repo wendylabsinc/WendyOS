@@ -160,3 +160,90 @@ func TestProgressModel_ErrorDoneMsg(t *testing.T) {
 		t.Errorf("error view should contain 'Error', got: %q", view)
 	}
 }
+
+func TestProgressModel_ViewByteCounter(t *testing.T) {
+	p := NewProgress("Extracting...")
+
+	// Send an update with Written and Total.
+	model, _ := p.Update(ProgressUpdateMsg{
+		Percent: 0.44,
+		Written: 26 * 1024 * 1024 * 1024, // ~26 GB
+		Total:   59 * 1024 * 1024 * 1024, // ~59 GB
+	})
+	updated := model.(ProgressModel)
+
+	view := updated.View()
+	if !strings.Contains(view, "26.0 GiB") {
+		t.Errorf("view should contain written bytes '26.0 GiB', got: %q", view)
+	}
+	if !strings.Contains(view, "59.0 GiB") {
+		t.Errorf("view should contain total bytes '59.0 GiB', got: %q", view)
+	}
+	if !strings.Contains(view, "/") {
+		t.Errorf("view should contain '/' separator for byte counter, got: %q", view)
+	}
+}
+
+func TestProgressModel_ViewNoByteCounterWhenZero(t *testing.T) {
+	p := NewProgress("Flashing...")
+
+	// Update with no Written/Total — should not show byte counter.
+	model, _ := p.Update(ProgressUpdateMsg{
+		Percent: 0.5,
+		Written: 0,
+		Total:   0,
+	})
+	updated := model.(ProgressModel)
+
+	view := updated.View()
+	if strings.Contains(view, "GiB") || strings.Contains(view, "MiB") || strings.Contains(view, "KiB") {
+		t.Errorf("view should not contain byte info when Written/Total are zero, got: %q", view)
+	}
+}
+
+func TestProgressModel_DoneRendersFullBytes(t *testing.T) {
+	p := NewProgress("Extracting...")
+
+	// First send a partial update so the model has byte info.
+	model, _ := p.Update(ProgressUpdateMsg{
+		Percent: 0.5,
+		Written: 500 * 1024 * 1024,  // 500 MB
+		Total:   1000 * 1024 * 1024, // 1000 MB
+	})
+	p = model.(ProgressModel)
+
+	// Now send done.
+	model, _ = p.Update(ProgressDoneMsg{Err: nil})
+	updated := model.(ProgressModel)
+
+	view := updated.View()
+	// Done state should show total/total (not written/total).
+	// Both sides should be "1000.0 MiB".
+	count := strings.Count(view, "1000.0 MiB")
+	if count != 2 {
+		t.Errorf("done view should show total/total (two instances of '1000.0 MiB'), got: %q", view)
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		input int64
+		want  string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1024, "1.0 KiB"},
+		{1536, "1.5 KiB"},
+		{1024 * 1024, "1.0 MiB"},
+		{500 * 1024 * 1024, "500.0 MiB"},
+		{1024 * 1024 * 1024, "1.0 GiB"},
+		{int64(10.5 * 1024 * 1024 * 1024), "10.5 GiB"},
+	}
+
+	for _, tt := range tests {
+		got := formatBytes(tt.input)
+		if got != tt.want {
+			t.Errorf("formatBytes(%d) = %q; want %q", tt.input, got, tt.want)
+		}
+	}
+}

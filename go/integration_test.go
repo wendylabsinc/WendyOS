@@ -157,6 +157,10 @@ func (m *statefulContainerdClient) CreateContainer(_ context.Context, req *agent
 	return nil
 }
 
+func (m *statefulContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, _ services.ProgressFunc) error {
+	return m.CreateContainer(ctx, req, appCfg)
+}
+
 func (m *statefulContainerdClient) StartContainer(_ context.Context, appName string) (<-chan services.ContainerOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,6 +178,10 @@ func (m *statefulContainerdClient) StartContainer(_ context.Context, appName str
 		close(ch)
 	}()
 	return ch, nil
+}
+
+func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader) (<-chan services.ContainerOutput, error) {
+	return m.StartContainer(context.Background(), appName)
 }
 
 // getLayerData returns the data stored for a given digest, for test assertions.

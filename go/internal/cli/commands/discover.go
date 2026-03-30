@@ -1,9 +1,14 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +22,8 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/env"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
+	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
 func newDiscoverCmd() *cobra.Command {
@@ -184,17 +191,37 @@ type btScanMsg struct {
 }
 type extScanMsg struct{ devices []models.ExternalDevice }
 
+// discoverDeviceInfo is the JSON structure copied to the clipboard.
+type discoverDeviceInfo struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Address string `json:"address"`
+	Version string `json:"version,omitempty"`
+}
+
+// flashClearMsg is sent after a delay to clear the flash message.
+type flashClearMsg struct{}
+
+// discoverUpdateDoneMsg is sent when a background device update completes.
+type discoverUpdateDoneMsg struct {
+	deviceName string
+	err        error
+}
+
 type discoverModel struct {
-	ctx             context.Context
-	opts            discovery.DiscoveryOptions
-	collection      *models.DevicesCollection
-	table           bubbleTable.Model
-	quitting        bool
-	hasResults      bool
-	err             error
-	includeExternal bool
-	windowHeight    int
-	bleWarning      string
+	ctx                context.Context
+	opts               discovery.DiscoveryOptions
+	collection         *models.DevicesCollection
+	table              bubbleTable.Model
+	quitting           bool
+	hasResults         bool
+	err                error
+	includeExternal    bool
+	windowHeight       int
+	bleWarning         string
+	flashMessage       string
+	flashIsError       bool
+	updatingDeviceName string // non-empty while a background update is running
 }
 
 func newDiscoverModel(ctx context.Context, opts discovery.DiscoveryOptions) discoverModel {
@@ -288,6 +315,61 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "enter":
+			rows := discoverTableRows(m.collection)
+			cursor := m.table.Cursor()
+			if len(rows) > 0 && cursor >= 0 && cursor < len(rows) {
+				row := rows[cursor]
+				info := deviceInfoFromRow(row)
+				m.flashMessage, m.flashIsError = copyDeviceJSON(info)
+				return m, clearFlashAfter(5 * time.Second)
+			}
+			return m, nil
+		case "a":
+			rows := discoverTableRows(m.collection)
+			if len(rows) > 0 {
+				var all []discoverDeviceInfo
+				for _, row := range rows {
+					all = append(all, deviceInfoFromRow(row))
+				}
+				m.flashMessage, m.flashIsError = copyDeviceJSON(all)
+				if !m.flashIsError {
+					m.flashMessage = "Copied all devices as JSON to clipboard."
+				}
+				return m, clearFlashAfter(5 * time.Second)
+			}
+			return m, nil
+		case "u":
+			if m.updatingDeviceName != "" {
+				return m, nil // already updating
+			}
+			rows := discoverTableRows(m.collection)
+			cursor := m.table.Cursor()
+			if len(rows) == 0 || cursor < 0 || cursor >= len(rows) {
+				return m, nil
+			}
+			row := rows[cursor]
+			if !strings.Contains(row[1], "LAN") {
+				m.flashMessage = "Update is only supported for LAN devices."
+				m.flashIsError = true
+				return m, clearFlashAfter(3 * time.Second)
+			}
+			rowVer := strings.TrimPrefix(row[3], "* ")
+			if rowVer == "" || version.CompareVersions(version.Version, rowVer) <= 0 {
+				m.flashMessage = "Device is already up to date."
+				m.flashIsError = false
+				return m, clearFlashAfter(3 * time.Second)
+			}
+			addr := lanDeviceAddr(m.collection, row[0])
+			if addr == "" {
+				m.flashMessage = "Could not determine device address."
+				m.flashIsError = true
+				return m, clearFlashAfter(3 * time.Second)
+			}
+			m.updatingDeviceName = row[0]
+			m.flashMessage = "Updating " + row[0] + "..."
+			m.flashIsError = false
+			return m, m.startDeviceUpdateCmd(addr, row[0])
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -322,6 +404,19 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hasResults = true
 		m.refreshTable()
 		return m, delayThen(env.DiscoverExternalInterval(), m.scanExternal())
+	case flashClearMsg:
+		m.flashMessage = ""
+		m.flashIsError = false
+	case discoverUpdateDoneMsg:
+		m.updatingDeviceName = ""
+		if msg.err != nil {
+			m.flashMessage = fmt.Sprintf("Update failed for %s: %v", msg.deviceName, msg.err)
+			m.flashIsError = true
+		} else {
+			m.flashMessage = fmt.Sprintf("Updated %s successfully.", msg.deviceName)
+			m.flashIsError = false
+		}
+		return m, clearFlashAfter(10 * time.Second)
 	}
 
 	return m, nil
@@ -335,8 +430,10 @@ func delayThen(d time.Duration, cmd tea.Cmd) tea.Cmd {
 }
 
 var (
-	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	scanStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	dimStyle        = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	scanStyle       = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+	flashStyle      = lipgloss.NewStyle().Foreground(tui.ColorAccent)
+	flashErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red
 )
 
 func (m discoverModel) View() string {
@@ -346,7 +443,11 @@ func (m discoverModel) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" (use arrows to navigate, press q or Ctrl+C to stop)") + "\n")
+	hintText := "↑/↓ navigate, enter copy, a copy all, u update, q quit"
+	if m.updatingDeviceName != "" {
+		hintText = "updating " + m.updatingDeviceName + "... (q quit)"
+	}
+	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" ("+hintText+")") + "\n")
 
 	if m.bleWarning != "" {
 		sb.WriteString(dimStyle.Render("  Bluetooth: "+m.bleWarning) + "\n")
@@ -364,6 +465,16 @@ func (m discoverModel) View() string {
 		sb.WriteString(dimStyle.Render("No devices found yet...") + "\n")
 	}
 
+	if m.flashMessage != "" {
+		style := flashStyle
+		if m.flashIsError {
+			style = flashErrorStyle
+		} else if m.updatingDeviceName != "" {
+			style = scanStyle
+		}
+		sb.WriteString("\n" + style.Render("  "+m.flashMessage) + "\n")
+	}
+
 	return sb.String()
 }
 
@@ -376,6 +487,91 @@ func (m *discoverModel) refreshTable() {
 	}
 	m.table.SetWidth(discoverTableWidth(m.table.Columns()))
 	m.table.SetHeight(discoverTableHeight(len(rows), m.windowHeight, true))
+}
+
+// markOutdated prefixes the version string with "* " when the agent is behind
+// the CLI, serving as a visible indicator in the discover table.
+func markOutdated(agentVer string) string {
+	if agentVer != "" && version.CompareVersions(version.Version, agentVer) > 0 {
+		return "* " + agentVer
+	}
+	return agentVer
+}
+
+// lanDeviceAddr returns the gRPC address for the first LAN device whose
+// DisplayName matches (case-insensitive). Returns "" if not found.
+func lanDeviceAddr(collection *models.DevicesCollection, displayName string) string {
+	for i := range collection.LANDevices {
+		d := &collection.LANDevices[i]
+		if strings.EqualFold(d.DisplayName, displayName) {
+			return preferredLANAddress(*d)
+		}
+	}
+	return ""
+}
+
+// startDeviceUpdateCmd returns a Bubble Tea command that connects to addr,
+// downloads and uploads the latest agent binary, and waits for the device to
+// restart. It sends a discoverUpdateDoneMsg when finished.
+func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
+	ctx := m.ctx
+	return func() tea.Msg {
+		conn, err := connectWithAutoTLS(ctx, addr)
+		if err != nil {
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
+		}
+		versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+		if err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("querying device: %w", err)}
+		}
+		arch := versionResp.GetCpuArchitecture()
+		if arch == "" {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
+		}
+
+		release, err := fetchAgentRelease(false)
+		if err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("fetching release: %w", err)}
+		}
+
+		assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
+		var matchedAsset *githubReleaseAsset
+		for _, a := range release.Assets {
+			if strings.HasPrefix(a.Name, assetPrefix) && strings.HasSuffix(a.Name, ".tar.gz") {
+				matchedAsset = &a
+				break
+			}
+		}
+		if matchedAsset == nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)}
+		}
+
+		binaryData, err := downloadAgentBinary(*matchedAsset)
+		if err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
+		}
+
+		h := sha256.Sum256(binaryData)
+		sha256Hash := hex.EncodeToString(h[:])
+
+		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("uploading: %w", err)}
+		}
+		conn.Close() // agent is restarting
+
+		newConn, err := waitForAgentRestart(ctx, addr)
+		if err != nil {
+			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+		}
+		newConn.Close()
+		return discoverUpdateDoneMsg{deviceName: name}
+	}
 }
 
 // --- shared table rendering ---
@@ -396,9 +592,9 @@ func renderDeviceTable(collection *models.DevicesCollection) string {
 }
 
 var (
-	discoverTableHeaders   = []string{"Name", "Type", "Address", "Port", "Version"}
-	discoverTableMinWidths = []int{12, 12, 14, 6, 10}
-	discoverTableMaxWidths = []int{28, 18, 28, 8, 16}
+	discoverTableHeaders   = []string{"Name", "Type", "Address", "Version"}
+	discoverTableMinWidths = []int{12, 12, 14, 10}
+	discoverTableMaxWidths = []int{28, 18, 28, 16}
 )
 
 func newDiscoverTable(interactive bool) bubbleTable.Model {
@@ -409,17 +605,13 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 	var rows []bubbleTable.Row
 
 	for _, d := range collection.USBDevices {
-		rows = append(rows, bubbleTable.Row{d.DisplayName, "USB", d.Hostname, "", d.AgentVersion})
+		rows = append(rows, bubbleTable.Row{d.DisplayName, "USB", d.Hostname, markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.MergedDevices() {
-		port := ""
-		if d.Port() > 0 {
-			port = fmt.Sprintf("%d", d.Port())
-		}
-		rows = append(rows, bubbleTable.Row{d.DisplayName, d.ConnectionTypes(), d.Address(), port, d.AgentVersion})
+		rows = append(rows, bubbleTable.Row{d.DisplayName, d.ConnectionTypes(), d.Address(), markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.EthernetInterfaces {
-		rows = append(rows, bubbleTable.Row{d.DisplayName, "Ethernet", d.IPAddress, "", d.AgentVersion})
+		rows = append(rows, bubbleTable.Row{d.DisplayName, "Ethernet", d.IPAddress, markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.ExternalDevices {
 		// Wendy Lite devices are merged with BLE Lite in MergedDevices().
@@ -431,7 +623,7 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 		if p := providers.ProviderForKey(d.ProviderKey); p != nil {
 			typeName = p.DisplayName()
 		}
-		rows = append(rows, bubbleTable.Row{d.DisplayName, typeName, addr, "", d.AgentVersion})
+		rows = append(rows, bubbleTable.Row{d.DisplayName, typeName, addr, markOutdated(d.AgentVersion)})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -481,4 +673,99 @@ func discoverTableHeight(rowCount, windowHeight int, interactive bool) int {
 		return min(height, max(windowHeight-4, 4))
 	}
 	return min(height, 12)
+}
+
+// deviceInfoFromRow converts a table row to a discoverDeviceInfo.
+func deviceInfoFromRow(row bubbleTable.Row) discoverDeviceInfo {
+	return discoverDeviceInfo{
+		Name:    row[0],
+		Type:    row[1],
+		Address: row[2],
+		Version: strings.TrimPrefix(row[3], "* "),
+	}
+}
+
+// copyDeviceJSON marshals v as indented JSON, copies it to the clipboard,
+// and returns a user-facing message and whether it's an error.
+func copyDeviceJSON(v interface{}) (message string, isError bool) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Copy failed: %v", err), true
+	}
+	if err := clipboardWriter(string(data)); err != nil {
+		return fmt.Sprintf("Copy failed: %v", err), true
+	}
+	return "Copied device info as JSON to clipboard.", false
+}
+
+// clearFlashAfter returns a tea.Cmd that sends flashClearMsg after the given duration.
+func clearFlashAfter(d time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(d)
+		return flashClearMsg{}
+	}
+}
+
+// clipboardWriter is the function used to copy text to the clipboard.
+// It is a package-level variable so tests can replace it.
+var clipboardWriter = copyToClipboard
+
+// clipboardCandidate describes a clipboard tool and its arguments.
+type clipboardCandidate struct {
+	name string
+	args []string
+}
+
+// execLookPath and execCommand are package-level variables so tests can stub them.
+var execLookPath = exec.LookPath
+var execCommand = exec.Command
+
+// copyToClipboard writes text to the system clipboard using platform tools.
+func copyToClipboard(text string) error {
+	var candidates []clipboardCandidate
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []clipboardCandidate{
+			{name: "pbcopy"},
+		}
+	case "linux":
+		candidates = []clipboardCandidate{
+			{name: "wl-copy"},
+			{name: "xclip", args: []string{"-selection", "clipboard"}},
+			{name: "xsel", args: []string{"--clipboard", "--input"}},
+		}
+	case "windows":
+		candidates = []clipboardCandidate{
+			{name: "clip.exe"},
+		}
+	default:
+		return fmt.Errorf("clipboard not supported on %s; copy the output manually", runtime.GOOS)
+	}
+	var errs []string
+	for _, c := range candidates {
+		if _, err := execLookPath(c.name); err != nil {
+			continue
+		}
+		var stderr bytes.Buffer
+		cmd := execCommand(c.name, c.args...)
+		cmd.Stdin = strings.NewReader(text)
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			detail := stderr.String()
+			if detail == "" {
+				detail = err.Error()
+			}
+			errs = append(errs, fmt.Sprintf("%s: %s", c.name, strings.TrimSpace(detail)))
+			continue
+		}
+		return nil
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("all clipboard tools failed: %s", strings.Join(errs, "; "))
+	}
+	names := make([]string, len(candidates))
+	for i, c := range candidates {
+		names[i] = c.name
+	}
+	return fmt.Errorf("no clipboard tool found; install one of: %s", strings.Join(names, ", "))
 }

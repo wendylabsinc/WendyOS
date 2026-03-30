@@ -30,13 +30,19 @@ type BluetoothManager interface {
 	Forget(ctx context.Context, address string) error
 }
 
+// ProgressFunc is called by CreateContainer to report progress during
+// image pull, unpack, and container creation. The caller may be nil.
+type ProgressFunc func(progress *agentpb.CreateContainerProgress)
+
 // ContainerdClient abstracts interactions with the containerd runtime.
 type ContainerdClient interface {
 	ListLayers(ctx context.Context) ([]*agentpb.LayerHeader, error)
 	WriteLayer(ctx context.Context, digest string, reader io.Reader, size int64) error
 	AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader) error
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
+	CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error
 	StartContainer(ctx context.Context, appName string) (<-chan ContainerOutput, error)
+	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error
 	DeleteContainer(ctx context.Context, appName string, deleteImage bool) error
 	ListContainers(ctx context.Context) ([]*agentpb.AppContainer, error)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,7 +39,9 @@ func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice
 		dev, err := dnssdResolve(resolveCtx, inst)
 		resolveCancel()
 		if err != nil {
-			continue
+			// Resolve failed (e.g. could not parse hostname) — fall back to
+			// a device derived from the browse instance name.
+			dev = deviceFromBrowse(inst)
 		}
 
 		key := fmt.Sprintf("%s-%s-%d", dev.DisplayName, dev.Hostname, dev.Port)
@@ -61,7 +64,7 @@ type browseResult struct {
 // It uses a short settle timer: once the first result arrives, it waits up to
 // 500ms for more results before returning. This avoids waiting for the full timeout.
 func dnssdBrowse(ctx context.Context, serviceType string) ([]browseResult, error) {
-	cmd := exec.CommandContext(ctx, "dns-sd", "-B", serviceType, "local.")
+	cmd := exec.CommandContext(ctx, "dns-sd", "-B", serviceType, "local")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -200,20 +203,56 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 		id = displayName
 	}
 
-	ipAddr := ""
-	if addrs, err := net.LookupHost(hostname); err == nil && len(addrs) > 0 {
-		ipAddr = addrs[0]
+	return models.LANDevice{
+		ID:            id,
+		DisplayName:   displayName,
+		Hostname:      hostname,
+		Port:          port,
+		InterfaceType: string(models.InterfaceLAN),
+		IsWendyDevice: true,
+	}, nil
+}
+
+// deviceFromBrowse builds a LANDevice from browse results alone, without
+// resolving via dns-sd -L. Used as a fallback when resolve fails (e.g.
+// the service has no TXT records).
+
+var hostnameLabelRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// isValidHostnameLabel reports whether s is a valid RFC1123 hostname label.
+func isValidHostnameLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 {
+		return false
+	}
+	return hostnameLabelRegexp.MatchString(s)
+}
+
+func deviceFromBrowse(inst browseResult) models.LANDevice {
+	displayName := inst.instanceName
+
+	var (
+		id       string
+		hostname string
+		port     int
+	)
+
+	// Only synthesize a hostname/ID when the instance name is already a valid
+	// hostname label. Otherwise, leave Hostname empty and Port zero to avoid
+	// exposing a misleading dialable pair.
+	if isValidHostnameLabel(inst.instanceName) {
+		id = inst.instanceName
+		hostname = inst.instanceName + ".local"
+		port = 50051
 	}
 
 	return models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
-		IPAddress:     ipAddr,
 		Port:          port,
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
-	}, nil
+	}
 }
 
 // discoverLANContinuous keeps dns-sd -B running and sends each newly
@@ -221,7 +260,7 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 func discoverLANContinuous(ctx context.Context, ch chan<- models.LANDevice) {
 	defer close(ch)
 
-	cmd := exec.CommandContext(ctx, "dns-sd", "-B", wendyServiceType, "local.")
+	cmd := exec.CommandContext(ctx, "dns-sd", "-B", wendyServiceType, "local")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -256,7 +295,7 @@ func discoverLANContinuous(ctx context.Context, ch chan<- models.LANDevice) {
 		dev, err := dnssdResolve(resolveCtx, inst)
 		resolveCancel()
 		if err != nil {
-			continue
+			dev = deviceFromBrowse(inst)
 		}
 
 		select {

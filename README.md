@@ -2,47 +2,23 @@
 
 ## Installing the CLI
 
-### macOS (Homebrew)
+Install or update the `wendy` CLI on macOS or Linux (x86_64 and ARM64):
 
 ```sh
-brew tap wendylabsinc/tap
-brew install wendy
+curl -fsSL https://install.wendy.sh/cli.sh | bash
 ```
 
-For the nightly (prerelease) version:
+Also available via [Homebrew, .deb, .rpm, and AUR](INSTALL.md).
+
+## Installing the Agent
+
+Install or update the `wendy-agent` on a Linux device (x86_64 and ARM64):
 
 ```sh
-brew tap wendylabsinc/tap
-brew install wendy-nightly
+curl -fsSL https://install.wendy.sh/agent.sh | bash
 ```
 
-To update:
-
-```sh
-brew upgrade wendy
-```
-
-### Linux
-
-Debian/Ubuntu (`.deb`):
-
-```sh
-sudo apt install ./wendy_<version>_<arch>.deb
-```
-
-Fedora/RHEL (`.rpm`):
-
-```sh
-sudo rpm -i wendy-<version>.<arch>.rpm
-```
-
-Arch Linux (AUR):
-
-```sh
-yay -S wendy
-```
-
-Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/wendylabsinc/wendy-agent/releases) page.
+Supports Debian/Ubuntu, Fedora/RHEL, and Arch Linux. Also available via [system packages](INSTALL.md).
 
 ## Building from Source
 
@@ -63,20 +39,41 @@ cd go
 CGO_ENABLED=1 go build -o wendy ./cmd/wendy
 ```
 
-### Agent (Swift)
-
-The wendy-agent requires **Swift 6.2** or later. On macOS, **Xcode 16.2** or later is needed.
-
-To build and run the agent locally:
+### Agent (Go)
 
 ```sh
-swift run wendy-agent
+cd go
+go build -o wendy-agent ./cmd/wendy-agent
 ```
 
+### Local Developer Tip
+
+Add a `wendy-dev` alias to your shell profile (`~/.zshrc` or `~/.bashrc`) so you can quickly iterate on CLI changes without overwriting your installed `wendy`:
+
+```sh
+wendy-dev() {
+  (cd /path/to/wendy-agent/go && go run ./cmd/wendy "$@")
+}
+```
+
+Then use `wendy-dev` anywhere you'd normally use `wendy`:
+
+```sh
+wendy-dev run
+wendy-dev discover --json
+```
+
+You can do the same for the agent:
+
+```sh
+wendy-agent-dev() {
+  (cd /path/to/wendy-agent/go && go run ./cmd/wendy-agent "$@")
+}
+```
 
 ## Setting Up the Device
 
-The device needs to run the `wendy-agent` utility. We provide pre-build [Wendy](https://wendyos.io) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
+The device needs to run the `wendy-agent`. We provide pre-built [WendyOS](https://wendy.sh) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
 
 ### Network Manager Support
 
@@ -111,26 +108,18 @@ If no environment variable is set, the agent will auto-detect the available netw
 
 #### Manual Setup
 
-The `wendy` CLI communicates with a `wendy-agent`. The agent needs uses Docker for running your apps, so Docker needs to be running.
+The `wendy` CLI communicates with a `wendy-agent`. The agent uses containerd for running your apps.
 On a Debian (or Ubuntu) based OS, you can do the following:
 
 ```sh
-# Install Docker
-sudo apt install docker.io
-# Start Docker and keep running across reboots
-sudo systemctl start docker
-sudo systemctl enable docker
-# Provide access to Docker from the current user
-sudo usermod -aG docker $USER
+# Install containerd
+sudo apt install containerd
+# Start containerd and keep running across reboots
+sudo systemctl start containerd
+sudo systemctl enable containerd
 ```
 
-Then, you can download and run your `wendy-agent` on the device. We provide nightly tags with the latest `wendy-agent` builds [in this repository](https://github.com/wendylabsinc/wendy-agent/tags).
-
-If you're planning to test the wendy-agent on macOS, you'll need to build and run the agent yourself from this repository.
-
-```sh
-swift run wendy-agent
-```
+Then install the agent using the install script above, or download a build from the [releases page](https://github.com/wendylabsinc/wendy-agent/releases).
 
 ## Examples
 
@@ -140,8 +129,6 @@ swift run wendy-agent
 cd Examples/HelloWorld
 wendy run
 ```
-
-This builds the example using the Swift Static Linux SDK and runs it on your device in a container.
 
 ### Hello HTTP
 
@@ -160,13 +147,7 @@ To debug an app, use the `--debug` flag:
 wendy run --debug
 ```
 
-You can then attach LLDB to port `4242`:
-
-```sh
-lldb
-(lldb) target create .wendy-build/debug/HelloWorld
-(lldb) gdb-remote localhost:4242
-```
+This enables host networking for remote debugger access. For Python apps, `debugpy` is automatically injected and listens on port `5678`.
 
 ## Analytics
 

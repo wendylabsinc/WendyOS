@@ -138,7 +138,17 @@ func (s *ContainerService) CreateContainerWithProgress(req *agentpb.CreateContai
 		return status.Errorf(codes.InvalidArgument, "invalid app config: %v", err)
 	}
 
-	if err := s.containerd.CreateContainer(stream.Context(), req, appCfg); err != nil {
+	onProgress := func(p *agentpb.CreateContainerProgress) {
+		if err := stream.Send(&agentpb.CreateContainerProgressResponse{
+			ResponseType: &agentpb.CreateContainerProgressResponse_Progress{
+				Progress: p,
+			},
+		}); err != nil {
+			s.logger.Warn("failed to send progress update", zap.Error(err))
+		}
+	}
+
+	if err := s.containerd.CreateContainerWithProgress(stream.Context(), req, appCfg, onProgress); err != nil {
 		return status.Errorf(codes.Internal, "failed to create container: %v", err)
 	}
 
@@ -227,6 +237,111 @@ func (s *ContainerService) streamContainerOutput(
 				s.logManager.Publish(appName, output)
 			}
 			// When containerd channel closes, publish a Done marker.
+			s.logManager.Publish(appName, ContainerOutput{Done: true})
+		}()
+	} else {
+		readCh = outputCh
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case output, ok := <-readCh:
+			if !ok || output.Done {
+				return nil
+			}
+			if len(output.Stdout) > 0 {
+				if err := stream.Send(&agentpb.RunContainerLayersResponse{
+					ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{
+						StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{
+							Data: output.Stdout,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			}
+			if len(output.Stderr) > 0 {
+				if err := stream.Send(&agentpb.RunContainerLayersResponse{
+					ResponseType: &agentpb.RunContainerLayersResponse_StderrOutput{
+						StderrOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{
+							Data: output.Stderr,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+// AttachContainer starts a container and multiplexes stdin from the client
+// with stdout/stderr back to the client over a single bidirectional stream.
+// The first client message must set app_name; subsequent messages carry stdin data.
+func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse]) error {
+	// First message must identify the app.
+	first, err := stream.Recv()
+	if err == io.EOF {
+		return status.Error(codes.InvalidArgument, "missing first attach message")
+	}
+	if err != nil {
+		return err
+	}
+	appName := first.GetAppName()
+	if appName == "" {
+		return status.Error(codes.InvalidArgument, "app_name required as first message")
+	}
+
+	ctx := stream.Context()
+
+	// Pipe client stdin messages into the container's stdin.
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	// Goroutine: forward stdin_data messages from the gRPC stream to stdinW.
+	go func() {
+		defer stdinW.Close()
+		for {
+			msg, recvErr := stream.Recv()
+			if recvErr != nil {
+				return // client disconnected or closed send
+			}
+			if data := msg.GetStdinData(); len(data) > 0 {
+				if _, writeErr := stdinW.Write(data); writeErr != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR)
+	if err != nil {
+		stdinR.Close()
+		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+	}
+
+	// Send started notification.
+	if err := stream.Send(&agentpb.RunContainerLayersResponse{
+		ResponseType: &agentpb.RunContainerLayersResponse_Started_{
+			Started: &agentpb.RunContainerLayersResponse_Started{},
+		},
+	}); err != nil {
+		return err
+	}
+
+	// Fan-out via log manager if configured.
+	var readCh <-chan ContainerOutput
+	if s.logManager != nil {
+		subID, subCh := s.logManager.Subscribe(appName)
+		defer s.logManager.Unsubscribe(appName, subID)
+		readCh = subCh
+
+		go func() {
+			for output := range outputCh {
+				s.logManager.Publish(appName, output)
+			}
 			s.logManager.Publish(appName, ContainerOutput{Done: true})
 		}()
 	} else {

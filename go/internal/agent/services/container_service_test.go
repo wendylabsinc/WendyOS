@@ -19,18 +19,19 @@ import (
 // ---------- mock containerd client ----------
 
 type mockContainerdClient struct {
-	containers    []*agentpb.AppContainer
-	listErr       error
-	stopErr       error
-	deleteErr     error
-	layers        []*agentpb.LayerHeader
-	listLayersErr error
-	writeLayerErr error
-	writtenDigest string
-	writtenData   []byte
-	createErr     error
-	startOutputCh chan ContainerOutput
-	startErr      error
+	containers     []*agentpb.AppContainer
+	listErr        error
+	stopErr        error
+	deleteErr      error
+	layers         []*agentpb.LayerHeader
+	listLayersErr  error
+	writeLayerErr  error
+	writtenDigest  string
+	writtenData    []byte
+	createErr      error
+	progressPhases []agentpb.CreateContainerProgress_Phase
+	startOutputCh  chan ContainerOutput
+	startErr       error
 }
 
 func (m *mockContainerdClient) ListContainers(_ context.Context) ([]*agentpb.AppContainer, error) {
@@ -60,11 +61,40 @@ func (m *mockContainerdClient) AssembleImage(_ context.Context, _ string, _ []*a
 func (m *mockContainerdClient) CreateContainer(_ context.Context, _ *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	return m.createErr
 }
+func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error {
+	if onProgress != nil {
+		for _, phase := range m.progressPhases {
+			onProgress(&agentpb.CreateContainerProgress{Phase: phase})
+		}
+	}
+	return m.CreateContainer(ctx, req, appCfg)
+}
 func (m *mockContainerdClient) StartContainer(_ context.Context, _ string) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
 	return m.startOutputCh, nil
+}
+
+func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader) (<-chan ContainerOutput, error) {
+	if m.startErr != nil {
+		return nil, m.startErr
+	}
+	return m.startOutputCh, nil
+}
+
+// attachTestMock embeds mockContainerdClient and overrides StartContainerWithStdin
+// so tests can capture the appName and stdin reader passed by AttachContainer.
+type attachTestMock struct {
+	mockContainerdClient
+	onStartWithStdin func(appName string, stdin io.Reader) (<-chan ContainerOutput, error)
+}
+
+func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+	if m.onStartWithStdin != nil {
+		return m.onStartWithStdin(appName, stdin)
+	}
+	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin)
 }
 
 // ---------- bufconn helper ----------
@@ -268,5 +298,138 @@ func TestWriteLayer(t *testing.T) {
 	expectedData := append(data, data2...)
 	if string(mock.writtenData) != string(expectedData) {
 		t.Errorf("writtenData = %q; want %q", mock.writtenData, expectedData)
+	}
+}
+
+func TestCreateContainerWithProgress(t *testing.T) {
+	phases := []agentpb.CreateContainerProgress_Phase{
+		agentpb.CreateContainerProgress_UNPACKING,
+		agentpb.CreateContainerProgress_CREATING_CONTAINER,
+		agentpb.CreateContainerProgress_COMPLETE,
+	}
+	mock := &mockContainerdClient{progressPhases: phases}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	stream, err := client.CreateContainerWithProgress(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+	})
+	if err != nil {
+		t.Fatalf("CreateContainerWithProgress: %v", err)
+	}
+
+	var receivedPhases []agentpb.CreateContainerProgress_Phase
+	gotCompleted := false
+
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+
+		switch r := resp.GetResponseType().(type) {
+		case *agentpb.CreateContainerProgressResponse_Progress:
+			receivedPhases = append(receivedPhases, r.Progress.GetPhase())
+		case *agentpb.CreateContainerProgressResponse_Completed:
+			gotCompleted = true
+		}
+	}
+
+	if len(receivedPhases) != len(phases) {
+		t.Fatalf("received %d progress phases; want %d", len(receivedPhases), len(phases))
+	}
+	for i, p := range receivedPhases {
+		if p != phases[i] {
+			t.Errorf("phase[%d] = %v; want %v", i, p, phases[i])
+		}
+	}
+	if !gotCompleted {
+		t.Error("did not receive Completed response")
+	}
+}
+
+func TestAttachContainer(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	capturedAppCh := make(chan string, 1)
+	stdinDataCh := make(chan string, 1)
+
+	mock := &attachTestMock{
+		onStartWithStdin: func(appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+			capturedAppCh <- appName
+			go func() {
+				// Read all stdin bytes, then produce output so the server
+				// doesn't close until we've verified what was forwarded.
+				data, _ := io.ReadAll(stdin)
+				stdinDataCh <- string(data)
+				outputCh <- ContainerOutput{Stdout: []byte("pong")}
+				close(outputCh)
+			}()
+			return outputCh, nil
+		},
+	}
+
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatalf("AttachContainer: %v", err)
+	}
+
+	// First message must be app_name.
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_AppName{AppName: "echo-app"},
+	}); err != nil {
+		t.Fatalf("send app_name: %v", err)
+	}
+
+	// Verify StartContainerWithStdin was called with the correct app name.
+	if got := <-capturedAppCh; got != "echo-app" {
+		t.Errorf("appName = %q; want echo-app", got)
+	}
+
+	// Forward stdin data.
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: []byte("ping")},
+	}); err != nil {
+		t.Fatalf("send stdin_data: %v", err)
+	}
+
+	// Close client send so the server's stdin reader reaches EOF, which unblocks
+	// the mock goroutine's io.ReadAll and lets it produce output.
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	// Expect Started response.
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv started: %v", err)
+	}
+	if resp.GetStarted() == nil {
+		t.Error("expected Started response")
+	}
+
+	// Expect stdout containing "pong".
+	resp, err = stream.Recv()
+	if err != nil {
+		t.Fatalf("recv stdout: %v", err)
+	}
+	if string(resp.GetStdoutOutput().GetData()) != "pong" {
+		t.Errorf("stdout = %q; want pong", resp.GetStdoutOutput().GetData())
+	}
+
+	// Stream should end with EOF.
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("expected EOF; got %v", err)
+	}
+
+	// Confirm stdin bytes reached the container's stdin reader.
+	if got := <-stdinDataCh; got != "ping" {
+		t.Errorf("stdin data = %q; want ping", got)
 	}
 }

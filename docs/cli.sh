@@ -199,6 +199,38 @@ REPO
     $SUDO yum makecache
     $SUDO yum install -y wendy
 
+  elif command -v pacman &>/dev/null; then
+    echo "Pacman detected. Will install wendy from the AUR."
+    confirm "Proceed?"
+
+    # AUR helpers and makepkg refuse to run as root. If we're root, drop
+    # privileges back to the invoking user via SUDO_USER.
+    AS_USER=""
+    if [[ "$(id -u)" -eq 0 ]]; then
+      if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+        AS_USER="sudo -u $SUDO_USER"
+      else
+        echo "Error: AUR packages cannot be built as root."
+        echo "  Please re-run this script as a normal user (with or without sudo)."
+        exit 1
+      fi
+    fi
+
+    if command -v yay &>/dev/null; then
+      $AS_USER yay -S --noconfirm wendy
+    elif command -v paru &>/dev/null; then
+      $AS_USER paru -S --noconfirm wendy
+    else
+      echo "No AUR helper (yay/paru) found. Installing with makepkg..."
+      $SUDO pacman -S --needed --noconfirm base-devel git
+      TMPDIR_AUR=$(mktemp -d)
+      trap 'rm -rf "$TMPDIR_AUR"' EXIT
+      [[ -n "$AS_USER" ]] && chown "${SUDO_USER}:${SUDO_USER}" "$TMPDIR_AUR"
+      $AS_USER git clone https://aur.archlinux.org/wendy.git "$TMPDIR_AUR/wendy"
+      cd "$TMPDIR_AUR/wendy"
+      $AS_USER makepkg -si --noconfirm
+    fi
+
   else
     TMPDIR_DL=$(mktemp -d)
     trap 'rm -rf "$TMPDIR_DL"' EXIT

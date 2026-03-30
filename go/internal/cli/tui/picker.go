@@ -133,9 +133,9 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	pickerTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	pickerHint     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	pickerScanning = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	pickerTitle    = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	pickerHint     = lipgloss.NewStyle().Foreground(ColorDim)
+	pickerScanning = lipgloss.NewStyle().Foreground(ColorPrimary)
 )
 
 func (m PickerModel) View() string {
@@ -187,7 +187,7 @@ var pickerColumnDefs = []pickerColumnDef{
 	{
 		title:    "Name",
 		minWidth: 18,
-		maxWidth: 28,
+		maxWidth: 48,
 		value: func(item PickerItem) string {
 			return item.Name
 		},

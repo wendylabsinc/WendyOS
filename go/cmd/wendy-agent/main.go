@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/internal/agent/bluetooth"
+	"github.com/wendylabsinc/wendy/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/internal/agent/container"
 	agentcontainerd "github.com/wendylabsinc/wendy/internal/agent/containerd"
 	"github.com/wendylabsinc/wendy/internal/agent/dbusproxy"
@@ -63,7 +64,13 @@ func main() {
 	// Clean up old agent binary backups from previous updates.
 	services.CleanupOldBackups(logger)
 
-	networkMgr := agentnet.NewNMCLINetworkManager(logger)
+	// Ensure NVIDIA CDI spec exists for GPU container support.
+	cdi.EnsureNVIDIACDISpec(logger)
+
+	var networkMgr services.NetworkManager
+	if nm := agentnet.NewNMCLINetworkManager(logger); nm != nil {
+		networkMgr = nm
+	}
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
 	btManager := bluetooth.NewManager(logger)
 

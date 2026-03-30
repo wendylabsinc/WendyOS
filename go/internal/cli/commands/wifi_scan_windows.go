@@ -12,3 +12,10 @@ type localWifiNetwork struct {
 func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 	return nil, fmt.Errorf("local WiFi scanning is not yet supported on Windows; use --ssid to specify the network")
 }
+
+const supportsKeychainLookup = false
+
+// lookupKeychainPassword is not supported on Windows.
+func lookupKeychainPassword(_ string) (string, error) {
+	return "", nil
+}

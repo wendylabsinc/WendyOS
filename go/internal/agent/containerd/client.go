@@ -14,6 +14,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -312,12 +313,22 @@ func wrapWithDebugpy(args []string) []string {
 // app. It builds an OCI runtime specification from the app config and request
 // parameters, unpacks the image, and registers the container.
 func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
+}
+
+func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	ctx = c.withNamespace(ctx)
 	appName := req.GetAppName()
 	imageName := req.GetImageName()
+
+	report := func(p *agentpb.CreateContainerProgress) {
+		if onProgress != nil {
+			onProgress(p)
+		}
+	}
 
 	c.logger.Info("Creating container",
 		zap.String("app_name", appName),
@@ -356,33 +367,28 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 
-	// Refresh images from the device-local registry before falling back to any
-	// cached manifest. `wendy run` always pushes to localhost:5000 first, so a
-	// blind GetImage() can otherwise reuse stale content for repeated deploys.
+	// For local-registry images, always pull from the embedded HTTP registry
+	// so containerd properly resolves manifest lists and unpacks layers.
+	// For remote images, try the local store first, then pull.
 	var image containerd.Image
 	var err error
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
 	if shouldRefreshImageFromRegistry(imageName) {
-		c.logger.Info("Refreshing image from local registry",
-			zap.String("image", imageName),
+		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
+		image, err = c.client.Pull(ctx, imageName,
+			containerd.WithPullUnpack,
+			containerd.WithResolver(resolver),
 		)
-		image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
 		if err != nil {
-			c.logger.Warn("Failed to refresh image from local registry, falling back to cached image",
-				zap.String("image", imageName),
-				zap.Error(err),
-			)
+			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 		}
-	}
-
-	if image == nil {
+	} else {
 		image, err = c.client.GetImage(ctx, imageName)
 		if err != nil {
 			c.logger.Info("Image not in local store, attempting pull from registry",
 				zap.String("image", imageName),
 			)
-			image, err = c.client.Pull(ctx, imageName,
-				containerd.WithPullUnpack,
-			)
+			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
 			if err != nil {
 				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 			}
@@ -423,8 +429,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		args = []string{"/bin/sh"}
 	}
 
-	// Wrap Python commands with debugpy for remote debugging.
-	if appCfg.Language == "python" {
+	// Wrap Python commands with debugpy for remote debugging (only in debug mode).
+	if appCfg.Debug && appCfg.Language == "python" {
 		args = wrapWithDebugpy(args)
 	}
 
@@ -469,6 +475,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 		c.applyCDIGPU(spec)
 	}
 
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
+
 	// Build labels for the container.
 	labels := wendyLabels(appName, version, req.GetRestartPolicy())
 
@@ -491,6 +499,8 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 
 	c.logger.Info("Container created",
 		zap.String("app_name", appName),
@@ -596,6 +606,71 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	c.logger.Info("Container started", zap.String("app_name", appName))
 
 	// Stream output from the pipes.
+	outputCh := make(chan services.ContainerOutput, 64)
+	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
+
+	return outputCh, nil
+}
+
+// StartContainerWithStdin is like StartContainer but attaches the provided
+// stdin reader to the container's standard input.
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	c.deleteStaleTask(ctx, container, appName)
+
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			c.logger.Warn("Orphaned task detected, force-deleting and recreating container", zap.String("app_name", appName))
+			c.forceDeleteTask(ctx, appName)
+			if rerr := c.recreateContainer(ctx, container, appName); rerr != nil {
+				c.logger.Error("Failed to recreate container", zap.Error(rerr))
+			} else {
+				container, err = c.client.LoadContainer(ctx, appName)
+				if err == nil {
+					task, err = container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+				}
+			}
+		}
+		if err != nil {
+			stdoutR.Close()
+			stdoutW.Close()
+			stderrR.Close()
+			stderrW.Close()
+			return nil, fmt.Errorf("creating task for %q: %w", appName, err)
+		}
+	}
+
+	exitStatusCh, err := task.Wait(ctx)
+	if err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 

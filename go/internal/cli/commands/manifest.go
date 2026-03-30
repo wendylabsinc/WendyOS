@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -12,36 +13,41 @@ const gcsBaseURL = "https://storage.googleapis.com/wendyos-images-public"
 
 // mainManifest is the top-level manifest fetched from GCS master.json.
 type mainManifest struct {
-	Devices map[string]manifestDevice `json:"devices"`
+	Devices  map[string]manifestDevice `json:"devices"`
+	Firmware map[string]manifestDevice `json:"firmware,omitempty"`
 }
 
 // manifestDevice describes a single device entry in the main manifest.
 type manifestDevice struct {
-	Name         string `json:"name"`
-	ManifestPath string `json:"manifest_path"`
-	Architecture string `json:"architecture"`
+	Latest        string `json:"latest"`
+	LatestNightly string `json:"latest_nightly"`
+	ManifestPath  string `json:"manifest_path"`
+	Stability     string `json:"stability"`
 }
 
 // deviceManifest contains version info for a specific device.
 type deviceManifest struct {
+	DeviceID string                   `json:"device_id"`
 	Versions map[string]deviceVersion `json:"versions"`
 }
 
 // deviceVersion describes one OS image version.
 type deviceVersion struct {
-	ImagePath string `json:"image_path"`
-	ImageSize int64  `json:"image_size"`
-	Stable    bool   `json:"stable"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	Checksum  string `json:"checksum"`
+	IsLatest  bool   `json:"is_latest"`
+	IsNightly bool   `json:"is_nightly"`
 }
 
 // deviceInfo is the aggregated info shown in the picker for one device.
 type deviceInfo struct {
-	Key            string // manifest key, e.g. "raspberry-pi-5"
-	Name           string // human-readable name
-	Architecture   string
-	LatestVersion  string // latest stable version tag
-	NightlyVersion string // latest prerelease version tag
-	ManifestPath   string
+	Key            string          // manifest key, e.g. "raspberry-pi-5"
+	Name           string          // human-readable name
+	LatestVersion  string          // latest stable version tag
+	NightlyVersion string          // latest prerelease version tag
+	Stability      string          // "stable" or "experimental"
+	Manifest       *deviceManifest // cached manifest to avoid re-fetching
 }
 
 // imageInfo describes a downloadable OS image.
@@ -99,6 +105,10 @@ func getAvailableDevices() ([]deviceInfo, error) {
 
 	var devices []deviceInfo
 	for key, dev := range main.Devices {
+		if dev.ManifestPath == "" {
+			continue
+		}
+
 		dm, err := fetchDeviceManifest(dev.ManifestPath)
 		if err != nil {
 			// Skip devices whose manifest can't be fetched.
@@ -106,69 +116,102 @@ func getAvailableDevices() ([]deviceInfo, error) {
 		}
 
 		info := deviceInfo{
-			Key:          key,
-			Name:         dev.Name,
-			Architecture: dev.Architecture,
-			ManifestPath: dev.ManifestPath,
-		}
-
-		// Find latest stable and nightly versions.
-		for ver, v := range dm.Versions {
-			if v.Stable {
-				if info.LatestVersion == "" || ver > info.LatestVersion {
-					info.LatestVersion = ver
-				}
-			} else {
-				if info.NightlyVersion == "" || ver > info.NightlyVersion {
-					info.NightlyVersion = ver
-				}
-			}
+			Key:            key,
+			Name:           humanizeDeviceKey(key),
+			LatestVersion:  dev.Latest,
+			NightlyVersion: dev.LatestNightly,
+			Stability:      dev.Stability,
+			Manifest:       dm,
 		}
 
 		devices = append(devices, info)
 	}
 
+	// Stable devices first, then alphabetically within each group.
 	sort.Slice(devices, func(i, j int) bool {
+		si := devices[i].Stability == "stable"
+		sj := devices[j].Stability == "stable"
+		if si != sj {
+			return si
+		}
 		return devices[i].Name < devices[j].Name
 	})
 
 	return devices, nil
 }
 
-// getLatestImageInfo returns the download URL and metadata for the latest image.
-func getLatestImageInfo(manifestPath string, nightly bool) (*imageInfo, error) {
-	dm, err := fetchDeviceManifest(manifestPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var bestVersion string
-	var bestImg deviceVersion
-	for ver, v := range dm.Versions {
-		if nightly && !v.Stable {
-			if bestVersion == "" || ver > bestVersion {
-				bestVersion = ver
-				bestImg = v
-			}
-		} else if !nightly && v.Stable {
-			if bestVersion == "" || ver > bestVersion {
-				bestVersion = ver
-				bestImg = v
-			}
-		}
-	}
-
-	if bestVersion == "" {
-		kind := "stable"
-		if nightly {
-			kind = "nightly"
-		}
-		return nil, fmt.Errorf("no %s version found", kind)
+// getImageInfo returns the download URL and metadata for a specific version
+// from an already-fetched device manifest.
+func getImageInfo(dm *deviceManifest, ver string) (*imageInfo, error) {
+	v, ok := dm.Versions[ver]
+	if !ok {
+		return nil, fmt.Errorf("version %s not found in device manifest", ver)
 	}
 
 	return &imageInfo{
-		DownloadURL: gcsBaseURL + "/" + bestImg.ImagePath,
-		ImageSize:   bestImg.ImageSize,
-		Version:     bestVersion,
+		DownloadURL: gcsBaseURL + "/" + v.Path,
+		ImageSize:   v.SizeBytes,
+		Version:     ver,
 	}, nil
+}
+
+// firmwareManifest contains version info for a specific chip.
+type firmwareManifest struct {
+	ChipID   string                         `json:"chip_id"`
+	Versions map[string]firmwareVersionInfo `json:"versions"`
+}
+
+// firmwareVersionInfo describes one firmware version.
+type firmwareVersionInfo struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	Checksum  string `json:"checksum"`
+	IsLatest  bool   `json:"is_latest"`
+	IsNightly bool   `json:"is_nightly"`
+}
+
+func fetchFirmwareManifest(path string) (*firmwareManifest, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	url := gcsBaseURL + "/" + path
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching firmware manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("firmware manifest returned status %d", resp.StatusCode)
+	}
+
+	var fm firmwareManifest
+	if err := json.NewDecoder(resp.Body).Decode(&fm); err != nil {
+		return nil, fmt.Errorf("decoding firmware manifest: %w", err)
+	}
+	return &fm, nil
+}
+
+// getFirmwareInfo returns the download URL and metadata for a specific firmware
+// version from an already-fetched firmware manifest.
+func getFirmwareInfo(fm *firmwareManifest, ver string) (*imageInfo, error) {
+	v, ok := fm.Versions[ver]
+	if !ok {
+		return nil, fmt.Errorf("version %s not found in firmware manifest", ver)
+	}
+
+	return &imageInfo{
+		DownloadURL: gcsBaseURL + "/" + v.Path,
+		ImageSize:   v.SizeBytes,
+		Version:     ver,
+	}, nil
+}
+
+// humanizeDeviceKey converts a manifest key like "raspberry-pi-5" to "Raspberry Pi 5".
+func humanizeDeviceKey(key string) string {
+	words := strings.Split(key, "-")
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }

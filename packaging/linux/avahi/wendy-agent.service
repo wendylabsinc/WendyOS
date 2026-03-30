@@ -5,5 +5,8 @@
   <service protocol="any">
     <type>_wendyos._udp</type>
     <port>50051</port>
+    <txt-record>id=WENDY_DEVICE_ID</txt-record>
+    <txt-record>name=WENDY_DEVICE_NAME</txt-record>
+    <txt-record>displayname=WENDY_DISPLAY_NAME</txt-record>
   </service>
 </service-group>
