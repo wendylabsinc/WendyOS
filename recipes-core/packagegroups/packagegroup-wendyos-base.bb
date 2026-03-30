@@ -34,6 +34,7 @@ RDEPENDS:${PN} = " \
     swapfile-setup \
     wendyos-etc-binds \
     containerd-config \
+    wendy-config \
     "
 
 RDEPENDS:${PN}:append = " \
