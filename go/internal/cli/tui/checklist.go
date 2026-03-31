@@ -53,10 +53,14 @@ func (m ChecklistModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "left", "right", " ":
 			m.items[m.cursor].Selected = !m.items[m.cursor].Selected
+		case "y", "Y":
+			m.items[m.cursor].Selected = true
+		case "n", "N":
+			m.items[m.cursor].Selected = false
 		case "enter":
 			m.done = true
 			return m, tea.Quit
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -83,7 +87,7 @@ func (m ChecklistModel) View() string {
 	var sb strings.Builder
 
 	sb.WriteString(clTitle.Render(m.Title))
-	sb.WriteString(clHint.Render("  (↑/↓ navigate, ←/→/space toggle, enter confirm)"))
+	sb.WriteString(clHint.Render("  (↑/↓ navigate, y/n or ←/→/space toggle, enter confirm)"))
 	sb.WriteString("\n\n")
 
 	for i, item := range m.items {
