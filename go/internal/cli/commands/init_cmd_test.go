@@ -275,15 +275,15 @@ func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
 		t.Fatalf("Chdir: %v", err)
 	}
 
-	// Replace the Bubble Tea promptYesNo with a simple mock that answers
-	// "yes" to the first question (GPU) and "no" to the rest.
-	callCount := 0
-	origPrompt := promptYesNo
-	promptYesNo = func(question string) (bool, error) {
-		callCount++
-		return callCount == 1, nil // first prompt = yes (GPU), rest = no
+	// Replace the Bubble Tea checklist with a mock that selects GPU.
+	origAsk := askEntitlementQuestions
+	askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
+		return []appconfig.Entitlement{
+			{Type: appconfig.EntitlementNetwork},
+			{Type: appconfig.EntitlementGPU},
+		}, nil
 	}
-	t.Cleanup(func() { promptYesNo = origPrompt })
+	t.Cleanup(func() { askEntitlementQuestions = origAsk })
 
 	cmd := newInitCmd()
 	cmd.SetArgs([]string{

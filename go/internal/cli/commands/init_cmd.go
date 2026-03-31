@@ -351,7 +351,8 @@ func pickInitLanguage(target string) (string, error) {
 	}
 }
 
-func askEntitlementQuestions(target, language string) ([]appconfig.Entitlement, error) {
+// askEntitlementQuestions is a variable so tests can replace it.
+var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
 	// Always include network.
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork},
@@ -363,21 +364,23 @@ func askEntitlementQuestions(target, language string) ([]appconfig.Entitlement, 
 		return entitlements, nil
 	}
 
-	fmt.Println("Let's figure out what your app needs access to.")
-	fmt.Println("Answer y/n for each capability:")
-	fmt.Println()
-
-	for _, q := range wendyOSEntitlementQuestions {
-		answer, err := promptYesNo(q.question)
-		if err != nil {
-			return nil, err
+	// Build checklist items from the entitlement questions.
+	items := make([]tui.ChecklistItem, len(wendyOSEntitlementQuestions))
+	for i, q := range wendyOSEntitlementQuestions {
+		items[i] = tui.ChecklistItem{
+			Label:       q.question,
+			Description: q.description,
+			Value:       q.entitlement,
 		}
+	}
 
-		if !answer {
-			continue
-		}
+	selected, err := tui.RunChecklist("What does your app need access to?", items)
+	if err != nil {
+		return nil, err
+	}
 
-		ent := appconfig.Entitlement{Type: q.entitlement}
+	for _, item := range selected {
+		ent := appconfig.Entitlement{Type: item.Value}
 
 		// Prompt for required fields on certain entitlement types.
 		if err := promptEntitlementFields(&ent); err != nil {
