@@ -18,22 +18,60 @@ type ChecklistItem struct {
 
 // ChecklistModel is a Bubble Tea model that presents a list of items with
 // yes/no toggles. Navigate with up/down, toggle with left/right or space,
-// and confirm with enter.
+// and confirm with enter. Row 0 is a "Select all" toggle.
 type ChecklistModel struct {
 	Title    string
 	items    []ChecklistItem
-	cursor   int
+	cursor   int // 0 = select-all row, 1..len(items) = item rows
 	done     bool
 	quitting bool
 }
 
-// NewChecklist creates a new checklist model.
+// NewChecklist creates a new checklist model. The cursor starts on the
+// "Select all" row at position 0.
 func NewChecklist(title string, items []ChecklistItem) ChecklistModel {
 	cp := make([]ChecklistItem, len(items))
 	copy(cp, items)
 	return ChecklistModel{
 		Title: title,
 		items: cp,
+	}
+}
+
+func (m ChecklistModel) allSelected() bool {
+	for _, item := range m.items {
+		if !item.Selected {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *ChecklistModel) setAll(v bool) {
+	for i := range m.items {
+		m.items[i].Selected = v
+	}
+}
+
+// totalRows returns the number of visible rows (select-all + items).
+func (m ChecklistModel) totalRows() int {
+	return 1 + len(m.items)
+}
+
+func (m *ChecklistModel) toggle() {
+	if m.cursor == 0 {
+		// Select-all row: toggle all items to the opposite of current state.
+		m.setAll(!m.allSelected())
+	} else {
+		m.items[m.cursor-1].Selected = !m.items[m.cursor-1].Selected
+	}
+}
+
+func (m *ChecklistModel) set(v bool) {
+	if m.cursor == 0 {
+		m.setAll(v)
+	} else {
+		m.items[m.cursor-1].Selected = v
 	}
 }
 
@@ -48,15 +86,15 @@ func (m ChecklistModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.items)-1 {
+			if m.cursor < m.totalRows()-1 {
 				m.cursor++
 			}
 		case "left", "right", " ":
-			m.items[m.cursor].Selected = !m.items[m.cursor].Selected
+			m.toggle()
 		case "y", "Y":
-			m.items[m.cursor].Selected = true
+			m.set(true)
 		case "n", "N":
-			m.items[m.cursor].Selected = false
+			m.set(false)
 		case "enter":
 			m.done = true
 			return m, tea.Quit
@@ -77,6 +115,7 @@ var (
 	clLabel       = lipgloss.NewStyle()
 	clLabelActive = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	clDesc        = lipgloss.NewStyle().Foreground(ColorDim)
+	clSeparator   = lipgloss.NewStyle().Foreground(ColorDim)
 )
 
 func (m ChecklistModel) View() string {
@@ -90,10 +129,29 @@ func (m ChecklistModel) View() string {
 	sb.WriteString(clHint.Render("  (↑/↓ navigate, y/n or ←/→/space toggle, enter confirm)"))
 	sb.WriteString("\n\n")
 
+	// Select-all row.
+	{
+		pointer := "  "
+		label := clLabel.Render("Enable all")
+		if m.cursor == 0 {
+			pointer = clCursor.Render("▸ ")
+			label = clLabelActive.Render("Enable all")
+		}
+		toggle := clOff.Render("No")
+		if m.allSelected() {
+			toggle = clOn.Render("Yes")
+		}
+		sb.WriteString(fmt.Sprintf("%s%s  %s\n", pointer, toggle, label))
+	}
+
+	sb.WriteString(clSeparator.Render("  ───") + "\n")
+
+	// Item rows.
 	for i, item := range m.items {
+		row := i + 1 // account for select-all row
 		pointer := "  "
 		label := clLabel.Render(item.Label)
-		if i == m.cursor {
+		if row == m.cursor {
 			pointer = clCursor.Render("▸ ")
 			label = clLabelActive.Render(item.Label)
 		}
