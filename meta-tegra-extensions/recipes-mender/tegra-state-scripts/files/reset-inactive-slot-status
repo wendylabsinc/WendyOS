@@ -1,0 +1,106 @@
+#!/bin/sh
+
+#
+# Mender state script: ArtifactCommit_Leave_50_reset-inactive-slot-status
+#
+# After a successful Mender commit, reset the inactive rootfs slot's UEFI
+# variable to "normal" (0x00). This prevents the slot from being permanently
+# stuck in "unbootable" (0xFF) state after a previous rollback.
+#
+# Background:
+#   On Jetson UEFI (L4T R36.x), when a Mender update rolls back, the UEFI
+#   retry_count mechanism eventually marks the target slot as unbootable
+#   (RootfsStatusSlot{A,B} = 0xFF). Since nvbootctrl mark-boot-successful
+#   was removed in L4T 35.2.1, nothing resets this flag. Without this script,
+#   the slot stays permanently unbootable and future OTA updates to that slot
+#   will fail (UEFI refuses to boot it despite valid rootfs content).
+#
+# Runs at: ArtifactCommit_Leave (after commit succeeds, non-critical)
+# Failure: Logged but does NOT fail the update (exit 0 always)
+#
+
+set -eu
+
+log() {
+    printf '%s\n' "mender-reset-slot: $*" >&2
+}
+
+export PATH=/usr/sbin:/sbin:/usr/bin:/bin:${PATH}
+
+GUID="781e084c-a330-417c-b678-38e696380cb9"
+EFIVAR_DIR="/sys/firmware/efi/efivars"
+
+# Determine which slot is inactive (the one we just came FROM, now the
+# rollback target for the NEXT update cycle)
+if ! command -v nvbootctrl >/dev/null 2>&1; then
+    log "nvbootctrl not found, skipping"
+    exit 0
+fi
+
+current_slot=$(nvbootctrl -t rootfs get-current-slot 2>/dev/null || echo "")
+if [ -z "${current_slot}" ]; then
+    log "could not determine current slot, skipping"
+    exit 0
+fi
+
+case "${current_slot}" in
+    0) inactive_name="B" ;;
+    1) inactive_name="A" ;;
+    *)
+        log "unexpected current slot '${current_slot}', skipping"
+        exit 0
+        ;;
+esac
+
+varfile="${EFIVAR_DIR}/RootfsStatusSlot${inactive_name}-${GUID}"
+
+if [ ! -f "${varfile}" ]; then
+    log "UEFI variable not found: ${varfile}, skipping"
+    exit 0
+fi
+
+# Read current status byte (byte offset 4 in the 8-byte efivar file)
+file_size=$(wc -c < "${varfile}")
+if [ "${file_size}" -ne 8 ]; then
+    log "unexpected variable size ${file_size} for slot ${inactive_name}, attempting fix"
+fi
+
+status_byte=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+
+if [ "${status_byte}" = "00" ] && [ "${file_size}" -eq 8 ]; then
+    log "slot ${inactive_name} already normal, nothing to do"
+    exit 0
+fi
+
+log "slot ${inactive_name} status: 0x${status_byte} (size: ${file_size}) -- resetting to normal"
+
+# Remove immutable flag (efivarfs sets this by default)
+if ! chattr -i "${varfile}" 2>/dev/null; then
+    log "WARN: failed to remove immutable flag on slot ${inactive_name}"
+    exit 0
+fi
+
+# Write normal value using dd via temp file (matches NVIDIA official pattern)
+# Format: 4-byte EFI attributes (0x07 = NV+BS+RT) + 4-byte UINT32 status (0x00 = normal)
+tmpfile=$(mktemp)
+printf '\x07\x00\x00\x00\x00\x00\x00\x00' > "${tmpfile}"
+if ! dd if="${tmpfile}" of="${varfile}" bs=8 2>/dev/null; then
+    log "WARN: failed to write slot ${inactive_name} status"
+    rm -f "${tmpfile}"
+    exit 0
+fi
+rm -f "${tmpfile}"
+sync
+
+# Verify
+new_status=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+new_size=$(wc -c < "${varfile}")
+
+if [ "${new_status}" = "00" ] && [ "${new_size}" -eq 8 ]; then
+    log "slot ${inactive_name} reset to normal (verified)"
+else
+    log "WARN: slot ${inactive_name} write verification failed (status=0x${new_status}, size=${new_size})"
+fi
+
+# Always succeed — this is a housekeeping step, not a gate
+exit 0

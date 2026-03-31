@@ -1,11 +1,13 @@
 #!/bin/sh
 
 #
-# Mender state script: ArtifactVerifyReboot_50_verify-bootloader-update
-# Verifies UEFI capsule update succeeded (if one was staged)
+# Mender state script: ArtifactCommit_Enter_50_verify-bootloader-update
+# Runs after reboot to new rootfs, before commit is made permanent.
+# Verifies UEFI capsule update succeeded (if one was staged):
 # - Checks bootloader version changed
 # - Verifies ESRT status
 # - Logs nvbootctrl status (informational only, not trusted)
+# Non-zero exit triggers Mender rollback.
 #
 
 set -eu
