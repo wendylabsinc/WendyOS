@@ -331,6 +331,58 @@ func TestBuildInitEntitlementsFromFlags_Input(t *testing.T) {
 	}
 }
 
+func TestBuildInitEntitlementsFromFlags_AllEntitlements(t *testing.T) {
+	entitlements, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+		gpioPinsSet:     true,
+		gpioPins:        "17,27",
+		i2cDeviceSet:    true,
+		i2cDevice:       "/dev/i2c-1",
+		persistNameSet:  true,
+		persistName:     "test-data",
+		persistPathSet:  true,
+		persistPath:     "/data",
+	})
+	if err != nil {
+		t.Fatalf("buildInitEntitlementsFromFlags: %v", err)
+	}
+
+	gotTypes := map[string]bool{}
+	for _, ent := range entitlements {
+		gotTypes[ent.Type] = true
+	}
+
+	for _, q := range wendyOSEntitlementQuestions {
+		if !gotTypes[q.entitlement] {
+			t.Errorf("expected entitlement %q from --all-entitlements", q.entitlement)
+		}
+	}
+	if !gotTypes[appconfig.EntitlementNetwork] {
+		t.Error("expected network entitlement")
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_AllConflictsWithEntitlement(t *testing.T) {
+	_, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+		entitlementsSet: true,
+		entitlements:    []string{"gpu"},
+	})
+	if err == nil {
+		t.Fatal("expected error combining --all-entitlements with --entitlement")
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_AllMissingFieldFlags(t *testing.T) {
+	// --all-entitlements without required field flags for gpio/i2c/persist should error.
+	_, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for --all-entitlements without required field flags")
+	}
+}
+
 func TestInitCommand_NonInteractiveInput(t *testing.T) {
 	tempDir := t.TempDir()
 	prevWD, err := os.Getwd()

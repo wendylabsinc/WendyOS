@@ -108,7 +108,7 @@ func Confirm(question string, programOpts ...tea.ProgramOption) (bool, error) {
 		return false, fmt.Errorf("confirm prompt: unexpected model type %T", result)
 	}
 	if model.Cancelled() {
-		return false, fmt.Errorf("confirm prompt: cancelled")
+		return false, ErrCancelled
 	}
 	return model.Confirmed(), nil
 }

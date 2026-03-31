@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,6 +169,9 @@ func newEntitlementsAddCmd() *cobra.Command {
 			ent := appconfig.Entitlement{Type: entType}
 
 			if err := promptEntitlementFields(&ent); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					return ErrUserCancelled
+				}
 				return err
 			}
 

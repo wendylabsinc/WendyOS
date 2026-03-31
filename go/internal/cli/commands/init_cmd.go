@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -159,7 +160,11 @@ func newInitCmd() *cobra.Command {
 			opts.persistPathSet = cmd.Flags().Changed("persist-path")
 			opts.assistantSet = cmd.Flags().Changed("assistant")
 
-			return runInitWizard(args, opts)
+			err := runInitWizard(args, opts)
+			if errors.Is(err, tui.ErrCancelled) {
+				return ErrUserCancelled
+			}
+			return err
 		},
 	}
 

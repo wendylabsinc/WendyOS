@@ -140,7 +140,7 @@ func PromptTextWithDefault(prompt, hint, defaultValue string, validate ValidateF
 		return "", fmt.Errorf("text prompt: unexpected model type %T", result)
 	}
 	if model.Cancelled() {
-		return "", fmt.Errorf("text prompt: cancelled")
+		return "", ErrCancelled
 	}
 	return model.Value(), nil
 }

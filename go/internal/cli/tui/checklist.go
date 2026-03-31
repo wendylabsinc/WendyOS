@@ -59,6 +59,9 @@ func (m ChecklistModel) totalRows() int {
 }
 
 func (m *ChecklistModel) toggle() {
+	if len(m.items) == 0 {
+		return
+	}
 	if m.cursor == 0 {
 		// Select-all row: toggle all items to the opposite of current state.
 		m.setAll(!m.allSelected())
@@ -68,6 +71,9 @@ func (m *ChecklistModel) toggle() {
 }
 
 func (m *ChecklistModel) set(v bool) {
+	if len(m.items) == 0 {
+		return
+	}
 	if m.cursor == 0 {
 		m.setAll(v)
 	} else {
@@ -200,7 +206,7 @@ func RunChecklist(title string, items []ChecklistItem, programOpts ...tea.Progra
 		return nil, fmt.Errorf("checklist: unexpected model type %T", result)
 	}
 	if model.Cancelled() {
-		return nil, fmt.Errorf("checklist: cancelled")
+		return nil, ErrCancelled
 	}
 	return model.SelectedItems(), nil
 }
