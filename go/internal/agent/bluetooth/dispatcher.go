@@ -230,12 +230,12 @@ func (d *Dispatcher) appsRemove(ctx context.Context, cmd *agentpb.AppsRemoveComm
 // ── Agent handler ─────────────────────────────────────────────────────────────
 
 func (d *Dispatcher) agentVersion(_ context.Context, _ *agentpb.AgentVersionCommand) *agentpb.BluetoothResponse {
-	os := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	platform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 	return &agentpb.BluetoothResponse{
 		Response: &agentpb.BluetoothResponse_AgentVersion{
 			AgentVersion: &agentpb.AgentVersionResponse{
 				Version: version.Version,
-				Os:      &os,
+				Os:      &platform,
 			},
 		},
 	}
@@ -277,12 +277,21 @@ func (d *Dispatcher) bluetoothList(ctx context.Context, _ *agentpb.BluetoothList
 		return errResp(err.Error())
 	}
 	var devices []*agentpb.BluetoothDeviceInfo
-	for batch := range ch {
-		for _, p := range batch {
-			devices = append(devices, &agentpb.BluetoothDeviceInfo{
-				Name:    p.GetName(),
-				Address: p.GetAddress(),
-			})
+loop:
+	for {
+		select {
+		case batch, ok := <-ch:
+			if !ok {
+				break loop
+			}
+			for _, p := range batch {
+				devices = append(devices, &agentpb.BluetoothDeviceInfo{
+					Name:    p.GetName(),
+					Address: p.GetAddress(),
+				})
+			}
+		case <-ctx.Done():
+			break loop
 		}
 	}
 	return &agentpb.BluetoothResponse{
