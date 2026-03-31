@@ -57,6 +57,7 @@ type initOptions struct {
 	target              string
 	language            string
 	entitlements        []string
+	allEntitlements     bool
 	noExtraEntitlements bool
 	gpioPins            string
 	i2cDevice           string
@@ -126,6 +127,18 @@ func newInitCmd() *cobra.Command {
     --no-extra-entitlements \
     --assistant skip
 
+  # Enable all entitlements at once
+  wendy init \
+    --app-id full-app \
+    --target wendyos \
+    --language python \
+    --all-entitlements \
+    --gpio-pins 17,27,22 \
+    --i2c-device /dev/i2c-1 \
+    --persist-name full-data \
+    --persist-path /data \
+    --assistant skip
+
   # Start Claude after init and install Wendy skills automatically
   wendy init \
     --app-id ai-app \
@@ -154,6 +167,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: swift or python")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&opts.allEntitlements, "all-entitlements", false, "Enable all entitlements (requires field flags for gpio, i2c, persist)")
 	cmd.Flags().BoolVar(&opts.noExtraEntitlements, "no-extra-entitlements", false, "Skip entitlement prompts and use only the default network entitlement")
 	cmd.Flags().StringVar(&opts.gpioPins, "gpio-pins", "", "GPIO pins for the gpio entitlement (comma-separated, e.g. 17,27,22)")
 	cmd.Flags().StringVar(&opts.i2cDevice, "i2c-device", "", "I2C device path for the i2c entitlement (e.g. /dev/i2c-1)")
@@ -394,7 +408,7 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 }
 
 func initEntitlementsProvided(opts initOptions) bool {
-	return opts.entitlementsSet || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
+	return opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
 }
 
 func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfig.Entitlement, error) {
@@ -402,24 +416,35 @@ func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfi
 	seen := map[string]bool{appconfig.EntitlementNetwork: true}
 
 	if opts.noExtraEntitlements {
-		if opts.entitlementsSet || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
+		if opts.entitlementsSet || opts.allEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
 			return nil, fmt.Errorf("--no-extra-entitlements cannot be combined with entitlement-specific flags")
 		}
 		return entitlements, nil
 	}
 
-	rawTypes := make([]string, 0, len(opts.entitlements)+3)
-	parsedEntitlementFlag := false
-	for _, rawType := range opts.entitlements {
-		entType := normalizeInitChoice(rawType)
-		if entType == "" {
-			continue
-		}
-		parsedEntitlementFlag = true
-		rawTypes = append(rawTypes, entType)
+	if opts.allEntitlements && opts.entitlementsSet {
+		return nil, fmt.Errorf("--all-entitlements cannot be combined with --entitlement")
 	}
-	if opts.entitlementsSet && !parsedEntitlementFlag {
-		return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+
+	rawTypes := make([]string, 0, len(opts.entitlements)+3)
+
+	if opts.allEntitlements {
+		for _, q := range wendyOSEntitlementQuestions {
+			rawTypes = append(rawTypes, q.entitlement)
+		}
+	} else {
+		parsedEntitlementFlag := false
+		for _, rawType := range opts.entitlements {
+			entType := normalizeInitChoice(rawType)
+			if entType == "" {
+				continue
+			}
+			parsedEntitlementFlag = true
+			rawTypes = append(rawTypes, entType)
+		}
+		if opts.entitlementsSet && !parsedEntitlementFlag {
+			return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+		}
 	}
 
 	if opts.gpioPinsSet {
