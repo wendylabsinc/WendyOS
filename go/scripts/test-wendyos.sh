@@ -168,8 +168,8 @@ for example in "${EXAMPLES[@]}"; do
             continue
         fi
 
-        # Pre-cleanup: remove leftover container from previous runs
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+        # Pre-cleanup: remove leftover container and image from previous runs
+        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force --delete-image &>/dev/null || true
 
         # Run the example
         if is_server "$example"; then
@@ -183,9 +183,9 @@ for example in "${EXAMPLES[@]}"; do
         # Track tested apps for GPU dedup
         TESTED_APPS+=("$dir")
 
-        # Post-cleanup: stop and remove
+        # Post-cleanup: stop and remove container + image
         "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force --delete-image &>/dev/null || true
 
         # Clean up generated wendy.json
         cleanup_generated_wendy_json "$dir"
@@ -239,16 +239,16 @@ else
 
         ((GPU_FOUND++))
 
-        # Pre-cleanup
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+        # Pre-cleanup: remove leftover container and image from previous runs
+        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force --delete-image &>/dev/null || true
 
         # All GPU samples run detached (they're long-running)
         run_test "$test_name" \
             bash -c "cd '$gpu_dir' && '$WENDY' run --device '$HOSTNAME' --detach"
 
-        # Post-cleanup
+        # Post-cleanup: stop and remove container + image
         "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force --delete-image &>/dev/null || true
 
     done < <(find "$SAMPLES_DIR" -name wendy.json -type f 2>/dev/null)
 
