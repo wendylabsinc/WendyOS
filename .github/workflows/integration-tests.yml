@@ -84,7 +84,7 @@ jobs:
     concurrency:
       group: integration-hw-${{ matrix.os }}
       cancel-in-progress: false
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +93,7 @@ jobs:
       run:
         working-directory: go
     env:
-      INPUT_HOSTNAME: ${{ inputs.hostname || 'wendy-SER9.local' }}
+      INPUT_HOSTNAME: ${{ inputs.hostname }}
       INPUT_TESTS: ${{ inputs.tests }}
     steps:
       - uses: actions/checkout@v6
@@ -109,11 +109,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          ARGS="-w ./bin/wendy"
-
-          if [[ -n "$INPUT_HOSTNAME" ]]; then
-            ARGS="$ARGS -h $INPUT_HOSTNAME"
-          fi
+          TEST_ARGS="-w ./bin/wendy"
 
           if [[ -n "$INPUT_TESTS" ]]; then
             HAS_TESTS=false
@@ -121,7 +117,7 @@ jobs:
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
               if [[ "$t" != "python-gpu" ]]; then
-                ARGS="$ARGS -t $t"
+                TEST_ARGS="$TEST_ARGS -t $t"
                 HAS_TESTS=true
               fi
             done
@@ -131,11 +127,34 @@ jobs:
             fi
           else
             for t in swift-hello swift-network swift-bluetooth python-hello python-network python-bluetooth python-no-network python-no-bluetooth; do
-              ARGS="$ARGS -t $t"
+              TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
 
-          scripts/test-ci.sh $ARGS
+          if [[ -n "$INPUT_HOSTNAME" ]]; then
+            DEVICES=("$INPUT_HOSTNAME")
+          else
+            echo "==> Discovering LAN devices..."
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>/tmp/wendy-discover-stderr.txt)
+            cat /tmp/wendy-discover-stderr.txt >&2 || true
+            DEVICES=()
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && DEVICES+=("$line")
+            done < <(echo "$DISCOVER_JSON" | jq -r '.lanDevices[].hostname // empty' 2>/dev/null)
+            if [[ ${#DEVICES[@]} -eq 0 ]]; then
+              echo "ERROR: No LAN devices found via wendy discover"
+              exit 1
+            fi
+            echo "==> Found ${#DEVICES[@]} device(s): ${DEVICES[*]}"
+          fi
+
+          OVERALL_FAIL=0
+          for device in "${DEVICES[@]}"; do
+            echo ""
+            echo "==> Testing device: $device"
+            scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
+          done
+          exit $OVERALL_FAIL
 
       - name: Cleanup
         if: always()
