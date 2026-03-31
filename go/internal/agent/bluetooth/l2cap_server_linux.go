@@ -105,26 +105,15 @@ func serveL2CAPConn(ctx context.Context, fd int, logger *zap.Logger, d *Dispatch
 			continue
 		}
 
-		// Read the 2-byte big-endian length prefix.
-		var lenBuf [2]byte
-		if _, err := readFull(fd, lenBuf[:]); err != nil {
-			return
-		}
-		msgLen := binary.BigEndian.Uint16(lenBuf[:])
-		if msgLen == 0 || int(msgLen) > maxFrameSize {
-			writeErrFrame(fd, logger, "invalid frame length")
-			return
-		}
-
-		// Read the protobuf payload.
-		buf := make([]byte, msgLen)
-		if _, err := readFull(fd, buf); err != nil {
+		// Read one complete length-prefixed message (single L2CAP SDU).
+		payload, err := readMessage(fd)
+		if err != nil {
 			return
 		}
 
 		// Decode command.
 		var cmd agentpb.BluetoothCommand
-		if err := proto.Unmarshal(buf, &cmd); err != nil {
+		if err := proto.Unmarshal(payload, &cmd); err != nil {
 			writeErrFrame(fd, logger, "malformed protobuf")
 			return
 		}
@@ -142,29 +131,36 @@ func serveL2CAPConn(ctx context.Context, fd int, logger *zap.Logger, d *Dispatch
 	}
 }
 
-// readFull reads exactly len(buf) bytes from fd.
-func readFull(fd int, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := unix.Read(fd, buf[total:])
-		if n > 0 {
-			total += n
-		}
-		if err != nil {
-			return total, err
-		}
+// readMessage reads one complete length-prefixed message from fd.
+// On SEQPACKET sockets each unix.Read returns exactly one SDU.
+func readMessage(fd int) ([]byte, error) {
+	buf := make([]byte, maxFrameSize)
+	n, err := unix.Read(fd, buf)
+	if err != nil {
+		return nil, err
 	}
-	return total, nil
+	if n == 0 {
+		return nil, fmt.Errorf("connection closed")
+	}
+	if n < 2 {
+		return nil, fmt.Errorf("frame too short: %d bytes", n)
+	}
+	msgLen := binary.BigEndian.Uint16(buf[:2])
+	if int(msgLen) != n-2 {
+		return nil, fmt.Errorf("frame length mismatch: header=%d actual=%d", msgLen, n-2)
+	}
+	return buf[2 : 2+msgLen], nil
 }
 
-// writeFrame writes a 2-byte big-endian length prefix followed by data.
+// writeFrame writes a 2-byte big-endian length prefix followed by data as a single write.
 func writeFrame(fd int, data []byte) error {
-	var hdr [2]byte
-	binary.BigEndian.PutUint16(hdr[:], uint16(len(data)))
-	if _, err := unix.Write(fd, hdr[:]); err != nil {
-		return err
+	if len(data) > maxFrameSize-2 {
+		return fmt.Errorf("frame too large: %d bytes", len(data))
 	}
-	_, err := unix.Write(fd, data)
+	frame := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(data)))
+	copy(frame[2:], data)
+	_, err := unix.Write(fd, frame)
 	return err
 }
 
