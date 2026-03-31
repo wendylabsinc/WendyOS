@@ -120,6 +120,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	bleDispatcher := bluetooth.NewDispatcher(networkMgr, containerdClient, hwDiscoverer, btManager)
+	bluetooth.StartBLEPeripheral(ctx, logger, bleDispatcher)
+
 	// Start the embedded dev container registry (Linux only, best-effort).
 	if runtime.GOOS == "linux" && ctrdErr == nil {
 		registryAddr := "0.0.0.0:5000"
