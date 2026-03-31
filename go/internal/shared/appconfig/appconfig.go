@@ -127,12 +127,15 @@ func LoadFromFile(path string) (*AppConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading wendy.json: %w", err)
 	}
+	return LoadFromBytes(data)
+}
 
+// LoadFromBytes parses a wendy.json from raw bytes.
+func LoadFromBytes(data []byte) (*AppConfig, error) {
 	var cfg AppConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing wendy.json: %w", err)
 	}
-
 	return &cfg, nil
 }
 

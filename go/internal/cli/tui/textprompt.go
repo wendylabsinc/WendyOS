@@ -15,7 +15,7 @@ type ValidateFunc func(value string) error
 
 // TextPromptModel is a Bubble Tea model for a single-line text input with
 // inline validation. Invalid input shows an error and lets the user edit
-// and resubmit. Press q or ctrl+c to quit.
+// and resubmit. Press ctrl+c to quit.
 type TextPromptModel struct {
 	Prompt   string
 	Hint     string // shown dimmed after the prompt (e.g. "e.g. /dev/i2c-1")

@@ -295,8 +295,12 @@ func promptEntitlementFields(ent *appconfig.Entitlement) error {
 		var pins []int
 		_, err := tui.PromptText(
 			"GPIO pins",
-			"comma-separated, e.g. 17,27,22",
+			"comma-separated, e.g. 17,27,22 — leave empty for all",
 			func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					pins = nil
+					return nil
+				}
 				p, err := parsePins(v)
 				if err != nil {
 					return err

@@ -38,7 +38,7 @@ func newJSONValidateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate [path]",
 		Short: "Validate a wendy.json file",
-		Long:  "Validates the wendy.json in the current directory (or at the given path) for required fields, valid entitlement types, and unknown keys.",
+		Long:  "Validates the wendy.json in the current directory (or at the given path) for required fields, valid entitlement types, and unknown entitlement keys.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := "wendy.json"
@@ -57,25 +57,18 @@ func newJSONValidateCmd() *cobra.Command {
 				return fmt.Errorf("reading %s: %w", path, err)
 			}
 
-			cfg, err := appconfig.LoadFromFile(path)
+			cfg, err := appconfig.LoadFromBytes(data)
 			if err != nil {
 				return err
 			}
 
-			hasErrors := false
-
 			if err := cfg.Validate(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				hasErrors = true
+				return err
 			}
 
 			warnings := appconfig.ValidateJSON(data)
 			for _, w := range warnings {
 				fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
-			}
-
-			if hasErrors {
-				return fmt.Errorf("validation failed")
 			}
 
 			if len(warnings) > 0 {

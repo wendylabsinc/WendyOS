@@ -703,15 +703,15 @@ const wendySkillsPluginName = "wendy@claude-skills"
 // installWendySkills checks if the Wendy skills plugin is installed and offers
 // to install it if missing. This gives Claude expert knowledge about Wendy
 // development.
-func installWendySkills(autoInstall bool) {
+func installWendySkills(autoInstall bool) error {
 	// Check if the plugin is already installed by looking at the plugin list output.
 	out, err := exec.Command("claude", "plugin", "list").Output()
 	if err != nil {
-		return
+		return nil
 	}
 
 	if strings.Contains(string(out), "wendy@claude-skills") {
-		return
+		return nil
 	}
 
 	fmt.Println("\nThe Wendy skills plugin gives Claude expert knowledge about")
@@ -720,8 +720,11 @@ func installWendySkills(autoInstall bool) {
 
 	if !autoInstall {
 		install, err := promptYesNo("Install Wendy skills for Claude Code?")
-		if err != nil || !install {
-			return
+		if err != nil {
+			return err
+		}
+		if !install {
+			return nil
 		}
 
 		fmt.Println()
@@ -734,7 +737,7 @@ func installWendySkills(autoInstall bool) {
 	if err := addMarketplace.Run(); err != nil {
 		fmt.Printf("  Could not add marketplace: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return
+		return nil
 	}
 
 	// Install the plugin.
@@ -744,10 +747,11 @@ func installWendySkills(autoInstall bool) {
 	if err := installCmd.Run(); err != nil {
 		fmt.Printf("  Could not install plugin: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return
+		return nil
 	}
 
 	fmt.Println("  Wendy skills installed successfully!")
+	return nil
 }
 
 func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, interactive bool) error {
@@ -761,11 +765,15 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 	}
 
 	if choice == assistantClaude {
+		var skillsErr error
 		switch {
 		case installClaudeSkills:
-			installWendySkills(true)
+			skillsErr = installWendySkills(true)
 		case interactive:
-			installWendySkills(false)
+			skillsErr = installWendySkills(false)
+		}
+		if skillsErr != nil {
+			return skillsErr
 		}
 	}
 
