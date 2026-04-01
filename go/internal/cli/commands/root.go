@@ -105,6 +105,8 @@ func NewRootCmd() *cobra.Command {
 	bluetoothCmd.GroupID = "devices"
 	hardwareCmd := newHardwareCmd()
 	hardwareCmd.GroupID = "devices"
+	sshCmd := newSSHCmd()
+	sshCmd.GroupID = "devices"
 	// Misc Commands
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "misc"
@@ -138,6 +140,7 @@ func NewRootCmd() *cobra.Command {
 		audioCmd,
 		bluetoothCmd,
 		hardwareCmd,
+		sshCmd,
 		cacheCmd,
 		infoCmd,
 		analyticsCmd,
