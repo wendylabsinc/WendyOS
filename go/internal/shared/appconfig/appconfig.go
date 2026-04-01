@@ -61,6 +61,11 @@ const (
 	PlatformWendyLite = "wendy-lite"
 )
 
+// SSHConfig holds SSH connection options read from wendy.json.
+type SSHConfig struct {
+	User string `json:"user,omitempty"`
+}
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
 	AppID        string           `json:"appId"`
@@ -71,6 +76,7 @@ type AppConfig struct {
 	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
 	Hooks        *HooksConfig     `json:"hooks,omitempty"`
 	Python       *PythonConfig    `json:"python,omitempty"`
+	SSH          *SSHConfig       `json:"ssh,omitempty"`
 	Debug        bool             `json:"debug,omitempty"`
 }
 
