@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"bufio"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1167,16 +1167,12 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			}
 
-			// Compute SHA256.
-			h := sha256.Sum256(binaryData)
-			sha256Hash := hex.EncodeToString(h[:])
-
 			if isInteractiveTerminal() && !jsonOutput {
 				s := tui.NewSpinner("Uploading agent binary...")
 				p := tea.NewProgram(s)
 
 				go func() {
-					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+					uploadErr := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData))
 					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 				}()
 
@@ -1192,11 +1188,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else if !jsonOutput {
 				fmt.Println("Uploading agent binary...")
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			} else {
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			}
@@ -1277,12 +1273,6 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 		return fmt.Errorf("binary is %s but device is %s; provide the correct binary with --binary", binaryArch, deviceArch)
 	}
 	return nil
-}
-
-func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, _ string) error {
-	// sha256Hash is always sha256(binaryData) at every call site; delegate to
-	// deviceUpdateUploadReader which computes the hash on the fly from the stream.
-	return deviceUpdateUploadReader(ctx, agentService, bytes.NewReader(binaryData))
 }
 
 // deviceUpdateUploadReader streams r to the agent in 64 KiB chunks, computing
