@@ -2,8 +2,9 @@ package commands
 
 import (
 	"bufio"
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -540,8 +541,11 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, a
 		return fmt.Errorf("downloading binary: %w", err)
 	}
 
+	h := sha256.Sum256(binaryData)
+	sha256Hash := hex.EncodeToString(h[:])
+
 	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
-	return deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData))
+	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers

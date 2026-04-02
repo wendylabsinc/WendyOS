@@ -3,6 +3,8 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -554,7 +556,10 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
 		}
 
-		if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
+		h := sha256.Sum256(binaryData)
+		sha256Hash := hex.EncodeToString(h[:])
+
+		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}
