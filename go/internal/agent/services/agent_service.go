@@ -137,6 +137,37 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		s.updateMu.Unlock()
 	}()
 
+	// Resolve the binary path before streaming begins so the temp file can be
+	// placed in the same directory as the target.
+	execPath, err := os.Executable()
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
+	}
+
+	if err := s.receiveAndInstallUpdate(stream, execPath); err != nil {
+		return err
+	}
+
+	// Trigger process exit so systemd restarts the agent with the new binary.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	return nil
+}
+
+// receiveAndInstallUpdate streams incoming chunks to a file and atomically
+// replaces execPath on a successful commit. It is the testable core of
+// UpdateAgent; the caller is responsible for triggering process exit.
+func (s *AgentService) receiveAndInstallUpdate(
+	stream grpc.BidiStreamingServer[agentpb.UpdateAgentRequest, agentpb.UpdateAgentResponse],
+	execPath string,
+) error {
 	s.logger.Info("UpdateAgent stream started")
 
 	// Receive binary chunks.
@@ -166,16 +197,6 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 				if expectedHash != "" && computedHash != expectedHash {
 					return status.Errorf(codes.DataLoss,
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
-				}
-
-				// Resolve the current binary path (follow symlinks).
-				execPath, err := os.Executable()
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
-				}
-				execPath, err = filepath.EvalSymlinks(execPath)
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
 				}
 
 				// Capture original file permissions.
@@ -223,12 +244,6 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 				}); err != nil {
 					return err
 				}
-
-				// Trigger process exit for systemd to restart the agent.
-				go func() {
-					time.Sleep(500 * time.Millisecond)
-					os.Exit(0)
-				}()
 
 				return nil
 			}
