@@ -105,10 +105,12 @@ jobs:
       - name: Build CLI
         run: make build-cli
 
-      - name: Restart Colima
+      - name: Ensure Colima is running
         run: |
-          colima stop 2>/dev/null || true
-          colima start
+          if ! colima status 2>/dev/null | grep -q "Running"; then
+            LIMA_HOME=~/.colima/_lima limactl stop --force colima 2>/dev/null || true
+            colima start
+          fi
           until docker info >/dev/null 2>&1; do sleep 2; done
 
       - name: Run integration tests
