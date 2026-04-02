@@ -347,3 +347,48 @@ func TestRunContainer_Deprecated(t *testing.T) {
 		t.Fatalf("expected Unimplemented/deprecated error, got: %v", err)
 	}
 }
+
+// ---- UpdateAgent streaming-to-disk stubs (Iteration 1) ----
+//
+// Each test below pins one observable behaviour of the new temp-file writer.
+// They are stubs only: the body is intentionally empty so they pass today;
+// real assertions are added when the implementation is written.
+
+// TestUpdateAgent_TempFileExistsDuringTransfer verifies that a .partial.*
+// temp file is created on disk as soon as the first chunk arrives and is
+// still present while subsequent chunks are in-flight, before the commit
+// control message is sent.
+func TestUpdateAgent_TempFileExistsDuringTransfer(t *testing.T) {
+	t.Skip("TODO: implement")
+}
+
+// TestUpdateAgent_InstalledBinaryMatchesSourceContent verifies that after a
+// successful update the file installed at the target path is byte-for-byte
+// identical to the data that was streamed across all chunks.
+func TestUpdateAgent_InstalledBinaryMatchesSourceContent(t *testing.T) {
+	t.Skip("TODO: implement")
+}
+
+// TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp verifies that when
+// the SHA256 supplied in the commit control message does not match the hash
+// of the received bytes, the RPC returns a DataLoss error and no .partial.*
+// file is left behind in the binary directory.
+func TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp(t *testing.T) {
+	t.Skip("TODO: implement")
+}
+
+// TestUpdateAgent_InterruptedStreamDoesNotModifyTargetBinary verifies that
+// if the stream terminates (e.g. connection drop) before the commit control
+// message arrives, the original binary at the target path is untouched and
+// the RPC returns an error.
+func TestUpdateAgent_InterruptedStreamDoesNotModifyTargetBinary(t *testing.T) {
+	t.Skip("TODO: implement")
+}
+
+// TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory verifies
+// that CleanupPartialFiles unconditionally removes every file matching
+// <execName>.partial.* in the directory of the agent binary, regardless of
+// age, leaving all other files intact.
+func TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory(t *testing.T) {
+	t.Skip("TODO: implement")
+}
