@@ -29,6 +29,7 @@ func bluezAdapterPath() string {
 	return defaultBluezAdapter
 }
 
+
 // advertisement implements org.bluez.LEAdvertisement1 on D-Bus.
 type advertisement struct{}
 

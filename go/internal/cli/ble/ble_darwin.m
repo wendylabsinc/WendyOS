@@ -272,6 +272,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
         }
         dispatch_semaphore_signal(self.l2capSema);
 
+
         while (self.l2capIORunning) {
             [rl runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
         }
