@@ -77,18 +77,14 @@ jobs:
             echo "WARNING: Some expected devices were not found. They may be offline."
           fi
 
-  integration-test:
-    name: Integration (${{ matrix.os }})
+  integration-test-macos:
+    name: Integration (macOS)
     if: github.event_name == 'push' || inputs.jobs == 'all' || inputs.jobs == 'integration'
     runs-on: [self-hosted, wendy-agent, '${{ matrix.os }}']
     concurrency:
-      group: integration-hw-${{ matrix.os }}
+      group: integration-hw-macos
       cancel-in-progress: false
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macOS, Linux]
     defaults:
       run:
         working-directory: go
@@ -108,7 +104,6 @@ jobs:
         run: make build-cli
 
       - name: Restart Colima
-        if: runner.os == 'macOS'
         run: |
           colima stop 2>/dev/null || true
           colima start
@@ -126,10 +121,6 @@ jobs:
               if [[ "$t" == "python-gpu" ]]; then
                 continue
               fi
-              if [[ "$RUNNER_OS" == "Linux" && "$t" == swift-* ]]; then
-                echo "Skipping swift test on Linux: $t"
-                continue
-              fi
               TEST_ARGS="$TEST_ARGS -t $t"
               HAS_TESTS=true
             done
@@ -139,9 +130,6 @@ jobs:
             fi
           else
             for t in swift-hello swift-network swift-bluetooth python-hello python-network python-bluetooth python-no-network python-no-bluetooth; do
-              if [[ "$RUNNER_OS" == "Linux" && "$t" == swift-* ]]; then
-                continue
-              fi
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -173,6 +161,100 @@ jobs:
             nc -zw 5 "$device" 50051 2>&1 && echo "nc port 50051: OK" || echo "nc port 50051: FAILED"
             nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
             scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
+            docker buildx rm wendy --force 2>/dev/null || true
+          done
+          exit $OVERALL_FAIL
+
+      - name: Cleanup
+        if: always()
+        run: make clean
+
+  integration-test-linux:
+    name: Integration (Linux)
+    if: github.event_name == 'push' || inputs.jobs == 'all' || inputs.jobs == 'integration'
+    needs: integration-test-macos
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, Linux]
+    concurrency:
+      group: integration-hw-linux
+      cancel-in-progress: false
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: go
+    env:
+      INPUT_HOSTNAME: ${{ inputs.hostname }}
+      INPUT_TESTS: ${{ inputs.tests }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run integration tests
+        run: |
+          TEST_ARGS="-w ./bin/wendy"
+
+          if [[ -n "$INPUT_TESTS" ]]; then
+            HAS_TESTS=false
+            IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
+            for t in "${TEST_ARRAY[@]}"; do
+              t="$(echo "$t" | xargs)"
+              if [[ "$t" == "python-gpu" ]]; then
+                continue
+              fi
+              if [[ "$t" == swift-* ]]; then
+                echo "Skipping swift test on Linux: $t"
+                continue
+              fi
+              TEST_ARGS="$TEST_ARGS -t $t"
+              HAS_TESTS=true
+            done
+            if [[ "$HAS_TESTS" == false ]]; then
+              echo "No applicable tests requested, skipping."
+              exit 0
+            fi
+          else
+            for t in python-hello python-network python-bluetooth python-no-network python-no-bluetooth; do
+              TEST_ARGS="$TEST_ARGS -t $t"
+            done
+          fi
+
+          if [[ -n "$INPUT_HOSTNAME" ]]; then
+            DEVICES=("$INPUT_HOSTNAME")
+          else
+            echo "==> Discovering LAN devices..."
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>/tmp/wendy-discover-stderr.txt)
+            cat /tmp/wendy-discover-stderr.txt >&2 || true
+            DEVICES=()
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && DEVICES+=("$line")
+            done < <(echo "$DISCOVER_JSON" | jq -r '.lanDevices[].hostname // empty' 2>/dev/null)
+            if [[ ${#DEVICES[@]} -eq 0 ]]; then
+              echo "ERROR: No LAN devices found via wendy discover"
+              exit 1
+            fi
+            echo "==> Found ${#DEVICES[@]} device(s): ${DEVICES[*]}"
+          fi
+
+          OVERALL_FAIL=0
+          for device in "${DEVICES[@]}"; do
+            echo ""
+            echo "==> Testing device: $device"
+            echo "==> Network diagnostics for $device:"
+            ip route get "$device" 2>/dev/null || true
+            arp -n "$device" 2>/dev/null || true
+            nc -zw 5 "$device" 50051 2>&1 && echo "nc port 50051: OK" || echo "nc port 50051: FAILED"
+            nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
+            scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
+            docker buildx rm wendy --force 2>/dev/null || true
           done
           exit $OVERALL_FAIL
 
@@ -226,7 +308,7 @@ jobs:
   summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [discover, integration-test, integration-test-gpu]
+    needs: [discover, integration-test-macos, integration-test-linux, integration-test-gpu]
     if: always()
     steps:
       - name: Check results
@@ -235,19 +317,27 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "${{ needs.discover.result }}" == "success" ]]; then
-            echo "- Device discovery (macOS + Linux): passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Device discovery: passed" >> "$GITHUB_STEP_SUMMARY"
           elif [[ "${{ needs.discover.result }}" == "skipped" ]]; then
             echo "- Device discovery: skipped" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- Device discovery (macOS + Linux): ${{ needs.discover.result }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Device discovery: ${{ needs.discover.result }}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [[ "${{ needs.integration-test.result }}" == "success" ]]; then
-            echo "- Platform tests (macOS + Linux): passed" >> "$GITHUB_STEP_SUMMARY"
-          elif [[ "${{ needs.integration-test.result }}" == "skipped" ]]; then
-            echo "- Platform tests: skipped" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ needs.integration-test-macos.result }}" == "success" ]]; then
+            echo "- Platform tests (macOS): passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.integration-test-macos.result }}" == "skipped" ]]; then
+            echo "- Platform tests (macOS): skipped" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- Platform tests (macOS + Linux): ${{ needs.integration-test.result }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Platform tests (macOS): ${{ needs.integration-test-macos.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.integration-test-linux.result }}" == "success" ]]; then
+            echo "- Platform tests (Linux): passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.integration-test-linux.result }}" == "skipped" ]]; then
+            echo "- Platform tests (Linux): skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Platform tests (Linux): ${{ needs.integration-test-linux.result }}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           if [[ "${{ needs.integration-test-gpu.result }}" == "success" ]]; then
@@ -258,7 +348,7 @@ jobs:
             echo "- GPU test: ${{ needs.integration-test-gpu.result }} (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test.result }}" == "failure" ]]; then
+          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test-macos.result }}" == "failure" || "${{ needs.integration-test-linux.result }}" == "failure" ]]; then
             echo ""
             echo "One or more blocking tests failed."
             exit 1
