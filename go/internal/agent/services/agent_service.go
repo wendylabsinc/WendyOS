@@ -170,9 +170,18 @@ func (s *AgentService) receiveAndInstallUpdate(
 ) error {
 	s.logger.Info("UpdateAgent stream started")
 
-	// Receive binary chunks.
 	hasher := sha256.New()
-	var binaryData []byte
+	var tmpFile *os.File
+
+	// removeTmp closes and removes the partial temp file if one was created.
+	removeTmp := func() {
+		if tmpFile != nil {
+			name := tmpFile.Name()
+			tmpFile.Close()
+			tmpFile = nil
+			os.Remove(name)
+		}
+	}
 
 	for {
 		msg, err := stream.Recv()
@@ -180,11 +189,21 @@ func (s *AgentService) receiveAndInstallUpdate(
 			break
 		}
 		if err != nil {
+			removeTmp()
 			return status.Errorf(codes.Internal, "error receiving update data: %v", err)
 		}
 
 		if chunk := msg.GetChunk(); chunk != nil {
-			binaryData = append(binaryData, chunk.GetData()...)
+			if tmpFile == nil {
+				tmpFile, err = os.CreateTemp(filepath.Dir(execPath), filepath.Base(execPath)+".partial.*")
+				if err != nil {
+					return status.Errorf(codes.Internal, "failed to create temp file: %v", err)
+				}
+			}
+			if _, err := tmpFile.Write(chunk.GetData()); err != nil {
+				removeTmp()
+				return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
+			}
 			hasher.Write(chunk.GetData())
 			continue
 		}
@@ -195,46 +214,52 @@ func (s *AgentService) receiveAndInstallUpdate(
 				computedHash := hex.EncodeToString(hasher.Sum(nil))
 				expectedHash := ctrl.GetUpdate().GetSha256()
 				if expectedHash != "" && computedHash != expectedHash {
+					removeTmp()
 					return status.Errorf(codes.DataLoss,
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				// Capture original file permissions.
+				// Close the temp file before renaming.
+				tmpName := tmpFile.Name()
+				if err := tmpFile.Close(); err != nil {
+					tmpFile = nil
+					os.Remove(tmpName)
+					return status.Errorf(codes.Internal, "failed to close temp file: %v", err)
+				}
+				tmpFile = nil
+
+				// Capture original file permissions and apply to temp file.
 				info, err := os.Stat(execPath)
 				if err != nil {
+					os.Remove(tmpName)
 					return status.Errorf(codes.Internal, "failed to stat executable: %v", err)
 				}
-				originalPerm := info.Mode()
-
-				// Write the new binary to a temp file.
-				tmpPath := execPath + ".update"
-				if err := os.WriteFile(tmpPath, binaryData, originalPerm); err != nil {
-					return status.Errorf(codes.Internal, "failed to write update file: %v", err)
+				if err := os.Chmod(tmpName, info.Mode()); err != nil {
+					os.Remove(tmpName)
+					return status.Errorf(codes.Internal, "failed to chmod temp file: %v", err)
 				}
 
 				// Create a backup of the current binary.
 				backupPath := execPath + ".backup"
 				if err := os.Rename(execPath, backupPath); err != nil {
-					os.Remove(tmpPath)
+					os.Remove(tmpName)
 					return status.Errorf(codes.Internal, "failed to create backup: %v", err)
 				}
 
-				// Atomic rename of new binary to current path.
-				if err := os.Rename(tmpPath, execPath); err != nil {
-					// Rollback: restore from backup.
+				// Atomic rename of temp file into place.
+				if err := os.Rename(tmpName, execPath); err != nil {
 					if rbErr := os.Rename(backupPath, execPath); rbErr != nil {
 						s.logger.Error("Failed to rollback from backup",
 							zap.Error(rbErr),
 							zap.String("backup_path", backupPath),
 						)
 					}
-					os.Remove(tmpPath)
+					os.Remove(tmpName)
 					return status.Errorf(codes.Internal, "failed to replace binary: %v", err)
 				}
 
 				s.logger.Info("Agent binary updated successfully",
 					zap.String("sha256", computedHash),
-					zap.Int("size", len(binaryData)),
 				)
 
 				if err := stream.Send(&agentpb.UpdateAgentResponse{
@@ -250,6 +275,7 @@ func (s *AgentService) receiveAndInstallUpdate(
 		}
 	}
 
+	removeTmp()
 	return status.Error(codes.InvalidArgument, "update stream ended without update control command")
 }
 
@@ -533,7 +559,19 @@ func CleanupOldBackups(logger *zap.Logger) {
 // to allow unit testing; the public CleanupPartialFiles resolves the path via
 // os.Executable.
 func cleanupPartialFiles(logger *zap.Logger, execPath string) {
-	// TODO: glob and remove .partial.* files (implemented in fix-in-memory-buffering)
+	matches, err := filepath.Glob(execPath + ".partial.*")
+	if err != nil {
+		logger.Warn("CleanupPartialFiles: glob failed", zap.Error(err))
+		return
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil {
+			logger.Warn("CleanupPartialFiles: failed to remove partial file",
+				zap.String("path", m), zap.Error(err))
+		} else {
+			logger.Info("Removed partial file", zap.String("path", m))
+		}
+	}
 }
 
 // CleanupPartialFiles removes partial update files left by any previous
