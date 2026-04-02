@@ -61,7 +61,8 @@ func main() {
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
-	// Clean up old agent binary backups from previous updates.
+	// Clean up leftovers from previous updates.
+	services.CleanupPartialFiles(logger)
 	services.CleanupOldBackups(logger)
 
 	// Ensure NVIDIA CDI spec exists for GPU container support.
