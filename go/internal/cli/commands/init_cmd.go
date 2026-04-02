@@ -437,6 +437,22 @@ func metaTemplateNames(meta *repoMeta) string {
 
 // runTemplateFlow handles init when a template is selected.
 func runTemplateFlow(cwd, appID, tmpl string, meta *repoMeta, opts initOptions) error {
+	// Prompt for app ID if not provided (interactive template selection).
+	if appID == "" {
+		fmt.Println()
+		var err error
+		appID, err = tui.PromptText("App ID", "used as the project directory and app identifier", func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("app ID cannot be empty")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		appID = strings.TrimSpace(appID)
+	}
+
 	language, err := resolveTemplateLanguage(meta, opts)
 	if err != nil {
 		return err
@@ -463,6 +479,9 @@ func runTemplateFlow(cwd, appID, tmpl string, meta *repoMeta, opts initOptions) 
 
 	// Create project in a subdirectory named after the app ID.
 	projectDir := filepath.Join(cwd, appID)
+	if entries, _ := os.ReadDir(projectDir); len(entries) > 0 {
+		return fmt.Errorf("directory ./%s/ already exists and is not empty", appID)
+	}
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}
@@ -504,7 +523,7 @@ func maybeGitInit(dir string, opts initOptions) error {
 			return fmt.Errorf("invalid --git-init value %q (expected yes or no)", opts.gitInit)
 		}
 	} else {
-		// Interactive prompt with default yes.
+		// Interactive yes/no prompt.
 		fmt.Println()
 		var err error
 		doInit, err = promptYesNo("Initialize a git repository?")
@@ -529,7 +548,11 @@ func maybeGitInit(dir string, opts initOptions) error {
 
 func resolveInitAppID(cwd string, args []string, opts initOptions) (string, error) {
 	if len(args) > 0 {
-		return strings.TrimSpace(args[0]), nil
+		appID := strings.TrimSpace(args[0])
+		if appID == "" {
+			return "", fmt.Errorf("app ID cannot be empty or whitespace")
+		}
+		return appID, nil
 	}
 
 	if opts.appIDSet {
@@ -540,28 +563,19 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 		return flagAppID, nil
 	}
 
-	// Template flow needs an explicit app ID (it becomes the directory name).
 	// Non-template flow can infer from the current directory name.
-	if opts.templateSet {
-		fmt.Println()
-		appID, err := tui.PromptText("App ID", "used as the project directory and app identifier", func(v string) error {
-			if strings.TrimSpace(v) == "" {
-				return fmt.Errorf("app ID cannot be empty")
-			}
-			return nil
-		})
-		if err != nil {
-			return "", err
+	if !opts.templateSet {
+		appID := strings.TrimSpace(filepath.Base(cwd))
+		if appID == "" {
+			return "", fmt.Errorf("could not infer a valid app ID; please provide a non-empty value via --app-id or as a positional argument")
 		}
-		return strings.TrimSpace(appID), nil
+		return appID, nil
 	}
 
-	appID := strings.TrimSpace(filepath.Base(cwd))
-	if appID == "" {
-		return "", fmt.Errorf("could not infer a valid app ID; please provide a non-empty value via --app-id or as a positional argument")
-	}
-
-	return appID, nil
+	// Template flow (both --template and interactive) needs an explicit
+	// app ID since it becomes the project directory name. Return empty
+	// here — runTemplateFlow will prompt if needed.
+	return "", nil
 }
 
 func resolveInitTarget(opts initOptions) (string, error) {
@@ -779,8 +793,7 @@ func isValidInitTarget(target string) bool {
 }
 
 func isValidInitLanguage(language string) bool {
-	return language == langSwift || language == langPython ||
-		language == langRust || language == langNode || language == langCpp
+	return language == langSwift || language == langPython
 }
 
 func validateInitLanguage(target, language string) error {

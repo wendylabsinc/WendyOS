@@ -153,6 +153,13 @@ func downloadTemplateArchive(language, templateName string) (map[string][]byte, 
 			continue
 		}
 
+		// Sanitize: reject path traversal.
+		cleaned := filepath.Clean(relPath)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+			continue
+		}
+		relPath = cleaned
+
 		content, err := io.ReadAll(tr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading file %s: %w", relPath, err)
@@ -394,14 +401,19 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			return fmt.Errorf("creating directory for %s: %w", relPath, err)
 		}
 
-		// Replace {{.VAR}} tokens with values.
-		rendered := string(content)
-		for key, val := range vals {
-			token := fmt.Sprintf("{{.%s}}", key)
-			rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+		// Only apply token replacement to text files. Binary files
+		// (images, fonts, wasm) are written as-is.
+		output := content
+		if isTextFile(relPath) {
+			rendered := string(content)
+			for key, val := range vals {
+				token := fmt.Sprintf("{{.%s}}", key)
+				rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+			}
+			output = []byte(rendered)
 		}
 
-		if err := os.WriteFile(destPath, []byte(rendered), 0o644); err != nil {
+		if err := os.WriteFile(destPath, output, 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
 		}
 	}
@@ -421,6 +433,28 @@ func renameTemplatePath(relPath, templateName, appID string) string {
 	return strings.Join(parts, "/")
 }
 
+// isTextFile returns true if a file path looks like a text file that should
+// have template tokens replaced. Binary files are left as-is.
+func isTextFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".html", ".css",
+		".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".swift", ".go",
+		".cpp", ".c", ".h", ".hpp", ".cmake", ".sh", ".bash", ".zsh",
+		".dockerfile", ".gitignore", ".env", ".cfg", ".ini", ".xml",
+		".svg", ".lock":
+		return true
+	}
+	// Files without extension (Dockerfile, Makefile, etc.)
+	base := filepath.Base(path)
+	switch base {
+	case "Dockerfile", "Makefile", "CMakeLists.txt", "Package.swift",
+		"Cargo.toml", "Cargo.lock", ".swift-version", ".gitignore":
+		return true
+	}
+	return false
+}
+
 // parseVarFlags parses --var KEY=VALUE flags into a map.
 func parseVarFlags(vars []string) (map[string]string, error) {
 	result := make(map[string]string, len(vars))
@@ -430,6 +464,9 @@ func parseVarFlags(vars []string) (map[string]string, error) {
 			return nil, fmt.Errorf("invalid --var format %q (expected KEY=VALUE)", v)
 		}
 		key := strings.TrimSpace(v[:eq])
+		if key == "" {
+			return nil, fmt.Errorf("invalid --var format %q (empty key)", v)
+		}
 		val := v[eq+1:]
 		result[key] = val
 	}
