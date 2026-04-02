@@ -59,7 +59,24 @@ func TestDeviceUpdateUpload_SHA256IsComputedFromReaderContent(t *testing.T) {
 // no single chunk message sent to the agent carries more than 64 KiB of
 // payload, ensuring the stream stays bounded in per-message memory use.
 func TestDeviceUpdateUpload_SendsDataInChunksNoLargerThan64KiB(t *testing.T) {
-	t.Skip("TODO: implement")
+	content := bytes.Repeat([]byte("b"), 200*1024) // 200 KiB — forces multiple chunks
+	stream := &fakeUpdateClientStream{}
+	mock := &mockAgentServiceClient{updateAgentStream: stream}
+
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
+	}
+
+	const maxChunk = 64 * 1024
+	for i, msg := range stream.sent {
+		chunk := msg.GetChunk()
+		if chunk == nil {
+			continue
+		}
+		if len(chunk.GetData()) > maxChunk {
+			t.Errorf("message %d: chunk size %d exceeds 64 KiB", i, len(chunk.GetData()))
+		}
+	}
 }
 
 // commitMsgSent returns the SHA256 from the commit control message in sent,
