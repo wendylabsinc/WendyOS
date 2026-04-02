@@ -18,8 +18,10 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -509,7 +511,41 @@ func TestUpdateAgent_InstalledBinaryMatchesSourceContent(t *testing.T) {
 // of the received bytes, the RPC returns a DataLoss error and no .partial.*
 // file is left behind in the binary directory.
 func TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp(t *testing.T) {
-	t.Skip("TODO: implement")
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "wendy-agent")
+	original := []byte("original-binary")
+	if err := os.WriteFile(execPath, original, 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	msgs := []*agentpb.UpdateAgentRequest{
+		chunkMsg([]byte("new-content")),
+		commitMsg("0000000000000000000000000000000000000000000000000000000000000000"),
+	}
+
+	stream := &fakeUpdateServerStream{ctx: context.Background(), msgs: msgs}
+	svc := NewAgentService(zap.NewNop(), nil, nil, nil)
+
+	err := svc.receiveAndInstallUpdate(stream, execPath)
+	if err == nil {
+		t.Fatal("expected error on SHA256 mismatch, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.DataLoss {
+		t.Errorf("expected DataLoss, got: %v", err)
+	}
+
+	// No .partial.* files must remain.
+	matches, _ := filepath.Glob(execPath + ".partial.*")
+	if len(matches) > 0 {
+		t.Errorf(".partial.* files left behind: %v", matches)
+	}
+
+	// Original binary must be unchanged.
+	got, _ := os.ReadFile(execPath)
+	if !bytes.Equal(got, original) {
+		t.Error("original binary was modified on hash mismatch")
+	}
 }
 
 // TestUpdateAgent_InterruptedStreamDoesNotModifyTargetBinary verifies that
