@@ -457,12 +457,74 @@ func TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory(t *testing.
 	}
 }
 
+// midTransferPauseStream wraps fakeUpdateServerStream and blocks on the
+// second Recv call (after the first chunk has been processed) so the test
+// goroutine can inspect the filesystem before the transfer completes.
+type midTransferPauseStream struct {
+	fakeUpdateServerStream
+	paused chan struct{} // closed when the stream is about to block
+	resume chan struct{} // close to unblock
+}
+
+func (m *midTransferPauseStream) Recv() (*agentpb.UpdateAgentRequest, error) {
+	if m.pos == 1 {
+		// First chunk has been delivered and processed; signal the test goroutine
+		// and wait for it to finish inspecting the filesystem.
+		close(m.paused)
+		<-m.resume
+	}
+	return m.fakeUpdateServerStream.Recv()
+}
+
 // TestUpdateAgent_TempFileExistsDuringTransfer verifies that a .partial.*
 // temp file is created on disk as soon as the first chunk arrives and is
 // still present while subsequent chunks are in-flight, before the commit
 // control message is sent.
 func TestUpdateAgent_TempFileExistsDuringTransfer(t *testing.T) {
-	t.Skip("TODO: implement")
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "wendy-agent")
+	if err := os.WriteFile(execPath, []byte("old"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	content := bytes.Repeat([]byte("y"), 64*1024)
+	h := sha256.Sum256(content)
+	hash := hex.EncodeToString(h[:])
+
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	stream := &midTransferPauseStream{
+		fakeUpdateServerStream: fakeUpdateServerStream{
+			ctx: context.Background(),
+			msgs: []*agentpb.UpdateAgentRequest{
+				chunkMsg(content),
+				commitMsg(hash),
+			},
+		},
+		paused: paused,
+		resume: resume,
+	}
+
+	svc := NewAgentService(zap.NewNop(), nil, nil, nil)
+	errCh := make(chan error, 1)
+	go func() { errCh <- svc.receiveAndInstallUpdate(stream, execPath) }()
+
+	// Wait until the first chunk has been processed and the stream is paused.
+	<-paused
+
+	matches, err := filepath.Glob(execPath + ".partial.*")
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Error("no .partial.* temp file found while transfer is in-flight")
+	}
+
+	close(resume) // let the transfer finish
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("receiveAndInstallUpdate: %v", err)
+	}
 }
 
 // TestUpdateAgent_InstalledBinaryMatchesSourceContent verifies that after a
