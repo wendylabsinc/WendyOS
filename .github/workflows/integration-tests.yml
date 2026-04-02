@@ -152,11 +152,11 @@ jobs:
           for device in "${DEVICES[@]}"; do
             echo ""
             echo "==> Testing device: $device"
-            echo "==> Connectivity check: $device port 50051"
-            if ! nc -zw 5 "$device" 50051 2>/dev/null; then
-              echo "WARNING: $device port 50051 unreachable, skipping"
-              continue
-            fi
+            echo "==> Network diagnostics for $device:"
+            route -n get "$device" 2>/dev/null || true
+            arp -n "$device" 2>/dev/null || true
+            nc -zw 5 "$device" 50051 2>&1 && echo "nc port 50051: OK" || echo "nc port 50051: FAILED"
+            nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
             scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
           done
           exit $OVERALL_FAIL
