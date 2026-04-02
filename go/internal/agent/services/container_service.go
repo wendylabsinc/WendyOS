@@ -1,10 +1,14 @@
 package services
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -21,6 +25,7 @@ type ContainerService struct {
 	logger     *zap.Logger
 	containerd ContainerdClient
 	logManager *ContainerLogManager
+	blobsDir   string
 }
 
 // NewContainerService creates a new ContainerService.
@@ -45,6 +50,15 @@ func WithLogManager(lm *ContainerLogManager) ContainerServiceOption {
 	}
 }
 
+// WithBlobsDir sets the directory used by WriteLayer to store blob files.
+// The service creates <blobsDir>/sha256/<hex> as the final path for each blob
+// and uses <blobsDir>/<hex>.partial.* as the temp file during transfer.
+func WithBlobsDir(dir string) ContainerServiceOption {
+	return func(s *ContainerService) {
+		s.blobsDir = dir
+	}
+}
+
 // ListLayers streams the OCI image layers present in containerd.
 func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.ServerStreamingServer[agentpb.LayerHeader]) error {
 	ctx := stream.Context()
@@ -61,10 +75,22 @@ func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.
 	return nil
 }
 
-// WriteLayer receives a streaming layer upload and writes it to the containerd
-// content store. Chunks are buffered in memory before writing.
+// WriteLayer receives a streaming layer upload and writes it directly to
+// <blobsDir>/sha256/<hex>, using a .partial.* temp file during transfer.
 func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse]) error {
-	ctx := stream.Context()
+	return s.receiveAndWriteLayer(stream, s.blobsDir)
+}
+
+// receiveAndWriteLayer streams incoming chunks to a temp file in blobsDir and
+// atomically renames it to <blobsDir>/sha256/<hex> on a verified EOF. It is
+// the testable core of WriteLayer; the caller supplies the target blobsDir.
+func (s *ContainerService) receiveAndWriteLayer(
+	stream grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse],
+	blobsDir string,
+) error {
+	if blobsDir == "" {
+		return status.Error(codes.Internal, "blobs directory not configured")
+	}
 
 	// Receive the first message to get the digest.
 	first, err := stream.Recv()
@@ -80,36 +106,110 @@ func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.Wr
 		return status.Error(codes.InvalidArgument, "no digest provided in layer upload")
 	}
 
-	// Buffer all chunks.
-	var data []byte
-	if chunk := first.GetData(); len(chunk) > 0 {
-		data = append(data, chunk...)
+	const sha256Prefix = "sha256:"
+	if !strings.HasPrefix(digest, sha256Prefix) {
+		return status.Errorf(codes.InvalidArgument, "unsupported digest format: %q", digest)
+	}
+	hexPart := strings.TrimPrefix(digest, sha256Prefix)
+
+	// If the blob already exists, drain the stream and return success.
+	finalPath := filepath.Join(blobsDir, "sha256", hexPart)
+	if _, err := os.Stat(finalPath); err == nil {
+		for {
+			_, recvErr := stream.Recv()
+			if recvErr == io.EOF {
+				break
+			}
+			if recvErr != nil {
+				return status.Errorf(codes.Internal, "error draining stream: %v", recvErr)
+			}
+		}
+		s.logger.Info("Layer already exists, skipping write", zap.String("digest", digest))
+		return stream.Send(&agentpb.WriteLayerResponse{})
 	}
 
+	// Ensure the sha256 subdirectory exists.
+	if err := os.MkdirAll(filepath.Join(blobsDir, "sha256"), 0o755); err != nil {
+		return status.Errorf(codes.Internal, "failed to create blobs directory: %v", err)
+	}
+
+	// Create a temp file in blobsDir for the incoming data.
+	tmpFile, err := os.CreateTemp(blobsDir, hexPart+".partial.*")
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to create temp file: %v", err)
+	}
+
+	// removeTmp closes and removes the partial temp file.
+	removeTmp := func() {
+		if tmpFile != nil {
+			name := tmpFile.Name()
+			tmpFile.Close()
+			tmpFile = nil
+			os.Remove(name)
+		}
+	}
+
+	hasher := sha256.New()
+	var size int64
+
+	writeChunk := func(data []byte) error {
+		if len(data) == 0 {
+			return nil
+		}
+		if _, err := tmpFile.Write(data); err != nil {
+			return err
+		}
+		hasher.Write(data)
+		size += int64(len(data))
+		return nil
+	}
+
+	// Write the first chunk.
+	if err := writeChunk(first.GetData()); err != nil {
+		removeTmp()
+		return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
+	}
+
+	// Stream remaining chunks.
 	for {
 		msg, recvErr := stream.Recv()
 		if recvErr == io.EOF {
 			break
 		}
 		if recvErr != nil {
+			removeTmp()
 			return status.Errorf(codes.Internal, "error receiving layer data: %v", recvErr)
 		}
-		if chunk := msg.GetData(); len(chunk) > 0 {
-			data = append(data, chunk...)
+		if err := writeChunk(msg.GetData()); err != nil {
+			removeTmp()
+			return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
 		}
 	}
 
-	s.logger.Info("Received layer data",
-		zap.String("digest", digest),
-		zap.Int("bytes", len(data)),
-	)
-
-	// Write to containerd content store.
-	if err := s.containerd.WriteLayer(ctx, digest, bytes.NewReader(data), int64(len(data))); err != nil {
-		return status.Errorf(codes.Internal, "failed to write layer: %v", err)
+	// Verify the digest.
+	computedHex := hex.EncodeToString(hasher.Sum(nil))
+	if computedHex != hexPart {
+		removeTmp()
+		return status.Errorf(codes.DataLoss,
+			"digest mismatch: expected sha256:%s, got sha256:%s", hexPart, computedHex)
 	}
 
-	s.logger.Info("Layer written", zap.String("digest", digest), zap.Int("size", len(data)))
+	// Close the temp file before renaming.
+	tmpName := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		tmpFile = nil
+		os.Remove(tmpName)
+		return status.Errorf(codes.Internal, "failed to close temp file: %v", err)
+	}
+	tmpFile = nil
+
+	// Atomic rename into the final blob path.
+	if err := os.Rename(tmpName, finalPath); err != nil {
+		os.Remove(tmpName)
+		return status.Errorf(codes.Internal, "failed to rename temp file: %v", err)
+	}
+
+	s.logger.Info("Layer written", zap.String("digest", digest), zap.Int64("size", size))
 	return stream.Send(&agentpb.WriteLayerResponse{})
 }
 
