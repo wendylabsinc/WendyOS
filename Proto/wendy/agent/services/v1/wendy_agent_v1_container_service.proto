@@ -149,6 +149,9 @@ message DeleteContainerRequest {
 
     // Optionally delete the container image as well (useful for freeing space)
     bool delete_image = 2;
+
+    // Optionally delete persistent volumes at /var/lib/wendy/volumes/
+    bool delete_volumes = 3;
 }
 
 message DeleteContainerResponse {}

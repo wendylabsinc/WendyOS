@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -391,16 +394,45 @@ func (s *ContainerService) StopContainer(ctx context.Context, req *agentpb.StopC
 	return &agentpb.StopContainerResponse{}, nil
 }
 
-// DeleteContainer deletes a container and optionally its image.
+// DeleteContainer deletes a container and optionally its image and volumes.
 func (s *ContainerService) DeleteContainer(ctx context.Context, req *agentpb.DeleteContainerRequest) (*agentpb.DeleteContainerResponse, error) {
 	if err := s.containerd.DeleteContainer(ctx, req.GetAppName(), req.GetDeleteImage()); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete container: %v", err)
 	}
+
+	if req.GetDeleteVolumes() {
+		s.deleteVolumes(req.GetAppName())
+	}
+
 	s.logger.Info("Container deleted",
 		zap.String("app_name", req.GetAppName()),
 		zap.Bool("delete_image", req.GetDeleteImage()),
+		zap.Bool("delete_volumes", req.GetDeleteVolumes()),
 	)
 	return &agentpb.DeleteContainerResponse{}, nil
+}
+
+// deleteVolumes removes persistent volume directories for an app.
+func (s *ContainerService) deleteVolumes(appName string) {
+	base := "/var/lib/wendy/volumes"
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == appName || strings.HasPrefix(name, appName+"-") {
+			path := filepath.Join(base, name)
+			if err := os.RemoveAll(path); err != nil {
+				s.logger.Warn("Failed to remove volume", zap.String("path", path), zap.Error(err))
+			} else {
+				s.logger.Info("Volume removed", zap.String("path", path))
+			}
+		}
+	}
 }
 
 // ListContainers lists running containers.
