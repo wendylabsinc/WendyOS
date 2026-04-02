@@ -553,5 +553,38 @@ func TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp(t *testing.T) {
 // message arrives, the original binary at the target path is untouched and
 // the RPC returns an error.
 func TestUpdateAgent_InterruptedStreamDoesNotModifyTargetBinary(t *testing.T) {
-	t.Skip("TODO: implement")
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "wendy-agent")
+	original := []byte("original-binary")
+	if err := os.WriteFile(execPath, original, 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Stream ends after some chunks but no commit — simulates a dropped connection.
+	msgs := []*agentpb.UpdateAgentRequest{
+		chunkMsg([]byte("chunk-1")),
+		chunkMsg([]byte("chunk-2")),
+	}
+
+	stream := &fakeUpdateServerStream{ctx: context.Background(), msgs: msgs}
+	svc := NewAgentService(zap.NewNop(), nil, nil, nil)
+
+	if err := svc.receiveAndInstallUpdate(stream, execPath); err == nil {
+		t.Fatal("expected error on interrupted stream, got nil")
+	}
+
+	// Original binary must be unchanged.
+	got, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Error("original binary was modified by interrupted stream")
+	}
+
+	// No .partial.* files must remain.
+	matches, _ := filepath.Glob(execPath + ".partial.*")
+	if len(matches) > 0 {
+		t.Errorf(".partial.* files left behind after interrupted stream: %v", matches)
+	}
 }
