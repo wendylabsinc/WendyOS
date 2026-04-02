@@ -227,6 +227,7 @@ for test_name in "${TESTS[@]}"; do
     # Post-cleanup: stop and remove
     "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
     "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+    docker buildx rm wendy --force &>/dev/null || true
 done
 
 echo ""
