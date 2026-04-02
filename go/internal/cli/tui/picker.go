@@ -44,6 +44,18 @@ type PickerModel struct {
 	// If nil, duplicate items are silently dropped.
 	MergeItem func(existing *PickerItem, incoming PickerItem)
 
+	// OnSetDefault is called when the user presses 'd' on the highlighted item.
+	// If nil, 'd' is ignored.
+	OnSetDefault func(item PickerItem)
+
+	// OnUnsetDefault is called when the user presses 'x'.
+	// If nil, 'x' is ignored.
+	OnUnsetDefault func()
+
+	// DefaultKey is the DedupKey (or Name if DedupKey is empty) of the item
+	// that is currently the default. Shown with a ★ indicator.
+	DefaultKey string
+
 	items    []PickerItem
 	seenIdx  map[string]int // dedup key -> index in items
 	table    bubbleTable.Model
@@ -94,6 +106,28 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = &item
 				return m, tea.Quit
 			}
+		case "d":
+			if m.OnSetDefault != nil {
+				cursor := m.table.Cursor()
+				if len(m.items) > 0 && cursor >= 0 && cursor < len(m.items) {
+					item := m.items[cursor]
+					key := strings.ToLower(item.DedupKey)
+					if key == "" {
+						key = strings.ToLower(item.Name)
+					}
+					m.DefaultKey = key
+					m.OnSetDefault(item)
+					m.refreshTable()
+				}
+			}
+			return m, nil
+		case "x":
+			if m.OnUnsetDefault != nil {
+				m.DefaultKey = ""
+				m.OnUnsetDefault()
+				m.refreshTable()
+			}
+			return m, nil
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
@@ -145,7 +179,11 @@ func (m PickerModel) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(pickerTitle.Render(m.Title) + pickerHint.Render(" (↑/↓ navigate, enter select, q quit)") + "\n\n")
+	hint := " (↑/↓ navigate, enter select, q quit)"
+	if m.OnSetDefault != nil {
+		hint = " (↑/↓ navigate, enter select, d set default, x unset default, q quit)"
+	}
+	sb.WriteString(pickerTitle.Render(m.Title) + pickerHint.Render(hint) + "\n\n")
 
 	if len(m.items) == 0 {
 		if m.scanning {
@@ -225,7 +263,7 @@ func newPickerTable() bubbleTable.Model {
 
 func (m *PickerModel) refreshTable() {
 	activeCols := pickerActiveColumns(m.items)
-	rows := pickerRows(m.items, activeCols)
+	rows := pickerRows(m.items, activeCols, m.DefaultKey)
 	m.table.SetColumns(pickerColumns(rows, activeCols))
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {
@@ -252,12 +290,23 @@ func pickerActiveColumns(items []PickerItem) []pickerColumnDef {
 	return active
 }
 
-func pickerRows(items []PickerItem, cols []pickerColumnDef) []bubbleTable.Row {
+func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string) []bubbleTable.Row {
 	rows := make([]bubbleTable.Row, 0, len(items))
 	for _, item := range items {
 		row := make(bubbleTable.Row, 0, len(cols))
 		for _, col := range cols {
-			row = append(row, col.value(item))
+			val := col.value(item)
+			// Prepend ★ to the Name column for the default item.
+			if col.title == "Name" && defaultKey != "" {
+				key := strings.ToLower(item.DedupKey)
+				if key == "" {
+					key = strings.ToLower(item.Name)
+				}
+				if key == defaultKey {
+					val = "★ " + val
+				}
+			}
+			row = append(row, val)
 		}
 		rows = append(rows, row)
 	}

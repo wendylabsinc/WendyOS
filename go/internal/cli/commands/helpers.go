@@ -826,6 +826,25 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 	return newCfg, nil
 }
 
+// pickerItemDeviceID extracts a hostname or provider key from a picker item,
+// suitable for storing as the default device.
+func pickerItemDeviceID(item tui.PickerItem) string {
+	entry, ok := item.Value.(*pickerEntry)
+	if !ok {
+		return ""
+	}
+	if entry.mergedDevice != nil && entry.mergedDevice.LAN != nil {
+		return entry.mergedDevice.LAN.DisplayName
+	}
+	if entry.externalDevice != nil {
+		return entry.externalDevice.ProviderKey
+	}
+	if entry.mergedDevice != nil {
+		return entry.mergedDevice.DisplayName
+	}
+	return ""
+}
+
 // pickerEntry is the value stored in each PickerItem.
 type pickerEntry struct {
 	mergedDevice   *models.DiscoveredDevice
@@ -890,6 +909,30 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	picker := tui.NewPicker()
 	picker.MergeItem = mergePickerItem
+
+	// Load current default device to show ★ indicator.
+	if loadedCfg, err := config.Load(); err == nil && loadedCfg.DefaultDevice != "" {
+		picker.DefaultKey = strings.ToLower(loadedCfg.DefaultDevice)
+	}
+
+	// Allow 'd' to set default and 'x' to unset default from the picker.
+	picker.OnSetDefault = func(item tui.PickerItem) {
+		deviceID := pickerItemDeviceID(item)
+		if deviceID == "" {
+			return
+		}
+		if cfg, err := config.Load(); err == nil {
+			cfg.DefaultDevice = deviceID
+			_ = config.Save(cfg)
+		}
+	}
+	picker.OnUnsetDefault = func() {
+		if cfg, err := config.Load(); err == nil {
+			cfg.DefaultDevice = ""
+			_ = config.Save(cfg)
+		}
+	}
+
 	p := tea.NewProgram(picker)
 
 	// Cancel continuous discovery when the picker exits.
