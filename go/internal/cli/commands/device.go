@@ -3,6 +3,7 @@ package commands
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -1166,16 +1167,12 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			}
 
-			// Compute SHA256.
-			h := sha256.Sum256(binaryData)
-			sha256Hash := hex.EncodeToString(h[:])
-
 			if isInteractiveTerminal() && !jsonOutput {
 				s := tui.NewSpinner("Uploading agent binary...")
 				p := tea.NewProgram(s)
 
 				go func() {
-					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData))
 					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 				}()
 
@@ -1191,11 +1188,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else if !jsonOutput {
 				fmt.Println("Uploading agent binary...")
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			} else {
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			}
@@ -1278,38 +1275,45 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 	return nil
 }
 
-func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string) error {
+func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, r io.Reader) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {
 		return fmt.Errorf("starting agent update: %w", err)
 	}
 
-	// Send binary in chunks.
+	// Stream chunks to the agent and compute SHA256 on the fly.
 	const chunkSize = 64 * 1024
-	for offset := 0; offset < len(binaryData); offset += chunkSize {
-		end := offset + chunkSize
-		if end > len(binaryData) {
-			end = len(binaryData)
-		}
-
-		if err := stream.Send(&agentpb.UpdateAgentRequest{
-			RequestType: &agentpb.UpdateAgentRequest_Chunk_{
-				Chunk: &agentpb.UpdateAgentRequest_Chunk{
-					Data: binaryData[offset:end],
+	hasher := sha256.New()
+	buf := make([]byte, chunkSize)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			hasher.Write(chunk)
+			if err := stream.Send(&agentpb.UpdateAgentRequest{
+				RequestType: &agentpb.UpdateAgentRequest_Chunk_{
+					Chunk: &agentpb.UpdateAgentRequest_Chunk{Data: chunk},
 				},
-			},
-		}); err != nil {
-			return fmt.Errorf("sending binary chunk: %w", err)
+			}); err != nil {
+				return fmt.Errorf("sending binary chunk: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading binary: %w", readErr)
 		}
 	}
 
-	// Send update control command with SHA256.
+	// Send commit with the SHA256 computed from the stream.
 	if err := stream.Send(&agentpb.UpdateAgentRequest{
 		RequestType: &agentpb.UpdateAgentRequest_Control{
 			Control: &agentpb.UpdateAgentRequest_ControlCommand{
 				Command: &agentpb.UpdateAgentRequest_ControlCommand_Update_{
 					Update: &agentpb.UpdateAgentRequest_ControlCommand_Update{
-						Sha256: sha256Hash,
+						Sha256: hex.EncodeToString(hasher.Sum(nil)),
 					},
 				},
 			},

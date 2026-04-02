@@ -1,19 +1,34 @@
 package commands
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"testing"
 
-// ---- deviceUpdateUpload streaming stubs (Iteration 1) ----
-//
-// These stubs pin the observable behaviour of the refactored deviceUpdateUpload
-// function, whose signature changes from (ctx, svc, []byte, string) to
-// (ctx, svc, io.Reader, int64, string) so that the CLI can stream a file
-// from disk instead of holding the entire binary in memory.
+	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
+)
 
 // TestDeviceUpdateUpload_SendsAllBytesFromReader verifies that every byte
 // produced by the io.Reader is delivered to the agent service, and that the
 // agent receives them in the correct order.
 func TestDeviceUpdateUpload_SendsAllBytesFromReader(t *testing.T) {
-	t.Skip("TODO: implement")
+	content := bytes.Repeat([]byte("z"), 200*1024) // 200 KiB
+	stream := &fakeUpdateClientStream{}
+	mock := &mockAgentServiceClient{updateAgentStream: stream}
+
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
+	}
+
+	var got []byte
+	for _, msg := range stream.sent {
+		if chunk := msg.GetChunk(); chunk != nil {
+			got = append(got, chunk.GetData()...)
+		}
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("delivered %d bytes, want %d", len(got), len(content))
+	}
 }
 
 // TestDeviceUpdateUpload_SHA256IsComputedFromReaderContent verifies that the
@@ -29,4 +44,17 @@ func TestDeviceUpdateUpload_SHA256IsComputedFromReaderContent(t *testing.T) {
 // payload, ensuring the stream stays bounded in per-message memory use.
 func TestDeviceUpdateUpload_SendsDataInChunksNoLargerThan64KiB(t *testing.T) {
 	t.Skip("TODO: implement")
+}
+
+// commitMsgSent returns the SHA256 from the commit control message in sent,
+// or "" if no commit message is present.
+func commitMsgSent(sent []*agentpb.UpdateAgentRequest) string {
+	for _, msg := range sent {
+		if ctrl := msg.GetControl(); ctrl != nil {
+			if upd := ctrl.GetUpdate(); upd != nil {
+				return upd.GetSha256()
+			}
+		}
+	}
+	return ""
 }

@@ -2,8 +2,10 @@ package commands
 
 import (
 	"context"
+	"io"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -56,3 +58,35 @@ func (m *mockAgentServiceClient) ForgetBluetoothPeripheral(_ context.Context, _ 
 func (m *mockAgentServiceClient) UpdateOS(_ context.Context, _ *agentpb.UpdateOSRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.UpdateOSResponse], error) {
 	return nil, nil
 }
+
+// fakeUpdateClientStream implements grpc.BidiStreamingClient for testing
+// deviceUpdateUpload. All sent messages accumulate in sent. Recv returns an
+// Updated response once, then io.EOF.
+type fakeUpdateClientStream struct {
+	sent    []*agentpb.UpdateAgentRequest
+	recvPos int
+}
+
+func (f *fakeUpdateClientStream) Send(r *agentpb.UpdateAgentRequest) error {
+	f.sent = append(f.sent, r)
+	return nil
+}
+
+func (f *fakeUpdateClientStream) Recv() (*agentpb.UpdateAgentResponse, error) {
+	if f.recvPos == 0 {
+		f.recvPos++
+		return &agentpb.UpdateAgentResponse{
+			ResponseType: &agentpb.UpdateAgentResponse_Updated_{
+				Updated: &agentpb.UpdateAgentResponse_Updated{},
+			},
+		}, nil
+	}
+	return nil, io.EOF
+}
+
+func (f *fakeUpdateClientStream) CloseSend() error              { return nil }
+func (f *fakeUpdateClientStream) Context() context.Context      { return context.Background() }
+func (f *fakeUpdateClientStream) Header() (metadata.MD, error)  { return nil, nil }
+func (f *fakeUpdateClientStream) Trailer() metadata.MD          { return nil }
+func (f *fakeUpdateClientStream) SendMsg(any) error             { return nil }
+func (f *fakeUpdateClientStream) RecvMsg(any) error             { return nil }
