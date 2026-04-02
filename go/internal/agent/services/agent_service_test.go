@@ -1,7 +1,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -464,7 +467,41 @@ func TestUpdateAgent_TempFileExistsDuringTransfer(t *testing.T) {
 // successful update the file installed at the target path is byte-for-byte
 // identical to the data that was streamed across all chunks.
 func TestUpdateAgent_InstalledBinaryMatchesSourceContent(t *testing.T) {
-	t.Skip("TODO: implement")
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "wendy-agent")
+	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	content := bytes.Repeat([]byte("x"), 200*1024) // 200 KiB
+	h := sha256.Sum256(content)
+	hash := hex.EncodeToString(h[:])
+
+	const chunkSize = 64 * 1024
+	var msgs []*agentpb.UpdateAgentRequest
+	for off := 0; off < len(content); off += chunkSize {
+		end := off + chunkSize
+		if end > len(content) {
+			end = len(content)
+		}
+		msgs = append(msgs, chunkMsg(content[off:end]))
+	}
+	msgs = append(msgs, commitMsg(hash))
+
+	stream := &fakeUpdateServerStream{ctx: context.Background(), msgs: msgs}
+	svc := NewAgentService(zap.NewNop(), nil, nil, nil)
+
+	if err := svc.receiveAndInstallUpdate(stream, execPath); err != nil {
+		t.Fatalf("receiveAndInstallUpdate: %v", err)
+	}
+
+	got, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("installed binary: got %d bytes, want %d", len(got), len(content))
+	}
 }
 
 // TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp verifies that when
