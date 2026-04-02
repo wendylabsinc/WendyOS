@@ -2,8 +2,12 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -12,6 +16,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -348,11 +353,104 @@ func TestRunContainer_Deprecated(t *testing.T) {
 	}
 }
 
-// ---- UpdateAgent streaming-to-disk stubs (Iteration 1) ----
-//
-// Each test below pins one observable behaviour of the new temp-file writer.
-// They are stubs only: the body is intentionally empty so they pass today;
-// real assertions are added when the implementation is written.
+// ---- streaming test infrastructure ----
+
+// fakeUpdateServerStream implements grpc.BidiStreamingServer for testing
+// receiveAndInstallUpdate. Pre-populate msgs with the message sequence the
+// stream should deliver; responses sent by the server accumulate in sent.
+type fakeUpdateServerStream struct {
+	ctx  context.Context
+	msgs []*agentpb.UpdateAgentRequest
+	pos  int
+	sent []*agentpb.UpdateAgentResponse
+}
+
+func (f *fakeUpdateServerStream) Recv() (*agentpb.UpdateAgentRequest, error) {
+	if f.pos >= len(f.msgs) {
+		return nil, io.EOF
+	}
+	msg := f.msgs[f.pos]
+	f.pos++
+	return msg, nil
+}
+
+func (f *fakeUpdateServerStream) Send(r *agentpb.UpdateAgentResponse) error {
+	f.sent = append(f.sent, r)
+	return nil
+}
+
+func (f *fakeUpdateServerStream) Context() context.Context     { return f.ctx }
+func (f *fakeUpdateServerStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeUpdateServerStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeUpdateServerStream) SetTrailer(metadata.MD)       {}
+func (f *fakeUpdateServerStream) SendMsg(any) error            { return nil }
+func (f *fakeUpdateServerStream) RecvMsg(any) error            { return nil }
+
+// chunkMsg wraps data in an UpdateAgentRequest chunk message.
+func chunkMsg(data []byte) *agentpb.UpdateAgentRequest {
+	return &agentpb.UpdateAgentRequest{
+		RequestType: &agentpb.UpdateAgentRequest_Chunk_{
+			Chunk: &agentpb.UpdateAgentRequest_Chunk{Data: data},
+		},
+	}
+}
+
+// commitMsg wraps a SHA256 hex string in an UpdateAgentRequest commit control message.
+func commitMsg(sha256Hash string) *agentpb.UpdateAgentRequest {
+	return &agentpb.UpdateAgentRequest{
+		RequestType: &agentpb.UpdateAgentRequest_Control{
+			Control: &agentpb.UpdateAgentRequest_ControlCommand{
+				Command: &agentpb.UpdateAgentRequest_ControlCommand_Update_{
+					Update: &agentpb.UpdateAgentRequest_ControlCommand_Update{
+						Sha256: sha256Hash,
+					},
+				},
+			},
+		},
+	}
+}
+
+// ---- UpdateAgent streaming-to-disk tests (Iteration 1) ----
+
+// TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory verifies
+// that cleanupPartialFiles unconditionally removes every file matching
+// <execName>.partial.* in the binary directory, leaving all other files intact.
+func TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory(t *testing.T) {
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "wendy-agent")
+
+	// The binary itself, a backup, and an unrelated file must survive.
+	keep := []string{execPath, execPath + ".backup", filepath.Join(dir, "unrelated")}
+	for _, name := range keep {
+		if err := os.WriteFile(name, []byte("keep"), 0o644); err != nil {
+			t.Fatalf("WriteFile %q: %v", name, err)
+		}
+	}
+
+	// Two partial files must be removed.
+	partials := []string{
+		execPath + ".partial.1111111111",
+		execPath + ".partial.2222222222",
+	}
+	for _, p := range partials {
+		if err := os.WriteFile(p, []byte("partial"), 0o644); err != nil {
+			t.Fatalf("WriteFile %q: %v", p, err)
+		}
+	}
+
+	cleanupPartialFiles(zap.NewNop(), execPath)
+
+	for _, p := range partials {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("partial file %q should have been removed", p)
+		}
+	}
+	for _, k := range keep {
+		if _, err := os.Stat(k); err != nil {
+			t.Errorf("file %q should still exist: %v", k, err)
+		}
+	}
+}
 
 // TestUpdateAgent_TempFileExistsDuringTransfer verifies that a .partial.*
 // temp file is created on disk as soon as the first chunk arrives and is
@@ -382,13 +480,5 @@ func TestUpdateAgent_SHA256MismatchReturnsErrorAndCleansUp(t *testing.T) {
 // message arrives, the original binary at the target path is untouched and
 // the RPC returns an error.
 func TestUpdateAgent_InterruptedStreamDoesNotModifyTargetBinary(t *testing.T) {
-	t.Skip("TODO: implement")
-}
-
-// TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory verifies
-// that CleanupPartialFiles unconditionally removes every file matching
-// <execName>.partial.* in the directory of the agent binary, regardless of
-// age, leaving all other files intact.
-func TestCleanupPartialFiles_RemovesAllPartialFilesInBinaryDirectory(t *testing.T) {
 	t.Skip("TODO: implement")
 }

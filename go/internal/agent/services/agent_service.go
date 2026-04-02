@@ -527,3 +527,28 @@ func CleanupOldBackups(logger *zap.Logger) {
 		logger.Info("Removed old backup", zap.String("path", backupPath))
 	}
 }
+
+// cleanupPartialFiles removes any <execPath>.partial.* files left by a
+// previous interrupted update. This unexported form accepts the path directly
+// to allow unit testing; the public CleanupPartialFiles resolves the path via
+// os.Executable.
+func cleanupPartialFiles(logger *zap.Logger, execPath string) {
+	// TODO: glob and remove .partial.* files (implemented in fix-in-memory-buffering)
+}
+
+// CleanupPartialFiles removes partial update files left by any previous
+// interrupted update. Should be called on agent startup alongside
+// CleanupOldBackups.
+func CleanupPartialFiles(logger *zap.Logger) {
+	execPath, err := os.Executable()
+	if err != nil {
+		logger.Debug("CleanupPartialFiles: failed to get executable path", zap.Error(err))
+		return
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		logger.Debug("CleanupPartialFiles: failed to resolve symlinks", zap.Error(err))
+		return
+	}
+	cleanupPartialFiles(logger, execPath)
+}
