@@ -24,8 +24,8 @@ gRPC servers for service-level tests. No BDD framework.
 Write tests proving `UpdateAgent` streams chunks to a temp file: the temp
 file exists mid-transfer; the final file has correct content; a SHA256
 mismatch on commit leaves no partial file; an interrupted stream leaves
-no `.tmp` at the target path. All fail. Replace the `[]byte` accumulator
-with a temp-file writer. Tests pass.
+no `.partial.*` file at the target path. All fail. Replace the `[]byte`
+accumulator with a temp-file writer. Tests pass.
 
 ---
 
@@ -55,13 +55,18 @@ landed first and in isolation.
 Replace the `binaryData []byte` accumulator with a temp-file writer:
 
 - On the first chunk, resolve `execPath` (do it early, not after receiving all
-  data), create a temp file at `execPath + ".update.tmp"`.
+  data), create a temp file via `os.CreateTemp(filepath.Dir(execPath), filepath.Base(execPath)+".partial.*")`.
+  This produces a unique path such as `wendy-agent.partial.1847392650` in the
+  same directory as the binary, and returns a ready-to-write `*os.File`.
 - On each subsequent chunk, write the chunk to the temp file and feed it to the
   running `sha256.New()` hasher. Do not accumulate in memory.
 - On the commit control message, flush and close the temp file, verify the
   SHA256, set permissions, rename backup, atomic rename into place — same logic
   as today, just operating on the temp file rather than an in-memory slice.
 - On any error, remove the temp file before returning.
+- On startup, `CleanupPartialFiles` (called alongside `CleanupOldBackups`)
+  globs for `execPath + ".partial.*"` and removes any matches
+  unconditionally — a partial file should never survive a restart.
 
 ### `UpdateAgent` — CLI side
 
@@ -84,10 +89,11 @@ string)`.
 Replace the `var data []byte` accumulator with a temp-file writer:
 
 - On the first message (which carries the digest), derive the target path
-  `<blobsDir>/sha256/<hex>` and create a temp file alongside it
-  (`<blobsDir>/sha256/<hex>.tmp`).
+  `<blobsDir>/sha256/<hex>` and create a temp file via
+  `os.CreateTemp(blobsDir, hex+".partial.*")`, producing a unique path
+  such as `<blobsDir>/abc123.partial.7391028456`.
 - Write each chunk to the temp file while feeding the SHA256 hasher.
-- On stream EOF, verify the digest, atomic rename `.tmp` → final path.
+- On stream EOF, verify the digest, atomic rename the `.partial.*` file → final path.
 - If the blob already exists (digest matches), remove the temp file and return
   success without overwriting.
 
@@ -95,5 +101,6 @@ Replace the `var data []byte` accumulator with a temp-file writer:
 
 - `wendy device update` with a 200 MB+ binary completes without OOM.
 - Interrupting the stream mid-transfer leaves no partial file at the target
-  path (only the `.tmp` file, which is cleaned up on next attempt).
+  path (only the `.partial.*` file, which is removed unconditionally on
+  the next agent startup by `CleanupPartialFiles`).
 - All existing agent and container service tests pass.
