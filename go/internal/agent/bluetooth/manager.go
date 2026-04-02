@@ -24,3 +24,14 @@ type Manager interface {
 func NewManager(logger *zap.Logger) Manager {
 	return newPlatformManager(logger)
 }
+
+// StartBLEPeripheral starts BLE advertising and the L2CAP command server.
+// Both are best-effort: failures are logged but do not affect LAN/USB serving.
+func StartBLEPeripheral(ctx context.Context, logger *zap.Logger, d *Dispatcher) {
+	if err := startAdvertising(ctx, logger); err != nil {
+		logger.Warn("BLE advertising unavailable", zap.Error(err))
+	}
+	if err := startL2CAPServer(ctx, logger, d); err != nil {
+		logger.Warn("BLE L2CAP server unavailable", zap.Error(err))
+	}
+}
