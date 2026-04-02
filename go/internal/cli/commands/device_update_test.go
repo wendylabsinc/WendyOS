@@ -3,6 +3,8 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -36,7 +38,21 @@ func TestDeviceUpdateUpload_SendsAllBytesFromReader(t *testing.T) {
 // actually read from the io.Reader, computed inline during streaming rather
 // than pre-computed from a full in-memory []byte.
 func TestDeviceUpdateUpload_SHA256IsComputedFromReaderContent(t *testing.T) {
-	t.Skip("TODO: implement")
+	content := bytes.Repeat([]byte("a"), 130*1024) // spans multiple chunks
+	h := sha256.Sum256(content)
+	want := hex.EncodeToString(h[:])
+
+	stream := &fakeUpdateClientStream{}
+	mock := &mockAgentServiceClient{updateAgentStream: stream}
+
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
+	}
+
+	got := commitMsgSent(stream.sent)
+	if got != want {
+		t.Errorf("commit SHA256 = %q, want %q", got, want)
+	}
 }
 
 // TestDeviceUpdateUpload_SendsDataInChunksNoLargerThan64KiB verifies that
