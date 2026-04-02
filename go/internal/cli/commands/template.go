@@ -1,0 +1,437 @@
+package commands
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
+)
+
+const (
+	templateRepoOwner  = "wendylabsinc"
+	templateRepoName   = "templates"
+	templateRepoBranch = "main"
+)
+
+// repoMeta is the parsed meta.json from the templates repo root.
+type repoMeta struct {
+	Templates []repoMetaTemplate  `json:"templates"`
+	Languages []repoMetaLanguage  `json:"languages"`
+}
+
+type repoMetaTemplate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type repoMetaLanguage struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+// templateManifest is the parsed template.json inside a specific template dir.
+type templateManifest struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Variables   []templateVariable `json:"variables"`
+}
+
+// templateVariable declares a single template variable.
+type templateVariable struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Type        string                 `json:"type"` // "string", "integer", "boolean"
+	Default     interface{}            `json:"default"`
+	Required    bool                   `json:"required"`
+	Prompt      string                 `json:"prompt"`
+	Validate    map[string]interface{} `json:"validate"`
+}
+
+// fetchRepoMeta downloads and parses meta.json from the templates repo.
+func fetchRepoMeta() (*repoMeta, error) {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/meta.json",
+		templateRepoOwner, templateRepoName, templateRepoBranch)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching template registry: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetching template registry: HTTP %d", resp.StatusCode)
+	}
+
+	var meta repoMeta
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, fmt.Errorf("parsing template registry: %w", err)
+	}
+	return &meta, nil
+}
+
+// isTemplateLanguage checks if a language key exists in the meta.
+func isTemplateLanguage(language string, meta *repoMeta) bool {
+	for _, l := range meta.Languages {
+		if l.Key == language {
+			return true
+		}
+	}
+	return false
+}
+
+// downloadTemplateArchive fetches the templates repo tarball and extracts
+// the files for {language}/{templateName}/ into a map of relative path -> content.
+// It also returns the parsed template.json manifest.
+func downloadTemplateArchive(language, templateName string) (map[string][]byte, *templateManifest, error) {
+	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
+		templateRepoOwner, templateRepoName, templateRepoBranch)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, nil, fmt.Errorf("downloading template: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("downloading template: HTTP %d", resp.StatusCode)
+	}
+
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decompressing template archive: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+
+	// The tarball has a top-level dir like "templates-main/".
+	// We want files under "templates-main/{language}/{templateName}/".
+	prefix := language + "/" + templateName + "/"
+
+	files := make(map[string][]byte)
+	var manifest *templateManifest
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading template archive: %w", err)
+		}
+
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		// Strip the top-level directory.
+		name := header.Name
+		slashIdx := strings.Index(name, "/")
+		if slashIdx < 0 {
+			continue
+		}
+		name = name[slashIdx+1:]
+
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		relPath := strings.TrimPrefix(name, prefix)
+		if relPath == "" {
+			continue
+		}
+
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading file %s: %w", relPath, err)
+		}
+
+		if relPath == "template.json" {
+			var m templateManifest
+			if err := json.Unmarshal(content, &m); err != nil {
+				return nil, nil, fmt.Errorf("parsing template.json: %w", err)
+			}
+			manifest = &m
+			continue // don't include template.json in output files
+		}
+
+		files[relPath] = content
+	}
+
+	if manifest == nil {
+		return nil, nil, fmt.Errorf("template %q not found for language %q (no template.json)", templateName, language)
+	}
+
+	return files, manifest, nil
+}
+
+// collectTemplateValues gathers values for all template variables.
+// It uses varOverrides (from --var flags) for non-interactive values,
+// falling back to bubbletea prompts for anything missing.
+// If all variables can be resolved without prompting (via overrides or defaults),
+// no interactive prompts are shown. Otherwise all non-overridden variables are
+// prompted interactively with defaults pre-filled.
+func collectTemplateValues(manifest *templateManifest, appID string, varOverrides map[string]string) (map[string]interface{}, error) {
+	vals := map[string]interface{}{
+		"APP_ID": appID,
+	}
+
+	// Determine if any variables need interactive input.
+	needsPrompt := false
+	for _, v := range manifest.Variables {
+		if v.Name == "APP_ID" {
+			continue
+		}
+		if _, ok := varOverrides[v.Name]; ok {
+			continue
+		}
+		if v.Default == nil {
+			needsPrompt = true
+			break
+		}
+	}
+
+	for _, v := range manifest.Variables {
+		if v.Name == "APP_ID" {
+			continue
+		}
+
+		// Check --var overrides first.
+		if raw, ok := varOverrides[v.Name]; ok {
+			parsed, err := parseVariableValue(v, raw)
+			if err != nil {
+				return nil, fmt.Errorf("invalid value for %s: %w", v.Name, err)
+			}
+			if err := validateVariable(v, parsed); err != nil {
+				return nil, err
+			}
+			vals[v.Name] = parsed
+			continue
+		}
+
+		// If no prompting needed, use defaults silently.
+		if !needsPrompt && v.Default != nil {
+			vals[v.Name] = v.Default
+			continue
+		}
+
+		// Interactive prompt with default pre-filled.
+		val, err := promptForVariable(v)
+		if err != nil {
+			return nil, err
+		}
+		vals[v.Name] = val
+	}
+
+	return vals, nil
+}
+
+// promptForVariable shows a bubbletea prompt for a single template variable.
+func promptForVariable(v templateVariable) (interface{}, error) {
+	prompt := v.Prompt
+	if prompt == "" {
+		prompt = v.Name
+	}
+
+	switch v.Type {
+	case "boolean":
+		defVal := false
+		if b, ok := v.Default.(bool); ok {
+			defVal = b
+		}
+		_ = defVal // tui.Confirm doesn't support defaults, so we just ask
+		result, err := tui.Confirm(prompt + "?")
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+
+	case "integer":
+		defStr := ""
+		if v.Default != nil {
+			defStr = fmt.Sprintf("%v", v.Default)
+			// JSON numbers unmarshal as float64.
+			if f, ok := v.Default.(float64); ok {
+				defStr = strconv.Itoa(int(f))
+			}
+		}
+
+		validate := func(input string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(input))
+			if err != nil {
+				return fmt.Errorf("must be an integer")
+			}
+			return validateVariable(v, n)
+		}
+
+		var result string
+		var err error
+		if defStr != "" {
+			result, err = tui.PromptTextWithDefault(prompt, v.Description, defStr, validate)
+		} else {
+			result, err = tui.PromptText(prompt, v.Description, validate)
+		}
+		if err != nil {
+			return nil, err
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(result))
+		return n, nil
+
+	default: // "string"
+		defStr := ""
+		if s, ok := v.Default.(string); ok {
+			defStr = s
+		}
+
+		validate := func(input string) error {
+			if v.Required && strings.TrimSpace(input) == "" {
+				return fmt.Errorf("%s cannot be empty", prompt)
+			}
+			return validateVariable(v, strings.TrimSpace(input))
+		}
+
+		var result string
+		var err error
+		if defStr != "" {
+			result, err = tui.PromptTextWithDefault(prompt, v.Description, defStr, validate)
+		} else {
+			result, err = tui.PromptText(prompt, v.Description, validate)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return strings.TrimSpace(result), nil
+	}
+}
+
+// parseVariableValue converts a string flag value to the appropriate Go type.
+func parseVariableValue(v templateVariable, raw string) (interface{}, error) {
+	switch v.Type {
+	case "integer":
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("expected integer, got %q", raw)
+		}
+		return n, nil
+	case "boolean":
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("expected boolean, got %q", raw)
+		}
+		return b, nil
+	default:
+		return raw, nil
+	}
+}
+
+// validateVariable checks a value against the variable's validation rules.
+func validateVariable(v templateVariable, val interface{}) error {
+	if v.Validate == nil {
+		return nil
+	}
+
+	switch v.Type {
+	case "integer":
+		n, ok := val.(int)
+		if !ok {
+			return nil
+		}
+		if minRaw, ok := v.Validate["min"]; ok {
+			if minF, ok := minRaw.(float64); ok && n < int(minF) {
+				return fmt.Errorf("%s must be at least %d", v.Name, int(minF))
+			}
+		}
+		if maxRaw, ok := v.Validate["max"]; ok {
+			if maxF, ok := maxRaw.(float64); ok && n > int(maxF) {
+				return fmt.Errorf("%s must be at most %d", v.Name, int(maxF))
+			}
+		}
+
+	case "string":
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		if patternRaw, ok := v.Validate["pattern"]; ok {
+			if pattern, ok := patternRaw.(string); ok {
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return fmt.Errorf("invalid validation pattern %q: %w", pattern, err)
+				}
+				if !re.MatchString(s) {
+					return fmt.Errorf("%s does not match pattern %s", v.Name, pattern)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// renderAndWriteTemplate takes the raw file map, replaces {{.VAR}} tokens
+// with collected values, and writes to destDir.
+// It renames directories named after the template to the app ID.
+func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}) error {
+	for relPath, content := range files {
+		// Rename template-named directories to app ID.
+		relPath = renameTemplatePath(relPath, templateName, appID)
+
+		destPath := filepath.Join(destDir, relPath)
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			return fmt.Errorf("creating directory for %s: %w", relPath, err)
+		}
+
+		// Replace {{.VAR}} tokens with values.
+		rendered := string(content)
+		for key, val := range vals {
+			token := fmt.Sprintf("{{.%s}}", key)
+			rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+		}
+
+		if err := os.WriteFile(destPath, []byte(rendered), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", destPath, err)
+		}
+	}
+
+	return nil
+}
+
+// renameTemplatePath replaces occurrences of the template name in path
+// components with the app ID (e.g. Sources/simple-api/ -> Sources/my-app/).
+func renameTemplatePath(relPath, templateName, appID string) string {
+	parts := strings.Split(relPath, "/")
+	for i, part := range parts {
+		if part == templateName {
+			parts[i] = appID
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// parseVarFlags parses --var KEY=VALUE flags into a map.
+func parseVarFlags(vars []string) (map[string]string, error) {
+	result := make(map[string]string, len(vars))
+	for _, v := range vars {
+		eq := strings.IndexByte(v, '=')
+		if eq < 1 {
+			return nil, fmt.Errorf("invalid --var format %q (expected KEY=VALUE)", v)
+		}
+		key := strings.TrimSpace(v[:eq])
+		val := v[eq+1:]
+		result[key] = val
+	}
+	return result, nil
+}
