@@ -527,7 +527,6 @@ func maybeGitInit(dir string, opts initOptions) error {
 	return nil
 }
 
-
 func resolveInitAppID(cwd string, args []string, opts initOptions) (string, error) {
 	if len(args) > 0 {
 		return strings.TrimSpace(args[0]), nil

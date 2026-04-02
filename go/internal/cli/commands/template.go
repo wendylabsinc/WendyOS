@@ -25,8 +25,8 @@ const (
 
 // repoMeta is the parsed meta.json from the templates repo root.
 type repoMeta struct {
-	Templates []repoMetaTemplate  `json:"templates"`
-	Languages []repoMetaLanguage  `json:"languages"`
+	Templates []repoMetaTemplate `json:"templates"`
+	Languages []repoMetaLanguage `json:"languages"`
 }
 
 type repoMetaTemplate struct {
