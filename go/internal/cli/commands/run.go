@@ -377,8 +377,10 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
 }
 
-// runMacOSWithAgent builds a Swift project locally, packages it as an OCI
-// image, uploads the blobs via WriteLayer, and creates/starts the container.
+// runMacOSWithAgent builds a Swift project locally, syncs files to the device
+// via SyncFiles gRPC, and creates/starts the container. The binary is always
+// included; sandbox.sb is included if present; any entries declared in
+// appCfg.Files are appended.
 func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Verify CPU architecture matches.
 	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
@@ -400,11 +402,11 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	// Build locally.
 	cliLogln("Building Swift project locally...")
-	cmd := exec.CommandContext(ctx, "swift", "build")
-	cmd.Dir = cwd
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	buildCmd := exec.CommandContext(ctx, "swift", "build")
+	buildCmd.Dir = cwd
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
 		return fmt.Errorf("swift build failed: %w", err)
 	}
 	cliLogln("Build completed.")
@@ -415,36 +417,39 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return fmt.Errorf("binary not found at %s: %w", binaryPath, err)
 	}
 
-	// Build OCI image from the binary (and optional sandbox profile).
+	// Assemble file sync entries.
+	// The binary is always included.
+	syncEntries := []fileSyncEntry{
+		{localRoot: binaryPath, remotePath: product},
+	}
+
+	// Include sandbox.sb if present.
 	sandboxPath := filepath.Join(cwd, "sandbox.sb")
-	sandboxArg := ""
 	if _, err := os.Stat(sandboxPath); err == nil {
-		sandboxArg = sandboxPath
+		syncEntries = append(syncEntries, fileSyncEntry{
+			localRoot:  sandboxPath,
+			remotePath: "sandbox.sb",
+		})
 	}
 
-	cliLogln("Building OCI image...")
-	layerBlob, configBlob, manifestBlob, err := buildMacOSOCIImage(binaryPath, sandboxArg, product, runtime.GOARCH)
-	if err != nil {
-		return fmt.Errorf("building OCI image: %w", err)
+	// Append user-declared files from wendy.json.
+	for _, f := range appCfg.Files {
+		localAbs := filepath.Join(cwd, f.Path)
+		syncEntries = append(syncEntries, fileSyncEntry{
+			localRoot:  localAbs,
+			remotePath: effectiveRemotePath(f.Path, f.To),
+		})
 	}
 
-	// Upload blobs via WriteLayer: layer, config, manifest.
-	cliLogln("Uploading OCI image...")
-	if err := uploadBlob(ctx, conn, layerBlob.Digest, layerBlob.Data); err != nil {
-		return fmt.Errorf("uploading layer blob: %w", err)
+	// Sync files to the device.
+	if err := syncFiles(ctx, conn, appCfg.AppID, syncEntries); err != nil {
+		return fmt.Errorf("syncing files: %w", err)
 	}
-	if err := uploadBlob(ctx, conn, configBlob.Digest, configBlob.Data); err != nil {
-		return fmt.Errorf("uploading config blob: %w", err)
-	}
-	if err := uploadBlob(ctx, conn, manifestBlob.Digest, manifestBlob.Data); err != nil {
-		return fmt.Errorf("uploading manifest blob: %w", err)
-	}
-	cliLogln("Upload completed.")
 
-	// Create container with manifest digest as image name.
+	// Create container: binary name via Cmd, no OCI digest.
 	createReq := &agentpb.CreateContainerRequest{
-		ImageName: manifestBlob.Digest,
-		AppName:   appCfg.AppID,
+		AppName: appCfg.AppID,
+		Cmd:     product,
 	}
 
 	if opts.deploy {
