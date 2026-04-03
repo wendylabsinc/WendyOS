@@ -1,8 +1,7 @@
 [Unit]
 Description=Enable PipeWire Audio for wendy User
 After=multi-user.target home.mount wendyos-user-setup.service
-Requires=home.mount
-Wants=wendyos-user-setup.service
+Wants=home.mount wendyos-user-setup.service
 ConditionPathExists=/home/wendy
 
 [Service]

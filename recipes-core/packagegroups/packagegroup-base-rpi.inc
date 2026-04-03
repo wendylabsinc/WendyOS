@@ -3,7 +3,7 @@ RDEPENDS:${PN}:remove:rpi = " \
     wendyos-etc-binds \
     systemd-mount-containerd \
     swapfile-setup \
-    wendyos-user \
+    wendyos-user-data-setup \
     "
 
 # Add RPi5-specific kernel modules

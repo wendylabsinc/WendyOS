@@ -35,16 +35,6 @@ IMAGE_INSTALL:remove = " \
     util-linux-mount \
     "
 
-# RPi5 has no Pipewire/audio stack like Jetson
-IMAGE_INSTALL:remove = " \
-    audio-config \
-    pipewire \
-    wireplumber \
-    pipewire-pulse \
-    pipewire-alsa \
-    rtkit \
-    "
-
 # WIC build dependencies
 do_image_wic[depends] += " \
     rpi-cmdline:do_deploy \

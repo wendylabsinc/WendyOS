@@ -29,6 +29,7 @@ RDEPENDS:${PN} = " \
     wendyos-identity \
     wendyos-agent \
     wendyos-user \
+    wendyos-user-data-setup \
     wendyos-motd \
     systemd-mount-containerd \
     swapfile-setup \
