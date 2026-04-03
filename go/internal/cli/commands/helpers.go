@@ -34,14 +34,15 @@ const defaultAgentPort = 50051
 
 const lanAddressProbeTimeout = 1500 * time.Millisecond
 
-var getAgentVersionAtAddress = func(ctx context.Context, address string) (*agentpb.GetAgentVersionResponse, error) {
+var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
 	conn, err := connectWithAutoTLS(ctx, address)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 	defer conn.Close()
 
-	return conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	return conn.IsMTLS, resp, err
 }
 
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
@@ -95,15 +96,16 @@ func preferredLANAddress(dev models.LANDevice) string {
 }
 
 // resolveLANAgentVersion tries the discovered LAN addresses in order and
-// returns the first one that answers GetAgentVersion.
-func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, *agentpb.GetAgentVersionResponse, error) {
+// returns the first one that answers GetAgentVersion, along with whether that
+// connection used mTLS.
+func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, bool, *agentpb.GetAgentVersionResponse, error) {
 	var lastErr error
 	for _, address := range lanAgentAddresses(dev) {
 		attemptCtx, cancel := context.WithTimeout(ctx, lanAddressProbeTimeout)
-		resp, err := getAgentVersionAtAddress(attemptCtx, address)
+		isMTLS, resp, err := getAgentVersionAtAddress(attemptCtx, address)
 		cancel()
 		if err == nil {
-			return address, resp, nil
+			return address, isMTLS, resp, nil
 		}
 		lastErr = err
 	}
@@ -111,7 +113,7 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no LAN address available for %q", dev.DisplayName)
 	}
-	return "", nil, lastErr
+	return "", false, nil, lastErr
 }
 
 // resolveLANVersions queries each LAN device's gRPC endpoint concurrently to
@@ -127,7 +129,7 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 	for i := range devices {
 		go func(idx int) {
 			d := &devices[idx]
-			_, resp, err := resolveLANAgentVersion(ctx, *d)
+			_, _, resp, err := resolveLANAgentVersion(ctx, *d)
 			if err != nil {
 				ch <- &indexedResult{index: idx}
 				return
@@ -149,17 +151,17 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 }
 
 // resolveLANVersion queries a single LAN device's gRPC endpoint to populate
-// version metadata and returns the enriched device.
-func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDevice, error) {
-	_, resp, err := resolveLANAgentVersion(ctx, dev)
+// version metadata. It also returns whether that connection used mTLS.
+func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDevice, bool, error) {
+	_, isMTLS, resp, err := resolveLANAgentVersion(ctx, dev)
 	if err != nil {
-		return dev, err
+		return dev, false, err
 	}
 	dev.AgentVersion = resp.GetVersion()
 	dev.OS = resp.GetOs()
 	dev.OSVersion = resp.GetOsVersion()
 	dev.CPUArchitecture = resp.GetCpuArchitecture()
-	return dev, nil
+	return dev, isMTLS, nil
 }
 
 // SelectedDevice represents either a gRPC agent, BLE device, or an external provider device.
@@ -892,6 +894,12 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	// Rebuild the type string from the merged transports.
 	existing.Type = md.ConnectionTypes()
+
+	// Propagate security status: LAN probes determine mTLS, BLE doesn't. Once
+	// we know a device is insecure (or secure), update the existing item.
+	if nd.LAN != nil {
+		existing.Insecure = incoming.Insecure
+	}
 }
 
 // pickDevice runs an interactive TUI that discovers devices across all
@@ -934,7 +942,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	// Continuous LAN discovery — devices appear as they're found.
 	lanCh := make(chan models.LANDevice, 16)
 	go discovery.DiscoverLANContinuous(discoverCtx, lanCh)
-	sendLANItem := func(dev models.LANDevice) {
+	sendLANItem := func(dev models.LANDevice, insecure bool) {
 		name := dev.DisplayName
 		if dev.AgentVersion != "" {
 			name += " v" + dev.AgentVersion
@@ -945,6 +953,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			Type:     "LAN",
 			Address:  preferredLANAddress(dev),
 			DedupKey: dev.DisplayName,
+			Insecure: insecure,
 			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 				DisplayName:     dev.DisplayName,
 				AgentVersion:    dev.AgentVersion,
@@ -957,8 +966,8 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	}
 	go func() {
 		for rawDev := range lanCh {
-			resolved, err := resolveLANVersion(discoverCtx, rawDev)
-			sendLANItem(resolved)
+			resolved, isMTLS, err := resolveLANVersion(discoverCtx, rawDev)
+			sendLANItem(resolved, err == nil && !isMTLS)
 			if err != nil {
 				// Version probe failed on first attempt. Retry in background so
 				// the version appears once the device becomes responsive, without
@@ -970,8 +979,8 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 							return
 						case <-time.After(2 * time.Second):
 						}
-						if updated, retryErr := resolveLANVersion(discoverCtx, d); retryErr == nil {
-							sendLANItem(updated)
+						if updated, isMTLS, retryErr := resolveLANVersion(discoverCtx, d); retryErr == nil {
+							sendLANItem(updated, !isMTLS)
 							return
 						}
 					}
@@ -1090,7 +1099,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	if entry.mergedDevice != nil {
 		d := entry.mergedDevice
 		if d.LAN != nil {
-			addr, _, err := resolveLANAgentVersion(ctx, *d.LAN)
+			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)
 			if err != nil {
 				// LAN metadata lookups can fail on provisioned devices without CLI certs.
 				// In that case, still try the preferred address once before falling back.

@@ -21,6 +21,10 @@ type PickerItem struct {
 	// Items with the same DedupKey (case-insensitive) are merged via MergeItem.
 	DedupKey string
 
+	// Insecure is true when the device is reachable but the connection is not
+	// secured with mTLS. A warning is shown in the picker when this item is highlighted.
+	Insecure bool
+
 	// Value is the opaque payload returned when this item is selected.
 	Value interface{}
 }
@@ -169,6 +173,7 @@ var (
 	pickerTitle    = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	pickerHint     = lipgloss.NewStyle().Foreground(ColorDim)
 	pickerScanning = lipgloss.NewStyle().Foreground(ColorPrimary)
+	pickerInsecure = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ef4444"))
 )
 
 func (m PickerModel) View() string {
@@ -201,6 +206,11 @@ func (m PickerModel) View() string {
 	}
 
 	sb.WriteString(m.table.View() + "\n")
+
+	cursor := m.table.Cursor()
+	if cursor >= 0 && cursor < len(m.items) && m.items[cursor].Insecure {
+		sb.WriteString(pickerInsecure.Render("  ⚠  Connection is not secured with mTLS. PKI support is coming soon.") + "\n")
+	}
 
 	if m.scanning {
 		sb.WriteString("\n" + pickerScanning.Render("  Scanning for more results...") + "\n")
@@ -271,7 +281,7 @@ func (m *PickerModel) refreshTable() {
 	// Remember which item the cursor is on so we can restore it after sorting.
 	var cursorKey string
 	if cursor := m.table.Cursor(); cursor >= 0 && cursor < len(m.items) {
-		cursorKey = pickerItemKey(m.items[cursor])
+		cursorKey = strings.ToLower(pickerItemKey(m.items[cursor]))
 	}
 
 	// Sort items by name for a stable, predictable display order. Use DedupKey
@@ -283,11 +293,12 @@ func (m *PickerModel) refreshTable() {
 	})
 
 	// Rebuild seenIdx to reflect the new positions after sorting.
+	// Keys are always stored lowercase to match the lookup in Update.
 	for k := range m.seenIdx {
 		delete(m.seenIdx, k)
 	}
 	for i, item := range m.items {
-		m.seenIdx[pickerItemKey(item)] = i
+		m.seenIdx[strings.ToLower(pickerItemKey(item))] = i
 	}
 
 	hasDefaultCol := m.OnSetDefault != nil
@@ -372,7 +383,11 @@ func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, h
 			}
 		}
 		for _, col := range cols {
-			row = append(row, col.value(item))
+			val := col.value(item)
+			if col.required && item.Insecure {
+				val += " ⚠"
+			}
+			row = append(row, val)
 		}
 		rows = append(rows, row)
 	}

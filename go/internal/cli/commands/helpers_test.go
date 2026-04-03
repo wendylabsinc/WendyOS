@@ -144,15 +144,15 @@ func TestResolveLANAgentVersionFallsBackAcrossAddresses(t *testing.T) {
 		mu    sync.Mutex
 		calls []string
 	)
-	getAgentVersionAtAddress = func(_ context.Context, address string) (*agentpb.GetAgentVersionResponse, error) {
+	getAgentVersionAtAddress = func(_ context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
 		mu.Lock()
 		calls = append(calls, address)
 		mu.Unlock()
 
 		if address == "192.168.1.23:50051" {
-			return nil, errors.New("dial tcp 192.168.1.23:50051: i/o timeout")
+			return false, nil, errors.New("dial tcp 192.168.1.23:50051: i/o timeout")
 		}
-		return &agentpb.GetAgentVersionResponse{Version: "1.2.3"}, nil
+		return false, &agentpb.GetAgentVersionResponse{Version: "1.2.3"}, nil
 	}
 
 	dev := models.LANDevice{
@@ -161,7 +161,7 @@ func TestResolveLANAgentVersionFallsBackAcrossAddresses(t *testing.T) {
 		Port:      defaultAgentPort,
 	}
 
-	address, resp, err := resolveLANAgentVersion(context.Background(), dev)
+	address, _, resp, err := resolveLANAgentVersion(context.Background(), dev)
 	if err != nil {
 		t.Fatalf("resolveLANAgentVersion() error = %v", err)
 	}
@@ -312,8 +312,8 @@ func TestResolveLANVersionsKeepsDevicesWhenMetadataLookupFails(t *testing.T) {
 	orig := getAgentVersionAtAddress
 	defer func() { getAgentVersionAtAddress = orig }()
 
-	getAgentVersionAtAddress = func(_ context.Context, address string) (*agentpb.GetAgentVersionResponse, error) {
-		return nil, errors.New("unreachable: " + address)
+	getAgentVersionAtAddress = func(_ context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
+		return false, nil, errors.New("unreachable: " + address)
 	}
 
 	devices := []models.LANDevice{
