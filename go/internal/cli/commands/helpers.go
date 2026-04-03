@@ -541,7 +541,7 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	}
 
 	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
-	return deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData))
+	return deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData))
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers

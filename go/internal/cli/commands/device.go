@@ -1172,7 +1172,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				p := tea.NewProgram(s)
 
 				go func() {
-					uploadErr := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData))
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData))
 					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 				}()
 
@@ -1188,11 +1188,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else if !jsonOutput {
 				fmt.Println("Uploading agent binary...")
-				if err := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			} else {
-				if err := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 					return err
 				}
 			}
@@ -1275,9 +1275,9 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 	return nil
 }
 
-// deviceUpdateUploadReader streams r to the agent in 64 KiB chunks, computing
+// deviceUpdateUpload streams r to the agent in 64 KiB chunks, computing
 // SHA256 on the fly, and sends a commit control message with the resulting hash.
-func deviceUpdateUploadReader(ctx context.Context, agentService agentpb.WendyAgentServiceClient, r io.Reader) error {
+func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, r io.Reader) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {
 		return fmt.Errorf("starting agent update: %w", err)

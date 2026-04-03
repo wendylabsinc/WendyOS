@@ -554,7 +554,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
 		}
 
-		if err := deviceUpdateUploadReader(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
+		if err := deviceUpdateUpload(ctx, conn.AgentService, bytes.NewReader(binaryData)); err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}

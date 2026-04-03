@@ -18,8 +18,8 @@ func TestDeviceUpdateUpload_SendsAllBytesFromReader(t *testing.T) {
 	stream := &fakeUpdateClientStream{}
 	mock := &mockAgentServiceClient{updateAgentStream: stream}
 
-	if err := deviceUpdateUploadReader(context.Background(), mock, bytes.NewReader(content)); err != nil {
-		t.Fatalf("deviceUpdateUploadReader: %v", err)
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
 	}
 
 	var got []byte
@@ -45,8 +45,8 @@ func TestDeviceUpdateUpload_SHA256IsComputedFromReaderContent(t *testing.T) {
 	stream := &fakeUpdateClientStream{}
 	mock := &mockAgentServiceClient{updateAgentStream: stream}
 
-	if err := deviceUpdateUploadReader(context.Background(), mock, bytes.NewReader(content)); err != nil {
-		t.Fatalf("deviceUpdateUploadReader: %v", err)
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
 	}
 
 	got := commitHashFromSent(stream.sent)
@@ -63,8 +63,8 @@ func TestDeviceUpdateUpload_SendsDataInChunksNoLargerThan64KiB(t *testing.T) {
 	stream := &fakeUpdateClientStream{}
 	mock := &mockAgentServiceClient{updateAgentStream: stream}
 
-	if err := deviceUpdateUploadReader(context.Background(), mock, bytes.NewReader(content)); err != nil {
-		t.Fatalf("deviceUpdateUploadReader: %v", err)
+	if err := deviceUpdateUpload(context.Background(), mock, bytes.NewReader(content)); err != nil {
+		t.Fatalf("deviceUpdateUpload: %v", err)
 	}
 
 	const maxChunk = 64 * 1024
