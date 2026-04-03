@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"go.uber.org/zap"
@@ -431,5 +433,143 @@ func TestAttachContainer(t *testing.T) {
 	// Confirm stdin bytes reached the container's stdin reader.
 	if got := <-stdinDataCh; got != "ping" {
 		t.Errorf("stdin data = %q; want ping", got)
+	}
+}
+
+// ---------- volume tests ----------
+
+func TestListVolumes_Empty(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	resp, err := cl.ListVolumes(context.Background(), &agentpb.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(resp.GetVolumes()) != 0 {
+		t.Errorf("expected 0 volumes, got %d", len(resp.GetVolumes()))
+	}
+}
+
+func TestListVolumes_WithVolumes(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	// Create two volume directories, one with a file inside.
+	if err := os.MkdirAll(filepath.Join(tmp, "app-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "app-data", "test.db"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "other-vol"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	resp, err := cl.ListVolumes(context.Background(), &agentpb.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(resp.GetVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes, got %d", len(resp.GetVolumes()))
+	}
+
+	// Find the volume with data.
+	var found bool
+	for _, v := range resp.GetVolumes() {
+		if v.GetName() == "app-data" {
+			found = true
+			if v.GetSizeBytes() != 5 {
+				t.Errorf("app-data size = %d, want 5", v.GetSizeBytes())
+			}
+			if v.GetPath() != filepath.Join(tmp, "app-data") {
+				t.Errorf("app-data path = %q", v.GetPath())
+			}
+			if v.GetCreatedAt() == "" {
+				t.Error("app-data created_at should not be empty")
+			}
+		}
+	}
+	if !found {
+		t.Error("app-data volume not found in response")
+	}
+}
+
+func TestRemoveVolume_Success(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	volPath := filepath.Join(tmp, "my-vol")
+	if err := os.MkdirAll(volPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: "my-vol"})
+	if err != nil {
+		t.Fatalf("RemoveVolume: %v", err)
+	}
+
+	if _, err := os.Stat(volPath); !os.IsNotExist(err) {
+		t.Error("volume directory should have been removed")
+	}
+}
+
+func TestRemoveVolume_NotFound(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: "nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent volume")
+	}
+}
+
+func TestRemoveVolume_InvalidName(t *testing.T) {
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	for _, name := range []string{"", ".", "..", "/"} {
+		_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: name})
+		if err == nil {
+			t.Errorf("expected error for invalid name %q", name)
+		}
+	}
+}
+
+func TestDirSize(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "sub", "b.txt"), []byte("world!"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	size := dirSize(tmp)
+	if size != 11 { // "hello" (5) + "world!" (6)
+		t.Errorf("dirSize = %d, want 11", size)
 	}
 }

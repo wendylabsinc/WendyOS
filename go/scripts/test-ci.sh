@@ -3,18 +3,26 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$REPO_DIR/.." && pwd)"
+TESTS_DIR="$REPO_ROOT/.github/ci-tests"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Test foundational examples across all languages by deploying to a real
-WendyOS device using 'wendy run'.
+Run CI integration tests against a real WendyOS device. Each test deploys a
+minimal app that exercises a specific entitlement and verifies it works.
 
-Foundational examples: hello-world, simple-server, web-app,
-persistent-volume, sqlite-persistence.
-
-Languages: python, swift, rust, node-typescript, cpp.
+Tests:
+  swift-hello           Basic Swift containerized deployment (no entitlements)
+  swift-network         Swift with network entitlement (WiFi connectivity)
+  swift-bluetooth       Swift with bluetooth entitlement
+  python-hello          Basic Python deployment (no entitlements)
+  python-network        Python with network entitlement (WiFi connectivity)
+  python-gpu            Python with GPU entitlement (CUDA verification)
+  python-bluetooth      Python with bluetooth entitlement
+  python-no-network     Verify network is blocked WITHOUT entitlement
+  python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -24,11 +32,13 @@ Device Selection:
 Options:
   -h, --hostname HOST   Device hostname (skips auto-discovery)
   -w, --wendy PATH      Path to wendy binary (default: wendy on PATH)
+  -t, --test NAME       Run only the named test (can be repeated)
   --help                Show this help message
 
 Examples:
-  $(basename "$0")                                  # auto-discover
+  $(basename "$0")                                  # auto-discover, all tests
   $(basename "$0") -h wendyos-merry-aurora          # explicit host
+  $(basename "$0") -t swift-hello -t python-hello   # specific tests only
   $(basename "$0") -w /path/to/wendy                # custom binary
 EOF
     exit 0
@@ -37,11 +47,13 @@ EOF
 HOSTNAME=""
 HOSTNAME_PROVIDED=false
 WENDY="wendy"
+SELECTED_TESTS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--hostname)      HOSTNAME="$2"; HOSTNAME_PROVIDED=true; shift 2 ;;
         -w|--wendy)         WENDY="$2"; shift 2 ;;
+        -t|--test)          SELECTED_TESTS+=("$2"); shift 2 ;;
         --help)             usage ;;
         *)                  echo "Unknown option: $1"; usage ;;
     esac
@@ -76,7 +88,7 @@ run_test() {
         ((PASS_COUNT++))
     else
         echo -e "${RED}FAIL${RESET} (exit $rc)"
-        echo "    Output: $(echo "$output" | head -5)"
+        echo "    Output: $(echo "$output" | tail -10)"
         ((FAIL_COUNT++))
     fi
     return $rc
@@ -84,21 +96,24 @@ run_test() {
 
 skip_test() {
     local name="$1"
+    local reason="${2:-}"
     printf "  %-50s " "$name"
-    echo -e "${YELLOW}SKIP${RESET}"
+    if [[ -n "$reason" ]]; then
+        echo -e "${YELLOW}SKIP${RESET} ($reason)"
+    else
+        echo -e "${YELLOW}SKIP${RESET}"
+    fi
     ((SKIP_COUNT++))
 }
 
 # ── Wendy binary validation ─────────────────────────────────────────
 
 if [[ "$WENDY" != "wendy" ]]; then
-    # Explicit path provided — check it exists and is executable
     if [[ ! -x "$WENDY" ]]; then
         echo -e "${RED}ERROR: wendy binary not found or not executable at $WENDY${RESET}"
         exit 1
     fi
 else
-    # Default — check wendy is on PATH
     if ! command -v wendy &>/dev/null; then
         echo -e "${RED}ERROR: 'wendy' not found on PATH${RESET}"
         echo "Hint: pass -w /path/to/wendy to specify the binary location."
@@ -129,63 +144,90 @@ fi
 echo -e "${BOLD}==> Target device: ${HOSTNAME}${RESET}"
 echo ""
 
-# ── Test definitions ─────────────────────────────────────────────────
+# ── Validate tests directory ─────────────────────────────────────────
 
-EXAMPLES=(hello-world simple-server web-app persistent-volume sqlite-persistence)
-LANGUAGES=(python swift rust node-typescript cpp)
+if [[ ! -d "$TESTS_DIR" ]]; then
+    echo -e "${RED}ERROR: CI tests directory not found at $TESTS_DIR${RESET}"
+    exit 1
+fi
 
-# Server examples use --detach; everything else runs to completion.
-is_server() {
-    [[ "$1" == "simple-server" || "$1" == "web-app" ]]
-}
+# ── Ordered test list ────────────────────────────────────────────────
+# Swift (containerized) first, then Python, basic → entitlements.
+
+ALL_TESTS=(
+    swift-hello
+    swift-network
+    swift-bluetooth
+    python-hello
+    python-network
+    python-gpu
+    python-bluetooth
+    python-no-network
+    python-no-bluetooth
+)
+
+# If specific tests were requested via -t, filter the list.
+if [[ ${#SELECTED_TESTS[@]} -gt 0 ]]; then
+    TESTS=()
+    for sel in "${SELECTED_TESTS[@]}"; do
+        found=false
+        for t in "${ALL_TESTS[@]}"; do
+            if [[ "$t" == "$sel" ]]; then
+                TESTS+=("$t")
+                found=true
+                break
+            fi
+        done
+        if [[ "$found" == false ]]; then
+            echo -e "${RED}ERROR: Unknown test '$sel'${RESET}"
+            echo "Available tests: ${ALL_TESTS[*]}"
+            exit 1
+        fi
+    done
+else
+    TESTS=("${ALL_TESTS[@]}")
+fi
+
+echo -e "${BOLD}==> Running ${#TESTS[@]} test(s)${RESET}"
+echo ""
 
 # ── Test loop ────────────────────────────────────────────────────────
 
-for example in "${EXAMPLES[@]}"; do
-    echo -e "${BOLD}==> $example${RESET}"
+for test_name in "${TESTS[@]}"; do
+    test_dir="$TESTS_DIR/$test_name"
 
-    for lang in "${LANGUAGES[@]}"; do
-        test_name="$lang/$example"
-        dir="$REPO_DIR/$lang/$example"
+    # Verify directory exists
+    if [[ ! -d "$test_dir" ]]; then
+        skip_test "$test_name" "no directory"
+        continue
+    fi
 
-        # Check directory exists
-        if [[ ! -d "$dir" ]]; then
-            skip_test "$test_name (no directory)"
-            continue
-        fi
+    # Verify wendy.json exists
+    if [[ ! -f "$test_dir/wendy.json" ]]; then
+        skip_test "$test_name" "no wendy.json"
+        continue
+    fi
 
-        # Check wendy.json exists
-        if [[ ! -f "$dir/wendy.json" ]]; then
-            skip_test "$test_name (no wendy.json)"
-            continue
-        fi
+    # Extract appId
+    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
+    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
+        skip_test "$test_name" "no appId"
+        continue
+    fi
 
-        # Extract appId
-        app_id=$(jq -r '.appId' "$dir/wendy.json" 2>/dev/null)
-        if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-            skip_test "$test_name (no appId)"
-            continue
-        fi
+    # Pre-cleanup: remove leftover container from previous runs
+    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
 
-        # Pre-cleanup: remove leftover container from previous runs (best-effort)
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+    # Deploy and run
+    run_test "$test_name" \
+        bash -c "cd '$test_dir' && '$WENDY' run --device '$HOSTNAME'"
 
-        # Run the example
-        if is_server "$example"; then
-            run_test "$test_name" \
-                bash -c "cd '$dir' && '$WENDY' run --device '$HOSTNAME' --detach"
-        else
-            run_test "$test_name" \
-                bash -c "cd '$dir' && '$WENDY' run --device '$HOSTNAME'"
-        fi
-
-        # Post-cleanup: stop and remove (best-effort)
-        "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-        "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    done
-
-    echo ""
+    # Post-cleanup: stop and remove
+    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
+    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
 done
+
+echo ""
 
 # ── Summary ──────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/env"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -349,27 +351,60 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			row := rows[cursor]
-			if !strings.Contains(row[1], "LAN") {
+			if !strings.Contains(row[2], "LAN") {
 				m.flashMessage = "Update is only supported for LAN devices."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
 			}
-			rowVer := strings.TrimPrefix(row[3], "* ")
+			rowVer := strings.TrimPrefix(row[4], "* ")
 			if rowVer == "" || version.CompareVersions(version.Version, rowVer) <= 0 {
 				m.flashMessage = "Device is already up to date."
 				m.flashIsError = false
 				return m, clearFlashAfter(3 * time.Second)
 			}
-			addr := lanDeviceAddr(m.collection, row[0])
+			addr := lanDeviceAddr(m.collection, row[1])
 			if addr == "" {
 				m.flashMessage = "Could not determine device address."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
 			}
-			m.updatingDeviceName = row[0]
-			m.flashMessage = "Updating " + row[0] + "..."
+			m.updatingDeviceName = row[1]
+			m.flashMessage = "Updating " + row[1] + "..."
 			m.flashIsError = false
-			return m, m.startDeviceUpdateCmd(addr, row[0])
+			return m, m.startDeviceUpdateCmd(addr, row[1])
+		case "d":
+			rows := discoverTableRows(m.collection)
+			cursor := m.table.Cursor()
+			if len(rows) > 0 && cursor >= 0 && cursor < len(rows) {
+				// Use the display name as the device identifier — for LAN devices
+				// this is the mDNS hostname which resolveDeviceAddress can resolve.
+				deviceID := rows[cursor][1]
+				// For LAN devices, prefer the address column (hostname.local).
+				addr := rows[cursor][3]
+				if addr != "" && !strings.Contains(addr, ":") {
+					deviceID = addr
+				} else if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+					deviceID = host
+				}
+				if cfg, err := config.Load(); err == nil {
+					cfg.DefaultDevice = deviceID
+					_ = config.Save(cfg)
+				}
+				m.flashMessage = "Default device set to: " + deviceID
+				m.flashIsError = false
+				m.refreshTable()
+				return m, clearFlashAfter(3 * time.Second)
+			}
+			return m, nil
+		case "x":
+			if cfg, err := config.Load(); err == nil {
+				cfg.DefaultDevice = ""
+				_ = config.Save(cfg)
+			}
+			m.flashMessage = "Default device cleared."
+			m.flashIsError = false
+			m.refreshTable()
+			return m, clearFlashAfter(3 * time.Second)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -385,6 +420,22 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshTable()
 		return m, delayThen(env.DiscoverEthernetInterval(), m.scanEthernet())
 	case lanScanMsg:
+		// Preserve last known AgentVersion when the version probe failed for a
+		// device. The gRPC probe uses a 1500 ms timeout, so transient latency or
+		// a momentarily-busy agent can cause the probe to return an error even
+		// though the device is still up. Without this, the Version column blinks
+		// blank for one scan cycle and then reappears on the next successful probe.
+		for i := range msg.devices {
+			if msg.devices[i].AgentVersion != "" {
+				continue
+			}
+			for _, prev := range m.collection.LANDevices {
+				if strings.EqualFold(prev.DisplayName, msg.devices[i].DisplayName) && prev.AgentVersion != "" {
+					msg.devices[i].AgentVersion = prev.AgentVersion
+					break
+				}
+			}
+		}
 		m.collection.LANDevices = msg.devices
 		m.hasResults = true
 		m.refreshTable()
@@ -443,11 +494,12 @@ func (m discoverModel) View() string {
 
 	var sb strings.Builder
 
-	hintText := "↑/↓ navigate, enter copy, a copy all, u update, q quit"
+	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + "\n")
 	if m.updatingDeviceName != "" {
-		hintText = "updating " + m.updatingDeviceName + "... (q quit)"
+		sb.WriteString(dimStyle.Render("  updating "+m.updatingDeviceName+"... (q quit)") + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render("  ↑/↓ navigate, enter copy, a copy all, u update, d set default, x unset default, q quit") + "\n")
 	}
-	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" ("+hintText+")") + "\n")
 
 	if m.bleWarning != "" {
 		sb.WriteString(dimStyle.Render("  Bluetooth: "+m.bleWarning) + "\n")
@@ -592,9 +644,9 @@ func renderDeviceTable(collection *models.DevicesCollection) string {
 }
 
 var (
-	discoverTableHeaders   = []string{"Name", "Type", "Address", "Version"}
-	discoverTableMinWidths = []int{12, 12, 14, 10}
-	discoverTableMaxWidths = []int{28, 18, 28, 16}
+	discoverTableHeaders   = []string{"", "Name", "Type", "Address", "Version"}
+	discoverTableMinWidths = []int{3, 12, 12, 14, 10}
+	discoverTableMaxWidths = []int{3, 28, 18, 28, 16}
 )
 
 func newDiscoverTable(interactive bool) bubbleTable.Model {
@@ -604,14 +656,27 @@ func newDiscoverTable(interactive bool) bubbleTable.Model {
 func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 	var rows []bubbleTable.Row
 
+	// Load default device to show ★ indicator.
+	var defaultDevice string
+	if cfg, err := config.Load(); err == nil {
+		defaultDevice = strings.ToLower(cfg.DefaultDevice)
+	}
+
+	defaultMark := func(name string) string {
+		if defaultDevice != "" && strings.ToLower(name) == defaultDevice {
+			return "★"
+		}
+		return ""
+	}
+
 	for _, d := range collection.USBDevices {
-		rows = append(rows, bubbleTable.Row{d.DisplayName, "USB", d.Hostname, markOutdated(d.AgentVersion)})
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "USB", d.Hostname, markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.MergedDevices() {
-		rows = append(rows, bubbleTable.Row{d.DisplayName, d.ConnectionTypes(), d.Address(), markOutdated(d.AgentVersion)})
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, d.ConnectionTypes(), d.Address(), markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.EthernetInterfaces {
-		rows = append(rows, bubbleTable.Row{d.DisplayName, "Ethernet", d.IPAddress, markOutdated(d.AgentVersion)})
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "Ethernet", d.IPAddress, markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.ExternalDevices {
 		// Wendy Lite devices are merged with BLE Lite in MergedDevices().
@@ -623,14 +688,14 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 		if p := providers.ProviderForKey(d.ProviderKey); p != nil {
 			typeName = p.DisplayName()
 		}
-		rows = append(rows, bubbleTable.Row{d.DisplayName, typeName, addr, markOutdated(d.AgentVersion)})
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, typeName, addr, markOutdated(d.AgentVersion)})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i][1] != rows[j][1] {
-			return rows[i][1] < rows[j][1]
+		if rows[i][2] != rows[j][2] { // Type column
+			return rows[i][2] < rows[j][2]
 		}
-		return strings.ToLower(rows[i][0]) < strings.ToLower(rows[j][0])
+		return strings.ToLower(rows[i][1]) < strings.ToLower(rows[j][1]) // Name column
 	})
 
 	return rows
@@ -678,10 +743,10 @@ func discoverTableHeight(rowCount, windowHeight int, interactive bool) int {
 // deviceInfoFromRow converts a table row to a discoverDeviceInfo.
 func deviceInfoFromRow(row bubbleTable.Row) discoverDeviceInfo {
 	return discoverDeviceInfo{
-		Name:    row[0],
-		Type:    row[1],
-		Address: row[2],
-		Version: strings.TrimPrefix(row[3], "* "),
+		Name:    row[1],
+		Type:    row[2],
+		Address: row[3],
+		Version: strings.TrimPrefix(row[4], "* "),
 	}
 }
 

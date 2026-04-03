@@ -268,25 +268,22 @@ func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	prevStdin := os.Stdin
 	t.Cleanup(func() {
 		_ = os.Chdir(prevWD)
-		os.Stdin = prevStdin
 	})
 	if err := os.Chdir(tempDir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
 
-	inputFile := filepath.Join(tempDir, "stdin.txt")
-	if err := os.WriteFile(inputFile, []byte("y\nn\nn\nn\nn\nn\nn\nn\nn\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// Replace the Bubble Tea checklist with a mock that selects GPU.
+	origAsk := askEntitlementQuestions
+	askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
+		return []appconfig.Entitlement{
+			{Type: appconfig.EntitlementNetwork},
+			{Type: appconfig.EntitlementGPU},
+		}, nil
 	}
-	f, err := os.Open(inputFile)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer f.Close()
-	os.Stdin = f
+	t.Cleanup(func() { askEntitlementQuestions = origAsk })
 
 	cmd := newInitCmd()
 	cmd.SetArgs([]string{
@@ -331,6 +328,58 @@ func TestBuildInitEntitlementsFromFlags_Input(t *testing.T) {
 		if !gotTypes[want] {
 			t.Fatalf("expected entitlement %q in %+v", want, entitlements)
 		}
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_AllEntitlements(t *testing.T) {
+	entitlements, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+		gpioPinsSet:     true,
+		gpioPins:        "17,27",
+		i2cDeviceSet:    true,
+		i2cDevice:       "/dev/i2c-1",
+		persistNameSet:  true,
+		persistName:     "test-data",
+		persistPathSet:  true,
+		persistPath:     "/data",
+	})
+	if err != nil {
+		t.Fatalf("buildInitEntitlementsFromFlags: %v", err)
+	}
+
+	gotTypes := map[string]bool{}
+	for _, ent := range entitlements {
+		gotTypes[ent.Type] = true
+	}
+
+	for _, q := range wendyOSEntitlementQuestions {
+		if !gotTypes[q.entitlement] {
+			t.Errorf("expected entitlement %q from --all-entitlements", q.entitlement)
+		}
+	}
+	if !gotTypes[appconfig.EntitlementNetwork] {
+		t.Error("expected network entitlement")
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_AllConflictsWithEntitlement(t *testing.T) {
+	_, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+		entitlementsSet: true,
+		entitlements:    []string{"gpu"},
+	})
+	if err == nil {
+		t.Fatal("expected error combining --all-entitlements with --entitlement")
+	}
+}
+
+func TestBuildInitEntitlementsFromFlags_AllMissingFieldFlags(t *testing.T) {
+	// --all-entitlements without required field flags for gpio/i2c/persist should error.
+	_, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
+		allEntitlements: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for --all-entitlements without required field flags")
 	}
 }
 

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -295,19 +296,14 @@ func newAppsStopCmd() *cobra.Command {
 
 func newAppsRemoveCmd() *cobra.Command {
 	var force bool
+	var cleanup bool
+	var deleteVolumes bool
 
 	cmd := &cobra.Command{
 		Use:   "remove [app-name]",
 		Short: "Remove an application",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// If an explicit name was given without --force, print confirmation
-			// without requiring a device connection (preserves original behavior).
-			if len(args) > 0 && !force {
-				fmt.Printf("Are you sure you want to remove %s? This cannot be undone. Use --force to skip confirmation.\n", args[0])
-				return nil
-			}
-
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
 			if err != nil {
@@ -323,20 +319,65 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if !force {
-					fmt.Printf("Are you sure you want to remove %s? This cannot be undone. Use --force to skip confirmation.\n", appName)
+			}
+
+			// Confirmation prompt (unless --force).
+			if !force {
+				confirmed, err := tui.Confirm(fmt.Sprintf("Remove %s? This cannot be undone.", appName))
+				if err != nil {
+					if errors.Is(err, tui.ErrCancelled) {
+						return ErrUserCancelled
+					}
+					return err
+				}
+				if !confirmed {
+					fmt.Println("Cancelled.")
 					return nil
+				}
+			}
+
+			// If neither --cleanup nor --delete-volumes was explicitly set,
+			// offer an interactive checklist for cleanup options.
+			cleanupSet := cmd.Flags().Changed("cleanup")
+			volumesSet := cmd.Flags().Changed("delete-volumes")
+			if !cleanupSet && !volumesSet && !force {
+				items := []tui.ChecklistItem{
+					{Label: "Delete container image", Description: "Frees disk space", Value: "cleanup"},
+					{Label: "Delete persistent volumes", Description: "Removes data in /var/lib/wendy/volumes", Value: "volumes"},
+				}
+				selected, err := tui.RunChecklist("Also clean up?", items)
+				if err != nil {
+					if errors.Is(err, tui.ErrCancelled) {
+						return ErrUserCancelled
+					}
+					return err
+				}
+				for _, item := range selected {
+					switch item.Value {
+					case "cleanup":
+						cleanup = true
+					case "volumes":
+						deleteVolumes = true
+					}
 				}
 			}
 
 			if target.Agent != nil {
 				_, err = target.Agent.ContainerService.DeleteContainer(ctx, &agentpb.DeleteContainerRequest{
-					AppName: appName,
+					AppName:       appName,
+					DeleteImage:   cleanup,
+					DeleteVolumes: deleteVolumes,
 				})
 				if err != nil {
 					return fmt.Errorf("removing container: %w", err)
 				}
 				fmt.Printf("Application %s removed.\n", appName)
+				if cleanup {
+					fmt.Println("  Container image cleanup requested.")
+				}
+				if deleteVolumes {
+					fmt.Println("  Persistent volume deletion requested.")
+				}
 				return nil
 			}
 
@@ -357,6 +398,8 @@ func newAppsRemoveCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&cleanup, "cleanup", false, "Also delete the container image (frees disk space; agent-connected devices only)")
+	cmd.Flags().BoolVar(&deleteVolumes, "delete-volumes", false, "Also delete persistent volumes (/var/lib/wendy/volumes; agent-connected devices only)")
 	return cmd
 }
 

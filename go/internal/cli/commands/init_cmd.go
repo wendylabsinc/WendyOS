@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,6 +58,7 @@ type initOptions struct {
 	target              string
 	language            string
 	entitlements        []string
+	allEntitlements     bool
 	noExtraEntitlements bool
 	gpioPins            string
 	i2cDevice           string
@@ -127,6 +128,18 @@ func newInitCmd() *cobra.Command {
     --no-extra-entitlements \
     --assistant skip
 
+  # Enable all entitlements at once
+  wendy init \
+    --app-id full-app \
+    --target wendyos \
+    --language python \
+    --all-entitlements \
+    --gpio-pins 17,27,22 \
+    --i2c-device /dev/i2c-1 \
+    --persist-name full-data \
+    --persist-path /data \
+    --assistant skip
+
   # Start Claude after init and install Wendy skills automatically
   wendy init \
     --app-id ai-app \
@@ -147,7 +160,11 @@ func newInitCmd() *cobra.Command {
 			opts.persistPathSet = cmd.Flags().Changed("persist-path")
 			opts.assistantSet = cmd.Flags().Changed("assistant")
 
-			return runInitWizard(args, opts)
+			err := runInitWizard(args, opts)
+			if errors.Is(err, tui.ErrCancelled) {
+				return ErrUserCancelled
+			}
+			return err
 		},
 	}
 
@@ -155,6 +172,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: swift or python")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&opts.allEntitlements, "all-entitlements", false, "Enable all entitlements (requires field flags for gpio, i2c, persist)")
 	cmd.Flags().BoolVar(&opts.noExtraEntitlements, "no-extra-entitlements", false, "Skip entitlement prompts and use only the default network entitlement")
 	cmd.Flags().StringVar(&opts.gpioPins, "gpio-pins", "", "GPIO pins for the gpio entitlement (comma-separated, e.g. 17,27,22)")
 	cmd.Flags().StringVar(&opts.i2cDevice, "i2c-device", "", "I2C device path for the i2c entitlement (e.g. /dev/i2c-1)")
@@ -187,8 +205,6 @@ func runInitWizard(args []string, opts initOptions) error {
 		return err
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-
 	// Step 1: Pick target device.
 	target, err := resolveInitTarget(opts)
 	if err != nil {
@@ -202,7 +218,7 @@ func runInitWizard(args []string, opts initOptions) error {
 	}
 
 	// Step 3: Interactive entitlement questions.
-	entitlements, err := resolveInitEntitlements(reader, target, language, opts)
+	entitlements, err := resolveInitEntitlements(target, language, opts)
 	if err != nil {
 		return err
 	}
@@ -243,7 +259,7 @@ func runInitWizard(args []string, opts initOptions) error {
 	}
 
 	// Step 6: Offer AI assistant session.
-	if err := resolveInitAssistant(reader, appID, target, language, entitlements, opts); err != nil {
+	if err := resolveInitAssistant(appID, target, language, entitlements, opts); err != nil {
 		return err
 	}
 
@@ -315,23 +331,23 @@ func resolveInitLanguage(target string, opts initOptions) (string, error) {
 	return pickInitLanguage(target)
 }
 
-func resolveInitEntitlements(reader *bufio.Reader, target, language string, opts initOptions) ([]appconfig.Entitlement, error) {
+func resolveInitEntitlements(target, language string, opts initOptions) ([]appconfig.Entitlement, error) {
 	if initEntitlementsProvided(opts) {
 		return buildInitEntitlementsFromFlags(target, opts)
 	}
 
 	fmt.Println()
-	return askEntitlementQuestions(reader, target, language)
+	return askEntitlementQuestions(target, language)
 }
 
-func resolveInitAssistant(reader *bufio.Reader, appID, target, language string, entitlements []appconfig.Entitlement, opts initOptions) error {
+func resolveInitAssistant(appID, target, language string, entitlements []appconfig.Entitlement, opts initOptions) error {
 	if opts.assistantSet {
 		choice := normalizeInitChoice(opts.assistant)
-		return runAIAssistantChoice(choice, appID, target, language, entitlements, opts.installClaudeSkills, nil)
+		return runAIAssistantChoice(choice, appID, target, language, entitlements, opts.installClaudeSkills, false)
 	}
 
 	fmt.Println()
-	return offerAIAssistant(reader, appID, target, language, entitlements)
+	return offerAIAssistant(appID, target, language, entitlements)
 }
 
 func pickInitLanguage(target string) (string, error) {
@@ -354,7 +370,8 @@ func pickInitLanguage(target string) (string, error) {
 	}
 }
 
-func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]appconfig.Entitlement, error) {
+// askEntitlementQuestions is a variable so tests can replace it.
+var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
 	// Always include network.
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork},
@@ -366,21 +383,23 @@ func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]a
 		return entitlements, nil
 	}
 
-	fmt.Println("Let's figure out what your app needs access to.")
-	fmt.Println("Answer y/n for each capability:")
-	fmt.Println()
-
-	for _, q := range wendyOSEntitlementQuestions {
-		answer, err := promptYesNo(reader, q.question)
-		if err != nil {
-			return nil, err
+	// Build checklist items from the entitlement questions.
+	items := make([]tui.ChecklistItem, len(wendyOSEntitlementQuestions))
+	for i, q := range wendyOSEntitlementQuestions {
+		items[i] = tui.ChecklistItem{
+			Label:       q.question,
+			Description: q.description,
+			Value:       q.entitlement,
 		}
+	}
 
-		if !answer {
-			continue
-		}
+	selected, err := tui.RunChecklist("What does your app need access to?", items)
+	if err != nil {
+		return nil, err
+	}
 
-		ent := appconfig.Entitlement{Type: q.entitlement}
+	for _, item := range selected {
+		ent := appconfig.Entitlement{Type: item.Value}
 
 		// Prompt for required fields on certain entitlement types.
 		if err := promptEntitlementFields(&ent); err != nil {
@@ -394,7 +413,7 @@ func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]a
 }
 
 func initEntitlementsProvided(opts initOptions) bool {
-	return opts.entitlementsSet || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
+	return opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
 }
 
 func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfig.Entitlement, error) {
@@ -402,24 +421,35 @@ func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfi
 	seen := map[string]bool{appconfig.EntitlementNetwork: true}
 
 	if opts.noExtraEntitlements {
-		if opts.entitlementsSet || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
+		if opts.entitlementsSet || opts.allEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
 			return nil, fmt.Errorf("--no-extra-entitlements cannot be combined with entitlement-specific flags")
 		}
 		return entitlements, nil
 	}
 
-	rawTypes := make([]string, 0, len(opts.entitlements)+3)
-	parsedEntitlementFlag := false
-	for _, rawType := range opts.entitlements {
-		entType := normalizeInitChoice(rawType)
-		if entType == "" {
-			continue
-		}
-		parsedEntitlementFlag = true
-		rawTypes = append(rawTypes, entType)
+	if opts.allEntitlements && opts.entitlementsSet {
+		return nil, fmt.Errorf("--all-entitlements cannot be combined with --entitlement")
 	}
-	if opts.entitlementsSet && !parsedEntitlementFlag {
-		return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+
+	rawTypes := make([]string, 0, len(opts.entitlements)+3)
+
+	if opts.allEntitlements {
+		for _, q := range wendyOSEntitlementQuestions {
+			rawTypes = append(rawTypes, q.entitlement)
+		}
+	} else {
+		parsedEntitlementFlag := false
+		for _, rawType := range opts.entitlements {
+			entType := normalizeInitChoice(rawType)
+			if entType == "" {
+				continue
+			}
+			parsedEntitlementFlag = true
+			rawTypes = append(rawTypes, entType)
+		}
+		if opts.entitlementsSet && !parsedEntitlementFlag {
+			return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+		}
 	}
 
 	if opts.gpioPinsSet {
@@ -519,14 +549,10 @@ func validateInitAssistantOptions(opts initOptions) error {
 	return nil
 }
 
-func promptYesNo(reader *bufio.Reader, question string) (bool, error) {
-	fmt.Printf("  %s [y/N] ", question)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return false, err
-	}
-	answer := strings.TrimSpace(strings.ToLower(line))
-	return answer == "y" || answer == "yes", nil
+// promptYesNo displays a styled yes/no prompt. It is a variable so tests can
+// replace it with a non-TTY implementation.
+var promptYesNo = func(question string) (bool, error) {
+	return tui.Confirm(question)
 }
 
 func scaffoldProject(dir, appID, target, language string) error {
@@ -633,7 +659,7 @@ CMD ["uv", "run", "%s"]
 	return nil
 }
 
-func offerAIAssistant(reader *bufio.Reader, appID, target, language string, entitlements []appconfig.Entitlement) error {
+func offerAIAssistant(appID, target, language string, entitlements []appconfig.Entitlement) error {
 	// Check which AI assistants are available.
 	hasClaude := isCommandAvailable("claude")
 	hasCodex := isCommandAvailable("codex")
@@ -668,7 +694,7 @@ func offerAIAssistant(reader *bufio.Reader, appID, target, language string, enti
 		return err
 	}
 
-	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, reader)
+	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, true)
 }
 
 const wendySkillsMarketplace = "wendylabsinc/claude-skills"
@@ -677,15 +703,15 @@ const wendySkillsPluginName = "wendy@claude-skills"
 // installWendySkills checks if the Wendy skills plugin is installed and offers
 // to install it if missing. This gives Claude expert knowledge about Wendy
 // development.
-func installWendySkills(reader *bufio.Reader, autoInstall bool) {
+func installWendySkills(autoInstall bool) error {
 	// Check if the plugin is already installed by looking at the plugin list output.
 	out, err := exec.Command("claude", "plugin", "list").Output()
 	if err != nil {
-		return
+		return nil
 	}
 
 	if strings.Contains(string(out), "wendy@claude-skills") {
-		return
+		return nil
 	}
 
 	fmt.Println("\nThe Wendy skills plugin gives Claude expert knowledge about")
@@ -693,9 +719,12 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	fmt.Println()
 
 	if !autoInstall {
-		install, err := promptYesNo(reader, "Install Wendy skills for Claude Code?")
-		if err != nil || !install {
-			return
+		install, err := promptYesNo("Install Wendy skills for Claude Code?")
+		if err != nil {
+			return err
+		}
+		if !install {
+			return nil
 		}
 
 		fmt.Println()
@@ -708,7 +737,7 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	if err := addMarketplace.Run(); err != nil {
 		fmt.Printf("  Could not add marketplace: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return
+		return nil
 	}
 
 	// Install the plugin.
@@ -718,13 +747,14 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	if err := installCmd.Run(); err != nil {
 		fmt.Printf("  Could not install plugin: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return
+		return nil
 	}
 
 	fmt.Println("  Wendy skills installed successfully!")
+	return nil
 }
 
-func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, reader *bufio.Reader) error {
+func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, interactive bool) error {
 	if choice == assistantSkip {
 		fmt.Println("\nYour project is ready! Run `wendy run` to build and deploy.")
 		return nil
@@ -735,11 +765,15 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 	}
 
 	if choice == assistantClaude {
+		var skillsErr error
 		switch {
 		case installClaudeSkills:
-			installWendySkills(nil, true)
-		case reader != nil:
-			installWendySkills(reader, false)
+			skillsErr = installWendySkills(true)
+		case interactive:
+			skillsErr = installWendySkills(false)
+		}
+		if skillsErr != nil {
+			return skillsErr
 		}
 	}
 

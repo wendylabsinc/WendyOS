@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wendy.sh/schemas/wendy.json",
+  "title": "Wendy App Configuration",
+  "description": "Configuration file for Wendy edge computing applications (wendy.json).",
+  "type": "object",
+  "required": ["appId"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema reference for editor support."
+    },
+    "appId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique application identifier."
+    },
+    "version": {
+      "type": "string",
+      "description": "Application version string (e.g. \"0.1.0\")."
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["wendyos", "wendy-lite"],
+      "description": "Target platform: wendyos (Linux edge devices) or wendy-lite (ESP32 WASM)."
+    },
+    "language": {
+      "type": "string",
+      "description": "Project language (e.g. \"swift\", \"python\")."
+    },
+    "debug": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable debug mode."
+    },
+    "entitlements": {
+      "type": "array",
+      "description": "Capabilities the app requires (GPU, network, Bluetooth, etc.).",
+      "items": {
+        "$ref": "#/$defs/entitlement"
+      }
+    },
+    "readiness": {
+      "$ref": "#/$defs/readiness"
+    },
+    "hooks": {
+      "$ref": "#/$defs/hooks"
+    },
+    "python": {
+      "$ref": "#/$defs/python"
+    }
+  },
+  "$defs": {
+    "entitlement": {
+      "type": "object",
+      "required": ["type"],
+      "description": "A single app entitlement granting access to a device capability.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "network" },
+            "mode": {
+              "type": "string",
+              "enum": ["host", "none"],
+              "description": "Network mode. \"host\" shares the host network stack; \"none\" disables networking."
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "bluetooth" },
+            "mode": {
+              "type": "string",
+              "description": "Bluetooth access mode."
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "video" },
+            "mode": {
+              "type": "string",
+              "description": "Video access mode."
+            },
+            "allowlist": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowed video device paths."
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "gpu" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "GPU access for AI inference or compute."
+        },
+        {
+          "properties": {
+            "type": { "const": "persist" },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "App ID — a shared namespace. Apps with the same ID can access each other's data."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Mount path inside the container (e.g. \"/data\")."
+            }
+          },
+          "required": ["type", "name", "path"],
+          "additionalProperties": false,
+          "description": "Persistent storage that survives container restarts."
+        },
+        {
+          "properties": {
+            "type": { "const": "audio" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Microphone and speaker access."
+        },
+        {
+          "properties": {
+            "type": { "const": "camera" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Camera device access."
+        },
+        {
+          "properties": {
+            "type": { "const": "usb" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "USB device access."
+        },
+        {
+          "properties": {
+            "type": { "const": "i2c" },
+            "device": {
+              "type": "string",
+              "minLength": 1,
+              "description": "I2C device path (e.g. \"/dev/i2c-1\")."
+            }
+          },
+          "required": ["type", "device"],
+          "additionalProperties": false,
+          "description": "I2C bus device access."
+        },
+        {
+          "properties": {
+            "type": { "const": "gpio" },
+            "pins": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "GPIO pin numbers. Omit to grant access to all GPIO chips."
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "General-purpose I/O pin access."
+        },
+        {
+          "properties": {
+            "type": { "const": "input" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "HID input device access (barcode scanners, keyboards, etc.)."
+        }
+      ]
+    },
+    "readiness": {
+      "type": "object",
+      "description": "Probe configuration the CLI uses to determine when the app is ready.",
+      "additionalProperties": false,
+      "properties": {
+        "tcpSocket": {
+          "type": "object",
+          "description": "Check readiness by dialing a TCP port.",
+          "required": ["port"],
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "TCP port to probe."
+            }
+          }
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30,
+          "description": "Readiness timeout in seconds (default 30)."
+        }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Lifecycle hook commands.",
+      "additionalProperties": false,
+      "properties": {
+        "postStart": {
+          "$ref": "#/$defs/hookCommand"
+        }
+      }
+    },
+    "hookCommand": {
+      "type": "object",
+      "description": "Commands to run at a lifecycle stage.",
+      "additionalProperties": false,
+      "properties": {
+        "cli": {
+          "type": "string",
+          "description": "Command to run on the developer's machine."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Command to run on the device."
+        }
+      }
+    },
+    "python": {
+      "type": "object",
+      "description": "Python-specific configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "sourceRoot": {
+          "type": "string",
+          "description": "Path to the Python source root directory."
+        }
+      }
+    }
+  }
+}
