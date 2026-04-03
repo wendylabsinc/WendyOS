@@ -469,11 +469,11 @@ public struct Wendy_Agent_Services_V1_WifiConnectResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -492,20 +492,20 @@ public struct Wendy_Agent_Services_V1_WifiStatusResponse: Sendable {
   public var connected: Bool = false
 
   public var ssid: String {
-    get {return _ssid ?? String()}
+    get {_ssid ?? String()}
     set {_ssid = newValue}
   }
   /// Returns true if `ssid` has been explicitly set.
-  public var hasSsid: Bool {return self._ssid != nil}
+  public var hasSsid: Bool {self._ssid != nil}
   /// Clears the value of `ssid`. Subsequent reads from it will return its default value.
   public mutating func clearSsid() {self._ssid = nil}
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -525,11 +525,11 @@ public struct Wendy_Agent_Services_V1_WifiDisconnectResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -561,11 +561,11 @@ public struct Wendy_Agent_Services_V1_AppsStopResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -584,11 +584,11 @@ public struct Wendy_Agent_Services_V1_AppsRemoveResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -608,29 +608,29 @@ public struct Wendy_Agent_Services_V1_AgentVersionResponse: Sendable {
   public var version: String = String()
 
   public var os: String {
-    get {return _os ?? String()}
+    get {_os ?? String()}
     set {_os = newValue}
   }
   /// Returns true if `os` has been explicitly set.
-  public var hasOs: Bool {return self._os != nil}
+  public var hasOs: Bool {self._os != nil}
   /// Clears the value of `os`. Subsequent reads from it will return its default value.
   public mutating func clearOs() {self._os = nil}
 
   public var osVersion: String {
-    get {return _osVersion ?? String()}
+    get {_osVersion ?? String()}
     set {_osVersion = newValue}
   }
   /// Returns true if `osVersion` has been explicitly set.
-  public var hasOsVersion: Bool {return self._osVersion != nil}
+  public var hasOsVersion: Bool {self._osVersion != nil}
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {self._osVersion = nil}
 
   public var cpuArchitecture: String {
-    get {return _cpuArchitecture ?? String()}
+    get {_cpuArchitecture ?? String()}
     set {_cpuArchitecture = newValue}
   }
   /// Returns true if `cpuArchitecture` has been explicitly set.
-  public var hasCpuArchitecture: Bool {return self._cpuArchitecture != nil}
+  public var hasCpuArchitecture: Bool {self._cpuArchitecture != nil}
   /// Clears the value of `cpuArchitecture`. Subsequent reads from it will return its default value.
   public mutating func clearCpuArchitecture() {self._cpuArchitecture = nil}
 
@@ -690,11 +690,11 @@ public struct Wendy_Agent_Services_V1_BluetoothConnectResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -713,11 +713,11 @@ public struct Wendy_Agent_Services_V1_BluetoothDisconnectResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -736,11 +736,11 @@ public struct Wendy_Agent_Services_V1_BluetoothForgetResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -760,11 +760,11 @@ public struct Wendy_Agent_Services_V1_WifiNetworkInfo: Sendable {
   public var ssid: String = String()
 
   public var signalStrength: Int32 {
-    get {return _signalStrength ?? 0}
+    get {_signalStrength ?? 0}
     set {_signalStrength = newValue}
   }
   /// Returns true if `signalStrength` has been explicitly set.
-  public var hasSignalStrength: Bool {return self._signalStrength != nil}
+  public var hasSignalStrength: Bool {self._signalStrength != nil}
   /// Clears the value of `signalStrength`. Subsequent reads from it will return its default value.
   public mutating func clearSignalStrength() {self._signalStrength = nil}
 
@@ -820,11 +820,11 @@ public struct Wendy_Agent_Services_V1_BluetoothDeviceInfo: Sendable {
   public var address: String = String()
 
   public var rssi: Int32 {
-    get {return _rssi ?? 0}
+    get {_rssi ?? 0}
     set {_rssi = newValue}
   }
   /// Returns true if `rssi` has been explicitly set.
-  public var hasRssi: Bool {return self._rssi != nil}
+  public var hasRssi: Bool {self._rssi != nil}
   /// Clears the value of `rssi`. Subsequent reads from it will return its default value.
   public mutating func clearRssi() {self._rssi = nil}
 
@@ -837,11 +837,11 @@ public struct Wendy_Agent_Services_V1_BluetoothDeviceInfo: Sendable {
   public var deviceType: String = String()
 
   public var icon: String {
-    get {return _icon ?? String()}
+    get {_icon ?? String()}
     set {_icon = newValue}
   }
   /// Returns true if `icon` has been explicitly set.
-  public var hasIcon: Bool {return self._icon != nil}
+  public var hasIcon: Bool {self._icon != nil}
   /// Clears the value of `icon`. Subsequent reads from it will return its default value.
   public mutating func clearIcon() {self._icon = nil}
 

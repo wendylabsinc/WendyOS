@@ -8,7 +8,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -72,11 +76,11 @@ public struct Wendy_Agent_Services_V1_ListAudioDevicesRequest: Sendable {
 
   /// Optional filter by device type
   public var typeFilter: Wendy_Agent_Services_V1_AudioDeviceType {
-    get {return _typeFilter ?? .unspecified}
+    get {_typeFilter ?? .unspecified}
     set {_typeFilter = newValue}
   }
   /// Returns true if `typeFilter` has been explicitly set.
-  public var hasTypeFilter: Bool {return self._typeFilter != nil}
+  public var hasTypeFilter: Bool {self._typeFilter != nil}
   /// Clears the value of `typeFilter`. Subsequent reads from it will return its default value.
   public mutating func clearTypeFilter() {self._typeFilter = nil}
 
@@ -149,11 +153,11 @@ public struct Wendy_Agent_Services_V1_SetDefaultAudioDeviceResponse: Sendable {
   public var success: Bool = false
 
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 

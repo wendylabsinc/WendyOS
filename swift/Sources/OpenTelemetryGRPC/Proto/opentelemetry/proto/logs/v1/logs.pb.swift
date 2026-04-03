@@ -22,7 +22,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -246,11 +250,11 @@ public struct Opentelemetry_Proto_Logs_V1_ResourceLogs: Sendable {
   /// The resource for the logs in this message.
   /// If this field is not set then resource info is unknown.
   public var resource: Opentelemetry_Proto_Resource_V1_Resource {
-    get {return _resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
+    get {_resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
     set {_resource = newValue}
   }
   /// Returns true if `resource` has been explicitly set.
-  public var hasResource: Bool {return self._resource != nil}
+  public var hasResource: Bool {self._resource != nil}
   /// Clears the value of `resource`. Subsequent reads from it will return its default value.
   public mutating func clearResource() {self._resource = nil}
 
@@ -282,11 +286,11 @@ public struct Opentelemetry_Proto_Logs_V1_ScopeLogs: Sendable {
   /// Semantically when InstrumentationScope isn't set, it is equivalent with
   /// an empty instrumentation scope name (unknown).
   public var scope: Opentelemetry_Proto_Common_V1_InstrumentationScope {
-    get {return _scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
+    get {_scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
     set {_scope = newValue}
   }
   /// Returns true if `scope` has been explicitly set.
-  public var hasScope: Bool {return self._scope != nil}
+  public var hasScope: Bool {self._scope != nil}
   /// Clears the value of `scope`. Subsequent reads from it will return its default value.
   public mutating func clearScope() {self._scope = nil}
 
@@ -348,11 +352,11 @@ public struct Opentelemetry_Proto_Logs_V1_LogRecord: Sendable {
   /// string message (including multi-line) describing the event in a free form or it can
   /// be a structured data composed of arrays and maps of other values. [Optional].
   public var body: Opentelemetry_Proto_Common_V1_AnyValue {
-    get {return _body ?? Opentelemetry_Proto_Common_V1_AnyValue()}
+    get {_body ?? Opentelemetry_Proto_Common_V1_AnyValue()}
     set {_body = newValue}
   }
   /// Returns true if `body` has been explicitly set.
-  public var hasBody: Bool {return self._body != nil}
+  public var hasBody: Bool {self._body != nil}
   /// Clears the value of `body`. Subsequent reads from it will return its default value.
   public mutating func clearBody() {self._body = nil}
 

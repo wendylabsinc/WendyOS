@@ -29,7 +29,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "CreateOrganization".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "CreateOrganization"
+                method: "CreateOrganization",
+                type: .unary
             )
         }
         /// Namespace for "GetOrganization" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "GetOrganization".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "GetOrganization"
+                method: "GetOrganization",
+                type: .unary
             )
         }
         /// Namespace for "UpdateOrganization" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "UpdateOrganization".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "UpdateOrganization"
+                method: "UpdateOrganization",
+                type: .unary
             )
         }
         /// Namespace for "DeleteOrganization" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "DeleteOrganization".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "DeleteOrganization"
+                method: "DeleteOrganization",
+                type: .unary
             )
         }
         /// Namespace for "ListOrganizations" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "ListOrganizations".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "ListOrganizations"
+                method: "ListOrganizations",
+                type: .serverStreaming
             )
         }
         /// Namespace for "AddMember" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "AddMember".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "AddMember"
+                method: "AddMember",
+                type: .unary
             )
         }
         /// Namespace for "AddMembersByEmails" metadata.
@@ -101,7 +107,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "AddMembersByEmails".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "AddMembersByEmails"
+                method: "AddMembersByEmails",
+                type: .unary
             )
         }
         /// Namespace for "UpdateMemberRole" metadata.
@@ -113,7 +120,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "UpdateMemberRole".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "UpdateMemberRole"
+                method: "UpdateMemberRole",
+                type: .unary
             )
         }
         /// Namespace for "RemoveMember" metadata.
@@ -125,7 +133,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "RemoveMember".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "RemoveMember"
+                method: "RemoveMember",
+                type: .unary
             )
         }
         /// Namespace for "ListMembers" metadata.
@@ -137,7 +146,8 @@ public enum Wendycloud_V1_OrganizationService: Sendable {
             /// Descriptor for "ListMembers".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.OrganizationService"),
-                method: "ListMembers"
+                method: "ListMembers",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.OrganizationService" service.

@@ -26,184 +26,184 @@ public struct Wendycloud_V1_Asset: @unchecked Sendable {
   // methods supported on all messages.
 
   public var id: Int32 {
-    get {return _storage._id}
+    get {_storage._id}
     set {_uniqueStorage()._id = newValue}
   }
 
   public var organizationID: Int32 {
-    get {return _storage._organizationID}
+    get {_storage._organizationID}
     set {_uniqueStorage()._organizationID = newValue}
   }
 
   public var parentAssetID: Int32 {
-    get {return _storage._parentAssetID ?? 0}
+    get {_storage._parentAssetID ?? 0}
     set {_uniqueStorage()._parentAssetID = newValue}
   }
   /// Returns true if `parentAssetID` has been explicitly set.
-  public var hasParentAssetID: Bool {return _storage._parentAssetID != nil}
+  public var hasParentAssetID: Bool {_storage._parentAssetID != nil}
   /// Clears the value of `parentAssetID`. Subsequent reads from it will return its default value.
   public mutating func clearParentAssetID() {_uniqueStorage()._parentAssetID = nil}
 
   public var name: String {
-    get {return _storage._name}
+    get {_storage._name}
     set {_uniqueStorage()._name = newValue}
   }
 
   public var details: String {
-    get {return _storage._details}
+    get {_storage._details}
     set {_uniqueStorage()._details = newValue}
   }
 
   public var assetType: String {
-    get {return _storage._assetType}
+    get {_storage._assetType}
     set {_uniqueStorage()._assetType = newValue}
   }
 
   /// Blob storage fields
   public var blobStorageURL: String {
-    get {return _storage._blobStorageURL ?? String()}
+    get {_storage._blobStorageURL ?? String()}
     set {_uniqueStorage()._blobStorageURL = newValue}
   }
   /// Returns true if `blobStorageURL` has been explicitly set.
-  public var hasBlobStorageURL: Bool {return _storage._blobStorageURL != nil}
+  public var hasBlobStorageURL: Bool {_storage._blobStorageURL != nil}
   /// Clears the value of `blobStorageURL`. Subsequent reads from it will return its default value.
   public mutating func clearBlobStorageURL() {_uniqueStorage()._blobStorageURL = nil}
 
   public var blobContentType: String {
-    get {return _storage._blobContentType ?? String()}
+    get {_storage._blobContentType ?? String()}
     set {_uniqueStorage()._blobContentType = newValue}
   }
   /// Returns true if `blobContentType` has been explicitly set.
-  public var hasBlobContentType: Bool {return _storage._blobContentType != nil}
+  public var hasBlobContentType: Bool {_storage._blobContentType != nil}
   /// Clears the value of `blobContentType`. Subsequent reads from it will return its default value.
   public mutating func clearBlobContentType() {_uniqueStorage()._blobContentType = nil}
 
   public var blobSizeBytes: Int64 {
-    get {return _storage._blobSizeBytes ?? 0}
+    get {_storage._blobSizeBytes ?? 0}
     set {_uniqueStorage()._blobSizeBytes = newValue}
   }
   /// Returns true if `blobSizeBytes` has been explicitly set.
-  public var hasBlobSizeBytes: Bool {return _storage._blobSizeBytes != nil}
+  public var hasBlobSizeBytes: Bool {_storage._blobSizeBytes != nil}
   /// Clears the value of `blobSizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearBlobSizeBytes() {_uniqueStorage()._blobSizeBytes = nil}
 
   public var blobMetadata: SwiftProtobuf.Google_Protobuf_Struct {
-    get {return _storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
+    get {_storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
     set {_uniqueStorage()._blobMetadata = newValue}
   }
   /// Returns true if `blobMetadata` has been explicitly set.
-  public var hasBlobMetadata: Bool {return _storage._blobMetadata != nil}
+  public var hasBlobMetadata: Bool {_storage._blobMetadata != nil}
   /// Clears the value of `blobMetadata`. Subsequent reads from it will return its default value.
   public mutating func clearBlobMetadata() {_uniqueStorage()._blobMetadata = nil}
 
   /// Compute device fields
   public var isComputeDevice: Bool {
-    get {return _storage._isComputeDevice}
+    get {_storage._isComputeDevice}
     set {_uniqueStorage()._isComputeDevice = newValue}
   }
 
   public var deviceType: String {
-    get {return _storage._deviceType ?? String()}
+    get {_storage._deviceType ?? String()}
     set {_uniqueStorage()._deviceType = newValue}
   }
   /// Returns true if `deviceType` has been explicitly set.
-  public var hasDeviceType: Bool {return _storage._deviceType != nil}
+  public var hasDeviceType: Bool {_storage._deviceType != nil}
   /// Clears the value of `deviceType`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceType() {_uniqueStorage()._deviceType = nil}
 
   public var architecture: String {
-    get {return _storage._architecture ?? String()}
+    get {_storage._architecture ?? String()}
     set {_uniqueStorage()._architecture = newValue}
   }
   /// Returns true if `architecture` has been explicitly set.
-  public var hasArchitecture: Bool {return _storage._architecture != nil}
+  public var hasArchitecture: Bool {_storage._architecture != nil}
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {_uniqueStorage()._architecture = nil}
 
   public var cpuCores: Int32 {
-    get {return _storage._cpuCores ?? 0}
+    get {_storage._cpuCores ?? 0}
     set {_uniqueStorage()._cpuCores = newValue}
   }
   /// Returns true if `cpuCores` has been explicitly set.
-  public var hasCpuCores: Bool {return _storage._cpuCores != nil}
+  public var hasCpuCores: Bool {_storage._cpuCores != nil}
   /// Clears the value of `cpuCores`. Subsequent reads from it will return its default value.
   public mutating func clearCpuCores() {_uniqueStorage()._cpuCores = nil}
 
   public var ramMb: Int32 {
-    get {return _storage._ramMb ?? 0}
+    get {_storage._ramMb ?? 0}
     set {_uniqueStorage()._ramMb = newValue}
   }
   /// Returns true if `ramMb` has been explicitly set.
-  public var hasRamMb: Bool {return _storage._ramMb != nil}
+  public var hasRamMb: Bool {_storage._ramMb != nil}
   /// Clears the value of `ramMb`. Subsequent reads from it will return its default value.
   public mutating func clearRamMb() {_uniqueStorage()._ramMb = nil}
 
   public var storageGb: Int32 {
-    get {return _storage._storageGb ?? 0}
+    get {_storage._storageGb ?? 0}
     set {_uniqueStorage()._storageGb = newValue}
   }
   /// Returns true if `storageGb` has been explicitly set.
-  public var hasStorageGb: Bool {return _storage._storageGb != nil}
+  public var hasStorageGb: Bool {_storage._storageGb != nil}
   /// Clears the value of `storageGb`. Subsequent reads from it will return its default value.
   public mutating func clearStorageGb() {_uniqueStorage()._storageGb = nil}
 
   public var osType: String {
-    get {return _storage._osType ?? String()}
+    get {_storage._osType ?? String()}
     set {_uniqueStorage()._osType = newValue}
   }
   /// Returns true if `osType` has been explicitly set.
-  public var hasOsType: Bool {return _storage._osType != nil}
+  public var hasOsType: Bool {_storage._osType != nil}
   /// Clears the value of `osType`. Subsequent reads from it will return its default value.
   public mutating func clearOsType() {_uniqueStorage()._osType = nil}
 
   public var osVersion: String {
-    get {return _storage._osVersion ?? String()}
+    get {_storage._osVersion ?? String()}
     set {_uniqueStorage()._osVersion = newValue}
   }
   /// Returns true if `osVersion` has been explicitly set.
-  public var hasOsVersion: Bool {return _storage._osVersion != nil}
+  public var hasOsVersion: Bool {_storage._osVersion != nil}
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {_uniqueStorage()._osVersion = nil}
 
   public var ipAddress: String {
-    get {return _storage._ipAddress ?? String()}
+    get {_storage._ipAddress ?? String()}
     set {_uniqueStorage()._ipAddress = newValue}
   }
   /// Returns true if `ipAddress` has been explicitly set.
-  public var hasIpAddress: Bool {return _storage._ipAddress != nil}
+  public var hasIpAddress: Bool {_storage._ipAddress != nil}
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {_uniqueStorage()._ipAddress = nil}
 
   public var macAddress: String {
-    get {return _storage._macAddress ?? String()}
+    get {_storage._macAddress ?? String()}
     set {_uniqueStorage()._macAddress = newValue}
   }
   /// Returns true if `macAddress` has been explicitly set.
-  public var hasMacAddress: Bool {return _storage._macAddress != nil}
+  public var hasMacAddress: Bool {_storage._macAddress != nil}
   /// Clears the value of `macAddress`. Subsequent reads from it will return its default value.
   public mutating func clearMacAddress() {_uniqueStorage()._macAddress = nil}
 
   /// Tags for filtering and organization
   public var tags: [String] {
-    get {return _storage._tags}
+    get {_storage._tags}
     set {_uniqueStorage()._tags = newValue}
   }
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return _storage._createdAt != nil}
+  public var hasCreatedAt: Bool {_storage._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {_uniqueStorage()._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return _storage._updatedAt != nil}
+  public var hasUpdatedAt: Bool {_storage._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {_uniqueStorage()._updatedAt = nil}
 
@@ -220,158 +220,158 @@ public struct Wendycloud_V1_CreateAssetRequest: @unchecked Sendable {
   // methods supported on all messages.
 
   public var organizationID: Int32 {
-    get {return _storage._organizationID}
+    get {_storage._organizationID}
     set {_uniqueStorage()._organizationID = newValue}
   }
 
   public var parentAssetID: Int32 {
-    get {return _storage._parentAssetID ?? 0}
+    get {_storage._parentAssetID ?? 0}
     set {_uniqueStorage()._parentAssetID = newValue}
   }
   /// Returns true if `parentAssetID` has been explicitly set.
-  public var hasParentAssetID: Bool {return _storage._parentAssetID != nil}
+  public var hasParentAssetID: Bool {_storage._parentAssetID != nil}
   /// Clears the value of `parentAssetID`. Subsequent reads from it will return its default value.
   public mutating func clearParentAssetID() {_uniqueStorage()._parentAssetID = nil}
 
   public var name: String {
-    get {return _storage._name}
+    get {_storage._name}
     set {_uniqueStorage()._name = newValue}
   }
 
   public var details: String {
-    get {return _storage._details}
+    get {_storage._details}
     set {_uniqueStorage()._details = newValue}
   }
 
   public var assetType: String {
-    get {return _storage._assetType}
+    get {_storage._assetType}
     set {_uniqueStorage()._assetType = newValue}
   }
 
   public var blobStorageURL: String {
-    get {return _storage._blobStorageURL ?? String()}
+    get {_storage._blobStorageURL ?? String()}
     set {_uniqueStorage()._blobStorageURL = newValue}
   }
   /// Returns true if `blobStorageURL` has been explicitly set.
-  public var hasBlobStorageURL: Bool {return _storage._blobStorageURL != nil}
+  public var hasBlobStorageURL: Bool {_storage._blobStorageURL != nil}
   /// Clears the value of `blobStorageURL`. Subsequent reads from it will return its default value.
   public mutating func clearBlobStorageURL() {_uniqueStorage()._blobStorageURL = nil}
 
   public var blobContentType: String {
-    get {return _storage._blobContentType ?? String()}
+    get {_storage._blobContentType ?? String()}
     set {_uniqueStorage()._blobContentType = newValue}
   }
   /// Returns true if `blobContentType` has been explicitly set.
-  public var hasBlobContentType: Bool {return _storage._blobContentType != nil}
+  public var hasBlobContentType: Bool {_storage._blobContentType != nil}
   /// Clears the value of `blobContentType`. Subsequent reads from it will return its default value.
   public mutating func clearBlobContentType() {_uniqueStorage()._blobContentType = nil}
 
   public var blobSizeBytes: Int64 {
-    get {return _storage._blobSizeBytes ?? 0}
+    get {_storage._blobSizeBytes ?? 0}
     set {_uniqueStorage()._blobSizeBytes = newValue}
   }
   /// Returns true if `blobSizeBytes` has been explicitly set.
-  public var hasBlobSizeBytes: Bool {return _storage._blobSizeBytes != nil}
+  public var hasBlobSizeBytes: Bool {_storage._blobSizeBytes != nil}
   /// Clears the value of `blobSizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearBlobSizeBytes() {_uniqueStorage()._blobSizeBytes = nil}
 
   public var blobMetadata: SwiftProtobuf.Google_Protobuf_Struct {
-    get {return _storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
+    get {_storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
     set {_uniqueStorage()._blobMetadata = newValue}
   }
   /// Returns true if `blobMetadata` has been explicitly set.
-  public var hasBlobMetadata: Bool {return _storage._blobMetadata != nil}
+  public var hasBlobMetadata: Bool {_storage._blobMetadata != nil}
   /// Clears the value of `blobMetadata`. Subsequent reads from it will return its default value.
   public mutating func clearBlobMetadata() {_uniqueStorage()._blobMetadata = nil}
 
   public var isComputeDevice: Bool {
-    get {return _storage._isComputeDevice}
+    get {_storage._isComputeDevice}
     set {_uniqueStorage()._isComputeDevice = newValue}
   }
 
   public var deviceType: String {
-    get {return _storage._deviceType ?? String()}
+    get {_storage._deviceType ?? String()}
     set {_uniqueStorage()._deviceType = newValue}
   }
   /// Returns true if `deviceType` has been explicitly set.
-  public var hasDeviceType: Bool {return _storage._deviceType != nil}
+  public var hasDeviceType: Bool {_storage._deviceType != nil}
   /// Clears the value of `deviceType`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceType() {_uniqueStorage()._deviceType = nil}
 
   public var architecture: String {
-    get {return _storage._architecture ?? String()}
+    get {_storage._architecture ?? String()}
     set {_uniqueStorage()._architecture = newValue}
   }
   /// Returns true if `architecture` has been explicitly set.
-  public var hasArchitecture: Bool {return _storage._architecture != nil}
+  public var hasArchitecture: Bool {_storage._architecture != nil}
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {_uniqueStorage()._architecture = nil}
 
   public var cpuCores: Int32 {
-    get {return _storage._cpuCores ?? 0}
+    get {_storage._cpuCores ?? 0}
     set {_uniqueStorage()._cpuCores = newValue}
   }
   /// Returns true if `cpuCores` has been explicitly set.
-  public var hasCpuCores: Bool {return _storage._cpuCores != nil}
+  public var hasCpuCores: Bool {_storage._cpuCores != nil}
   /// Clears the value of `cpuCores`. Subsequent reads from it will return its default value.
   public mutating func clearCpuCores() {_uniqueStorage()._cpuCores = nil}
 
   public var ramMb: Int32 {
-    get {return _storage._ramMb ?? 0}
+    get {_storage._ramMb ?? 0}
     set {_uniqueStorage()._ramMb = newValue}
   }
   /// Returns true if `ramMb` has been explicitly set.
-  public var hasRamMb: Bool {return _storage._ramMb != nil}
+  public var hasRamMb: Bool {_storage._ramMb != nil}
   /// Clears the value of `ramMb`. Subsequent reads from it will return its default value.
   public mutating func clearRamMb() {_uniqueStorage()._ramMb = nil}
 
   public var storageGb: Int32 {
-    get {return _storage._storageGb ?? 0}
+    get {_storage._storageGb ?? 0}
     set {_uniqueStorage()._storageGb = newValue}
   }
   /// Returns true if `storageGb` has been explicitly set.
-  public var hasStorageGb: Bool {return _storage._storageGb != nil}
+  public var hasStorageGb: Bool {_storage._storageGb != nil}
   /// Clears the value of `storageGb`. Subsequent reads from it will return its default value.
   public mutating func clearStorageGb() {_uniqueStorage()._storageGb = nil}
 
   public var osType: String {
-    get {return _storage._osType ?? String()}
+    get {_storage._osType ?? String()}
     set {_uniqueStorage()._osType = newValue}
   }
   /// Returns true if `osType` has been explicitly set.
-  public var hasOsType: Bool {return _storage._osType != nil}
+  public var hasOsType: Bool {_storage._osType != nil}
   /// Clears the value of `osType`. Subsequent reads from it will return its default value.
   public mutating func clearOsType() {_uniqueStorage()._osType = nil}
 
   public var osVersion: String {
-    get {return _storage._osVersion ?? String()}
+    get {_storage._osVersion ?? String()}
     set {_uniqueStorage()._osVersion = newValue}
   }
   /// Returns true if `osVersion` has been explicitly set.
-  public var hasOsVersion: Bool {return _storage._osVersion != nil}
+  public var hasOsVersion: Bool {_storage._osVersion != nil}
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {_uniqueStorage()._osVersion = nil}
 
   public var ipAddress: String {
-    get {return _storage._ipAddress ?? String()}
+    get {_storage._ipAddress ?? String()}
     set {_uniqueStorage()._ipAddress = newValue}
   }
   /// Returns true if `ipAddress` has been explicitly set.
-  public var hasIpAddress: Bool {return _storage._ipAddress != nil}
+  public var hasIpAddress: Bool {_storage._ipAddress != nil}
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {_uniqueStorage()._ipAddress = nil}
 
   public var macAddress: String {
-    get {return _storage._macAddress ?? String()}
+    get {_storage._macAddress ?? String()}
     set {_uniqueStorage()._macAddress = newValue}
   }
   /// Returns true if `macAddress` has been explicitly set.
-  public var hasMacAddress: Bool {return _storage._macAddress != nil}
+  public var hasMacAddress: Bool {_storage._macAddress != nil}
   /// Clears the value of `macAddress`. Subsequent reads from it will return its default value.
   public mutating func clearMacAddress() {_uniqueStorage()._macAddress = nil}
 
   public var tags: [String] {
-    get {return _storage._tags}
+    get {_storage._tags}
     set {_uniqueStorage()._tags = newValue}
   }
 
@@ -400,147 +400,147 @@ public struct Wendycloud_V1_UpdateAssetRequest: @unchecked Sendable {
   // methods supported on all messages.
 
   public var id: Int32 {
-    get {return _storage._id}
+    get {_storage._id}
     set {_uniqueStorage()._id = newValue}
   }
 
   public var name: String {
-    get {return _storage._name ?? String()}
+    get {_storage._name ?? String()}
     set {_uniqueStorage()._name = newValue}
   }
   /// Returns true if `name` has been explicitly set.
-  public var hasName: Bool {return _storage._name != nil}
+  public var hasName: Bool {_storage._name != nil}
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {_uniqueStorage()._name = nil}
 
   public var details: String {
-    get {return _storage._details ?? String()}
+    get {_storage._details ?? String()}
     set {_uniqueStorage()._details = newValue}
   }
   /// Returns true if `details` has been explicitly set.
-  public var hasDetails: Bool {return _storage._details != nil}
+  public var hasDetails: Bool {_storage._details != nil}
   /// Clears the value of `details`. Subsequent reads from it will return its default value.
   public mutating func clearDetails() {_uniqueStorage()._details = nil}
 
   public var blobStorageURL: String {
-    get {return _storage._blobStorageURL ?? String()}
+    get {_storage._blobStorageURL ?? String()}
     set {_uniqueStorage()._blobStorageURL = newValue}
   }
   /// Returns true if `blobStorageURL` has been explicitly set.
-  public var hasBlobStorageURL: Bool {return _storage._blobStorageURL != nil}
+  public var hasBlobStorageURL: Bool {_storage._blobStorageURL != nil}
   /// Clears the value of `blobStorageURL`. Subsequent reads from it will return its default value.
   public mutating func clearBlobStorageURL() {_uniqueStorage()._blobStorageURL = nil}
 
   public var blobContentType: String {
-    get {return _storage._blobContentType ?? String()}
+    get {_storage._blobContentType ?? String()}
     set {_uniqueStorage()._blobContentType = newValue}
   }
   /// Returns true if `blobContentType` has been explicitly set.
-  public var hasBlobContentType: Bool {return _storage._blobContentType != nil}
+  public var hasBlobContentType: Bool {_storage._blobContentType != nil}
   /// Clears the value of `blobContentType`. Subsequent reads from it will return its default value.
   public mutating func clearBlobContentType() {_uniqueStorage()._blobContentType = nil}
 
   public var blobSizeBytes: Int64 {
-    get {return _storage._blobSizeBytes ?? 0}
+    get {_storage._blobSizeBytes ?? 0}
     set {_uniqueStorage()._blobSizeBytes = newValue}
   }
   /// Returns true if `blobSizeBytes` has been explicitly set.
-  public var hasBlobSizeBytes: Bool {return _storage._blobSizeBytes != nil}
+  public var hasBlobSizeBytes: Bool {_storage._blobSizeBytes != nil}
   /// Clears the value of `blobSizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearBlobSizeBytes() {_uniqueStorage()._blobSizeBytes = nil}
 
   public var blobMetadata: SwiftProtobuf.Google_Protobuf_Struct {
-    get {return _storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
+    get {_storage._blobMetadata ?? SwiftProtobuf.Google_Protobuf_Struct()}
     set {_uniqueStorage()._blobMetadata = newValue}
   }
   /// Returns true if `blobMetadata` has been explicitly set.
-  public var hasBlobMetadata: Bool {return _storage._blobMetadata != nil}
+  public var hasBlobMetadata: Bool {_storage._blobMetadata != nil}
   /// Clears the value of `blobMetadata`. Subsequent reads from it will return its default value.
   public mutating func clearBlobMetadata() {_uniqueStorage()._blobMetadata = nil}
 
   public var deviceType: String {
-    get {return _storage._deviceType ?? String()}
+    get {_storage._deviceType ?? String()}
     set {_uniqueStorage()._deviceType = newValue}
   }
   /// Returns true if `deviceType` has been explicitly set.
-  public var hasDeviceType: Bool {return _storage._deviceType != nil}
+  public var hasDeviceType: Bool {_storage._deviceType != nil}
   /// Clears the value of `deviceType`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceType() {_uniqueStorage()._deviceType = nil}
 
   public var architecture: String {
-    get {return _storage._architecture ?? String()}
+    get {_storage._architecture ?? String()}
     set {_uniqueStorage()._architecture = newValue}
   }
   /// Returns true if `architecture` has been explicitly set.
-  public var hasArchitecture: Bool {return _storage._architecture != nil}
+  public var hasArchitecture: Bool {_storage._architecture != nil}
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {_uniqueStorage()._architecture = nil}
 
   public var cpuCores: Int32 {
-    get {return _storage._cpuCores ?? 0}
+    get {_storage._cpuCores ?? 0}
     set {_uniqueStorage()._cpuCores = newValue}
   }
   /// Returns true if `cpuCores` has been explicitly set.
-  public var hasCpuCores: Bool {return _storage._cpuCores != nil}
+  public var hasCpuCores: Bool {_storage._cpuCores != nil}
   /// Clears the value of `cpuCores`. Subsequent reads from it will return its default value.
   public mutating func clearCpuCores() {_uniqueStorage()._cpuCores = nil}
 
   public var ramMb: Int32 {
-    get {return _storage._ramMb ?? 0}
+    get {_storage._ramMb ?? 0}
     set {_uniqueStorage()._ramMb = newValue}
   }
   /// Returns true if `ramMb` has been explicitly set.
-  public var hasRamMb: Bool {return _storage._ramMb != nil}
+  public var hasRamMb: Bool {_storage._ramMb != nil}
   /// Clears the value of `ramMb`. Subsequent reads from it will return its default value.
   public mutating func clearRamMb() {_uniqueStorage()._ramMb = nil}
 
   public var storageGb: Int32 {
-    get {return _storage._storageGb ?? 0}
+    get {_storage._storageGb ?? 0}
     set {_uniqueStorage()._storageGb = newValue}
   }
   /// Returns true if `storageGb` has been explicitly set.
-  public var hasStorageGb: Bool {return _storage._storageGb != nil}
+  public var hasStorageGb: Bool {_storage._storageGb != nil}
   /// Clears the value of `storageGb`. Subsequent reads from it will return its default value.
   public mutating func clearStorageGb() {_uniqueStorage()._storageGb = nil}
 
   public var osType: String {
-    get {return _storage._osType ?? String()}
+    get {_storage._osType ?? String()}
     set {_uniqueStorage()._osType = newValue}
   }
   /// Returns true if `osType` has been explicitly set.
-  public var hasOsType: Bool {return _storage._osType != nil}
+  public var hasOsType: Bool {_storage._osType != nil}
   /// Clears the value of `osType`. Subsequent reads from it will return its default value.
   public mutating func clearOsType() {_uniqueStorage()._osType = nil}
 
   public var osVersion: String {
-    get {return _storage._osVersion ?? String()}
+    get {_storage._osVersion ?? String()}
     set {_uniqueStorage()._osVersion = newValue}
   }
   /// Returns true if `osVersion` has been explicitly set.
-  public var hasOsVersion: Bool {return _storage._osVersion != nil}
+  public var hasOsVersion: Bool {_storage._osVersion != nil}
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {_uniqueStorage()._osVersion = nil}
 
   public var ipAddress: String {
-    get {return _storage._ipAddress ?? String()}
+    get {_storage._ipAddress ?? String()}
     set {_uniqueStorage()._ipAddress = newValue}
   }
   /// Returns true if `ipAddress` has been explicitly set.
-  public var hasIpAddress: Bool {return _storage._ipAddress != nil}
+  public var hasIpAddress: Bool {_storage._ipAddress != nil}
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {_uniqueStorage()._ipAddress = nil}
 
   public var macAddress: String {
-    get {return _storage._macAddress ?? String()}
+    get {_storage._macAddress ?? String()}
     set {_uniqueStorage()._macAddress = newValue}
   }
   /// Returns true if `macAddress` has been explicitly set.
-  public var hasMacAddress: Bool {return _storage._macAddress != nil}
+  public var hasMacAddress: Bool {_storage._macAddress != nil}
   /// Clears the value of `macAddress`. Subsequent reads from it will return its default value.
   public mutating func clearMacAddress() {_uniqueStorage()._macAddress = nil}
 
   public var tags: [String] {
-    get {return _storage._tags}
+    get {_storage._tags}
     set {_uniqueStorage()._tags = newValue}
   }
 
@@ -583,11 +583,11 @@ public struct Wendycloud_V1_ListAssetsRequest: Sendable {
   public var organizationID: Int32 = 0
 
   public var isComputeDevice: Bool {
-    get {return _isComputeDevice ?? false}
+    get {_isComputeDevice ?? false}
     set {_isComputeDevice = newValue}
   }
   /// Returns true if `isComputeDevice` has been explicitly set.
-  public var hasIsComputeDevice: Bool {return self._isComputeDevice != nil}
+  public var hasIsComputeDevice: Bool {self._isComputeDevice != nil}
   /// Clears the value of `isComputeDevice`. Subsequent reads from it will return its default value.
   public mutating func clearIsComputeDevice() {self._isComputeDevice = nil}
 
@@ -597,11 +597,11 @@ public struct Wendycloud_V1_ListAssetsRequest: Sendable {
 
   /// Filter by name, details, asset_type, device_type, or tags
   public var filter: String {
-    get {return _filter ?? String()}
+    get {_filter ?? String()}
     set {_filter = newValue}
   }
   /// Returns true if `filter` has been explicitly set.
-  public var hasFilter: Bool {return self._filter != nil}
+  public var hasFilter: Bool {self._filter != nil}
   /// Clears the value of `filter`. Subsequent reads from it will return its default value.
   public mutating func clearFilter() {self._filter = nil}
 
@@ -676,11 +676,11 @@ public struct Wendycloud_V1_GetAssetLineageResponse: Sendable {
 
   /// The root asset (top-most parent)
   public var rootAsset: Wendycloud_V1_Asset {
-    get {return _rootAsset ?? Wendycloud_V1_Asset()}
+    get {_rootAsset ?? Wendycloud_V1_Asset()}
     set {_rootAsset = newValue}
   }
   /// Returns true if `rootAsset` has been explicitly set.
-  public var hasRootAsset: Bool {return self._rootAsset != nil}
+  public var hasRootAsset: Bool {self._rootAsset != nil}
   /// Clears the value of `rootAsset`. Subsequent reads from it will return its default value.
   public mutating func clearRootAsset() {self._rootAsset = nil}
 

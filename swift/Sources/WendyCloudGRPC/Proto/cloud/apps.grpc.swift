@@ -29,7 +29,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "CreateApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateApp"
+                method: "CreateApp",
+                type: .unary
             )
         }
         /// Namespace for "GetApp" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "GetApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "GetApp"
+                method: "GetApp",
+                type: .unary
             )
         }
         /// Namespace for "UpdateApp" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "UpdateApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "UpdateApp"
+                method: "UpdateApp",
+                type: .unary
             )
         }
         /// Namespace for "DeleteApp" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "DeleteApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "DeleteApp"
+                method: "DeleteApp",
+                type: .unary
             )
         }
         /// Namespace for "ListApps" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "ListApps".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListApps"
+                method: "ListApps",
+                type: .unary
             )
         }
         /// Namespace for "CreateAppVersion" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "CreateAppVersion".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateAppVersion"
+                method: "CreateAppVersion",
+                type: .unary
             )
         }
         /// Namespace for "GetAppVersion" metadata.
@@ -101,7 +107,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "GetAppVersion".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "GetAppVersion"
+                method: "GetAppVersion",
+                type: .unary
             )
         }
         /// Namespace for "ListAppVersions" metadata.
@@ -113,7 +120,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "ListAppVersions".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAppVersions"
+                method: "ListAppVersions",
+                type: .unary
             )
         }
         /// Namespace for "CreateAssetContainer" metadata.
@@ -125,7 +133,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "CreateAssetContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateAssetContainer"
+                method: "CreateAssetContainer",
+                type: .unary
             )
         }
         /// Namespace for "GetAssetContainer" metadata.
@@ -137,7 +146,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "GetAssetContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "GetAssetContainer"
+                method: "GetAssetContainer",
+                type: .unary
             )
         }
         /// Namespace for "UpdateAssetContainer" metadata.
@@ -149,7 +159,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "UpdateAssetContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "UpdateAssetContainer"
+                method: "UpdateAssetContainer",
+                type: .unary
             )
         }
         /// Namespace for "ListAssetContainers" metadata.
@@ -161,7 +172,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "ListAssetContainers".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAssetContainers"
+                method: "ListAssetContainers",
+                type: .unary
             )
         }
         /// Namespace for "ListAssetContainersByApp" metadata.
@@ -173,7 +185,8 @@ public enum Wendycloud_V1_AppService: Sendable {
             /// Descriptor for "ListAssetContainersByApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAssetContainersByApp"
+                method: "ListAssetContainersByApp",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.AppService" service.

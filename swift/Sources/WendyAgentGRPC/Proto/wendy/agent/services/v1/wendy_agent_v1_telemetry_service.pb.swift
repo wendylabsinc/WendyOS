@@ -27,31 +27,31 @@ public struct Wendy_Agent_Services_V1_StreamLogsRequest: Sendable {
 
   /// Optional filter by service name
   public var serviceName: String {
-    get {return _serviceName ?? String()}
+    get {_serviceName ?? String()}
     set {_serviceName = newValue}
   }
   /// Returns true if `serviceName` has been explicitly set.
-  public var hasServiceName: Bool {return self._serviceName != nil}
+  public var hasServiceName: Bool {self._serviceName != nil}
   /// Clears the value of `serviceName`. Subsequent reads from it will return its default value.
   public mutating func clearServiceName() {self._serviceName = nil}
 
   /// Optional filter by minimum severity level (TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21)
   public var minSeverity: Int32 {
-    get {return _minSeverity ?? 0}
+    get {_minSeverity ?? 0}
     set {_minSeverity = newValue}
   }
   /// Returns true if `minSeverity` has been explicitly set.
-  public var hasMinSeverity: Bool {return self._minSeverity != nil}
+  public var hasMinSeverity: Bool {self._minSeverity != nil}
   /// Clears the value of `minSeverity`. Subsequent reads from it will return its default value.
   public mutating func clearMinSeverity() {self._minSeverity = nil}
 
   /// Optional filter by app/container name
   public var appName: String {
-    get {return _appName ?? String()}
+    get {_appName ?? String()}
     set {_appName = newValue}
   }
   /// Returns true if `appName` has been explicitly set.
-  public var hasAppName: Bool {return self._appName != nil}
+  public var hasAppName: Bool {self._appName != nil}
   /// Clears the value of `appName`. Subsequent reads from it will return its default value.
   public mutating func clearAppName() {self._appName = nil}
 
@@ -72,11 +72,11 @@ public struct Wendy_Agent_Services_V1_StreamLogsResponse: Sendable {
   /// OTLP logs data using the standard OpenTelemetry format.
   /// Can be forwarded directly to a local OTLP collector.
   public var logs: Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest {
-    get {return _logs ?? Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest()}
+    get {_logs ?? Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest()}
     set {_logs = newValue}
   }
   /// Returns true if `logs` has been explicitly set.
-  public var hasLogs: Bool {return self._logs != nil}
+  public var hasLogs: Bool {self._logs != nil}
   /// Clears the value of `logs`. Subsequent reads from it will return its default value.
   public mutating func clearLogs() {self._logs = nil}
 
@@ -94,31 +94,31 @@ public struct Wendy_Agent_Services_V1_StreamMetricsRequest: Sendable {
 
   /// Optional filter by service name
   public var serviceName: String {
-    get {return _serviceName ?? String()}
+    get {_serviceName ?? String()}
     set {_serviceName = newValue}
   }
   /// Returns true if `serviceName` has been explicitly set.
-  public var hasServiceName: Bool {return self._serviceName != nil}
+  public var hasServiceName: Bool {self._serviceName != nil}
   /// Clears the value of `serviceName`. Subsequent reads from it will return its default value.
   public mutating func clearServiceName() {self._serviceName = nil}
 
   /// Optional filter by metric name prefix
   public var metricNamePrefix: String {
-    get {return _metricNamePrefix ?? String()}
+    get {_metricNamePrefix ?? String()}
     set {_metricNamePrefix = newValue}
   }
   /// Returns true if `metricNamePrefix` has been explicitly set.
-  public var hasMetricNamePrefix: Bool {return self._metricNamePrefix != nil}
+  public var hasMetricNamePrefix: Bool {self._metricNamePrefix != nil}
   /// Clears the value of `metricNamePrefix`. Subsequent reads from it will return its default value.
   public mutating func clearMetricNamePrefix() {self._metricNamePrefix = nil}
 
   /// Optional filter by app/container name
   public var appName: String {
-    get {return _appName ?? String()}
+    get {_appName ?? String()}
     set {_appName = newValue}
   }
   /// Returns true if `appName` has been explicitly set.
-  public var hasAppName: Bool {return self._appName != nil}
+  public var hasAppName: Bool {self._appName != nil}
   /// Clears the value of `appName`. Subsequent reads from it will return its default value.
   public mutating func clearAppName() {self._appName = nil}
 
@@ -139,11 +139,11 @@ public struct Wendy_Agent_Services_V1_StreamMetricsResponse: Sendable {
   /// OTLP metrics data using the standard OpenTelemetry format.
   /// Can be forwarded directly to a local OTLP collector.
   public var metrics: Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest {
-    get {return _metrics ?? Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest()}
+    get {_metrics ?? Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest()}
     set {_metrics = newValue}
   }
   /// Returns true if `metrics` has been explicitly set.
-  public var hasMetrics: Bool {return self._metrics != nil}
+  public var hasMetrics: Bool {self._metrics != nil}
   /// Clears the value of `metrics`. Subsequent reads from it will return its default value.
   public mutating func clearMetrics() {self._metrics = nil}
 
@@ -161,31 +161,31 @@ public struct Wendy_Agent_Services_V1_StreamTracesRequest: Sendable {
 
   /// Optional filter by service name
   public var serviceName: String {
-    get {return _serviceName ?? String()}
+    get {_serviceName ?? String()}
     set {_serviceName = newValue}
   }
   /// Returns true if `serviceName` has been explicitly set.
-  public var hasServiceName: Bool {return self._serviceName != nil}
+  public var hasServiceName: Bool {self._serviceName != nil}
   /// Clears the value of `serviceName`. Subsequent reads from it will return its default value.
   public mutating func clearServiceName() {self._serviceName = nil}
 
   /// Optional filter by app/container name
   public var appName: String {
-    get {return _appName ?? String()}
+    get {_appName ?? String()}
     set {_appName = newValue}
   }
   /// Returns true if `appName` has been explicitly set.
-  public var hasAppName: Bool {return self._appName != nil}
+  public var hasAppName: Bool {self._appName != nil}
   /// Clears the value of `appName`. Subsequent reads from it will return its default value.
   public mutating func clearAppName() {self._appName = nil}
 
   /// Optional filter by span name prefix
   public var spanNamePrefix: String {
-    get {return _spanNamePrefix ?? String()}
+    get {_spanNamePrefix ?? String()}
     set {_spanNamePrefix = newValue}
   }
   /// Returns true if `spanNamePrefix` has been explicitly set.
-  public var hasSpanNamePrefix: Bool {return self._spanNamePrefix != nil}
+  public var hasSpanNamePrefix: Bool {self._spanNamePrefix != nil}
   /// Clears the value of `spanNamePrefix`. Subsequent reads from it will return its default value.
   public mutating func clearSpanNamePrefix() {self._spanNamePrefix = nil}
 
@@ -206,11 +206,11 @@ public struct Wendy_Agent_Services_V1_StreamTracesResponse: Sendable {
   /// OTLP trace data using the standard OpenTelemetry format.
   /// Can be forwarded directly to a local OTLP collector.
   public var traces: Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest {
-    get {return _traces ?? Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest()}
+    get {_traces ?? Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest()}
     set {_traces = newValue}
   }
   /// Returns true if `traces` has been explicitly set.
-  public var hasTraces: Bool {return self._traces != nil}
+  public var hasTraces: Bool {self._traces != nil}
   /// Clears the value of `traces`. Subsequent reads from it will return its default value.
   public mutating func clearTraces() {self._traces = nil}
 

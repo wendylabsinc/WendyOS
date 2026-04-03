@@ -22,7 +22,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -240,11 +244,11 @@ public struct Opentelemetry_Proto_Metrics_V1_ResourceMetrics: Sendable {
   /// The resource for the metrics in this message.
   /// If this field is not set then no resource info is known.
   public var resource: Opentelemetry_Proto_Resource_V1_Resource {
-    get {return _resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
+    get {_resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
     set {_resource = newValue}
   }
   /// Returns true if `resource` has been explicitly set.
-  public var hasResource: Bool {return self._resource != nil}
+  public var hasResource: Bool {self._resource != nil}
   /// Clears the value of `resource`. Subsequent reads from it will return its default value.
   public mutating func clearResource() {self._resource = nil}
 
@@ -276,11 +280,11 @@ public struct Opentelemetry_Proto_Metrics_V1_ScopeMetrics: Sendable {
   /// Semantically when InstrumentationScope isn't set, it is equivalent with
   /// an empty instrumentation scope name (unknown).
   public var scope: Opentelemetry_Proto_Common_V1_InstrumentationScope {
-    get {return _scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
+    get {_scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
     set {_scope = newValue}
   }
   /// Returns true if `scope` has been explicitly set.
-  public var hasScope: Bool {return self._scope != nil}
+  public var hasScope: Bool {self._scope != nil}
   /// Clears the value of `scope`. Subsequent reads from it will return its default value.
   public mutating func clearScope() {self._scope = nil}
 
@@ -699,11 +703,11 @@ public struct Opentelemetry_Proto_Metrics_V1_HistogramDataPoint: Sendable {
   /// doing so.  This is specifically to enforce compatibility w/ OpenMetrics,
   /// see: https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#histogram
   public var sum: Double {
-    get {return _sum ?? 0}
+    get {_sum ?? 0}
     set {_sum = newValue}
   }
   /// Returns true if `sum` has been explicitly set.
-  public var hasSum: Bool {return self._sum != nil}
+  public var hasSum: Bool {self._sum != nil}
   /// Clears the value of `sum`. Subsequent reads from it will return its default value.
   public mutating func clearSum() {self._sum = nil}
 
@@ -746,21 +750,21 @@ public struct Opentelemetry_Proto_Metrics_V1_HistogramDataPoint: Sendable {
 
   /// min is the minimum value over (start_time, end_time].
   public var min: Double {
-    get {return _min ?? 0}
+    get {_min ?? 0}
     set {_min = newValue}
   }
   /// Returns true if `min` has been explicitly set.
-  public var hasMin: Bool {return self._min != nil}
+  public var hasMin: Bool {self._min != nil}
   /// Clears the value of `min`. Subsequent reads from it will return its default value.
   public mutating func clearMin() {self._min = nil}
 
   /// max is the maximum value over (start_time, end_time].
   public var max: Double {
-    get {return _max ?? 0}
+    get {_max ?? 0}
     set {_max = newValue}
   }
   /// Returns true if `max` has been explicitly set.
-  public var hasMax: Bool {return self._max != nil}
+  public var hasMax: Bool {self._max != nil}
   /// Clears the value of `max`. Subsequent reads from it will return its default value.
   public mutating func clearMax() {self._max = nil}
 
@@ -816,11 +820,11 @@ public struct Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint: Send
   /// doing so.  This is specifically to enforce compatibility w/ OpenMetrics,
   /// see: https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#histogram
   public var sum: Double {
-    get {return _sum ?? 0}
+    get {_sum ?? 0}
     set {_sum = newValue}
   }
   /// Returns true if `sum` has been explicitly set.
-  public var hasSum: Bool {return self._sum != nil}
+  public var hasSum: Bool {self._sum != nil}
   /// Clears the value of `sum`. Subsequent reads from it will return its default value.
   public mutating func clearSum() {self._sum = nil}
 
@@ -853,21 +857,21 @@ public struct Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint: Send
 
   /// positive carries the positive range of exponential bucket counts.
   public var positive: Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets {
-    get {return _positive ?? Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets()}
+    get {_positive ?? Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets()}
     set {_positive = newValue}
   }
   /// Returns true if `positive` has been explicitly set.
-  public var hasPositive: Bool {return self._positive != nil}
+  public var hasPositive: Bool {self._positive != nil}
   /// Clears the value of `positive`. Subsequent reads from it will return its default value.
   public mutating func clearPositive() {self._positive = nil}
 
   /// negative carries the negative range of exponential bucket counts.
   public var negative: Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets {
-    get {return _negative ?? Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets()}
+    get {_negative ?? Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint.Buckets()}
     set {_negative = newValue}
   }
   /// Returns true if `negative` has been explicitly set.
-  public var hasNegative: Bool {return self._negative != nil}
+  public var hasNegative: Bool {self._negative != nil}
   /// Clears the value of `negative`. Subsequent reads from it will return its default value.
   public mutating func clearNegative() {self._negative = nil}
 
@@ -881,21 +885,21 @@ public struct Opentelemetry_Proto_Metrics_V1_ExponentialHistogramDataPoint: Send
 
   /// The minimum value over (start_time, end_time].
   public var min: Double {
-    get {return _min ?? 0}
+    get {_min ?? 0}
     set {_min = newValue}
   }
   /// Returns true if `min` has been explicitly set.
-  public var hasMin: Bool {return self._min != nil}
+  public var hasMin: Bool {self._min != nil}
   /// Clears the value of `min`. Subsequent reads from it will return its default value.
   public mutating func clearMin() {self._min = nil}
 
   /// The maximum value over (start_time, end_time].
   public var max: Double {
-    get {return _max ?? 0}
+    get {_max ?? 0}
     set {_max = newValue}
   }
   /// Returns true if `max` has been explicitly set.
-  public var hasMax: Bool {return self._max != nil}
+  public var hasMax: Bool {self._max != nil}
   /// Clears the value of `max`. Subsequent reads from it will return its default value.
   public mutating func clearMax() {self._max = nil}
 

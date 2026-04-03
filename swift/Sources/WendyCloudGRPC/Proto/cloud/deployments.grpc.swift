@@ -29,7 +29,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "CreateAppRelease".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "CreateAppRelease"
+                method: "CreateAppRelease",
+                type: .unary
             )
         }
         /// Namespace for "UpdateAppRelease" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "UpdateAppRelease".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "UpdateAppRelease"
+                method: "UpdateAppRelease",
+                type: .unary
             )
         }
         /// Namespace for "ListAppReleases" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "ListAppReleases".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "ListAppReleases"
+                method: "ListAppReleases",
+                type: .serverStreaming
             )
         }
         /// Namespace for "GetPushImageCredentials" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "GetPushImageCredentials".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "GetPushImageCredentials"
+                method: "GetPushImageCredentials",
+                type: .unary
             )
         }
         /// Namespace for "CreateDeployment" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "CreateDeployment".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "CreateDeployment"
+                method: "CreateDeployment",
+                type: .unary
             )
         }
         /// Namespace for "GetDeployment" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "GetDeployment".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "GetDeployment"
+                method: "GetDeployment",
+                type: .unary
             )
         }
         /// Namespace for "ListDeployments" metadata.
@@ -101,7 +107,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "ListDeployments".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "ListDeployments"
+                method: "ListDeployments",
+                type: .serverStreaming
             )
         }
         /// Namespace for "HandleReportedState" metadata.
@@ -113,7 +120,8 @@ public enum Wendycloud_V1_DeploymentService: Sendable {
             /// Descriptor for "HandleReportedState".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.DeploymentService"),
-                method: "HandleReportedState"
+                method: "HandleReportedState",
+                type: .bidirectionalStreaming
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.DeploymentService" service.

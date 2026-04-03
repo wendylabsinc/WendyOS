@@ -75,29 +75,29 @@ public struct Wendycloud_V1_AppRelease: Sendable {
   public var details: String = String()
 
   public var imageDigest: String {
-    get {return _imageDigest ?? String()}
+    get {_imageDigest ?? String()}
     set {_imageDigest = newValue}
   }
   /// Returns true if `imageDigest` has been explicitly set.
-  public var hasImageDigest: Bool {return self._imageDigest != nil}
+  public var hasImageDigest: Bool {self._imageDigest != nil}
   /// Clears the value of `imageDigest`. Subsequent reads from it will return its default value.
   public mutating func clearImageDigest() {self._imageDigest = nil}
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return self._updatedAt != nil}
+  public var hasUpdatedAt: Bool {self._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {self._updatedAt = nil}
 
@@ -208,11 +208,11 @@ public struct Wendycloud_V1_GetPushImageCredentialsResponse: Sendable {
   public var accessToken: String = String()
 
   public var expiresAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_expiresAt = newValue}
   }
   /// Returns true if `expiresAt` has been explicitly set.
-  public var hasExpiresAt: Bool {return self._expiresAt != nil}
+  public var hasExpiresAt: Bool {self._expiresAt != nil}
   /// Clears the value of `expiresAt`. Subsequent reads from it will return its default value.
   public mutating func clearExpiresAt() {self._expiresAt = nil}
 
@@ -243,11 +243,11 @@ public struct Wendycloud_V1_Deployment: Sendable {
   public var createdByUserID: String = String()
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
@@ -267,11 +267,11 @@ public struct Wendycloud_V1_CreateDeploymentRequest: Sendable {
   public var organizationID: Int32 = 0
 
   public var jqFilter: String {
-    get {return _jqFilter ?? String()}
+    get {_jqFilter ?? String()}
     set {_jqFilter = newValue}
   }
   /// Returns true if `jqFilter` has been explicitly set.
-  public var hasJqFilter: Bool {return self._jqFilter != nil}
+  public var hasJqFilter: Bool {self._jqFilter != nil}
   /// Clears the value of `jqFilter`. Subsequent reads from it will return its default value.
   public mutating func clearJqFilter() {self._jqFilter = nil}
 
@@ -354,11 +354,11 @@ public struct Wendycloud_V1_CurrentState: Sendable {
   public var appID: String = String()
 
   public var appReleaseID: Int32 {
-    get {return _appReleaseID ?? 0}
+    get {_appReleaseID ?? 0}
     set {_appReleaseID = newValue}
   }
   /// Returns true if `appReleaseID` has been explicitly set.
-  public var hasAppReleaseID: Bool {return self._appReleaseID != nil}
+  public var hasAppReleaseID: Bool {self._appReleaseID != nil}
   /// Clears the value of `appReleaseID`. Subsequent reads from it will return its default value.
   public mutating func clearAppReleaseID() {self._appReleaseID = nil}
 
@@ -397,11 +397,11 @@ public struct Wendycloud_V1_DesiredAppState: Sendable {
   public var appID: String = String()
 
   public var appReleaseID: Int32 {
-    get {return _appReleaseID ?? 0}
+    get {_appReleaseID ?? 0}
     set {_appReleaseID = newValue}
   }
   /// Returns true if `appReleaseID` has been explicitly set.
-  public var hasAppReleaseID: Bool {return self._appReleaseID != nil}
+  public var hasAppReleaseID: Bool {self._appReleaseID != nil}
   /// Clears the value of `appReleaseID`. Subsequent reads from it will return its default value.
   public mutating func clearAppReleaseID() {self._appReleaseID = nil}
 

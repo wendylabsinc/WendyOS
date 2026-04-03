@@ -29,7 +29,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "ListLayers".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "ListLayers"
+                method: "ListLayers",
+                type: .serverStreaming
             )
         }
         /// Namespace for "WriteLayer" metadata.
@@ -41,7 +42,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "WriteLayer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "WriteLayer"
+                method: "WriteLayer",
+                type: .bidirectionalStreaming
             )
         }
         /// Namespace for "CreateContainer" metadata.
@@ -53,7 +55,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "CreateContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "CreateContainer"
+                method: "CreateContainer",
+                type: .unary
             )
         }
         /// Namespace for "CreateContainerWithProgress" metadata.
@@ -65,7 +68,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "CreateContainerWithProgress".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "CreateContainerWithProgress"
+                method: "CreateContainerWithProgress",
+                type: .serverStreaming
             )
         }
         /// Namespace for "RunContainer" metadata.
@@ -77,7 +81,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "RunContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "RunContainer"
+                method: "RunContainer",
+                type: .serverStreaming
             )
         }
         /// Namespace for "StartContainer" metadata.
@@ -89,7 +94,21 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "StartContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "StartContainer"
+                method: "StartContainer",
+                type: .serverStreaming
+            )
+        }
+        /// Namespace for "AttachContainer" metadata.
+        public enum AttachContainer: Sendable {
+            /// Request type for "AttachContainer".
+            public typealias Input = Wendy_Agent_Services_V1_AttachContainerRequest
+            /// Response type for "AttachContainer".
+            public typealias Output = Wendy_Agent_Services_V1_RunContainerLayersResponse
+            /// Descriptor for "AttachContainer".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "AttachContainer",
+                type: .bidirectionalStreaming
             )
         }
         /// Namespace for "StopContainer" metadata.
@@ -101,7 +120,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "StopContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "StopContainer"
+                method: "StopContainer",
+                type: .unary
             )
         }
         /// Namespace for "DeleteContainer" metadata.
@@ -113,7 +133,8 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "DeleteContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "DeleteContainer"
+                method: "DeleteContainer",
+                type: .unary
             )
         }
         /// Namespace for "ListContainers" metadata.
@@ -125,7 +146,34 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             /// Descriptor for "ListContainers".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
-                method: "ListContainers"
+                method: "ListContainers",
+                type: .serverStreaming
+            )
+        }
+        /// Namespace for "ListVolumes" metadata.
+        public enum ListVolumes: Sendable {
+            /// Request type for "ListVolumes".
+            public typealias Input = Wendy_Agent_Services_V1_ListVolumesRequest
+            /// Response type for "ListVolumes".
+            public typealias Output = Wendy_Agent_Services_V1_ListVolumesResponse
+            /// Descriptor for "ListVolumes".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "ListVolumes",
+                type: .unary
+            )
+        }
+        /// Namespace for "RemoveVolume" metadata.
+        public enum RemoveVolume: Sendable {
+            /// Request type for "RemoveVolume".
+            public typealias Input = Wendy_Agent_Services_V1_RemoveVolumeRequest
+            /// Response type for "RemoveVolume".
+            public typealias Output = Wendy_Agent_Services_V1_RemoveVolumeResponse
+            /// Descriptor for "RemoveVolume".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "RemoveVolume",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyContainerService" service.
@@ -136,9 +184,12 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             CreateContainerWithProgress.descriptor,
             RunContainer.descriptor,
             StartContainer.descriptor,
+            AttachContainer.descriptor,
             StopContainer.descriptor,
             DeleteContainer.descriptor,
-            ListContainers.descriptor
+            ListContainers.descriptor,
+            ListVolumes.descriptor,
+            RemoveVolume.descriptor
         ]
     }
 }
@@ -248,6 +299,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>
 
+        /// Handle the "AttachContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_RunContainerLayersResponse` messages.
+        func attachContainer(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>
+
         /// Handle the "StopContainer" method.
         ///
         /// - Parameters:
@@ -289,6 +354,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListContainersRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListContainersResponse>
+
+        /// Handle the "ListVolumes" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ListVolumesRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ListVolumesResponse` messages.
+        func listVolumes(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse>
+
+        /// Handle the "RemoveVolume" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_RemoveVolumeRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_RemoveVolumeResponse` messages.
+        func removeVolume(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>
     }
 
     /// Service protocol for the "wendy.agent.services.v1.WendyContainerService" service.
@@ -383,6 +476,20 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>
 
+        /// Handle the "AttachContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_RunContainerLayersResponse` messages.
+        func attachContainer(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>
+
         /// Handle the "StopContainer" method.
         ///
         /// - Parameters:
@@ -424,6 +531,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListContainersRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListContainersResponse>
+
+        /// Handle the "ListVolumes" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListVolumesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ListVolumesResponse` message.
+        func listVolumes(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse>
+
+        /// Handle the "RemoveVolume" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RemoveVolumeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_RemoveVolumeResponse` message.
+        func removeVolume(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v1.WendyContainerService" service.
@@ -521,6 +656,21 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws
 
+        /// Handle the "AttachContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A stream of `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - response: A response stream of `Wendy_Agent_Services_V1_RunContainerLayersResponse` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        func attachContainer(
+            request: GRPCCore.RPCAsyncSequence<Wendy_Agent_Services_V1_AttachContainerRequest, any Swift.Error>,
+            response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_RunContainerLayersResponse>,
+            context: GRPCCore.ServerContext
+        ) async throws
+
         /// Handle the "StopContainer" method.
         ///
         /// - Parameters:
@@ -563,6 +713,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             response: GRPCCore.RPCWriter<Wendy_Agent_Services_V1_ListContainersResponse>,
             context: GRPCCore.ServerContext
         ) async throws
+
+        /// Handle the "ListVolumes" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ListVolumesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ListVolumesResponse` to respond with.
+        func listVolumes(
+            request: Wendy_Agent_Services_V1_ListVolumesRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ListVolumesResponse
+
+        /// Handle the "RemoveVolume" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_RemoveVolumeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_RemoveVolumeResponse` to respond with.
+        func removeVolume(
+            request: Wendy_Agent_Services_V1_RemoveVolumeRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_RemoveVolumeResponse
     }
 }
 
@@ -637,6 +815,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.AttachContainer.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_AttachContainerRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_RunContainerLayersResponse>(),
+            handler: { request, context in
+                try await self.attachContainer(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.StopContainer.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_StopContainerRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_StopContainerResponse>(),
@@ -664,6 +853,28 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListContainersResponse>(),
             handler: { request, context in
                 try await self.listContainers(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.ListVolumes.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListVolumesRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListVolumesResponse>(),
+            handler: { request, context in
+                try await self.listVolumes(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.RemoveVolume.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_RemoveVolumeRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_RemoveVolumeResponse>(),
+            handler: { request, context in
+                try await self.removeVolume(
                     request: request,
                     context: context
                 )
@@ -761,6 +972,28 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
             context: context
         )
         return response
+    }
+
+    public func listVolumes(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse> {
+        let response = try await self.listVolumes(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func removeVolume(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse> {
+        let response = try await self.removeVolume(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
     }
 }
 
@@ -865,6 +1098,23 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
         )
     }
 
+    public func attachContainer(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
+        return GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>(
+            metadata: [:],
+            producer: { writer in
+                try await self.attachContainer(
+                    request: request.messages,
+                    response: writer,
+                    context: context
+                )
+                return [:]
+            }
+        )
+    }
+
     public func stopContainer(
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_StopContainerRequest>,
         context: GRPCCore.ServerContext
@@ -905,6 +1155,32 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
                 )
                 return [:]
             }
+        )
+    }
+
+    public func listVolumes(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse>(
+            message: try await self.listVolumes(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func removeVolume(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>(
+            message: try await self.removeVolume(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
         )
     }
 }
@@ -1032,6 +1308,25 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
+        /// Call the "AttachContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RunContainerLayersResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func attachContainer<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_RunContainerLayersResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
         /// Call the "StopContainer" method.
         ///
         /// - Parameters:
@@ -1087,6 +1382,44 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListContainersResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_ListContainersResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ListVolumes" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListVolumesRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListVolumesRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListVolumesResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func listVolumes<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListVolumesResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListVolumesResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "RemoveVolume" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RemoveVolumeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RemoveVolumeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RemoveVolumeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func removeVolume<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_RemoveVolumeResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -1276,6 +1609,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
 
+        /// Call the "AttachContainer" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RunContainerLayersResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func attachContainer<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_AttachContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_RunContainerLayersResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.bidirectionalStreaming(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.AttachContainer.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
         /// Call the "StopContainer" method.
         ///
         /// - Parameters:
@@ -1357,6 +1718,66 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             try await self.client.serverStreaming(
                 request: request,
                 descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.ListContainers.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ListVolumes" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListVolumesRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListVolumesRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListVolumesResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func listVolumes<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ListVolumesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListVolumesResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListVolumesResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.ListVolumes.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "RemoveVolume" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RemoveVolumeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RemoveVolumeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RemoveVolumeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func removeVolume<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_RemoveVolumeResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.RemoveVolume.descriptor,
                 serializer: serializer,
                 deserializer: deserializer,
                 options: options,
@@ -1509,6 +1930,29 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
         )
     }
 
+    /// Call the "AttachContainer" method.
+    ///
+    /// - Parameters:
+    ///   - request: A streaming request producing `Wendy_Agent_Services_V1_AttachContainerRequest` messages.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func attachContainer<Result>(
+        request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        try await self.attachContainer(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_AttachContainerRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_RunContainerLayersResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "StopContainer" method.
     ///
     /// - Parameters:
@@ -1577,6 +2021,56 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListContainersRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListContainersResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ListVolumes" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListVolumesRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listVolumes<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListVolumesResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.listVolumes(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListVolumesRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListVolumesResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RemoveVolume" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_RemoveVolumeRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func removeVolume<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.removeVolume(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_RemoveVolumeRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_RemoveVolumeResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -1751,6 +2245,34 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
         )
     }
 
+    /// Call the "AttachContainer" method.
+    ///
+    /// - Parameters:
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func attachContainer<Result>(
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        requestProducer producer: @Sendable @escaping (GRPCCore.RPCWriter<Wendy_Agent_Services_V1_AttachContainerRequest>) async throws -> Void,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_AttachContainerRequest>(
+            metadata: metadata,
+            producer: producer
+        )
+        return try await self.attachContainer(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "StopContainer" method.
     ///
     /// - Parameters:
@@ -1830,6 +2352,64 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             metadata: metadata
         )
         return try await self.listContainers(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ListVolumes" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listVolumes<Result>(
+        _ message: Wendy_Agent_Services_V1_ListVolumesRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListVolumesResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListVolumesRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.listVolumes(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RemoveVolume" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func removeVolume<Result>(
+        _ message: Wendy_Agent_Services_V1_RemoveVolumeRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.removeVolume(
             request: request,
             options: options,
             onResponse: handleResponse

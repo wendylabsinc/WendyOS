@@ -29,7 +29,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "CreateNotification".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "CreateNotification"
+                method: "CreateNotification",
+                type: .unary
             )
         }
         /// Namespace for "ListNotifications" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "ListNotifications".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "ListNotifications"
+                method: "ListNotifications",
+                type: .unary
             )
         }
         /// Namespace for "GetNotification" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "GetNotification".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "GetNotification"
+                method: "GetNotification",
+                type: .unary
             )
         }
         /// Namespace for "DeleteNotification" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "DeleteNotification".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "DeleteNotification"
+                method: "DeleteNotification",
+                type: .unary
             )
         }
         /// Namespace for "MarkAsRead" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "MarkAsRead".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "MarkAsRead"
+                method: "MarkAsRead",
+                type: .unary
             )
         }
         /// Namespace for "GetUnreadCount" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_NotificationService: Sendable {
             /// Descriptor for "GetUnreadCount".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.NotificationService"),
-                method: "GetUnreadCount"
+                method: "GetUnreadCount",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.NotificationService" service.

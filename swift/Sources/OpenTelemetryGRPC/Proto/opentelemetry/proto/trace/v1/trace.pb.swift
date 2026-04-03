@@ -22,7 +22,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -136,11 +140,11 @@ public struct Opentelemetry_Proto_Trace_V1_ResourceSpans: Sendable {
   /// The resource for the spans in this message.
   /// If this field is not set then no resource info is known.
   public var resource: Opentelemetry_Proto_Resource_V1_Resource {
-    get {return _resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
+    get {_resource ?? Opentelemetry_Proto_Resource_V1_Resource()}
     set {_resource = newValue}
   }
   /// Returns true if `resource` has been explicitly set.
-  public var hasResource: Bool {return self._resource != nil}
+  public var hasResource: Bool {self._resource != nil}
   /// Clears the value of `resource`. Subsequent reads from it will return its default value.
   public mutating func clearResource() {self._resource = nil}
 
@@ -172,11 +176,11 @@ public struct Opentelemetry_Proto_Trace_V1_ScopeSpans: Sendable {
   /// Semantically when InstrumentationScope isn't set, it is equivalent with
   /// an empty instrumentation scope name (unknown).
   public var scope: Opentelemetry_Proto_Common_V1_InstrumentationScope {
-    get {return _scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
+    get {_scope ?? Opentelemetry_Proto_Common_V1_InstrumentationScope()}
     set {_scope = newValue}
   }
   /// Returns true if `scope` has been explicitly set.
-  public var hasScope: Bool {return self._scope != nil}
+  public var hasScope: Bool {self._scope != nil}
   /// Clears the value of `scope`. Subsequent reads from it will return its default value.
   public mutating func clearScope() {self._scope = nil}
 
@@ -213,7 +217,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// This field is required.
   public var traceID: Data {
-    get {return _storage._traceID}
+    get {_storage._traceID}
     set {_uniqueStorage()._traceID = newValue}
   }
 
@@ -224,7 +228,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// This field is required.
   public var spanID: Data {
-    get {return _storage._spanID}
+    get {_storage._spanID}
     set {_uniqueStorage()._spanID = newValue}
   }
 
@@ -232,14 +236,14 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   /// It is a trace_state in w3c-trace-context format: https://www.w3.org/TR/trace-context/#tracestate-header
   /// See also https://github.com/w3c/distributed-tracing for more details about this field.
   public var traceState: String {
-    get {return _storage._traceState}
+    get {_storage._traceState}
     set {_uniqueStorage()._traceState = newValue}
   }
 
   /// The `span_id` of this span's parent span. If this is a root span, then this
   /// field must be empty. The ID is an 8-byte array.
   public var parentSpanID: Data {
-    get {return _storage._parentSpanID}
+    get {_storage._parentSpanID}
     set {_uniqueStorage()._parentSpanID = newValue}
   }
 
@@ -265,7 +269,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// [Optional].
   public var flags: UInt32 {
-    get {return _storage._flags}
+    get {_storage._flags}
     set {_uniqueStorage()._flags = newValue}
   }
 
@@ -281,7 +285,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// This field is required.
   public var name: String {
-    get {return _storage._name}
+    get {_storage._name}
     set {_uniqueStorage()._name = newValue}
   }
 
@@ -289,7 +293,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   /// two spans with the same name may be distinguished using `CLIENT` (caller)
   /// and `SERVER` (callee) to identify queueing latency associated with the span.
   public var kind: Opentelemetry_Proto_Trace_V1_Span.SpanKind {
-    get {return _storage._kind}
+    get {_storage._kind}
     set {_uniqueStorage()._kind = newValue}
   }
 
@@ -300,7 +304,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// This field is semantically required and it is expected that end_time >= start_time.
   public var startTimeUnixNano: UInt64 {
-    get {return _storage._startTimeUnixNano}
+    get {_storage._startTimeUnixNano}
     set {_uniqueStorage()._startTimeUnixNano = newValue}
   }
 
@@ -311,7 +315,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   ///
   /// This field is semantically required and it is expected that end_time >= start_time.
   public var endTimeUnixNano: UInt64 {
-    get {return _storage._endTimeUnixNano}
+    get {_storage._endTimeUnixNano}
     set {_uniqueStorage()._endTimeUnixNano = newValue}
   }
 
@@ -327,7 +331,7 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   /// attribute with the same key).
   /// The behavior of software that receives duplicated keys can be unpredictable.
   public var attributes: [Opentelemetry_Proto_Common_V1_KeyValue] {
-    get {return _storage._attributes}
+    get {_storage._attributes}
     set {_uniqueStorage()._attributes = newValue}
   }
 
@@ -335,45 +339,45 @@ public struct Opentelemetry_Proto_Trace_V1_Span: @unchecked Sendable {
   /// can be discarded because their keys are too long or because there are too many
   /// attributes. If this value is 0, then no attributes were dropped.
   public var droppedAttributesCount: UInt32 {
-    get {return _storage._droppedAttributesCount}
+    get {_storage._droppedAttributesCount}
     set {_uniqueStorage()._droppedAttributesCount = newValue}
   }
 
   /// A collection of Event items.
   public var events: [Opentelemetry_Proto_Trace_V1_Span.Event] {
-    get {return _storage._events}
+    get {_storage._events}
     set {_uniqueStorage()._events = newValue}
   }
 
   /// The number of dropped events. If the value is 0, then no
   /// events were dropped.
   public var droppedEventsCount: UInt32 {
-    get {return _storage._droppedEventsCount}
+    get {_storage._droppedEventsCount}
     set {_uniqueStorage()._droppedEventsCount = newValue}
   }
 
   /// A collection of Links, which are references from this span to a span
   /// in the same or different trace.
   public var links: [Opentelemetry_Proto_Trace_V1_Span.Link] {
-    get {return _storage._links}
+    get {_storage._links}
     set {_uniqueStorage()._links = newValue}
   }
 
   /// The number of dropped links after the maximum size was
   /// enforced. If this value is 0, then no links were dropped.
   public var droppedLinksCount: UInt32 {
-    get {return _storage._droppedLinksCount}
+    get {_storage._droppedLinksCount}
     set {_uniqueStorage()._droppedLinksCount = newValue}
   }
 
   /// An optional final status for this span. Semantically when Status isn't set, it means
   /// span's status code is unset, i.e. assume STATUS_CODE_UNSET (code = 0).
   public var status: Opentelemetry_Proto_Trace_V1_Status {
-    get {return _storage._status ?? Opentelemetry_Proto_Trace_V1_Status()}
+    get {_storage._status ?? Opentelemetry_Proto_Trace_V1_Status()}
     set {_uniqueStorage()._status = newValue}
   }
   /// Returns true if `status` has been explicitly set.
-  public var hasStatus: Bool {return _storage._status != nil}
+  public var hasStatus: Bool {_storage._status != nil}
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {_uniqueStorage()._status = nil}
 

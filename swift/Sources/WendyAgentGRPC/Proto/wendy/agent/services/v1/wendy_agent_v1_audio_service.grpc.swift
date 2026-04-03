@@ -29,7 +29,8 @@ public enum Wendy_Agent_Services_V1_WendyAudioService: Sendable {
             /// Descriptor for "ListAudioDevices".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAudioService"),
-                method: "ListAudioDevices"
+                method: "ListAudioDevices",
+                type: .unary
             )
         }
         /// Namespace for "SetDefaultAudioDevice" metadata.
@@ -41,7 +42,8 @@ public enum Wendy_Agent_Services_V1_WendyAudioService: Sendable {
             /// Descriptor for "SetDefaultAudioDevice".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAudioService"),
-                method: "SetDefaultAudioDevice"
+                method: "SetDefaultAudioDevice",
+                type: .unary
             )
         }
         /// Namespace for "StreamAudioLevels" metadata.
@@ -53,7 +55,8 @@ public enum Wendy_Agent_Services_V1_WendyAudioService: Sendable {
             /// Descriptor for "StreamAudioLevels".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAudioService"),
-                method: "StreamAudioLevels"
+                method: "StreamAudioLevels",
+                type: .serverStreaming
             )
         }
         /// Namespace for "StreamAudio" metadata.
@@ -65,7 +68,8 @@ public enum Wendy_Agent_Services_V1_WendyAudioService: Sendable {
             /// Descriptor for "StreamAudio".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAudioService"),
-                method: "StreamAudio"
+                method: "StreamAudio",
+                type: .serverStreaming
             )
         }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyAudioService" service.

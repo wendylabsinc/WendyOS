@@ -29,7 +29,8 @@ public enum Wendycloud_V1_UserService: Sendable {
             /// Descriptor for "CreateUser".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.UserService"),
-                method: "CreateUser"
+                method: "CreateUser",
+                type: .unary
             )
         }
         /// Namespace for "GetUser" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_UserService: Sendable {
             /// Descriptor for "GetUser".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.UserService"),
-                method: "GetUser"
+                method: "GetUser",
+                type: .unary
             )
         }
         /// Namespace for "UpdateUser" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_UserService: Sendable {
             /// Descriptor for "UpdateUser".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.UserService"),
-                method: "UpdateUser"
+                method: "UpdateUser",
+                type: .unary
             )
         }
         /// Namespace for "ListUsers" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_UserService: Sendable {
             /// Descriptor for "ListUsers".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.UserService"),
-                method: "ListUsers"
+                method: "ListUsers",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.UserService" service.

@@ -22,7 +22,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -169,11 +173,11 @@ public struct Opentelemetry_Proto_Common_V1_KeyValue: Sendable {
 
   /// The value of the pair.
   public var value: Opentelemetry_Proto_Common_V1_AnyValue {
-    get {return _value ?? Opentelemetry_Proto_Common_V1_AnyValue()}
+    get {_value ?? Opentelemetry_Proto_Common_V1_AnyValue()}
     set {_value = newValue}
   }
   /// Returns true if `value` has been explicitly set.
-  public var hasValue: Bool {return self._value != nil}
+  public var hasValue: Bool {self._value != nil}
   /// Clears the value of `value`. Subsequent reads from it will return its default value.
   public mutating func clearValue() {self._value = nil}
 

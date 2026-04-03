@@ -72,11 +72,11 @@ public struct Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceResponse: S
   /// `error_message` = "") is equivalent to it not being set/present. Senders
   /// SHOULD interpret it the same way as in the full success case.
   public var partialSuccess: Opentelemetry_Proto_Collector_Logs_V1_ExportLogsPartialSuccess {
-    get {return _partialSuccess ?? Opentelemetry_Proto_Collector_Logs_V1_ExportLogsPartialSuccess()}
+    get {_partialSuccess ?? Opentelemetry_Proto_Collector_Logs_V1_ExportLogsPartialSuccess()}
     set {_partialSuccess = newValue}
   }
   /// Returns true if `partialSuccess` has been explicitly set.
-  public var hasPartialSuccess: Bool {return self._partialSuccess != nil}
+  public var hasPartialSuccess: Bool {self._partialSuccess != nil}
   /// Clears the value of `partialSuccess`. Subsequent reads from it will return its default value.
   public mutating func clearPartialSuccess() {self._partialSuccess = nil}
 

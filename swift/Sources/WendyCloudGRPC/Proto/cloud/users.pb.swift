@@ -34,20 +34,20 @@ public struct Wendycloud_V1_User: Sendable {
   public var isSuperAdmin: Bool = false
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return self._updatedAt != nil}
+  public var hasUpdatedAt: Bool {self._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {self._updatedAt = nil}
 
@@ -95,20 +95,20 @@ public struct Wendycloud_V1_UpdateUserRequest: Sendable {
   public var id: String = String()
 
   public var name: String {
-    get {return _name ?? String()}
+    get {_name ?? String()}
     set {_name = newValue}
   }
   /// Returns true if `name` has been explicitly set.
-  public var hasName: Bool {return self._name != nil}
+  public var hasName: Bool {self._name != nil}
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
   public var isSuperAdmin: Bool {
-    get {return _isSuperAdmin ?? false}
+    get {_isSuperAdmin ?? false}
     set {_isSuperAdmin = newValue}
   }
   /// Returns true if `isSuperAdmin` has been explicitly set.
-  public var hasIsSuperAdmin: Bool {return self._isSuperAdmin != nil}
+  public var hasIsSuperAdmin: Bool {self._isSuperAdmin != nil}
   /// Clears the value of `isSuperAdmin`. Subsequent reads from it will return its default value.
   public mutating func clearIsSuperAdmin() {self._isSuperAdmin = nil}
 

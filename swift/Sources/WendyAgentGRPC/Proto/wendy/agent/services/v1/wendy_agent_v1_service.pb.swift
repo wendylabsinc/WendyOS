@@ -8,7 +8,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -143,11 +147,11 @@ public struct Wendy_Agent_Services_V1_ControlCommand: Sendable {
 
     /// Optional restart policy override for Docker runtime.
     public var restartPolicy: RestartPolicy {
-      get {return _restartPolicy ?? RestartPolicy()}
+      get {_restartPolicy ?? RestartPolicy()}
       set {_restartPolicy = newValue}
     }
     /// Returns true if `restartPolicy` has been explicitly set.
-    public var hasRestartPolicy: Bool {return self._restartPolicy != nil}
+    public var hasRestartPolicy: Bool {self._restartPolicy != nil}
     /// Clears the value of `restartPolicy`. Subsequent reads from it will return its default value.
     public mutating func clearRestartPolicy() {self._restartPolicy = nil}
 
@@ -401,11 +405,11 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
 
   /// OS version read from /etc/wendy/version.txt (only present on WendyOS)
   public var osVersion: String {
-    get {return _osVersion ?? String()}
+    get {_osVersion ?? String()}
     set {_osVersion = newValue}
   }
   /// Returns true if `osVersion` has been explicitly set.
-  public var hasOsVersion: Bool {return self._osVersion != nil}
+  public var hasOsVersion: Bool {self._osVersion != nil}
   /// Clears the value of `osVersion`. Subsequent reads from it will return its default value.
   public mutating func clearOsVersion() {self._osVersion = nil}
 
@@ -414,11 +418,11 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
   public var cpuArchitecture: String = String()
 
   public var publicKey: String {
-    get {return _publicKey ?? String()}
+    get {_publicKey ?? String()}
     set {_publicKey = newValue}
   }
   /// Returns true if `publicKey` has been explicitly set.
-  public var hasPublicKey: Bool {return self._publicKey != nil}
+  public var hasPublicKey: Bool {self._publicKey != nil}
   /// Clears the value of `publicKey`. Subsequent reads from it will return its default value.
   public mutating func clearPublicKey() {self._publicKey = nil}
 
@@ -465,11 +469,11 @@ public struct Wendy_Agent_Services_V1_ListWiFiNetworksResponse: Sendable {
 
     /// Signal strength indicator (if available)
     public var signalStrength: Int32 {
-      get {return _signalStrength ?? 0}
+      get {_signalStrength ?? 0}
       set {_signalStrength = newValue}
     }
     /// Returns true if `signalStrength` has been explicitly set.
-    public var hasSignalStrength: Bool {return self._signalStrength != nil}
+    public var hasSignalStrength: Bool {self._signalStrength != nil}
     /// Clears the value of `signalStrength`. Subsequent reads from it will return its default value.
     public mutating func clearSignalStrength() {self._signalStrength = nil}
 
@@ -511,11 +515,11 @@ public struct Wendy_Agent_Services_V1_ConnectToWiFiResponse: Sendable {
 
   /// Optional error message if connection failed
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -548,21 +552,21 @@ public struct Wendy_Agent_Services_V1_GetWiFiStatusResponse: Sendable {
 
   /// SSID of the connected network (only present if connected is true)
   public var ssid: String {
-    get {return _ssid ?? String()}
+    get {_ssid ?? String()}
     set {_ssid = newValue}
   }
   /// Returns true if `ssid` has been explicitly set.
-  public var hasSsid: Bool {return self._ssid != nil}
+  public var hasSsid: Bool {self._ssid != nil}
   /// Clears the value of `ssid`. Subsequent reads from it will return its default value.
   public mutating func clearSsid() {self._ssid = nil}
 
   /// Optional error message if status check failed
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -596,11 +600,11 @@ public struct Wendy_Agent_Services_V1_DisconnectWiFiResponse: Sendable {
 
   /// Optional error message if disconnection failed
   public var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  public var hasErrorMessage: Bool {return self._errorMessage != nil}
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   public mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -619,11 +623,11 @@ public struct Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest: Sendable 
 
   /// Optional filter by hardware category (e.g., "gpu", "usb", "i2c")
   public var categoryFilter: String {
-    get {return _categoryFilter ?? String()}
+    get {_categoryFilter ?? String()}
     set {_categoryFilter = newValue}
   }
   /// Returns true if `categoryFilter` has been explicitly set.
-  public var hasCategoryFilter: Bool {return self._categoryFilter != nil}
+  public var hasCategoryFilter: Bool {self._categoryFilter != nil}
   /// Clears the value of `categoryFilter`. Subsequent reads from it will return its default value.
   public mutating func clearCategoryFilter() {self._categoryFilter = nil}
 

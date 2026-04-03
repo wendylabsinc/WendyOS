@@ -29,7 +29,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "IssueCertificate".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "IssueCertificate"
+                method: "IssueCertificate",
+                type: .unary
             )
         }
         /// Namespace for "RefreshCertificate" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "RefreshCertificate".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "RefreshCertificate"
+                method: "RefreshCertificate",
+                type: .unary
             )
         }
         /// Namespace for "RevokeCertificate" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "RevokeCertificate".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "RevokeCertificate"
+                method: "RevokeCertificate",
+                type: .unary
             )
         }
         /// Namespace for "GetCertificate" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "GetCertificate".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "GetCertificate"
+                method: "GetCertificate",
+                type: .unary
             )
         }
         /// Namespace for "ListCertificates" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "ListCertificates".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "ListCertificates"
+                method: "ListCertificates",
+                type: .serverStreaming
             )
         }
         /// Namespace for "GetCaBundle" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "GetCaBundle".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "GetCaBundle"
+                method: "GetCaBundle",
+                type: .unary
             )
         }
         /// Namespace for "CreateAssetEnrollmentToken" metadata.
@@ -101,7 +107,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "CreateAssetEnrollmentToken".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "CreateAssetEnrollmentToken"
+                method: "CreateAssetEnrollmentToken",
+                type: .unary
             )
         }
         /// Namespace for "CreateUserEnrollmentToken" metadata.
@@ -113,7 +120,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "CreateUserEnrollmentToken".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "CreateUserEnrollmentToken"
+                method: "CreateUserEnrollmentToken",
+                type: .unary
             )
         }
         /// Namespace for "GetCertificateMetadata" metadata.
@@ -125,7 +133,8 @@ public enum Wendycloud_V1_CertificateService: Sendable {
             /// Descriptor for "GetCertificateMetadata".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.CertificateService"),
-                method: "GetCertificateMetadata"
+                method: "GetCertificateMetadata",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.CertificateService" service.

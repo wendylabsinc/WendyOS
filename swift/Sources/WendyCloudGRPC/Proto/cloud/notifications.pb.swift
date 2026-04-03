@@ -82,29 +82,29 @@ public struct Wendycloud_V1_Notification: Sendable {
   public var severity: Wendycloud_V1_NotificationSeverity = .unspecified
 
   public var relatedEntities: SwiftProtobuf.Google_Protobuf_Struct {
-    get {return _relatedEntities ?? SwiftProtobuf.Google_Protobuf_Struct()}
+    get {_relatedEntities ?? SwiftProtobuf.Google_Protobuf_Struct()}
     set {_relatedEntities = newValue}
   }
   /// Returns true if `relatedEntities` has been explicitly set.
-  public var hasRelatedEntities: Bool {return self._relatedEntities != nil}
+  public var hasRelatedEntities: Bool {self._relatedEntities != nil}
   /// Clears the value of `relatedEntities`. Subsequent reads from it will return its default value.
   public mutating func clearRelatedEntities() {self._relatedEntities = nil}
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
   public var deletedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _deletedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_deletedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_deletedAt = newValue}
   }
   /// Returns true if `deletedAt` has been explicitly set.
-  public var hasDeletedAt: Bool {return self._deletedAt != nil}
+  public var hasDeletedAt: Bool {self._deletedAt != nil}
   /// Clears the value of `deletedAt`. Subsequent reads from it will return its default value.
   public mutating func clearDeletedAt() {self._deletedAt = nil}
 
@@ -131,11 +131,11 @@ public struct Wendycloud_V1_CreateNotificationRequest: Sendable {
   public var severity: Wendycloud_V1_NotificationSeverity = .unspecified
 
   public var relatedEntities: SwiftProtobuf.Google_Protobuf_Struct {
-    get {return _relatedEntities ?? SwiftProtobuf.Google_Protobuf_Struct()}
+    get {_relatedEntities ?? SwiftProtobuf.Google_Protobuf_Struct()}
     set {_relatedEntities = newValue}
   }
   /// Returns true if `relatedEntities` has been explicitly set.
-  public var hasRelatedEntities: Bool {return self._relatedEntities != nil}
+  public var hasRelatedEntities: Bool {self._relatedEntities != nil}
   /// Clears the value of `relatedEntities`. Subsequent reads from it will return its default value.
   public mutating func clearRelatedEntities() {self._relatedEntities = nil}
 
@@ -160,11 +160,11 @@ public struct Wendycloud_V1_ListNotificationsRequest: Sendable {
   public var pageToken: String = String()
 
   public var severityFilter: Wendycloud_V1_NotificationSeverity {
-    get {return _severityFilter ?? .unspecified}
+    get {_severityFilter ?? .unspecified}
     set {_severityFilter = newValue}
   }
   /// Returns true if `severityFilter` has been explicitly set.
-  public var hasSeverityFilter: Bool {return self._severityFilter != nil}
+  public var hasSeverityFilter: Bool {self._severityFilter != nil}
   /// Clears the value of `severityFilter`. Subsequent reads from it will return its default value.
   public mutating func clearSeverityFilter() {self._severityFilter = nil}
 

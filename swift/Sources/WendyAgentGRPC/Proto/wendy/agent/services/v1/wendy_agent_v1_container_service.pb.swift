@@ -8,7 +8,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -37,11 +41,11 @@ public struct Wendy_Agent_Services_V1_ListContainersResponse: Sendable {
   // methods supported on all messages.
 
   public var container: AppContainer {
-    get {return _container ?? AppContainer()}
+    get {_container ?? AppContainer()}
     set {_container = newValue}
   }
   /// Returns true if `container` has been explicitly set.
-  public var hasContainer: Bool {return self._container != nil}
+  public var hasContainer: Bool {self._container != nil}
   /// Clears the value of `container`. Subsequent reads from it will return its default value.
   public mutating func clearContainer() {self._container = nil}
 
@@ -122,11 +126,11 @@ public struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sendable {
 
   /// Optional restart policy override for Docker runtime.
   public var restartPolicy: RestartPolicy {
-    get {return _restartPolicy ?? RestartPolicy()}
+    get {_restartPolicy ?? RestartPolicy()}
     set {_restartPolicy = newValue}
   }
   /// Returns true if `restartPolicy` has been explicitly set.
-  public var hasRestartPolicy: Bool {return self._restartPolicy != nil}
+  public var hasRestartPolicy: Bool {self._restartPolicy != nil}
   /// Clears the value of `restartPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearRestartPolicy() {self._restartPolicy = nil}
 
@@ -158,11 +162,11 @@ public struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendable {
   public var workingDir: String = String()
 
   public var restartPolicy: RestartPolicy {
-    get {return _restartPolicy ?? RestartPolicy()}
+    get {_restartPolicy ?? RestartPolicy()}
     set {_restartPolicy = newValue}
   }
   /// Returns true if `restartPolicy` has been explicitly set.
-  public var hasRestartPolicy: Bool {return self._restartPolicy != nil}
+  public var hasRestartPolicy: Bool {self._restartPolicy != nil}
   /// Clears the value of `restartPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearRestartPolicy() {self._restartPolicy = nil}
 
@@ -297,6 +301,42 @@ public struct Wendy_Agent_Services_V1_StartContainerRequest: Sendable {
   public init() {}
 }
 
+/// AttachContainerRequest is the client-to-server message for AttachContainer.
+/// The first message must set app_name; subsequent messages carry stdin data.
+public struct Wendy_Agent_Services_V1_AttachContainerRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var requestType: Wendy_Agent_Services_V1_AttachContainerRequest.OneOf_RequestType? = nil
+
+  public var appName: String {
+    get {
+      if case .appName(let v)? = requestType {return v}
+      return String()
+    }
+    set {requestType = .appName(newValue)}
+  }
+
+  public var stdinData: Data {
+    get {
+      if case .stdinData(let v)? = requestType {return v}
+      return Data()
+    }
+    set {requestType = .stdinData(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_RequestType: Equatable, Sendable {
+    case appName(String)
+    case stdinData(Data)
+
+  }
+
+  public init() {}
+}
+
 public struct Wendy_Agent_Services_V1_RunContainerLayerHeader: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -414,12 +454,80 @@ public struct Wendy_Agent_Services_V1_DeleteContainerRequest: Sendable {
   /// Optionally delete the container image as well (useful for freeing space)
   public var deleteImage: Bool = false
 
+  /// Optionally delete persistent volumes at /var/lib/wendy/volumes/
+  public var deleteVolumes: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 }
 
 public struct Wendy_Agent_Services_V1_DeleteContainerResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_ListVolumesRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_VolumeInfo: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var name: String = String()
+
+  public var path: String = String()
+
+  public var sizeBytes: Int64 = 0
+
+  /// RFC 3339 UTC (directory mtime — may update when files are added/removed)
+  public var createdAt: String = String()
+
+  public var usedBy: [String] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_ListVolumesResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var volumes: [Wendy_Agent_Services_V1_VolumeInfo] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_RemoveVolumeRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var name: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_RemoveVolumeResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -897,6 +1005,63 @@ extension Wendy_Agent_Services_V1_StartContainerRequest: SwiftProtobuf.Message, 
   }
 }
 
+extension Wendy_Agent_Services_V1_AttachContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AttachContainerRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_name\0\u{3}stdin_data\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try {
+        var v: String?
+        try decoder.decodeSingularStringField(value: &v)
+        if let v = v {
+          if self.requestType != nil {try decoder.handleConflictingOneOf()}
+          self.requestType = .appName(v)
+        }
+      }()
+      case 2: try {
+        var v: Data?
+        try decoder.decodeSingularBytesField(value: &v)
+        if let v = v {
+          if self.requestType != nil {try decoder.handleConflictingOneOf()}
+          self.requestType = .stdinData(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    switch self.requestType {
+    case .appName?: try {
+      guard case .appName(let v)? = self.requestType else { preconditionFailure() }
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    }()
+    case .stdinData?: try {
+      guard case .stdinData(let v)? = self.requestType else { preconditionFailure() }
+      try visitor.visitSingularBytesField(value: v, fieldNumber: 2)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_AttachContainerRequest, rhs: Wendy_Agent_Services_V1_AttachContainerRequest) -> Bool {
+    if lhs.requestType != rhs.requestType {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 extension Wendy_Agent_Services_V1_RunContainerLayerHeader: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunContainerLayerHeader"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}digest\0\u{1}size\0\u{3}diff_id\0\u{1}gzip\0")
@@ -1126,7 +1291,7 @@ extension Wendy_Agent_Services_V1_StopContainerResponse: SwiftProtobuf.Message, 
 
 extension Wendy_Agent_Services_V1_DeleteContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".DeleteContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_name\0\u{3}delete_image\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_name\0\u{3}delete_image\0\u{3}delete_volumes\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1136,6 +1301,7 @@ extension Wendy_Agent_Services_V1_DeleteContainerRequest: SwiftProtobuf.Message,
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.appName) }()
       case 2: try { try decoder.decodeSingularBoolField(value: &self.deleteImage) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.deleteVolumes) }()
       default: break
       }
     }
@@ -1148,12 +1314,16 @@ extension Wendy_Agent_Services_V1_DeleteContainerRequest: SwiftProtobuf.Message,
     if self.deleteImage != false {
       try visitor.visitSingularBoolField(value: self.deleteImage, fieldNumber: 2)
     }
+    if self.deleteVolumes != false {
+      try visitor.visitSingularBoolField(value: self.deleteVolumes, fieldNumber: 3)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_DeleteContainerRequest, rhs: Wendy_Agent_Services_V1_DeleteContainerRequest) -> Bool {
     if lhs.appName != rhs.appName {return false}
     if lhs.deleteImage != rhs.deleteImage {return false}
+    if lhs.deleteVolumes != rhs.deleteVolumes {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1173,6 +1343,154 @@ extension Wendy_Agent_Services_V1_DeleteContainerResponse: SwiftProtobuf.Message
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_DeleteContainerResponse, rhs: Wendy_Agent_Services_V1_DeleteContainerResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ListVolumesRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ListVolumesRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ListVolumesRequest, rhs: Wendy_Agent_Services_V1_ListVolumesRequest) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_VolumeInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".VolumeInfo"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}path\0\u{3}size_bytes\0\u{3}created_at\0\u{3}used_by\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.path) }()
+      case 3: try { try decoder.decodeSingularInt64Field(value: &self.sizeBytes) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.createdAt) }()
+      case 5: try { try decoder.decodeRepeatedStringField(value: &self.usedBy) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
+    }
+    if !self.path.isEmpty {
+      try visitor.visitSingularStringField(value: self.path, fieldNumber: 2)
+    }
+    if self.sizeBytes != 0 {
+      try visitor.visitSingularInt64Field(value: self.sizeBytes, fieldNumber: 3)
+    }
+    if !self.createdAt.isEmpty {
+      try visitor.visitSingularStringField(value: self.createdAt, fieldNumber: 4)
+    }
+    if !self.usedBy.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.usedBy, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_VolumeInfo, rhs: Wendy_Agent_Services_V1_VolumeInfo) -> Bool {
+    if lhs.name != rhs.name {return false}
+    if lhs.path != rhs.path {return false}
+    if lhs.sizeBytes != rhs.sizeBytes {return false}
+    if lhs.createdAt != rhs.createdAt {return false}
+    if lhs.usedBy != rhs.usedBy {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ListVolumesResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ListVolumesResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}volumes\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.volumes) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.volumes.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.volumes, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ListVolumesResponse, rhs: Wendy_Agent_Services_V1_ListVolumesResponse) -> Bool {
+    if lhs.volumes != rhs.volumes {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_RemoveVolumeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RemoveVolumeRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_RemoveVolumeRequest, rhs: Wendy_Agent_Services_V1_RemoveVolumeRequest) -> Bool {
+    if lhs.name != rhs.name {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_RemoveVolumeResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RemoveVolumeResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_RemoveVolumeResponse, rhs: Wendy_Agent_Services_V1_RemoveVolumeResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

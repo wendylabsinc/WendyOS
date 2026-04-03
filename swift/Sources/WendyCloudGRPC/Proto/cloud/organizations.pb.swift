@@ -82,29 +82,29 @@ public struct Wendycloud_V1_Organization: Sendable {
   public var details: String = String()
 
   public var domain: String {
-    get {return _domain ?? String()}
+    get {_domain ?? String()}
     set {_domain = newValue}
   }
   /// Returns true if `domain` has been explicitly set.
-  public var hasDomain: Bool {return self._domain != nil}
+  public var hasDomain: Bool {self._domain != nil}
   /// Clears the value of `domain`. Subsequent reads from it will return its default value.
   public mutating func clearDomain() {self._domain = nil}
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return self._updatedAt != nil}
+  public var hasUpdatedAt: Bool {self._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {self._updatedAt = nil}
 
@@ -131,20 +131,20 @@ public struct Wendycloud_V1_OrganizationMember: Sendable {
   public var role: Wendycloud_V1_OrganizationRole = .unspecified
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return self._createdAt != nil}
+  public var hasCreatedAt: Bool {self._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {self._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return self._updatedAt != nil}
+  public var hasUpdatedAt: Bool {self._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {self._updatedAt = nil}
 
@@ -166,11 +166,11 @@ public struct Wendycloud_V1_CreateOrganizationRequest: Sendable {
   public var details: String = String()
 
   public var domain: String {
-    get {return _domain ?? String()}
+    get {_domain ?? String()}
     set {_domain = newValue}
   }
   /// Returns true if `domain` has been explicitly set.
-  public var hasDomain: Bool {return self._domain != nil}
+  public var hasDomain: Bool {self._domain != nil}
   /// Clears the value of `domain`. Subsequent reads from it will return its default value.
   public mutating func clearDomain() {self._domain = nil}
 
@@ -201,29 +201,29 @@ public struct Wendycloud_V1_UpdateOrganizationRequest: Sendable {
   public var id: Int32 = 0
 
   public var name: String {
-    get {return _name ?? String()}
+    get {_name ?? String()}
     set {_name = newValue}
   }
   /// Returns true if `name` has been explicitly set.
-  public var hasName: Bool {return self._name != nil}
+  public var hasName: Bool {self._name != nil}
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
   public var details: String {
-    get {return _details ?? String()}
+    get {_details ?? String()}
     set {_details = newValue}
   }
   /// Returns true if `details` has been explicitly set.
-  public var hasDetails: Bool {return self._details != nil}
+  public var hasDetails: Bool {self._details != nil}
   /// Clears the value of `details`. Subsequent reads from it will return its default value.
   public mutating func clearDetails() {self._details = nil}
 
   public var domain: String {
-    get {return _domain ?? String()}
+    get {_domain ?? String()}
     set {_domain = newValue}
   }
   /// Returns true if `domain` has been explicitly set.
-  public var hasDomain: Bool {return self._domain != nil}
+  public var hasDomain: Bool {self._domain != nil}
   /// Clears the value of `domain`. Subsequent reads from it will return its default value.
   public mutating func clearDomain() {self._domain = nil}
 
@@ -266,20 +266,20 @@ public struct Wendycloud_V1_ListOrganizationsRequest: Sendable {
   // methods supported on all messages.
 
   public var offset: Int32 {
-    get {return _offset ?? 0}
+    get {_offset ?? 0}
     set {_offset = newValue}
   }
   /// Returns true if `offset` has been explicitly set.
-  public var hasOffset: Bool {return self._offset != nil}
+  public var hasOffset: Bool {self._offset != nil}
   /// Clears the value of `offset`. Subsequent reads from it will return its default value.
   public mutating func clearOffset() {self._offset = nil}
 
   public var limit: Int32 {
-    get {return _limit ?? 0}
+    get {_limit ?? 0}
     set {_limit = newValue}
   }
   /// Returns true if `limit` has been explicitly set.
-  public var hasLimit: Bool {return self._limit != nil}
+  public var hasLimit: Bool {self._limit != nil}
   /// Clears the value of `limit`. Subsequent reads from it will return its default value.
   public mutating func clearLimit() {self._limit = nil}
 
@@ -297,11 +297,11 @@ public struct Wendycloud_V1_ListOrganizationsResponse: Sendable {
   // methods supported on all messages.
 
   public var organization: Wendycloud_V1_Organization {
-    get {return _organization ?? Wendycloud_V1_Organization()}
+    get {_organization ?? Wendycloud_V1_Organization()}
     set {_organization = newValue}
   }
   /// Returns true if `organization` has been explicitly set.
-  public var hasOrganization: Bool {return self._organization != nil}
+  public var hasOrganization: Bool {self._organization != nil}
   /// Clears the value of `organization`. Subsequent reads from it will return its default value.
   public mutating func clearOrganization() {self._organization = nil}
 
@@ -438,11 +438,11 @@ public struct Wendycloud_V1_AddMemberResult: Sendable {
   public var error: String = String()
 
   public var member: Wendycloud_V1_OrganizationMember {
-    get {return _member ?? Wendycloud_V1_OrganizationMember()}
+    get {_member ?? Wendycloud_V1_OrganizationMember()}
     set {_member = newValue}
   }
   /// Returns true if `member` has been explicitly set.
-  public var hasMember: Bool {return self._member != nil}
+  public var hasMember: Bool {self._member != nil}
   /// Clears the value of `member`. Subsequent reads from it will return its default value.
   public mutating func clearMember() {self._member = nil}
 

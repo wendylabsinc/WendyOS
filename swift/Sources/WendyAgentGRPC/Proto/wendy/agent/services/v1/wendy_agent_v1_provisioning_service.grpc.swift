@@ -29,7 +29,8 @@ public enum Wendy_Agent_Services_V1_WendyProvisioningService: Sendable {
             /// Descriptor for "StartProvisioning".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyProvisioningService"),
-                method: "StartProvisioning"
+                method: "StartProvisioning",
+                type: .unary
             )
         }
         /// Namespace for "IsProvisioned" metadata.
@@ -41,7 +42,8 @@ public enum Wendy_Agent_Services_V1_WendyProvisioningService: Sendable {
             /// Descriptor for "IsProvisioned".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyProvisioningService"),
-                method: "IsProvisioned"
+                method: "IsProvisioned",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyProvisioningService" service.

@@ -179,21 +179,21 @@ public struct Wendycloud_V1_GetCertificateMetadataResponse: Sendable {
 
   /// Set if this is an asset certificate
   public var assetID: Int32 {
-    get {return _assetID ?? 0}
+    get {_assetID ?? 0}
     set {_assetID = newValue}
   }
   /// Returns true if `assetID` has been explicitly set.
-  public var hasAssetID: Bool {return self._assetID != nil}
+  public var hasAssetID: Bool {self._assetID != nil}
   /// Clears the value of `assetID`. Subsequent reads from it will return its default value.
   public mutating func clearAssetID() {self._assetID = nil}
 
   /// Set if this is a user certificate
   public var userID: String {
-    get {return _userID ?? String()}
+    get {_userID ?? String()}
     set {_userID = newValue}
   }
   /// Returns true if `userID` has been explicitly set.
-  public var hasUserID: Bool {return self._userID != nil}
+  public var hasUserID: Bool {self._userID != nil}
   /// Clears the value of `userID`. Subsequent reads from it will return its default value.
   public mutating func clearUserID() {self._userID = nil}
 
@@ -217,106 +217,106 @@ public struct Wendycloud_V1_Certificate: @unchecked Sendable {
   // methods supported on all messages.
 
   public var id: Int32 {
-    get {return _storage._id}
+    get {_storage._id}
     set {_uniqueStorage()._id = newValue}
   }
 
   public var organizationID: Int32 {
-    get {return _storage._organizationID}
+    get {_storage._organizationID}
     set {_uniqueStorage()._organizationID = newValue}
   }
 
   /// Set if this is an asset certificate
   public var assetID: Int32 {
-    get {return _storage._assetID ?? 0}
+    get {_storage._assetID ?? 0}
     set {_uniqueStorage()._assetID = newValue}
   }
   /// Returns true if `assetID` has been explicitly set.
-  public var hasAssetID: Bool {return _storage._assetID != nil}
+  public var hasAssetID: Bool {_storage._assetID != nil}
   /// Clears the value of `assetID`. Subsequent reads from it will return its default value.
   public mutating func clearAssetID() {_uniqueStorage()._assetID = nil}
 
   /// Set if this is a user certificate
   public var userID: String {
-    get {return _storage._userID ?? String()}
+    get {_storage._userID ?? String()}
     set {_uniqueStorage()._userID = newValue}
   }
   /// Returns true if `userID` has been explicitly set.
-  public var hasUserID: Bool {return _storage._userID != nil}
+  public var hasUserID: Bool {_storage._userID != nil}
   /// Clears the value of `userID`. Subsequent reads from it will return its default value.
   public mutating func clearUserID() {_uniqueStorage()._userID = nil}
 
   public var serialNumber: String {
-    get {return _storage._serialNumber}
+    get {_storage._serialNumber}
     set {_uniqueStorage()._serialNumber = newValue}
   }
 
   /// Leaf certificate (PEM)
   public var pemCertificate: String {
-    get {return _storage._pemCertificate}
+    get {_storage._pemCertificate}
     set {_uniqueStorage()._pemCertificate = newValue}
   }
 
   /// Chain including issuer(s) (PEM)
   public var pemCertificateChain: String {
-    get {return _storage._pemCertificateChain}
+    get {_storage._pemCertificateChain}
     set {_uniqueStorage()._pemCertificateChain = newValue}
   }
 
   public var notBefore: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._notBefore ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._notBefore ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._notBefore = newValue}
   }
   /// Returns true if `notBefore` has been explicitly set.
-  public var hasNotBefore: Bool {return _storage._notBefore != nil}
+  public var hasNotBefore: Bool {_storage._notBefore != nil}
   /// Clears the value of `notBefore`. Subsequent reads from it will return its default value.
   public mutating func clearNotBefore() {_uniqueStorage()._notBefore = nil}
 
   public var notAfter: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._notAfter ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._notAfter ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._notAfter = newValue}
   }
   /// Returns true if `notAfter` has been explicitly set.
-  public var hasNotAfter: Bool {return _storage._notAfter != nil}
+  public var hasNotAfter: Bool {_storage._notAfter != nil}
   /// Clears the value of `notAfter`. Subsequent reads from it will return its default value.
   public mutating func clearNotAfter() {_uniqueStorage()._notAfter = nil}
 
   public var status: Wendycloud_V1_CertificateStatus {
-    get {return _storage._status}
+    get {_storage._status}
     set {_uniqueStorage()._status = newValue}
   }
 
   /// if revoked
   public var revokedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._revokedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._revokedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._revokedAt = newValue}
   }
   /// Returns true if `revokedAt` has been explicitly set.
-  public var hasRevokedAt: Bool {return _storage._revokedAt != nil}
+  public var hasRevokedAt: Bool {_storage._revokedAt != nil}
   /// Clears the value of `revokedAt`. Subsequent reads from it will return its default value.
   public mutating func clearRevokedAt() {_uniqueStorage()._revokedAt = nil}
 
   /// free-form for now
   public var revocationReason: String {
-    get {return _storage._revocationReason}
+    get {_storage._revocationReason}
     set {_uniqueStorage()._revocationReason = newValue}
   }
 
   public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._createdAt = newValue}
   }
   /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {return _storage._createdAt != nil}
+  public var hasCreatedAt: Bool {_storage._createdAt != nil}
   /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
   public mutating func clearCreatedAt() {_uniqueStorage()._createdAt = nil}
 
   public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._updatedAt = newValue}
   }
   /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {return _storage._updatedAt != nil}
+  public var hasUpdatedAt: Bool {_storage._updatedAt != nil}
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {_uniqueStorage()._updatedAt = nil}
 
@@ -353,21 +353,21 @@ public struct Wendycloud_V1_IssueCertificateResponse: Sendable {
 
   /// If successful, contains the issued certificate
   public var certificate: Wendycloud_V1_Certificate {
-    get {return _certificate ?? Wendycloud_V1_Certificate()}
+    get {_certificate ?? Wendycloud_V1_Certificate()}
     set {_certificate = newValue}
   }
   /// Returns true if `certificate` has been explicitly set.
-  public var hasCertificate: Bool {return self._certificate != nil}
+  public var hasCertificate: Bool {self._certificate != nil}
   /// Clears the value of `certificate`. Subsequent reads from it will return its default value.
   public mutating func clearCertificate() {self._certificate = nil}
 
   /// Error details if issuance failed (empty on success)
   public var error: Wendycloud_V1_CertificateError {
-    get {return _error ?? Wendycloud_V1_CertificateError()}
+    get {_error ?? Wendycloud_V1_CertificateError()}
     set {_error = newValue}
   }
   /// Returns true if `error` has been explicitly set.
-  public var hasError: Bool {return self._error != nil}
+  public var hasError: Bool {self._error != nil}
   /// Clears the value of `error`. Subsequent reads from it will return its default value.
   public mutating func clearError() {self._error = nil}
 
@@ -379,21 +379,21 @@ public struct Wendycloud_V1_IssueCertificateResponse: Sendable {
 
   /// Asset this certificate was issued for (populated when using asset enrollment token)
   public var assetID: Int32 {
-    get {return _assetID ?? 0}
+    get {_assetID ?? 0}
     set {_assetID = newValue}
   }
   /// Returns true if `assetID` has been explicitly set.
-  public var hasAssetID: Bool {return self._assetID != nil}
+  public var hasAssetID: Bool {self._assetID != nil}
   /// Clears the value of `assetID`. Subsequent reads from it will return its default value.
   public mutating func clearAssetID() {self._assetID = nil}
 
   /// User this certificate was issued for (populated when using user enrollment token)
   public var userID: String {
-    get {return _userID ?? String()}
+    get {_userID ?? String()}
     set {_userID = newValue}
   }
   /// Returns true if `userID` has been explicitly set.
-  public var hasUserID: Bool {return self._userID != nil}
+  public var hasUserID: Bool {self._userID != nil}
   /// Clears the value of `userID`. Subsequent reads from it will return its default value.
   public mutating func clearUserID() {self._userID = nil}
 
@@ -432,21 +432,21 @@ public struct Wendycloud_V1_RefreshCertificateResponse: Sendable {
 
   /// If successful, contains the refreshed certificate
   public var certificate: Wendycloud_V1_Certificate {
-    get {return _certificate ?? Wendycloud_V1_Certificate()}
+    get {_certificate ?? Wendycloud_V1_Certificate()}
     set {_certificate = newValue}
   }
   /// Returns true if `certificate` has been explicitly set.
-  public var hasCertificate: Bool {return self._certificate != nil}
+  public var hasCertificate: Bool {self._certificate != nil}
   /// Clears the value of `certificate`. Subsequent reads from it will return its default value.
   public mutating func clearCertificate() {self._certificate = nil}
 
   /// Error details if refresh failed (empty on success)
   public var error: Wendycloud_V1_CertificateError {
-    get {return _error ?? Wendycloud_V1_CertificateError()}
+    get {_error ?? Wendycloud_V1_CertificateError()}
     set {_error = newValue}
   }
   /// Returns true if `error` has been explicitly set.
-  public var hasError: Bool {return self._error != nil}
+  public var hasError: Bool {self._error != nil}
   /// Clears the value of `error`. Subsequent reads from it will return its default value.
   public mutating func clearError() {self._error = nil}
 
@@ -508,20 +508,20 @@ public struct Wendycloud_V1_ListCertificatesRequest: Sendable {
 
   /// Offset/limit based pagination
   public var offset: Int32 {
-    get {return _offset ?? 0}
+    get {_offset ?? 0}
     set {_offset = newValue}
   }
   /// Returns true if `offset` has been explicitly set.
-  public var hasOffset: Bool {return self._offset != nil}
+  public var hasOffset: Bool {self._offset != nil}
   /// Clears the value of `offset`. Subsequent reads from it will return its default value.
   public mutating func clearOffset() {self._offset = nil}
 
   public var limit: Int32 {
-    get {return _limit ?? 0}
+    get {_limit ?? 0}
     set {_limit = newValue}
   }
   /// Returns true if `limit` has been explicitly set.
-  public var hasLimit: Bool {return self._limit != nil}
+  public var hasLimit: Bool {self._limit != nil}
   /// Clears the value of `limit`. Subsequent reads from it will return its default value.
   public mutating func clearLimit() {self._limit = nil}
 
@@ -540,11 +540,11 @@ public struct Wendycloud_V1_ListCertificatesResponse: Sendable {
 
   /// One certificate per streamed response and total count for the full query
   public var certificate: Wendycloud_V1_Certificate {
-    get {return _certificate ?? Wendycloud_V1_Certificate()}
+    get {_certificate ?? Wendycloud_V1_Certificate()}
     set {_certificate = newValue}
   }
   /// Returns true if `certificate` has been explicitly set.
-  public var hasCertificate: Bool {return self._certificate != nil}
+  public var hasCertificate: Bool {self._certificate != nil}
   /// Clears the value of `certificate`. Subsequent reads from it will return its default value.
   public mutating func clearCertificate() {self._certificate = nil}
 
@@ -611,11 +611,11 @@ public struct Wendycloud_V1_CreateAssetEnrollmentTokenResponse: Sendable {
   public var jti: String = String()
 
   public var expiresAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_expiresAt = newValue}
   }
   /// Returns true if `expiresAt` has been explicitly set.
-  public var hasExpiresAt: Bool {return self._expiresAt != nil}
+  public var hasExpiresAt: Bool {self._expiresAt != nil}
   /// Clears the value of `expiresAt`. Subsequent reads from it will return its default value.
   public mutating func clearExpiresAt() {self._expiresAt = nil}
 
@@ -662,11 +662,11 @@ public struct Wendycloud_V1_CreateUserEnrollmentTokenResponse: Sendable {
   public var jti: String = String()
 
   public var expiresAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_expiresAt = newValue}
   }
   /// Returns true if `expiresAt` has been explicitly set.
-  public var hasExpiresAt: Bool {return self._expiresAt != nil}
+  public var hasExpiresAt: Bool {self._expiresAt != nil}
   /// Clears the value of `expiresAt`. Subsequent reads from it will return its default value.
   public mutating func clearExpiresAt() {self._expiresAt = nil}
 

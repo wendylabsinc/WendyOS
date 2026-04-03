@@ -43,7 +43,8 @@ public enum Opentelemetry_Proto_Collector_Metrics_V1_MetricsService: Sendable {
             /// Descriptor for "Export".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "opentelemetry.proto.collector.metrics.v1.MetricsService"),
-                method: "Export"
+                method: "Export",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "opentelemetry.proto.collector.metrics.v1.MetricsService" service.

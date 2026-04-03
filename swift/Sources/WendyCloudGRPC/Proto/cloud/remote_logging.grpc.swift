@@ -29,7 +29,8 @@ public enum Wendycloud_V1_RemoteLoggingService: Sendable {
             /// Descriptor for "WriteLogEntries".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.RemoteLoggingService"),
-                method: "WriteLogEntries"
+                method: "WriteLogEntries",
+                type: .unary
             )
         }
         /// Namespace for "TailLogEntries" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_RemoteLoggingService: Sendable {
             /// Descriptor for "TailLogEntries".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.RemoteLoggingService"),
-                method: "TailLogEntries"
+                method: "TailLogEntries",
+                type: .serverStreaming
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.RemoteLoggingService" service.

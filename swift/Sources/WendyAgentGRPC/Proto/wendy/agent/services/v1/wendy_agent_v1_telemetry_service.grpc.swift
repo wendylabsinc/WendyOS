@@ -29,7 +29,8 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService: Sendable {
             /// Descriptor for "StreamLogs".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyTelemetryService"),
-                method: "StreamLogs"
+                method: "StreamLogs",
+                type: .serverStreaming
             )
         }
         /// Namespace for "StreamMetrics" metadata.
@@ -41,7 +42,8 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService: Sendable {
             /// Descriptor for "StreamMetrics".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyTelemetryService"),
-                method: "StreamMetrics"
+                method: "StreamMetrics",
+                type: .serverStreaming
             )
         }
         /// Namespace for "StreamTraces" metadata.
@@ -53,7 +55,8 @@ public enum Wendy_Agent_Services_V1_WendyTelemetryService: Sendable {
             /// Descriptor for "StreamTraces".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyTelemetryService"),
-                method: "StreamTraces"
+                method: "StreamTraces",
+                type: .serverStreaming
             )
         }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyTelemetryService" service.

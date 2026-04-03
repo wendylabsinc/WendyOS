@@ -29,7 +29,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "RunContainer".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "RunContainer"
+                method: "RunContainer",
+                type: .bidirectionalStreaming
             )
         }
         /// Namespace for "UpdateAgent" metadata.
@@ -41,7 +42,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "UpdateAgent".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "UpdateAgent"
+                method: "UpdateAgent",
+                type: .bidirectionalStreaming
             )
         }
         /// Namespace for "GetAgentVersion" metadata.
@@ -53,7 +55,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "GetAgentVersion".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "GetAgentVersion"
+                method: "GetAgentVersion",
+                type: .unary
             )
         }
         /// Namespace for "ListWiFiNetworks" metadata.
@@ -65,7 +68,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ListWiFiNetworks".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ListWiFiNetworks"
+                method: "ListWiFiNetworks",
+                type: .unary
             )
         }
         /// Namespace for "ConnectToWiFi" metadata.
@@ -77,7 +81,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ConnectToWiFi".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ConnectToWiFi"
+                method: "ConnectToWiFi",
+                type: .unary
             )
         }
         /// Namespace for "GetWiFiStatus" metadata.
@@ -89,7 +94,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "GetWiFiStatus".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "GetWiFiStatus"
+                method: "GetWiFiStatus",
+                type: .unary
             )
         }
         /// Namespace for "DisconnectWiFi" metadata.
@@ -101,7 +107,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "DisconnectWiFi".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "DisconnectWiFi"
+                method: "DisconnectWiFi",
+                type: .unary
             )
         }
         /// Namespace for "ListHardwareCapabilities" metadata.
@@ -113,7 +120,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ListHardwareCapabilities".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ListHardwareCapabilities"
+                method: "ListHardwareCapabilities",
+                type: .unary
             )
         }
         /// Namespace for "ScanBluetoothPeripherals" metadata.
@@ -125,7 +133,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ScanBluetoothPeripherals".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ScanBluetoothPeripherals"
+                method: "ScanBluetoothPeripherals",
+                type: .bidirectionalStreaming
             )
         }
         /// Namespace for "ConnectBluetoothPeripheral" metadata.
@@ -137,7 +146,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ConnectBluetoothPeripheral".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ConnectBluetoothPeripheral"
+                method: "ConnectBluetoothPeripheral",
+                type: .unary
             )
         }
         /// Namespace for "DisconnectBluetoothPeripheral" metadata.
@@ -149,7 +159,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "DisconnectBluetoothPeripheral".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "DisconnectBluetoothPeripheral"
+                method: "DisconnectBluetoothPeripheral",
+                type: .unary
             )
         }
         /// Namespace for "ForgetBluetoothPeripheral" metadata.
@@ -161,7 +172,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "ForgetBluetoothPeripheral".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "ForgetBluetoothPeripheral"
+                method: "ForgetBluetoothPeripheral",
+                type: .unary
             )
         }
         /// Namespace for "UpdateOS" metadata.
@@ -173,7 +185,8 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             /// Descriptor for "UpdateOS".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
-                method: "UpdateOS"
+                method: "UpdateOS",
+                type: .serverStreaming
             )
         }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyAgentService" service.

@@ -29,7 +29,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "CreateAsset".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "CreateAsset"
+                method: "CreateAsset",
+                type: .unary
             )
         }
         /// Namespace for "GetAsset" metadata.
@@ -41,7 +42,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "GetAsset".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "GetAsset"
+                method: "GetAsset",
+                type: .unary
             )
         }
         /// Namespace for "UpdateAsset" metadata.
@@ -53,7 +55,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "UpdateAsset".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "UpdateAsset"
+                method: "UpdateAsset",
+                type: .unary
             )
         }
         /// Namespace for "DeleteAsset" metadata.
@@ -65,7 +68,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "DeleteAsset".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "DeleteAsset"
+                method: "DeleteAsset",
+                type: .unary
             )
         }
         /// Namespace for "ListAssets" metadata.
@@ -77,7 +81,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "ListAssets".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "ListAssets"
+                method: "ListAssets",
+                type: .unary
             )
         }
         /// Namespace for "ListAssetChildren" metadata.
@@ -89,7 +94,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "ListAssetChildren".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "ListAssetChildren"
+                method: "ListAssetChildren",
+                type: .unary
             )
         }
         /// Namespace for "GetAssetLineage" metadata.
@@ -101,7 +107,8 @@ public enum Wendycloud_V1_AssetService: Sendable {
             /// Descriptor for "GetAssetLineage".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AssetService"),
-                method: "GetAssetLineage"
+                method: "GetAssetLineage",
+                type: .unary
             )
         }
         /// Descriptors for all methods in the "wendycloud.v1.AssetService" service.

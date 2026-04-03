@@ -92,21 +92,21 @@ public struct Wendycloud_V1_LogEntry: Sendable {
 
   /// Event time at the source.
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
   }
   /// Returns true if `timestamp` has been explicitly set.
-  public var hasTimestamp: Bool {return self._timestamp != nil}
+  public var hasTimestamp: Bool {self._timestamp != nil}
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
   /// Observed time at the collector/agent (optional).
   public var observedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _observedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_observedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_observedAt = newValue}
   }
   /// Returns true if `observedAt` has been explicitly set.
-  public var hasObservedAt: Bool {return self._observedAt != nil}
+  public var hasObservedAt: Bool {self._observedAt != nil}
   /// Clears the value of `observedAt`. Subsequent reads from it will return its default value.
   public mutating func clearObservedAt() {self._observedAt = nil}
 
@@ -125,29 +125,29 @@ public struct Wendycloud_V1_LogEntry: Sendable {
 
   /// Optional source location hints.
   public var file: String {
-    get {return _file ?? String()}
+    get {_file ?? String()}
     set {_file = newValue}
   }
   /// Returns true if `file` has been explicitly set.
-  public var hasFile: Bool {return self._file != nil}
+  public var hasFile: Bool {self._file != nil}
   /// Clears the value of `file`. Subsequent reads from it will return its default value.
   public mutating func clearFile() {self._file = nil}
 
   public var function: String {
-    get {return _function ?? String()}
+    get {_function ?? String()}
     set {_function = newValue}
   }
   /// Returns true if `function` has been explicitly set.
-  public var hasFunction: Bool {return self._function != nil}
+  public var hasFunction: Bool {self._function != nil}
   /// Clears the value of `function`. Subsequent reads from it will return its default value.
   public mutating func clearFunction() {self._function = nil}
 
   public var line: Int32 {
-    get {return _line ?? 0}
+    get {_line ?? 0}
     set {_line = newValue}
   }
   /// Returns true if `line` has been explicitly set.
-  public var hasLine: Bool {return self._line != nil}
+  public var hasLine: Bool {self._line != nil}
   /// Clears the value of `line`. Subsequent reads from it will return its default value.
   public mutating func clearLine() {self._line = nil}
 
@@ -156,11 +156,11 @@ public struct Wendycloud_V1_LogEntry: Sendable {
 
   /// Optional deployment ID for associating logs with a specific deployment.
   public var deploymentID: Int32 {
-    get {return _deploymentID ?? 0}
+    get {_deploymentID ?? 0}
     set {_deploymentID = newValue}
   }
   /// Returns true if `deploymentID` has been explicitly set.
-  public var hasDeploymentID: Bool {return self._deploymentID != nil}
+  public var hasDeploymentID: Bool {self._deploymentID != nil}
   /// Clears the value of `deploymentID`. Subsequent reads from it will return its default value.
   public mutating func clearDeploymentID() {self._deploymentID = nil}
 
@@ -218,21 +218,21 @@ public struct Wendycloud_V1_WriteLogEntriesRequest: Sendable {
 
   /// Optional: identity of the collector/agent pushing logs.
   public var collector: String {
-    get {return _collector ?? String()}
+    get {_collector ?? String()}
     set {_collector = newValue}
   }
   /// Returns true if `collector` has been explicitly set.
-  public var hasCollector: Bool {return self._collector != nil}
+  public var hasCollector: Bool {self._collector != nil}
   /// Clears the value of `collector`. Subsequent reads from it will return its default value.
   public mutating func clearCollector() {self._collector = nil}
 
   /// e.g., "0.98.0"
   public var collectorVersion: String {
-    get {return _collectorVersion ?? String()}
+    get {_collectorVersion ?? String()}
     set {_collectorVersion = newValue}
   }
   /// Returns true if `collectorVersion` has been explicitly set.
-  public var hasCollectorVersion: Bool {return self._collectorVersion != nil}
+  public var hasCollectorVersion: Bool {self._collectorVersion != nil}
   /// Clears the value of `collectorVersion`. Subsequent reads from it will return its default value.
   public mutating func clearCollectorVersion() {self._collectorVersion = nil}
 
@@ -241,11 +241,11 @@ public struct Wendycloud_V1_WriteLogEntriesRequest: Sendable {
 
   /// Optional hint for grouping in Cloud Logging (otherwise computed server-side).
   public var logName: String {
-    get {return _logName ?? String()}
+    get {_logName ?? String()}
     set {_logName = newValue}
   }
   /// Returns true if `logName` has been explicitly set.
-  public var hasLogName: Bool {return self._logName != nil}
+  public var hasLogName: Bool {self._logName != nil}
   /// Clears the value of `logName`. Subsequent reads from it will return its default value.
   public mutating func clearLogName() {self._logName = nil}
 
@@ -307,51 +307,51 @@ public struct Wendycloud_V1_TailLogEntriesRequest: Sendable {
 
   /// Optional start time for the tail window; defaults to 'now - 2m'.
   public var startTime: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _startTime ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_startTime ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_startTime = newValue}
   }
   /// Returns true if `startTime` has been explicitly set.
-  public var hasStartTime: Bool {return self._startTime != nil}
+  public var hasStartTime: Bool {self._startTime != nil}
   /// Clears the value of `startTime`. Subsequent reads from it will return its default value.
   public mutating func clearStartTime() {self._startTime = nil}
 
   /// Server polling interval in seconds; defaults to 2.
   public var pollIntervalSeconds: Int32 {
-    get {return _pollIntervalSeconds ?? 0}
+    get {_pollIntervalSeconds ?? 0}
     set {_pollIntervalSeconds = newValue}
   }
   /// Returns true if `pollIntervalSeconds` has been explicitly set.
-  public var hasPollIntervalSeconds: Bool {return self._pollIntervalSeconds != nil}
+  public var hasPollIntervalSeconds: Bool {self._pollIntervalSeconds != nil}
   /// Clears the value of `pollIntervalSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearPollIntervalSeconds() {self._pollIntervalSeconds = nil}
 
   /// Max entries per batch; defaults to 100.
   public var pageSize: Int32 {
-    get {return _pageSize ?? 0}
+    get {_pageSize ?? 0}
     set {_pageSize = newValue}
   }
   /// Returns true if `pageSize` has been explicitly set.
-  public var hasPageSize: Bool {return self._pageSize != nil}
+  public var hasPageSize: Bool {self._pageSize != nil}
   /// Clears the value of `pageSize`. Subsequent reads from it will return its default value.
   public mutating func clearPageSize() {self._pageSize = nil}
 
   /// Optional explicit log name (otherwise the server uses its default).
   public var logName: String {
-    get {return _logName ?? String()}
+    get {_logName ?? String()}
     set {_logName = newValue}
   }
   /// Returns true if `logName` has been explicitly set.
-  public var hasLogName: Bool {return self._logName != nil}
+  public var hasLogName: Bool {self._logName != nil}
   /// Clears the value of `logName`. Subsequent reads from it will return its default value.
   public mutating func clearLogName() {self._logName = nil}
 
   /// Optional deployment filter; when set, only entries matching this deployment_id are returned.
   public var deploymentID: Int32 {
-    get {return _deploymentID ?? 0}
+    get {_deploymentID ?? 0}
     set {_deploymentID = newValue}
   }
   /// Returns true if `deploymentID` has been explicitly set.
-  public var hasDeploymentID: Bool {return self._deploymentID != nil}
+  public var hasDeploymentID: Bool {self._deploymentID != nil}
   /// Clears the value of `deploymentID`. Subsequent reads from it will return its default value.
   public mutating func clearDeploymentID() {self._deploymentID = nil}
 
@@ -375,11 +375,11 @@ public struct Wendycloud_V1_TailLogEntriesResponse: Sendable {
 
   /// Watermark timestamp up to which the server attempted to read.
   public var readThrough: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _readThrough ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_readThrough ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_readThrough = newValue}
   }
   /// Returns true if `readThrough` has been explicitly set.
-  public var hasReadThrough: Bool {return self._readThrough != nil}
+  public var hasReadThrough: Bool {self._readThrough != nil}
   /// Clears the value of `readThrough`. Subsequent reads from it will return its default value.
   public mutating func clearReadThrough() {self._readThrough = nil}
 

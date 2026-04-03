@@ -434,6 +434,27 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
     // MARK: - Unimplemented
 
+    func attachContainer(
+        request: StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
+        context: ServerContext
+    ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
+        throw RPCError(code: .unimplemented, message: "AttachContainer is not implemented")
+    }
+
+    func listVolumes(
+        request: ServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse> {
+        throw RPCError(code: .unimplemented, message: "ListVolumes is not implemented")
+    }
+
+    func removeVolume(
+        request: ServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse> {
+        throw RPCError(code: .unimplemented, message: "RemoveVolume is not implemented")
+    }
+
     func listLayers(
         request: ServerRequest<Wendy_Agent_Services_V1_ListLayersRequest>,
         context: ServerContext
