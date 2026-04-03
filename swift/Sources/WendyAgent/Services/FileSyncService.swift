@@ -27,20 +27,15 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
         request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_FileSyncRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_FileSyncResponse> {
-        // Collect all request messages before entering the response producer closure
-        // so we can hold a `let` (required by Swift 6 @Sendable capture rules).
-        var tempMessages: [Wendy_Agent_Services_V1_FileSyncRequest] = []
-        for try await msg in request.messages {
-            tempMessages.append(msg)
-        }
-        let allMessages = tempMessages
-
+        // StreamingServerRequest and its RPCAsyncSequence are both Sendable,
+        // so we can capture `messages` directly in the @Sendable response closure.
+        let messages = request.messages
         let appsBase = self.appsBase
         let logger = self.logger
 
         return StreamingServerResponse(metadata: [:]) { writer in
             try await FileSyncService.runSession(
-                messages: allMessages,
+                messages: messages,
                 writeResponse: { try await writer.write($0) },
                 appsBase: appsBase,
                 logger: logger
@@ -51,13 +46,14 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
     // MARK: - Session logic (nonisolated so it can be captured in @Sendable closures)
 
-    static func runSession(
-        messages: [Wendy_Agent_Services_V1_FileSyncRequest],
+    static func runSession<S: AsyncSequence & Sendable>(
+        messages: S,
         writeResponse: (Wendy_Agent_Services_V1_FileSyncResponse) async throws -> Void,
         appsBase: URL,
         logger: Logger
-    ) async throws {
-        guard let first = messages.first, case .start(let startMsg) = first.requestType else {
+    ) async throws where S.Element == Wendy_Agent_Services_V1_FileSyncRequest {
+        var messageIterator = messages.makeAsyncIterator()
+        guard let first = try await messageIterator.next(), case .start(let startMsg) = first.requestType else {
             throw RPCError(code: .invalidArgument, message: "First message must be FileSyncStart")
         }
 
@@ -99,7 +95,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
         }
 
         do {
-            for msg in messages.dropFirst() {
+            while let msg = try await messageIterator.next() {
                 switch msg.requestType {
                 case .chunk(let chunk):
                     let relPath = chunk.path

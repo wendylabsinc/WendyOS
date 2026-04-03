@@ -116,7 +116,7 @@ struct RunSessionTests {
 
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         try await FileSyncService.runSession(
-            messages: [startReq],
+            messages: makeStream([startReq]),
             writeResponse: { responses.append($0) },
             appsBase: appsBaseURL,
             logger: .init(label: "test")
@@ -160,7 +160,7 @@ struct RunSessionTests {
 
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         try await FileSyncService.runSession(
-            messages: [startReq],
+            messages: makeStream([startReq]),
             writeResponse: { responses.append($0) },
             appsBase: appsBaseURL,
             logger: .init(label: "test")
@@ -213,7 +213,7 @@ struct RunSessionTests {
 
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         try await FileSyncService.runSession(
-            messages: [req0, req1, req2],
+            messages: makeStream([req0, req1, req2]),
             writeResponse: { responses.append($0) },
             appsBase: appsBaseURL,
             logger: .init(label: "test")
@@ -281,7 +281,7 @@ struct RunSessionTests {
 
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         try await FileSyncService.runSession(
-            messages: [req0, req1, req2],
+            messages: makeStream([req0, req1, req2]),
             writeResponse: { responses.append($0) },
             appsBase: appsBaseURL,
             logger: .init(label: "test")
@@ -326,7 +326,7 @@ struct RunSessionTests {
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         do {
             try await FileSyncService.runSession(
-                messages: [req0, req1, req2],
+                messages: makeStream([req0, req1, req2]),
                 writeResponse: { responses.append($0) },
                 appsBase: appsBaseURL,
                 logger: .init(label: "test")
@@ -366,7 +366,7 @@ struct RunSessionTests {
 
         var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
         try await FileSyncService.runSession(
-            messages: [req0],
+            messages: makeStream([req0]),
             writeResponse: { responses.append($0) },
             appsBase: appsBaseURL,
             logger: .init(label: "test")
@@ -383,6 +383,15 @@ struct RunSessionTests {
 }
 
 // MARK: - Helpers
+
+private func makeStream(
+    _ msgs: [Wendy_Agent_Services_V1_FileSyncRequest]
+) -> AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest> {
+    AsyncStream { cont in
+        for m in msgs { cont.yield(m) }
+        cont.finish()
+    }
+}
 
 private func makeTempDir() throws -> String {
     let tmp =
