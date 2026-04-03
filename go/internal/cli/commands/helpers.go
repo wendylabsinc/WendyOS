@@ -298,27 +298,15 @@ func isInteractiveTerminal() bool {
 }
 
 // handleDefaultDeviceRecovery runs the recovery flow after a default device
-// connection failure. It may return a new connection via the device picker,
-// clear the default, or propagate the original error.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, origErr error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
-	choice := promptDefaultDeviceRecovery(hostname)
-	switch choice {
-	case recoveryDiscover:
-		return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
-	case recoveryUnsetDefault:
-		cfg, err := config.Load()
-		if err != nil {
-			return nil, fmt.Errorf("loading config: %w", err)
-		}
-		cfg.DefaultDevice = ""
-		if err := config.Save(cfg); err != nil {
-			return nil, fmt.Errorf("saving config: %w", err)
-		}
-		fmt.Println("Default device cleared.")
-		return nil, ErrDefaultCleared
-	default:
-		return nil, origErr
-	}
+// connection failure. Shows a warning and immediately opens the device picker
+// where the user can select a new device and optionally set/unset default
+// via 'd'/'x' shortcuts.
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable.", hostname)))
+	fmt.Println()
+
+	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
 }
 
 // connectToAgent establishes a gRPC connection to the target device.

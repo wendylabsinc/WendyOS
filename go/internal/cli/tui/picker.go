@@ -262,9 +262,31 @@ func newPickerTable() bubbleTable.Model {
 }
 
 func (m *PickerModel) refreshTable() {
+	hasDefaultCol := m.DefaultKey != "" || m.OnSetDefault != nil
 	activeCols := pickerActiveColumns(m.items)
 	rows := pickerRows(m.items, activeCols, m.DefaultKey)
-	m.table.SetColumns(pickerColumns(rows, activeCols))
+
+	var cols []bubbleTable.Column
+	if hasDefaultCol {
+		// Leading ★ column, then the data columns (offset by 1 in rows).
+		cols = append(cols, bubbleTable.Column{Title: "", Width: 3})
+		for i, def := range activeCols {
+			colIdx := i + 1 // rows have the star column at index 0
+			width := lipgloss.Width(def.title)
+			for _, row := range rows {
+				if colIdx < len(row) {
+					width = max(width, lipgloss.Width(row[colIdx]))
+				}
+			}
+			width += 2
+			width = max(width, def.minWidth)
+			width = min(width, def.maxWidth)
+			cols = append(cols, bubbleTable.Column{Title: def.title, Width: width})
+		}
+	} else {
+		cols = pickerColumns(rows, activeCols)
+	}
+	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {
 		m.table.SetCursor(0)
@@ -293,20 +315,21 @@ func pickerActiveColumns(items []PickerItem) []pickerColumnDef {
 func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string) []bubbleTable.Row {
 	rows := make([]bubbleTable.Row, 0, len(items))
 	for _, item := range items {
-		row := make(bubbleTable.Row, 0, len(cols))
-		for _, col := range cols {
-			val := col.value(item)
-			// Prepend ★ to the Name column for the default item.
-			if col.title == "Name" && defaultKey != "" {
-				key := strings.ToLower(item.DedupKey)
-				if key == "" {
-					key = strings.ToLower(item.Name)
-				}
-				if key == defaultKey {
-					val = "★ " + val
-				}
+		var row bubbleTable.Row
+		// Add leading ★ column when default tracking is active.
+		if defaultKey != "" {
+			key := strings.ToLower(item.DedupKey)
+			if key == "" {
+				key = strings.ToLower(item.Name)
 			}
-			row = append(row, val)
+			if key == defaultKey {
+				row = append(row, "★")
+			} else {
+				row = append(row, "")
+			}
+		}
+		for _, col := range cols {
+			row = append(row, col.value(item))
 		}
 		rows = append(rows, row)
 	}
