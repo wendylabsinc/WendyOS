@@ -22,7 +22,7 @@ struct WendyAgent: AsyncParsableCommand {
     var otelPort: Int = 4317
 
     @Option(name: .shortAndLong, help: "The directory to store configuration files in.")
-    var configDir: String = "/etc/wendy-agent"
+    var configDirectory: String = "/etc/wendy-agent"
 
     @Option(help: "Path to the app executable to run.")
     var appPath: String = ""

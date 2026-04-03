@@ -12,37 +12,37 @@ import WendyAgentGRPC
 struct BuildManifestTests {
     @Test("empty directory returns empty manifest")
     func emptyDirectory() throws {
-        let tmp = try makeTempDir()
-        defer { cleanup(tmp) }
-        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: tmp))
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
+        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: temporaryDirectory))
         #expect(entries.isEmpty)
     }
 
     @Test("single file produces correct path, size, sha256, mode")
     func singleFile() throws {
-        let tmp = try makeTempDir()
-        defer { cleanup(tmp) }
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
 
         let content = Data("hello world".utf8)
-        let fileURL = URL(fileURLWithPath: tmp).appendingPathComponent("app.bin")
+        let fileURL = URL(fileURLWithPath: temporaryDirectory).appendingPathComponent("app.bin")
         try content.write(to: fileURL)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fileURL.path)
 
-        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: tmp))
+        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: temporaryDirectory))
         #expect(entries.count == 1)
-        let e = entries[0]
-        #expect(e.path == "app.bin")
-        #expect(e.size == Int64(content.count))
-        #expect(e.sha256 == sha256Hex(content))
-        #expect(e.mode == 0o755)
+        let entry = entries[0]
+        #expect(entry.path == "app.bin")
+        #expect(entry.size == Int64(content.count))
+        #expect(entry.sha256 == sha256Hex(content))
+        #expect(entry.mode == 0o755)
     }
 
     @Test("nested directories produce correct relative paths")
     func nestedPaths() throws {
-        let tmp = try makeTempDir()
-        defer { cleanup(tmp) }
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
 
-        let base = URL(fileURLWithPath: tmp)
+        let base = URL(fileURLWithPath: temporaryDirectory)
         try FileManager.default.createDirectory(
             at: base.appendingPathComponent("models/v1"),
             withIntermediateDirectories: true
@@ -59,10 +59,10 @@ struct BuildManifestTests {
 
     @Test(".tmp files are excluded from manifest")
     func tmpFilesExcluded() throws {
-        let tmp = try makeTempDir()
-        defer { cleanup(tmp) }
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
 
-        let base = URL(fileURLWithPath: tmp)
+        let base = URL(fileURLWithPath: temporaryDirectory)
         try Data("data".utf8).write(to: base.appendingPathComponent("real.bin"))
         try Data("partial".utf8).write(to: base.appendingPathComponent("real.bin.tmp"))
 
@@ -82,14 +82,14 @@ struct BuildManifestTests {
 
     @Test("sha256 is correct for known content")
     func sha256Correctness() throws {
-        let tmp = try makeTempDir()
-        defer { cleanup(tmp) }
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
 
         let content = Data(repeating: 0xAB, count: 256)
-        let fileURL = URL(fileURLWithPath: tmp).appendingPathComponent("known.bin")
+        let fileURL = URL(fileURLWithPath: temporaryDirectory).appendingPathComponent("known.bin")
         try content.write(to: fileURL)
 
-        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: tmp))
+        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: temporaryDirectory))
         #expect(entries.count == 1)
         #expect(entries[0].sha256 == sha256Hex(content))
     }
@@ -241,8 +241,8 @@ struct RunSessionTests {
         #expect(mode == 0o755)
 
         // No .tmp left.
-        let tmpPath = URL(fileURLWithPath: destPath.path + ".tmp")
-        #expect(!FileManager.default.fileExists(atPath: tmpPath.path))
+        let temporaryFileURL = URL(fileURLWithPath: destPath.path + ".tmp")
+        #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
     }
 
     @Test("nested path — parent directories created automatically")
@@ -339,9 +339,9 @@ struct RunSessionTests {
         // No file or .tmp should remain.
         let appDir = appsBaseURL.appendingPathComponent(appID)
         let destPath = appDir.appendingPathComponent("app")
-        let tmpPath = URL(fileURLWithPath: destPath.path + ".tmp")
+        let temporaryFileURL = URL(fileURLWithPath: destPath.path + ".tmp")
         #expect(!FileManager.default.fileExists(atPath: destPath.path))
-        #expect(!FileManager.default.fileExists(atPath: tmpPath.path))
+        #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
     }
 
     @Test("stale file is deleted after stream EOF")
@@ -385,20 +385,20 @@ struct RunSessionTests {
 // MARK: - Helpers
 
 private func makeStream(
-    _ msgs: [Wendy_Agent_Services_V1_FileSyncRequest]
+    _ messages: [Wendy_Agent_Services_V1_FileSyncRequest]
 ) -> AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest> {
-    AsyncStream { cont in
-        for m in msgs { cont.yield(m) }
-        cont.finish()
+    AsyncStream { continuation in
+        for message in messages { continuation.yield(message) }
+        continuation.finish()
     }
 }
 
 private func makeTempDir() throws -> String {
-    let tmp =
+    let path =
         FileManager.default.temporaryDirectory
         .appendingPathComponent("wendy-test-\(UUID().uuidString)").path
-    try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
-    return tmp
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    return path
 }
 
 private func cleanup(_ path: String) {

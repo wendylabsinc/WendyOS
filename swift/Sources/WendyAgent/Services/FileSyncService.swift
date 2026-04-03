@@ -82,113 +82,113 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
         )
 
         // Process remaining messages: chunks and commits.
-        var tempHandles: [String: FileHandle] = [:]
-        var tempURLs: [String: URL] = [:]
+        var temporaryHandles: [String: FileHandle] = [:]
+        var temporaryURLs: [String: URL] = [:]
 
-        func cleanupTmp(path: String) {
-            if let fh = tempHandles.removeValue(forKey: path) {
-                try? fh.close()
+        func cleanupTemporary(path: String) {
+            if let fileHandle = temporaryHandles.removeValue(forKey: path) {
+                try? fileHandle.close()
             }
-            if let url = tempURLs.removeValue(forKey: path) {
+            if let url = temporaryURLs.removeValue(forKey: path) {
                 try? FileManager.default.removeItem(at: url)
             }
         }
 
         do {
-            while let msg = try await messageIterator.next() {
-                switch msg.requestType {
+            while let message = try await messageIterator.next() {
+                switch message.requestType {
                 case .chunk(let chunk):
-                    let relPath = chunk.path
-                    let destURL = workDir.appendingPathComponent(relPath)
-                    let tmpURL = URL(fileURLWithPath: destURL.path + ".tmp")
+                    let relativePath = chunk.path
+                    let destinationURL = workDir.appendingPathComponent(relativePath)
+                    let temporaryURL = URL(fileURLWithPath: destinationURL.path + ".tmp")
 
-                    if tempHandles[relPath] == nil {
+                    if temporaryHandles[relativePath] == nil {
                         try FileManager.default.createDirectory(
-                            at: tmpURL.deletingLastPathComponent(),
+                            at: temporaryURL.deletingLastPathComponent(),
                             withIntermediateDirectories: true
                         )
-                        FileManager.default.createFile(atPath: tmpURL.path, contents: nil)
-                        guard let fh = FileHandle(forWritingAtPath: tmpURL.path) else {
+                        FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+                        guard let fileHandle = FileHandle(forWritingAtPath: temporaryURL.path) else {
                             throw RPCError(
                                 code: .internalError,
-                                message: "Cannot open temp file at \(tmpURL.path)"
+                                message: "Cannot open temporary file at \(temporaryURL.path)"
                             )
                         }
-                        tempHandles[relPath] = fh
-                        tempURLs[relPath] = tmpURL
+                        temporaryHandles[relativePath] = fileHandle
+                        temporaryURLs[relativePath] = temporaryURL
                     }
 
-                    tempHandles[relPath]!.seekToEndOfFile()
-                    tempHandles[relPath]!.write(chunk.data)
+                    temporaryHandles[relativePath]!.seekToEndOfFile()
+                    temporaryHandles[relativePath]!.write(chunk.data)
 
                 case .commit(let commit):
-                    let relPath = commit.path
-                    let destURL = workDir.appendingPathComponent(relPath)
-                    let tmpURL = tempURLs[relPath] ?? URL(fileURLWithPath: destURL.path + ".tmp")
+                    let relativePath = commit.path
+                    let destinationURL = workDir.appendingPathComponent(relativePath)
+                    let temporaryURL = temporaryURLs[relativePath] ?? URL(fileURLWithPath: destinationURL.path + ".tmp")
 
                     // Close the write handle before reading for verification.
-                    if let fh = tempHandles.removeValue(forKey: relPath) {
-                        try fh.close()
+                    if let fileHandle = temporaryHandles.removeValue(forKey: relativePath) {
+                        try fileHandle.close()
                     }
-                    tempURLs.removeValue(forKey: relPath)
+                    temporaryURLs.removeValue(forKey: relativePath)
 
                     // Verify SHA256 and size.
-                    guard let tmpData = FileManager.default.contents(atPath: tmpURL.path) else {
+                    guard let temporaryData = FileManager.default.contents(atPath: temporaryURL.path) else {
                         throw RPCError(
                             code: .internalError,
-                            message: "Temp file missing for \(relPath)"
+                            message: "Temporary file missing for \(relativePath)"
                         )
                     }
 
-                    let actualSize = Int64(tmpData.count)
+                    let actualSize = Int64(temporaryData.count)
                     if actualSize != commit.size {
-                        try? FileManager.default.removeItem(at: tmpURL)
+                        try? FileManager.default.removeItem(at: temporaryURL)
                         throw RPCError(
                             code: .dataLoss,
                             message:
-                                "Size mismatch for \(relPath): expected \(commit.size), got \(actualSize)"
+                                "Size mismatch for \(relativePath): expected \(commit.size), got \(actualSize)"
                         )
                     }
 
-                    let computedHash = SHA256.hash(data: tmpData)
+                    let computedHash = SHA256.hash(data: temporaryData)
                         .map { String(format: "%02x", $0) }.joined()
                     if computedHash != commit.sha256 {
-                        try? FileManager.default.removeItem(at: tmpURL)
+                        try? FileManager.default.removeItem(at: temporaryURL)
                         throw RPCError(
                             code: .dataLoss,
                             message:
-                                "SHA256 mismatch for \(relPath): expected \(commit.sha256), got \(computedHash)"
+                                "SHA256 mismatch for \(relativePath): expected \(commit.sha256), got \(computedHash)"
                         )
                     }
 
                     // Set file mode from CLI manifest entry; default 0o644.
-                    let cliEntry = cliManifest.first(where: { $0.path == relPath })
+                    let cliEntry = cliManifest.first(where: { $0.path == relativePath })
                     let fileMode = cliEntry.map { Int($0.mode) } ?? 0o644
                     try FileManager.default.setAttributes(
                         [.posixPermissions: fileMode],
-                        ofItemAtPath: tmpURL.path
+                        ofItemAtPath: temporaryURL.path
                     )
 
                     // Atomic rename.
                     try FileManager.default.createDirectory(
-                        at: destURL.deletingLastPathComponent(),
+                        at: destinationURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    if FileManager.default.fileExists(atPath: destURL.path) {
-                        try FileManager.default.removeItem(at: destURL)
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        try FileManager.default.removeItem(at: destinationURL)
                     }
-                    try FileManager.default.moveItem(at: tmpURL, to: destURL)
+                    try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
 
                     // Send ack.
                     var ackResponse = Wendy_Agent_Services_V1_FileSyncResponse()
                     var ack = Wendy_Agent_Services_V1_FileSyncAck()
-                    ack.path = relPath
+                    ack.path = relativePath
                     ackResponse.responseType = .ack(ack)
                     try await writeResponse(ackResponse)
 
                     logger.info(
                         "File committed",
-                        metadata: ["path": "\(relPath)", "app_id": "\(appID)"]
+                        metadata: ["path": "\(relativePath)", "app_id": "\(appID)"]
                     )
 
                 case .start, nil:
@@ -196,13 +196,13 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                 }
             }
         } catch {
-            // Clean up all open temp handles/files before re-throwing.
-            for path in Array(tempHandles.keys) { cleanupTmp(path: path) }
+            // Clean up all open temporary handles/files before re-throwing.
+            for path in Array(temporaryHandles.keys) { cleanupTemporary(path: path) }
             throw error
         }
 
-        // Clean up any remaining orphaned temp files (shouldn't happen in normal flow).
-        for path in Array(tempHandles.keys) { cleanupTmp(path: path) }
+        // Clean up any remaining orphaned temporary files (shouldn't happen in normal flow).
+        for path in Array(temporaryHandles.keys) { cleanupTemporary(path: path) }
 
         // Prune stale files: in agent manifest but absent from CLI's declared set.
         let cliPaths = Set(cliManifest.map(\.path))
@@ -257,22 +257,22 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             if fileURL.pathExtension == "tmp" { continue }
 
             let resolvedFileURL = fileURL.resolvingSymlinksInPath()
-            let relPath = String(resolvedFileURL.path.dropFirst(workDirPath.count + 1))
+            let relativePath = String(resolvedFileURL.path.dropFirst(workDirPath.count + 1))
 
             // Get POSIX permissions via FileManager.
             let attrs = try FileManager.default.attributesOfItem(atPath: resolvedFileURL.path)
             let mode = (attrs[.posixPermissions] as? Int).map(UInt32.init) ?? 0o644
 
             // Compute SHA256 by streaming in 64 KiB reads.
-            guard let fh = FileHandle(forReadingAtPath: resolvedFileURL.path) else {
+            guard let fileHandle = FileHandle(forReadingAtPath: resolvedFileURL.path) else {
                 throw RPCError(code: .internalError, message: "Cannot read \(fileURL.path)")
             }
-            defer { try? fh.close() }
+            defer { try? fileHandle.close() }
 
             var hasher = SHA256()
             var totalSize: Int64 = 0
             while true {
-                let chunk = fh.readData(ofLength: 64 * 1024)
+                let chunk = fileHandle.readData(ofLength: 64 * 1024)
                 if chunk.isEmpty { break }
                 hasher.update(data: chunk)
                 totalSize += Int64(chunk.count)
@@ -280,7 +280,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
 
             var entry = Wendy_Agent_Services_V1_FileSyncEntry()
-            entry.path = relPath
+            entry.path = relativePath
             entry.size = totalSize
             entry.sha256 = digest
             entry.mode = mode

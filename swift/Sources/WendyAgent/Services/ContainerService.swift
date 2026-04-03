@@ -6,16 +6,16 @@ import OpenTelemetryGRPC
 import WendyAgentGRPC
 
 actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
-    private let appsDir: String
-    private let blobsDir: String
+    private let appsDirectory: String
+    private let blobsDirectory: String
     private let broadcaster: TelemetryBroadcaster
     private let executablePath: String
     private let logger = Logger(label: "sh.wendy.agent.container")
     private var runningProcesses: [String: Foundation.Process] = [:]
     private let sandboxProfilePath: String?
 
-    /// Maps app name → (appDir, binaryName) for apps uploaded via WriteLayer.
-    private var appDirs: [String: (dir: String, binaryName: String)] = [:]
+    /// Maps app name → (appDirectory, binaryName) for apps uploaded via WriteLayer.
+    private var appDirectories: [String: (directory: String, binaryName: String)] = [:]
 
     /// Docker backend for Linux containers. Nil when Docker is not available.
     private let dockerBackend: DockerContainerBackend?
@@ -35,7 +35,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         broadcaster: TelemetryBroadcaster,
         executablePath: String,
         sandboxProfilePath: String? = nil,
-        appsDir: String? = nil,
+        appsDirectory: String? = nil,
         dockerAvailable: Bool = false
     ) {
         self.broadcaster = broadcaster
@@ -44,15 +44,15 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.dockerBackend = dockerAvailable ? DockerContainerBackend() : nil
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let baseDir = "\(home)/Library/Application Support/wendy-agent"
+        let baseDirectory = "\(home)/Library/Application Support/wendy-agent"
 
-        let dir = appsDir ?? "\(baseDir)/apps"
-        self.appsDir = dir
-        self.blobsDir = "\(baseDir)/blobs"
+        let directory = appsDirectory ?? "\(baseDirectory)/apps"
+        self.appsDirectory = directory
+        self.blobsDirectory = "\(baseDirectory)/blobs"
 
         // Ensure directories exist.
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(atPath: "\(blobsDir)/sha256", withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: "\(blobsDirectory)/sha256", withIntermediateDirectories: true)
     }
 
     // MARK: - Implemented
@@ -107,8 +107,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         if imageName.hasPrefix("sha256:") {
             // OCI image: parse manifest → config → extract layer.
-            let appDir = "\(appsDir)/\(appName)"
-            try FileManager.default.createDirectory(atPath: appDir, withIntermediateDirectories: true)
+            let appDirectory = "\(appsDirectory)/\(appName)"
+            try FileManager.default.createDirectory(atPath: appDirectory, withIntermediateDirectories: true)
 
             // Read manifest blob.
             let manifestData = try readBlob(digest: imageName)
@@ -128,23 +128,23 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             guard let layerDesc = manifest.layers.first else {
                 throw RPCError(code: .invalidArgument, message: "OCI manifest has no layers")
             }
-            try await extractTarGz(blobDigest: layerDesc.digest, to: appDir)
+            try await extractTarGz(blobDigest: layerDesc.digest, to: appDirectory)
 
-            let binaryPath = "\(appDir)/\(binaryName)"
+            let binaryPath = "\(appDirectory)/\(binaryName)"
             guard FileManager.default.fileExists(atPath: binaryPath) else {
                 throw RPCError(code: .notFound, message: "Binary not found at \(binaryPath) after extraction")
             }
 
-            appDirs[appName] = (dir: appDir, binaryName: binaryName)
+            appDirectories[appName] = (directory: appDirectory, binaryName: binaryName)
             logger.info("OCI image unpacked", metadata: ["app_name": "\(appName)", "binary": "\(binaryName)"])
         } else if !imageName.isEmpty {
             // Legacy: imageName is the binary name directly.
-            let appDir = "\(appsDir)/\(appName)"
-            let binaryPath = "\(appDir)/\(imageName)"
+            let appDirectory = "\(appsDirectory)/\(appName)"
+            let binaryPath = "\(appDirectory)/\(imageName)"
             guard FileManager.default.fileExists(atPath: binaryPath) else {
                 throw RPCError(code: .notFound, message: "Binary not found at \(binaryPath)")
             }
-            appDirs[appName] = (dir: appDir, binaryName: imageName)
+            appDirectories[appName] = (directory: appDirectory, binaryName: imageName)
             logger.info("Registered app directory", metadata: ["app_name": "\(appName)", "binary": "\(binaryPath)"])
         } else {
             // File-sync path: imageName is empty, cmd carries the binary name.
@@ -153,15 +153,15 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 // Nothing to register — container will fall back to --appPath.
                 return ServerResponse(message: Wendy_Agent_Services_V1_CreateContainerResponse())
             }
-            let appDir = "\(appsDir)/\(appName)"
-            let binaryPath = "\(appDir)/\(cmd)"
+            let appDirectory = "\(appsDirectory)/\(appName)"
+            let binaryPath = "\(appDirectory)/\(cmd)"
             guard FileManager.default.fileExists(atPath: binaryPath) else {
                 throw RPCError(
                     code: .notFound,
                     message: "Binary not found at \(binaryPath). Run 'wendy run' to sync files first."
                 )
             }
-            appDirs[appName] = (dir: appDir, binaryName: cmd)
+            appDirectories[appName] = (directory: appDirectory, binaryName: cmd)
             logger.info(
                 "Registered app (file-sync path)",
                 metadata: ["app_name": "\(appName)", "binary": "\(binaryPath)"]
@@ -203,9 +203,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                     group.addTask {
                         let handle = stdoutPipe.fileHandleForReading
                         for try await data in handle.bytes(for: appName) {
-                            var msg = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            msg.responseType = .stdoutOutput(.with { $0.data = data })
-                            try await writer.write(msg)
+                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                            response.responseType = .stdoutOutput(.with { $0.data = data })
+                            try await writer.write(response)
 
                             await Self.broadcastLog(
                                 broadcaster: broadcaster, appName: appName,
@@ -217,9 +217,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                     group.addTask {
                         let handle = stderrPipe.fileHandleForReading
                         for try await data in handle.bytes(for: appName) {
-                            var msg = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            msg.responseType = .stderrOutput(.with { $0.data = data })
-                            try await writer.write(msg)
+                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                            response.responseType = .stderrOutput(.with { $0.data = data })
+                            try await writer.write(response)
 
                             await Self.broadcastLog(
                                 broadcaster: broadcaster, appName: appName,
@@ -249,9 +249,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         // Resolve binary path: prefer uploaded app, fall back to --appPath.
         let binaryPath: String
         let profilePath: String?
-        if let entry = appDirs[appName] {
-            binaryPath = "\(entry.dir)/\(entry.binaryName)"
-            let candidateProfile = "\(entry.dir)/sandbox.sb"
+        if let entry = appDirectories[appName] {
+            binaryPath = "\(entry.directory)/\(entry.binaryName)"
+            let candidateProfile = "\(entry.directory)/sandbox.sb"
             profilePath = FileManager.default.fileExists(atPath: candidateProfile) ? candidateProfile : nil
         } else {
             binaryPath = executablePath
@@ -291,9 +291,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 group.addTask {
                     let handle = stdoutPipe.fileHandleForReading
                     for try await data in handle.bytes(for: appName) {
-                        var msg = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                        msg.responseType = .stdoutOutput(.with { $0.data = data })
-                        try await writer.write(msg)
+                        var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                        response.responseType = .stdoutOutput(.with { $0.data = data })
+                        try await writer.write(response)
 
                         await Self.broadcastLog(
                             broadcaster: broadcaster,
@@ -309,9 +309,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 group.addTask {
                     let handle = stderrPipe.fileHandleForReading
                     for try await data in handle.bytes(for: appName) {
-                        var msg = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                        msg.responseType = .stderrOutput(.with { $0.data = data })
-                        try await writer.write(msg)
+                        var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                        response.responseType = .stderrOutput(.with { $0.data = data })
+                        try await writer.write(response)
 
                         await Self.broadcastLog(
                             broadcaster: broadcaster,
@@ -495,7 +495,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 throw RPCError(code: .dataLoss, message: "SHA256 mismatch: expected \(expectedHash), got \(computedHash)")
             }
 
-            let blobPath = "\(blobsDir)/sha256/\(expectedHash)"
+            let blobPath = "\(blobsDirectory)/sha256/\(expectedHash)"
             try accumulated.write(to: URL(fileURLWithPath: blobPath))
 
             logger.info("WriteLayer completed (OCI blob)", metadata: [
@@ -515,9 +515,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 throw RPCError(code: .dataLoss, message: "SHA256 mismatch: expected \(expectedHash), got \(computedHash)")
             }
 
-            let appDir = "\(appsDir)/\(appName)"
-            try FileManager.default.createDirectory(atPath: appDir, withIntermediateDirectories: true)
-            let filePath = "\(appDir)/\(filename)"
+            let appDirectory = "\(appsDirectory)/\(appName)"
+            try FileManager.default.createDirectory(atPath: appDirectory, withIntermediateDirectories: true)
+            let filePath = "\(appDirectory)/\(filename)"
             try accumulated.write(to: URL(fileURLWithPath: filePath))
 
             if filename != "sandbox.sb" {
@@ -555,19 +555,19 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     // MARK: - Helpers
 
     private func readBlob(digest: String) throws -> Data {
-        // digest is "sha256:<hex>" — map to blobsDir/sha256/<hex>.
-        let blobPath = "\(blobsDir)/\(digest.replacingOccurrences(of: ":", with: "/"))"
+        // digest is "sha256:<hex>" — map to blobsDirectory/sha256/<hex>.
+        let blobPath = "\(blobsDirectory)/\(digest.replacingOccurrences(of: ":", with: "/"))"
         guard let data = FileManager.default.contents(atPath: blobPath) else {
             throw RPCError(code: .notFound, message: "Blob not found at \(blobPath)")
         }
         return data
     }
 
-    private func extractTarGz(blobDigest: String, to destDir: String) async throws {
-        let blobPath = "\(blobsDir)/\(blobDigest.replacingOccurrences(of: ":", with: "/"))"
+    private func extractTarGz(blobDigest: String, to destinationDirectory: String) async throws {
+        let blobPath = "\(blobsDirectory)/\(blobDigest.replacingOccurrences(of: ":", with: "/"))"
         let tarProcess = Foundation.Process()
         tarProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tarProcess.arguments = ["-xzf", blobPath, "-C", destDir]
+        tarProcess.arguments = ["-xzf", blobPath, "-C", destinationDirectory]
 
         let status = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int32, Error>) in
             tarProcess.terminationHandler = { p in
