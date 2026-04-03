@@ -262,9 +262,9 @@ func newPickerTable() bubbleTable.Model {
 }
 
 func (m *PickerModel) refreshTable() {
-	hasDefaultCol := m.DefaultKey != "" || m.OnSetDefault != nil
+	hasDefaultCol := m.OnSetDefault != nil
 	activeCols := pickerActiveColumns(m.items)
-	rows := pickerRows(m.items, activeCols, m.DefaultKey)
+	rows := pickerRows(m.items, activeCols, m.DefaultKey, hasDefaultCol)
 
 	var cols []bubbleTable.Column
 	if hasDefaultCol {
@@ -312,17 +312,17 @@ func pickerActiveColumns(items []PickerItem) []pickerColumnDef {
 	return active
 }
 
-func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string) []bubbleTable.Row {
+func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, hasDefaultCol bool) []bubbleTable.Row {
 	rows := make([]bubbleTable.Row, 0, len(items))
 	for _, item := range items {
 		var row bubbleTable.Row
-		// Add leading ★ column when default tracking is active.
-		if defaultKey != "" {
+		// Always add the ★ column when default tracking is enabled.
+		if hasDefaultCol {
 			key := strings.ToLower(item.DedupKey)
 			if key == "" {
 				key = strings.ToLower(item.Name)
 			}
-			if key == defaultKey {
+			if defaultKey != "" && key == defaultKey {
 				row = append(row, "★")
 			} else {
 				row = append(row, "")
