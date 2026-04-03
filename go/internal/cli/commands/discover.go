@@ -468,11 +468,12 @@ func (m discoverModel) View() string {
 
 	var sb strings.Builder
 
-	hintText := "↑/↓ navigate, enter copy, a copy all, u update, d set default, x unset default, q quit"
+	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + "\n")
 	if m.updatingDeviceName != "" {
-		hintText = "updating " + m.updatingDeviceName + "... (q quit)"
+		sb.WriteString(dimStyle.Render("  updating "+m.updatingDeviceName+"... (q quit)") + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render("  ↑/↓ navigate, enter copy, a copy all, u update, d set default, x unset default, q quit") + "\n")
 	}
-	sb.WriteString(scanStyle.Render("⟳ Scanning for WendyOS devices...") + dimStyle.Render(" ("+hintText+")") + "\n")
 
 	if m.bleWarning != "" {
 		sb.WriteString(dimStyle.Render("  Bluetooth: "+m.bleWarning) + "\n")
