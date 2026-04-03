@@ -1,0 +1,151 @@
+name: Hardware Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      hostname:
+        description: 'Device hostname (empty = auto-discover via mDNS)'
+        required: false
+        default: ''
+      tests:
+        description: 'Comma-separated test names (empty = all applicable)'
+        required: false
+        default: ''
+
+jobs:
+  integration-test:
+    name: Integration (${{ matrix.os }})
+    runs-on: [self-hosted, wendy-hw, '${{ matrix.os }}']
+    concurrency:
+      group: integration-hw-${{ matrix.os }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macOS, Linux]
+    defaults:
+      run:
+        working-directory: go
+    env:
+      INPUT_HOSTNAME: ${{ inputs.hostname }}
+      INPUT_TESTS: ${{ inputs.tests }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run integration tests
+        run: |
+          ARGS="-w ./bin/wendy"
+
+          if [[ -n "$INPUT_HOSTNAME" ]]; then
+            ARGS="$ARGS -h $INPUT_HOSTNAME"
+          fi
+
+          if [[ -n "$INPUT_TESTS" ]]; then
+            HAS_TESTS=false
+            IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
+            for t in "${TEST_ARRAY[@]}"; do
+              t="$(echo "$t" | xargs)"
+              if [[ "$t" != "python-gpu" ]]; then
+                ARGS="$ARGS -t $t"
+                HAS_TESTS=true
+              fi
+            done
+            if [[ "$HAS_TESTS" == false ]]; then
+              echo "No non-GPU tests requested, skipping."
+              exit 0
+            fi
+          else
+            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-bluetooth python-no-network python-no-bluetooth; do
+              ARGS="$ARGS -t $t"
+            done
+          fi
+
+          scripts/test-ci.sh $ARGS
+
+      - name: Cleanup
+        if: always()
+        run: make clean
+
+  integration-test-gpu:
+    name: Integration (GPU)
+    runs-on: [self-hosted, wendy-hw, gpu]
+    concurrency:
+      group: integration-hw-gpu
+      cancel-in-progress: false
+    timeout-minutes: 30
+    continue-on-error: true
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.tests == '' ||
+      contains(inputs.tests, 'python-gpu')
+    defaults:
+      run:
+        working-directory: go
+    env:
+      INPUT_HOSTNAME: ${{ inputs.hostname }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run GPU integration test
+        run: |
+          ARGS="-w ./bin/wendy -t python-gpu"
+          if [[ -n "$INPUT_HOSTNAME" ]]; then
+            ARGS="$ARGS -h $INPUT_HOSTNAME"
+          fi
+          scripts/test-ci.sh $ARGS
+
+      - name: Cleanup
+        if: always()
+        run: make clean
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [integration-test, integration-test-gpu]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "## Hardware Integration Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.integration-test.result }}" == "success" ]]; then
+            echo "- Platform tests (macOS + Linux): passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.integration-test.result }}" == "skipped" ]]; then
+            echo "- Platform tests: skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Platform tests (macOS + Linux): ${{ needs.integration-test.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.integration-test-gpu.result }}" == "success" ]]; then
+            echo "- GPU test: passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.integration-test-gpu.result }}" == "skipped" ]]; then
+            echo "- GPU test: skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- GPU test: ${{ needs.integration-test-gpu.result }} (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
+            echo ""
+            echo "Platform integration tests failed."
+            exit 1
+          fi

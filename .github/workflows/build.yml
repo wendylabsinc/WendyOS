@@ -622,6 +622,15 @@ jobs:
           curl -fsSL https://install.wendy.sh/cli.sh | bash
           ```
 
+          **Windows (install)**
+          ```
+          winget install WendyLabs.Wendy
+          ```
+          **Windows (update)**
+          ```
+          winget upgrade WendyLabs.Wendy
+          ```
+
           ## Install the Wendy Agent
 
           **Linux/macOS**

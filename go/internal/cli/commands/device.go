@@ -52,6 +52,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceTelemetryStreamCmd(),
 		newWifiCmd(),
 		newAppsCmd(),
+		newVolumesCmd(),
 	)
 
 	return cmd

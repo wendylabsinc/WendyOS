@@ -45,6 +45,19 @@ type PickerModel struct {
 	// If nil, duplicate items are silently dropped.
 	MergeItem func(existing *PickerItem, incoming PickerItem)
 
+	// OnSetDefault is called when the user presses 'd' on the highlighted item.
+	// If nil, 'd' is ignored.
+	OnSetDefault func(item PickerItem)
+
+	// OnUnsetDefault is called when the user presses 'x'.
+	// If nil, 'x' is ignored.
+	OnUnsetDefault func()
+
+	// DefaultKey is compared case-insensitively against each item's DedupKey
+	// (or Name if DedupKey is empty). Should be stored lowercase for consistency.
+	// Shown with a ★ indicator in the table.
+	DefaultKey string
+
 	items    []PickerItem
 	seenIdx  map[string]int // dedup key -> index in items
 	table    bubbleTable.Model
@@ -95,6 +108,28 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = &item
 				return m, tea.Quit
 			}
+		case "d":
+			if m.OnSetDefault != nil {
+				cursor := m.table.Cursor()
+				if len(m.items) > 0 && cursor >= 0 && cursor < len(m.items) {
+					item := m.items[cursor]
+					key := strings.ToLower(item.DedupKey)
+					if key == "" {
+						key = strings.ToLower(item.Name)
+					}
+					m.DefaultKey = key
+					m.OnSetDefault(item)
+					m.refreshTable()
+				}
+			}
+			return m, nil
+		case "x":
+			if m.OnUnsetDefault != nil {
+				m.DefaultKey = ""
+				m.OnUnsetDefault()
+				m.refreshTable()
+			}
+			return m, nil
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
@@ -143,7 +178,18 @@ func (m PickerModel) View() string {
 
 	var sb strings.Builder
 
-	sb.WriteString(pickerTitle.Render(m.Title) + pickerHint.Render(" (↑/↓ navigate, enter select, q quit)") + "\n\n")
+	hint := " (↑/↓ navigate, enter select, q quit)"
+	if m.OnSetDefault != nil || m.OnUnsetDefault != nil {
+		extras := ""
+		if m.OnSetDefault != nil {
+			extras += ", d set default"
+		}
+		if m.OnUnsetDefault != nil {
+			extras += ", x unset default"
+		}
+		hint = " (↑/↓ navigate, enter select" + extras + ", q quit)"
+	}
+	sb.WriteString(pickerTitle.Render(m.Title) + pickerHint.Render(hint) + "\n\n")
 
 	if len(m.items) == 0 {
 		if m.scanning {
@@ -244,9 +290,31 @@ func (m *PickerModel) refreshTable() {
 		m.seenIdx[pickerItemKey(item)] = i
 	}
 
+	hasDefaultCol := m.OnSetDefault != nil
 	activeCols := pickerActiveColumns(m.items)
-	rows := pickerRows(m.items, activeCols)
-	m.table.SetColumns(pickerColumns(rows, activeCols))
+	rows := pickerRows(m.items, activeCols, m.DefaultKey, hasDefaultCol)
+
+	var cols []bubbleTable.Column
+	if hasDefaultCol {
+		// Leading ★ column, then the data columns (offset by 1 in rows).
+		cols = append(cols, bubbleTable.Column{Title: "", Width: 3})
+		for i, def := range activeCols {
+			colIdx := i + 1 // rows have the star column at index 0
+			width := lipgloss.Width(def.title)
+			for _, row := range rows {
+				if colIdx < len(row) {
+					width = max(width, lipgloss.Width(row[colIdx]))
+				}
+			}
+			width += 2
+			width = max(width, def.minWidth)
+			width = min(width, def.maxWidth)
+			cols = append(cols, bubbleTable.Column{Title: def.title, Width: width})
+		}
+	} else {
+		cols = pickerColumns(rows, activeCols)
+	}
+	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 
 	// Restore cursor to the same item, or default to 0 on first render.
@@ -287,10 +355,22 @@ func pickerActiveColumns(items []PickerItem) []pickerColumnDef {
 	return active
 }
 
-func pickerRows(items []PickerItem, cols []pickerColumnDef) []bubbleTable.Row {
+func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, hasDefaultCol bool) []bubbleTable.Row {
 	rows := make([]bubbleTable.Row, 0, len(items))
 	for _, item := range items {
-		row := make(bubbleTable.Row, 0, len(cols))
+		var row bubbleTable.Row
+		// Always add the ★ column when default tracking is enabled.
+		if hasDefaultCol {
+			key := strings.ToLower(item.DedupKey)
+			if key == "" {
+				key = strings.ToLower(item.Name)
+			}
+			if defaultKey != "" && key == defaultKey {
+				row = append(row, "★")
+			} else {
+				row = append(row, "")
+			}
+		}
 		for _, col := range cols {
 			row = append(row, col.value(item))
 		}

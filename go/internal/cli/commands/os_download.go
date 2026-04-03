@@ -1,13 +1,11 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -64,14 +62,11 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		fmt.Printf("\nImage already cached: %s (%.1f MB)\n", cached, sizeMB)
 
 		if !overwrite {
-			fmt.Print("Re-download and overwrite? [y/N] ")
-
-			reader := bufio.NewReader(os.Stdin)
-			line, err := reader.ReadString('\n')
+			confirmed, err := tui.Confirm("Re-download and overwrite?")
 			if err != nil {
 				return err
 			}
-			if answer := strings.TrimSpace(strings.ToLower(line)); answer != "y" && answer != "yes" {
+			if !confirmed {
 				fmt.Println("Keeping existing cached image.")
 				return nil
 			}

@@ -77,3 +77,98 @@ func TestPickerModel_ShowsDescriptionColumnWhenPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestPickerModel_DefaultKeyShowsStar(t *testing.T) {
+	m := NewPickerWithTitle("Select a device")
+	m.DefaultKey = "alpha"
+	m.OnSetDefault = func(item PickerItem) {}
+	m.OnUnsetDefault = func() {}
+
+	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
+		{Name: "alpha", Type: "LAN", Value: "alpha"},
+		{Name: "beta", Type: "LAN", Value: "beta"},
+	}})
+	pm := updated.(PickerModel)
+
+	view := pm.View()
+	if !strings.Contains(view, "★") {
+		t.Error("expected ★ indicator for default item")
+	}
+	if !strings.Contains(view, "d set default") {
+		t.Error("expected hint text to contain 'd set default'")
+	}
+	if !strings.Contains(view, "x unset default") {
+		t.Error("expected hint text to contain 'x unset default'")
+	}
+}
+
+func TestPickerModel_DKeySetsDefault(t *testing.T) {
+	m := NewPickerWithTitle("Select a device")
+	var setItem PickerItem
+	m.OnSetDefault = func(item PickerItem) { setItem = item }
+	m.OnUnsetDefault = func() {}
+
+	// Add items.
+	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
+		{Name: "alpha", Type: "LAN", Value: "alpha"},
+		{Name: "beta", Type: "LAN", Value: "beta"},
+	}})
+	pm := updated.(PickerModel)
+
+	// Press 'd' on the first item (cursor starts at 0).
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	pm = updated.(PickerModel)
+
+	if setItem.Name != "alpha" {
+		t.Errorf("OnSetDefault called with %q, want alpha", setItem.Name)
+	}
+	if pm.DefaultKey != "alpha" {
+		t.Errorf("DefaultKey = %q, want alpha", pm.DefaultKey)
+	}
+}
+
+func TestPickerModel_XKeyClearsDefault(t *testing.T) {
+	m := NewPickerWithTitle("Select a device")
+	m.DefaultKey = "alpha"
+	var unsetCalled bool
+	m.OnSetDefault = func(item PickerItem) {}
+	m.OnUnsetDefault = func() { unsetCalled = true }
+
+	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
+		{Name: "alpha", Type: "LAN", Value: "alpha"},
+	}})
+	pm := updated.(PickerModel)
+
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	pm = updated.(PickerModel)
+
+	if !unsetCalled {
+		t.Error("OnUnsetDefault was not called")
+	}
+	if pm.DefaultKey != "" {
+		t.Errorf("DefaultKey = %q, want empty", pm.DefaultKey)
+	}
+}
+
+func TestPickerModel_DXIgnoredWithoutCallbacks(t *testing.T) {
+	m := NewPickerWithTitle("Select")
+	// No OnSetDefault/OnUnsetDefault set.
+
+	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
+		{Name: "alpha", Value: "alpha"},
+	}})
+	pm := updated.(PickerModel)
+
+	// Press 'd' — should not panic or set anything.
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	pm = updated.(PickerModel)
+	if pm.DefaultKey != "" {
+		t.Error("DefaultKey should remain empty without callback")
+	}
+
+	// View should NOT contain d/x hint.
+	view := pm.View()
+	if strings.Contains(view, "d set default") {
+		t.Error("d/x hint should not appear without callbacks")
+	}
+}
