@@ -61,6 +61,15 @@ const (
 	PlatformWendyLite = "wendy-lite"
 )
 
+// FileSyncEntry describes a file or directory to sync to the device's app
+// working directory before the app starts. Path is relative to wendy.json.
+// To is the destination path relative to the app working directory; it
+// defaults to Path (with any leading ./ stripped) when omitted.
+type FileSyncEntry struct {
+	Path string `json:"path"`
+	To   string `json:"to,omitempty"`
+}
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
 	AppID        string           `json:"appId"`
@@ -72,6 +81,7 @@ type AppConfig struct {
 	Hooks        *HooksConfig     `json:"hooks,omitempty"`
 	Python       *PythonConfig    `json:"python,omitempty"`
 	Debug        bool             `json:"debug,omitempty"`
+	Files        []FileSyncEntry  `json:"files,omitempty"`
 }
 
 // ReadinessConfig defines a probe the CLI uses to determine when the app is ready.
@@ -181,6 +191,26 @@ func (c *AppConfig) Validate() error {
 		}
 	}
 
+	for i, f := range c.Files {
+		if f.Path == "" {
+			return fmt.Errorf("files[%d]: path is required", i)
+		}
+		if strings.HasPrefix(f.Path, "/") {
+			return fmt.Errorf("files[%d]: path must not be absolute", i)
+		}
+		if containsDotDot(f.Path) {
+			return fmt.Errorf("files[%d]: path must not contain '..' components", i)
+		}
+		if f.To != "" {
+			if strings.HasPrefix(f.To, "/") {
+				return fmt.Errorf("files[%d]: to must not be absolute", i)
+			}
+			if containsDotDot(f.To) {
+				return fmt.Errorf("files[%d]: to must not contain '..' components", i)
+			}
+		}
+	}
+
 	if c.Readiness != nil {
 		if c.Readiness.TCPSocket != nil {
 			port := c.Readiness.TCPSocket.Port
@@ -194,6 +224,16 @@ func (c *AppConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// containsDotDot reports whether p has a path component equal to "..".
+func containsDotDot(p string) bool {
+	for _, component := range strings.Split(p, "/") {
+		if component == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateJSON checks raw JSON data for unknown keys in entitlements and returns warnings.

@@ -67,6 +67,7 @@ struct WendyAgent: AsyncParsableCommand {
             AudioService(),
             ProvisioningService(),
             TelemetryService(broadcaster: broadcaster),
+            FileSyncService(),
         ]
 
         let server = GRPCServer(

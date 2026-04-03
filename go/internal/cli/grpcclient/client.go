@@ -27,6 +27,7 @@ type AgentConnection struct {
 	AudioService        agentpb.WendyAudioServiceClient
 	ProvisioningService agentpb.WendyProvisioningServiceClient
 	TelemetryService    agentpb.WendyTelemetryServiceClient
+	FileSyncService     agentpb.WendyFileSyncServiceClient
 }
 
 // Connect creates an insecure gRPC connection to the agent at the given address.
@@ -125,5 +126,6 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		AudioService:        agentpb.NewWendyAudioServiceClient(conn),
 		ProvisioningService: agentpb.NewWendyProvisioningServiceClient(conn),
 		TelemetryService:    agentpb.NewWendyTelemetryServiceClient(conn),
+		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),
 	}
 }

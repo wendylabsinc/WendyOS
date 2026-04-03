@@ -146,6 +146,26 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             }
             appDirs[appName] = (dir: appDir, binaryName: imageName)
             logger.info("Registered app directory", metadata: ["app_name": "\(appName)", "binary": "\(binaryPath)"])
+        } else {
+            // File-sync path: imageName is empty, cmd carries the binary name.
+            let cmd = request.message.cmd
+            guard !cmd.isEmpty else {
+                // Nothing to register — container will fall back to --appPath.
+                return ServerResponse(message: Wendy_Agent_Services_V1_CreateContainerResponse())
+            }
+            let appDir = "\(appsDir)/\(appName)"
+            let binaryPath = "\(appDir)/\(cmd)"
+            guard FileManager.default.fileExists(atPath: binaryPath) else {
+                throw RPCError(
+                    code: .notFound,
+                    message: "Binary not found at \(binaryPath). Run 'wendy run' to sync files first."
+                )
+            }
+            appDirs[appName] = (dir: appDir, binaryName: cmd)
+            logger.info(
+                "Registered app (file-sync path)",
+                metadata: ["app_name": "\(appName)", "binary": "\(binaryPath)"]
+            )
         }
 
         return ServerResponse(message: Wendy_Agent_Services_V1_CreateContainerResponse())

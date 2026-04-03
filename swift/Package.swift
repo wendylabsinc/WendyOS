@@ -19,6 +19,16 @@ let package = Package(
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
     ],
     targets: [
+        .testTarget(
+            name: "WendyAgentTests",
+            dependencies: [
+                .target(name: "wendy-agent"),
+                .target(name: "WendyAgentGRPC"),
+                .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+            ],
+            path: "Tests/WendyAgentTests"
+        ),
         .executableTarget(
             name: "wendy-agent",
             dependencies: [
