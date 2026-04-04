@@ -424,6 +424,7 @@ func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) 
 		Name:        "No template",
 		Description: "Configure target, language, and entitlements manually",
 		Value:       "",
+		SortKey:     "~",
 	})
 	return pickFromItems("Start from a template?", items)
 }
@@ -645,8 +646,8 @@ func resolveInitTarget(opts initOptions) (string, error) {
 
 	fmt.Println()
 	return pickFromItems("What is your target device?", []tui.PickerItem{
-		{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS},
-		{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite},
+		{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS, SortKey: "0"},
+		{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "1"},
 	})
 }
 

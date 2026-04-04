@@ -21,6 +21,11 @@ type PickerItem struct {
 	// Items with the same DedupKey (case-insensitive) are merged via MergeItem.
 	DedupKey string
 
+	// SortKey overrides the sort order when set. Items are sorted by SortKey
+	// first (when non-empty), then by name. Use this to pin items to a specific
+	// position (e.g. "0_first", "z_last") without affecting the display name.
+	SortKey string
+
 	// Insecure is true when the device is reachable but the connection is not
 	// secured with mTLS. A warning is shown in the picker when this item is highlighted.
 	Insecure bool
@@ -284,12 +289,18 @@ func (m *PickerModel) refreshTable() {
 		cursorKey = strings.ToLower(pickerItemKey(m.items[cursor]))
 	}
 
-	// Sort items by name for a stable, predictable display order. Use DedupKey
-	// (the device name without any version suffix) so merge updates that append
-	// a version don't cause items to jump around.
+	// Sort items for a stable, predictable display order. When SortKey is set,
+	// it takes precedence; otherwise sort by name (using DedupKey if present).
 	sort.SliceStable(m.items, func(i, j int) bool {
-		return strings.ToLower(pickerItemKey(m.items[i])) <
-			strings.ToLower(pickerItemKey(m.items[j]))
+		ki := m.items[i].SortKey
+		if ki == "" {
+			ki = strings.ToLower(pickerItemKey(m.items[i]))
+		}
+		kj := m.items[j].SortKey
+		if kj == "" {
+			kj = strings.ToLower(pickerItemKey(m.items[j]))
+		}
+		return ki < kj
 	})
 
 	// Rebuild seenIdx to reflect the new positions after sorting.
