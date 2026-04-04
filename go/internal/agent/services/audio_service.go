@@ -2,6 +2,7 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -29,19 +30,14 @@ func NewAudioService(logger *zap.Logger) *AudioService {
 	return &AudioService{logger: logger}
 }
 
-// ListAudioDevices enumerates audio devices via PipeWire (pw-cli) or ALSA (arecord/aplay).
+// ListAudioDevices enumerates audio devices via ALSA (arecord/aplay).
+// ALSA card numbers are used because all streaming (StreamAudio, StreamAudioLevels)
+// uses arecord with hw:N device arguments — PipeWire/PulseAudio node IDs are a
+// different numbering system and would not map correctly to streaming device IDs.
 func (s *AudioService) ListAudioDevices(ctx context.Context, _ *agentpb.ListAudioDevicesRequest) (*agentpb.ListAudioDevicesResponse, error) {
-	devices, err := s.listPipeWireDevices(ctx)
+	devices, err := s.listALSADevices(ctx)
 	if err != nil {
-		s.logger.Warn("PipeWire enumeration failed, falling back to PulseAudio", zap.Error(err))
-		devices, err = s.listPulseAudioDevices(ctx)
-		if err != nil {
-			s.logger.Warn("PulseAudio enumeration failed, falling back to ALSA", zap.Error(err))
-			devices, err = s.listALSADevices(ctx)
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to enumerate audio devices: %v", err)
-			}
-		}
+		return nil, status.Errorf(codes.Internal, "failed to enumerate audio devices: %v", err)
 	}
 	return &agentpb.ListAudioDevicesResponse{Devices: devices}, nil
 }
@@ -299,6 +295,32 @@ func (s *AudioService) setPulseAudioDefaultDevice(ctx context.Context, req *agen
 	return nil, fmt.Errorf("device ID %d not found in PulseAudio sinks or sources", targetID)
 }
 
+// firstALSACaptureCard returns the card number of the first ALSA capture device,
+// or 0 if none is found or arecord is unavailable.
+func firstALSACaptureCard(ctx context.Context) uint32 {
+	cmd := exec.CommandContext(ctx, "arecord", "-l")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	devices := parseALSAOutput(string(out), agentpb.AudioDeviceType_AUDIO_DEVICE_TYPE_INPUT)
+	if len(devices) > 0 {
+		return devices[0].GetId()
+	}
+	return 0
+}
+
+// alsaDeviceArg returns the arecord -D argument for the given device ID.
+// When id is 0 (unspecified), it auto-selects the first available capture card.
+// plughw is used instead of hw so ALSA's plug layer handles any sample-rate or
+// format conversion — without it, hw: requires an exact hardware-supported rate.
+func alsaDeviceArg(ctx context.Context, id uint32) string {
+	if id == 0 {
+		id = firstALSACaptureCard(ctx)
+	}
+	return fmt.Sprintf("plughw:%d,0", id)
+}
+
 // StreamAudioLevels streams peak/RMS dB levels for a device.
 func (s *AudioService) StreamAudioLevels(req *agentpb.StreamAudioLevelsRequest, stream grpc.ServerStreamingServer[agentpb.AudioLevelUpdate]) error {
 	ctx := stream.Context()
@@ -315,11 +337,9 @@ func (s *AudioService) StreamAudioLevels(req *agentpb.StreamAudioLevelsRequest, 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Use arecord to capture a short PCM snippet for level analysis.
-	deviceArg := "default"
-	if req.GetDeviceId() > 0 {
-		deviceArg = fmt.Sprintf("hw:%d", req.GetDeviceId())
-	}
+	// Device IDs from audio list correspond to ALSA card numbers (arecord -l).
+	// ID 0 means "unspecified" — auto-select the first capture card.
+	deviceArg := alsaDeviceArg(ctx, req.GetDeviceId())
 
 	cmd := exec.CommandContext(ctx, "arecord",
 		"-D", deviceArg,
@@ -329,6 +349,8 @@ func (s *AudioService) StreamAudioLevels(req *agentpb.StreamAudioLevelsRequest, 
 		"-t", "raw",
 		"-",
 	)
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to create audio pipe: %v", err)
@@ -347,6 +369,9 @@ func (s *AudioService) StreamAudioLevels(req *agentpb.StreamAudioLevelsRequest, 
 		case <-ticker.C:
 			n, err := stdout.Read(buf)
 			if err != nil {
+				if msg := strings.TrimSpace(stderrBuf.String()); msg != "" {
+					return status.Errorf(codes.Internal, "audio capture failed: %s", msg)
+				}
 				return nil
 			}
 
@@ -376,10 +401,9 @@ func (s *AudioService) StreamAudio(req *agentpb.StreamAudioRequest, stream grpc.
 		channels = 1
 	}
 
-	deviceArg := "default"
-	if req.GetDeviceId() > 0 {
-		deviceArg = fmt.Sprintf("hw:%d", req.GetDeviceId())
-	}
+	// Device IDs from audio list correspond to ALSA card numbers (arecord -l).
+	// ID 0 means "unspecified" — auto-select the first capture card.
+	deviceArg := alsaDeviceArg(ctx, req.GetDeviceId())
 
 	cmd := exec.CommandContext(ctx, "arecord",
 		"-D", deviceArg,
@@ -387,8 +411,11 @@ func (s *AudioService) StreamAudio(req *agentpb.StreamAudioRequest, stream grpc.
 		"-r", fmt.Sprintf("%d", sampleRate),
 		"-c", fmt.Sprintf("%d", channels),
 		"-t", "raw",
+		"--buffer-time=50000", // 50ms ALSA buffer to minimise capture latency
 		"-",
 	)
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to create audio pipe: %v", err)
@@ -412,6 +439,9 @@ func (s *AudioService) StreamAudio(req *agentpb.StreamAudioRequest, stream grpc.
 
 		n, err := stdout.Read(buf)
 		if err != nil {
+			if msg := strings.TrimSpace(stderrBuf.String()); msg != "" {
+				return status.Errorf(codes.Internal, "audio capture failed: %s", msg)
+			}
 			return nil
 		}
 

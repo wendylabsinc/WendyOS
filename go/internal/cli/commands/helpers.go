@@ -330,7 +330,8 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 			// unreachable default devices early so the recovery menu
 			// can be shown instead of a cryptic error later.
 			// mTLS connections are already probed inside connectWithAutoTLS.
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			// 8s allows time for mDNS (.local) resolution + TCP + gRPC handshake.
+			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 			cancel()
 			if probeErr != nil {
@@ -415,7 +416,8 @@ func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.
 			if tlsErr == nil {
 				// grpc.NewClient is lazy — verify the connection actually
 				// works with a fast probe before committing to mTLS.
-				probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				// 8s allows time for mDNS (.local) resolution + TCP + TLS handshake.
+				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 				cancel()
 				if probeErr == nil {
