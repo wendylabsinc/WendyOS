@@ -91,6 +91,10 @@ jobs:
         with:
           go-version-file: wendy-os-publisher/go.mod
 
+      - name: Install flashable image dependencies (Jetson only)
+        if: github.event_name != 'pull_request' && matrix.device == 'jetson'
+        run: sudo apt-get install -y device-tree-compiler
+
       - name: Generate flashable image (Jetson only)
         if: github.event_name != 'pull_request' && matrix.device == 'jetson'
         env:
