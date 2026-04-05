@@ -526,16 +526,15 @@ func filterTraces(req *otelpb.ExportTraceServiceRequest, filter *agentpb.StreamT
 	}
 
 	serviceName := filter.ServiceName
-	appName := filter.AppName
 	spanNamePrefix := filter.SpanNamePrefix
 
-	if serviceName == nil && appName == nil && spanNamePrefix == nil {
+	if serviceName == nil && spanNamePrefix == nil {
 		return req
 	}
 
 	var filteredResourceSpans []*otelpb.ResourceSpans
 	for _, rs := range req.GetResourceSpans() {
-		if !matchResourceAttributes(rs.GetResource(), serviceName, appName) {
+		if !matchResourceAttributes(rs.GetResource(), serviceName) {
 			continue
 		}
 
