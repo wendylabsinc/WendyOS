@@ -3,7 +3,9 @@ package oci
 import (
 	"errors"
 	"os"
+	"os/user"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -476,6 +478,97 @@ func TestApplyEntitlements_Input(t *testing.T) {
 	if !foundInputRule {
 		t.Error("input entitlement did not add cgroup device rule (major 13)")
 	}
+}
+
+func TestApplyEntitlements_GPIO(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementGPIO, Pins: []int{5, 6, 13}},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// Should add a cgroup rule for GPIO devices (major 254).
+	foundGPIORule := false
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Major != nil && *d.Major == 254 && d.Allow {
+			foundGPIORule = true
+			break
+		}
+	}
+	if !foundGPIORule {
+		t.Error("gpio entitlement did not add cgroup device rule (major 254)")
+	}
+
+	// Should mount /dev/gpiochip0 when it exists on the host.
+	t.Run("mounts /dev/gpiochip0 when present", func(t *testing.T) {
+		if _, err := os.Stat("/dev/gpiochip0"); err == nil {
+			if !hasMountDest(spec, "/dev/gpiochip0") {
+				t.Error("gpio entitlement did not add /dev/gpiochip0 mount")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat /dev/gpiochip0: %v", err)
+		} else {
+			t.Skip("/dev/gpiochip0 not present on this host")
+		}
+	})
+}
+
+func TestApplyEntitlements_SPI(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementSPI},
+		},
+	}
+
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	foundSPIRule := false
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Major != nil && *d.Major == 153 && d.Allow {
+			foundSPIRule = true
+			break
+		}
+	}
+	if !foundSPIRule {
+		t.Error("spi entitlement did not add SPI cgroup device rule (major 153)")
+	}
+
+	// SPI group GID: if the "spi" group exists on this host, verify it was added.
+	// If not (e.g. macOS, ubuntu CI), verify we didn't add a bogus GID.
+	if grp, err := user.LookupGroup("spi"); err == nil {
+		gid, err := strconv.ParseUint(grp.Gid, 10, 32)
+		if err != nil {
+			t.Fatalf("failed to parse spi group GID %q: %v", grp.Gid, err)
+		}
+		if !hasGID(spec, uint32(gid)) {
+			t.Errorf("spi entitlement did not add spi group GID %d", gid)
+		}
+	} else if len(spec.Process.User.AdditionalGids) != 0 {
+		t.Errorf("spi group not present on host but AdditionalGids is not empty: %v", spec.Process.User.AdditionalGids)
+	}
+
+	// Should mount /dev/spidev0.0 when it exists on the host.
+	t.Run("mounts /dev/spidev0.0 when present", func(t *testing.T) {
+		if _, err := os.Stat("/dev/spidev0.0"); err == nil {
+			if !hasMountDest(spec, "/dev/spidev0.0") {
+				t.Error("spi entitlement did not add /dev/spidev0.0 mount")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat /dev/spidev0.0: %v", err)
+		} else {
+			t.Skip("/dev/spidev0.0 not present on this host")
+		}
+	})
 }
 
 func TestApplyEntitlements_Empty(t *testing.T) {

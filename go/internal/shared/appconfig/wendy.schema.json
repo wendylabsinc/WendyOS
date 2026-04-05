@@ -177,6 +177,14 @@
         },
         {
           "properties": {
+            "type": { "const": "spi" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "SPI device access."
+        },
+        {
+          "properties": {
             "type": { "const": "input" }
           },
           "required": ["type"],

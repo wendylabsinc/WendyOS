@@ -92,6 +92,7 @@ var wendyOSEntitlementQuestions = []entitlementQuestion{
 	{"Does your app need Bluetooth peripheral access?", appconfig.EntitlementBluetooth, "Bluetooth Low Energy peripherals"},
 	{"Does your app need USB peripheral access?", appconfig.EntitlementUSB, "USB device access"},
 	{"Does your app need GPIO pin access?", appconfig.EntitlementGPIO, "General-purpose I/O pins"},
+	{"Does your app need SPI bus access (displays, sensors, flash)?", appconfig.EntitlementSPI, "SPI bus access (may require GPIO access)"},
 	{"Does your app need I2C bus access?", appconfig.EntitlementI2C, "I2C bus devices"},
 	{"Does your app need audio input/output?", appconfig.EntitlementAudio, "Microphone and speaker access"},
 	{"Does your app need camera access?", appconfig.EntitlementCamera, "Camera device access"},

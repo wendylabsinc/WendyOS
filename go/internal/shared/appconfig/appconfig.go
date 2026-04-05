@@ -22,6 +22,7 @@ const (
 	EntitlementUSB       = "usb"
 	EntitlementI2C       = "i2c"
 	EntitlementGPIO      = "gpio"
+	EntitlementSPI       = "spi"
 	EntitlementInput     = "input"
 )
 
@@ -37,6 +38,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementUSB,
 	EntitlementI2C,
 	EntitlementGPIO,
+	EntitlementSPI,
 	EntitlementInput,
 }
 
@@ -52,6 +54,7 @@ var allowedKeys = map[string][]string{
 	EntitlementUSB:       {"type"},
 	EntitlementI2C:       {"type", "device"},
 	EntitlementGPIO:      {"type", "pins"},
+	EntitlementSPI:       {"type"},
 	EntitlementInput:     {"type"},
 }
 

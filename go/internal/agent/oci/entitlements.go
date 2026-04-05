@@ -3,7 +3,9 @@ package oci
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -64,6 +66,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applyI2C(spec, ent)
 		case appconfig.EntitlementGPIO:
 			applyGPIO(spec, ent)
+		case appconfig.EntitlementSPI:
+			applySPI(spec)
 		case appconfig.EntitlementInput:
 			applyInput(spec)
 		}
@@ -439,6 +443,40 @@ func applyGPIO(spec *Spec, ent appconfig.Entitlement) {
 	})
 
 	_ = ent.Pins // Pins are used for documentation/validation; access is chip-level.
+}
+
+// applySPI adds SPI device access.
+func applySPI(spec *Spec) {
+	// Mount SPI devices that exist on the host.
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			devPath := fmt.Sprintf("/dev/spidev%d.%d", i, j)
+			if _, err := os.Stat(devPath); err == nil {
+				spec.Mounts = append(spec.Mounts, Mount{
+					Destination: devPath,
+					Source:      devPath,
+					Type:        "bind",
+					Options:     []string{"rbind", "rw"},
+				})
+			}
+		}
+	}
+
+	// Add SPI group GID for device permissions (group name varies by distro).
+	if grp, err := user.LookupGroup("spi"); err == nil {
+		if gid, err := strconv.ParseUint(grp.Gid, 10, 32); err == nil {
+			spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, uint32(gid))
+		}
+	}
+
+	// Allow SPI devices (major 153).
+	spiMajor := int64(153)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &spiMajor,
+		Access: "rwm",
+	})
 }
 
 // applyInput adds HID input device access (barcode scanners, keyboards, etc.).
