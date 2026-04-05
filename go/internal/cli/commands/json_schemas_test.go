@@ -272,14 +272,14 @@ func TestWifiNetworksJSON_Schema(t *testing.T) {
 func TestHardwareListJSON_Schema(t *testing.T) {
 	caps := []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
 		{
-			Category:   "gpu",
-			DevicePath: "/dev/nvidia0",
+			Category:    "gpu",
+			DevicePath:  "/dev/nvidia0",
 			Description: "NVIDIA Jetson GPU",
-			Properties: map[string]string{"model": "Orin", "vram": "16GB"},
+			Properties:  map[string]string{"model": "Orin", "vram": "16GB"},
 		},
 		{
-			Category:   "audio",
-			DevicePath: "/dev/snd/controlC0",
+			Category:    "audio",
+			DevicePath:  "/dev/snd/controlC0",
 			Description: "HDA Audio",
 		},
 	}
