@@ -59,7 +59,10 @@ func newDeviceCmd() *cobra.Command {
 }
 
 func newDeviceVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var checkUpdates bool
+	var prerelease bool
+
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Get the agent version on the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -75,14 +78,30 @@ func newDeviceVersionCmd() *cobra.Command {
 				return fmt.Errorf("getting agent version: %w", err)
 			}
 
+			agentVersion := resp.GetVersion()
+
+			var latestVersion string
+			if checkUpdates {
+				release, err := fetchAgentRelease(prerelease)
+				if err != nil {
+					return fmt.Errorf("checking for updates: %w", err)
+				}
+				latestVersion = release.TagName
+			}
+
 			if jsonOutput {
-				data, err := json.MarshalIndent(map[string]string{
-					"version":         resp.GetVersion(),
+				out := map[string]any{
+					"version":         agentVersion,
 					"os":              resp.GetOs(),
 					"osVersion":       resp.GetOsVersion(),
 					"cpuArchitecture": resp.GetCpuArchitecture(),
 					"cliVersion":      version.Version,
-				}, "", "  ")
+				}
+				if checkUpdates {
+					out["latestVersion"] = latestVersion
+					out["updateAvailable"] = version.CompareVersions(latestVersion, agentVersion) > 0
+				}
+				data, err := json.MarshalIndent(out, "", "  ")
 				if err != nil {
 					return err
 				}
@@ -90,20 +109,33 @@ func newDeviceVersionCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Agent Version: %s\n", resp.GetVersion())
+			fmt.Printf("Agent Version: %s\n", agentVersion)
 			fmt.Printf("OS: %s %s\n", resp.GetOs(), resp.GetOsVersion())
 			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
 			fmt.Printf("CLI Version: %s\n", version.Version)
 
-			if cmp := version.CompareVersions(version.Version, resp.GetVersion()); cmp > 0 {
+			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
 				fmt.Println("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
 				fmt.Println("\nNote: CLI is behind the agent. Consider updating the CLI.")
 			}
 
+			if checkUpdates {
+				if version.CompareVersions(latestVersion, agentVersion) > 0 {
+					fmt.Printf("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update\n", latestVersion, agentVersion)
+				} else {
+					fmt.Println("\nAgent is up to date.")
+				}
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&checkUpdates, "check-updates", false, "Check for available agent updates on GitHub")
+	cmd.Flags().BoolVar(&prerelease, "prerelease", false, "Include prerelease (nightly) builds when checking for updates")
+
+	return cmd
 }
 
 func newDeviceSetDefaultCmd() *cobra.Command {

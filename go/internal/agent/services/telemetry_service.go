@@ -378,13 +378,20 @@ func (r *OTELTraceReceiver) Export(_ context.Context, req *otelpb.ExportTraceSer
 
 // matchResourceAttributes checks whether a resource's attributes match the given
 // service name filter. Returns true if all specified filters match.
-func matchResourceAttributes(resource *otelpb.Resource, serviceName *string) bool {
-	if serviceName == nil {
+func matchResourceAttributes(resource *otelpb.Resource, serviceName *string, appName *string) bool {
+	if serviceName == nil && appName == nil {
 		return true
 	}
 	for _, attr := range resource.GetAttributes() {
 		if attr.GetKey() == "service.name" {
-			return attr.GetValue().GetStringValue() == *serviceName
+			val := attr.GetValue().GetStringValue()
+			if serviceName != nil && val == *serviceName {
+				return true
+			}
+			if appName != nil && val == *appName {
+				return true
+			}
+			return false
 		}
 	}
 	return false
@@ -408,20 +415,21 @@ func filterLogs(req *otelpb.ExportLogsServiceRequest, filter *agentpb.StreamLogs
 	}
 
 	serviceName := filter.ServiceName
+	appName := filter.AppName
 	var minSeverity int32
 	if filter.MinSeverity != nil {
 		minSeverity = *filter.MinSeverity
 	}
 
 	// If no filters, pass through.
-	if serviceName == nil && minSeverity == 0 {
+	if serviceName == nil && appName == nil && minSeverity == 0 {
 		return req
 	}
 
 	var filteredResourceLogs []*otelpb.ResourceLogs
 	for _, rl := range req.GetResourceLogs() {
 		// Check resource attributes for service.name.
-		if !matchResourceAttributes(rl.GetResource(), serviceName) {
+		if !matchResourceAttributes(rl.GetResource(), serviceName, appName) {
 			continue
 		}
 
@@ -470,15 +478,16 @@ func filterMetrics(req *otelpb.ExportMetricsServiceRequest, filter *agentpb.Stre
 	}
 
 	serviceName := filter.ServiceName
+	appName := filter.AppName
 	metricNamePrefix := filter.MetricNamePrefix
 
-	if serviceName == nil && metricNamePrefix == nil {
+	if serviceName == nil && appName == nil && metricNamePrefix == nil {
 		return req
 	}
 
 	var filteredResourceMetrics []*otelpb.ResourceMetrics
 	for _, rm := range req.GetResourceMetrics() {
-		if !matchResourceAttributes(rm.GetResource(), serviceName) {
+		if !matchResourceAttributes(rm.GetResource(), serviceName, appName) {
 			continue
 		}
 
