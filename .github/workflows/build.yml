@@ -1003,6 +1003,8 @@ jobs:
     name: Template Tests
     needs: [release]
     if: needs.release.result == 'success'
+    permissions:
+      contents: read
     uses: ./.github/workflows/test-templates.yml
     with:
       deploy: false

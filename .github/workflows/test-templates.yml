@@ -72,21 +72,21 @@ jobs:
           INPUT_TEMPLATE: ${{ inputs.template }}
           INPUT_LANGUAGE: ${{ inputs.language }}
         run: |
-          ARGS="-w ./bin/wendy --skip-run"
+          args=(-w ./bin/wendy --skip-run)
 
           if [[ -n "$INPUT_TEMPLATES_BRANCH" && "$INPUT_TEMPLATES_BRANCH" != "main" ]]; then
-            ARGS="$ARGS --templates-branch $INPUT_TEMPLATES_BRANCH"
+            args+=(--templates-branch "$INPUT_TEMPLATES_BRANCH")
           fi
 
           if [[ -n "$INPUT_TEMPLATE" ]]; then
-            ARGS="$ARGS --template $INPUT_TEMPLATE"
+            args+=(--template "$INPUT_TEMPLATE")
           fi
 
           if [[ -n "$INPUT_LANGUAGE" ]]; then
-            ARGS="$ARGS --language $INPUT_LANGUAGE"
+            args+=(--language "$INPUT_LANGUAGE")
           fi
 
-          scripts/test-templates.sh $ARGS
+          scripts/test-templates.sh "${args[@]}"
 
       - name: Cleanup
         if: always()
@@ -127,25 +127,25 @@ jobs:
 
       - name: Run template tests with deploy
         run: |
-          ARGS="-w ./bin/wendy"
+          ARGS=(-w ./bin/wendy)
 
           if [[ -n "$INPUT_HOSTNAME" ]]; then
-            ARGS="$ARGS -h $INPUT_HOSTNAME"
+            ARGS+=(-h "$INPUT_HOSTNAME")
           fi
 
           if [[ -n "$INPUT_TEMPLATES_BRANCH" && "$INPUT_TEMPLATES_BRANCH" != "main" ]]; then
-            ARGS="$ARGS --templates-branch $INPUT_TEMPLATES_BRANCH"
+            ARGS+=(--templates-branch "$INPUT_TEMPLATES_BRANCH")
           fi
 
           if [[ -n "$INPUT_TEMPLATE" ]]; then
-            ARGS="$ARGS --template $INPUT_TEMPLATE"
+            ARGS+=(--template "$INPUT_TEMPLATE")
           fi
 
           if [[ -n "$INPUT_LANGUAGE" ]]; then
-            ARGS="$ARGS --language $INPUT_LANGUAGE"
+            ARGS+=(--language "$INPUT_LANGUAGE")
           fi
 
-          scripts/test-templates.sh $ARGS
+          scripts/test-templates.sh "${ARGS[@]}"
 
       - name: Cleanup
         if: always()
