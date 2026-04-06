@@ -220,6 +220,12 @@ func ValidateJSON(data []byte) []string {
 		if err := json.Unmarshal(typeRaw, &entType); err != nil {
 			continue
 		}
+		if entType == EntitlementVideo {
+			warnings = append(warnings, fmt.Sprintf(
+				`entitlement[%d] uses deprecated type "video"; use "camera" instead`,
+				i,
+			))
+		}
 
 		allowed, ok := allowedKeys[entType]
 		if !ok {

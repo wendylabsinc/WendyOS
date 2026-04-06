@@ -19,16 +19,34 @@ import (
 var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNetwork:   "Access network interfaces",
 	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
-	appconfig.EntitlementVideo:     "Access video cameras",
+	appconfig.EntitlementVideo:     "Deprecated alias for camera devices",
 	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
 	appconfig.EntitlementPersist:   "Persist data across restarts",
 	appconfig.EntitlementAudio:     "Access audio input/output devices",
-	appconfig.EntitlementCamera:    "Access camera devices",
+	appconfig.EntitlementCamera:    "Access camera devices (preferred)",
 	appconfig.EntitlementUSB:       "Access USB peripherals",
 	appconfig.EntitlementI2C:       "Access I2C bus devices",
 	appconfig.EntitlementGPIO:      "Access GPIO pins",
 	appconfig.EntitlementSPI:       "Access SPI bus devices (displays, sensors, flash - may require GPIO access)",
 	appconfig.EntitlementInput:     "Access HID input devices (barcode scanners, keyboards)",
+}
+
+func displayEntitlementType(entType string) string {
+	if entType == appconfig.EntitlementVideo {
+		return entType + " (deprecated alias for camera)"
+	}
+	return entType
+}
+
+func selectableEntitlementTypes() []string {
+	types := make([]string, 0, len(appconfig.ValidEntitlementTypes))
+	for _, t := range appconfig.ValidEntitlementTypes {
+		if t == appconfig.EntitlementVideo {
+			continue
+		}
+		types = append(types, t)
+	}
+	return types
 }
 
 func newProjectCmd() *cobra.Command {
@@ -87,7 +105,7 @@ func listAllEntitlementTypes(cmd *cobra.Command) error {
 
 	cmd.Println("Available entitlement types:")
 	for _, t := range types {
-		cmd.Printf("  %s\n", t)
+		cmd.Printf("  %s\n", displayEntitlementType(t))
 	}
 	return nil
 }
@@ -114,7 +132,7 @@ func listProjectEntitlements(cmd *cobra.Command) error {
 
 	cmd.Println("Project entitlements:")
 	for _, e := range cfg.Entitlements {
-		cmd.Printf("  %s\n", e.Type)
+		cmd.Printf("  %s\n", displayEntitlementType(e.Type))
 	}
 	return nil
 }
@@ -141,7 +159,7 @@ func newEntitlementsAddCmd() *cobra.Command {
 			} else {
 				// Build picker items from entitlement types not yet in the project.
 				var items []tui.PickerItem
-				for _, t := range appconfig.ValidEntitlementTypes {
+				for _, t := range selectableEntitlementTypes() {
 					if !existing[t] {
 						items = append(items, tui.PickerItem{Name: t, Description: entitlementDescriptions[t], Value: t})
 					}
@@ -161,6 +179,11 @@ func newEntitlementsAddCmd() *cobra.Command {
 			if !slices.Contains(appconfig.ValidEntitlementTypes, entType) {
 				return fmt.Errorf("unknown entitlement type %q\nValid types: %s",
 					entType, strings.Join(appconfig.ValidEntitlementTypes, ", "))
+			}
+			if entType == appconfig.EntitlementVideo {
+				cmd.Printf("Warning: entitlement %q is deprecated; using %q instead.\n",
+					appconfig.EntitlementVideo, appconfig.EntitlementCamera)
+				entType = appconfig.EntitlementCamera
 			}
 
 			if existing[entType] {
@@ -210,7 +233,7 @@ func newEntitlementsRemoveCmd() *cobra.Command {
 
 				var items []tui.PickerItem
 				for _, e := range cfg.Entitlements {
-					items = append(items, tui.PickerItem{Name: e.Type, Description: entitlementDescriptions[e.Type], Value: e.Type})
+					items = append(items, tui.PickerItem{Name: displayEntitlementType(e.Type), Description: entitlementDescriptions[e.Type], Value: e.Type})
 				}
 
 				selected, err := pickFromItems("Select an entitlement to remove", items)

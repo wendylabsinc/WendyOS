@@ -3,6 +3,7 @@ package appconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -228,6 +229,32 @@ func TestValidateJSON_InputUnknownKeys(t *testing.T) {
 	warnings := ValidateJSON(data)
 	if len(warnings) == 0 {
 		t.Fatal("ValidateJSON() expected warning for unknown key on input entitlement, got none")
+	}
+}
+
+func TestValidateJSON_VideoDeprecatedWarning(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "video"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for deprecated video entitlement, got none")
+	}
+
+	found := false
+	for _, warning := range warnings {
+		if strings.Contains(warning, `deprecated type "video"`) &&
+			strings.Contains(warning, `"camera"`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ValidateJSON() warnings = %v, want deprecated video alias warning", warnings)
 	}
 }
 
