@@ -42,6 +42,9 @@ on:
         type: string
         default: ''
 
+permissions:
+  contents: read
+
 concurrency:
   group: template-tests-${{ github.ref }}
   cancel-in-progress: true
