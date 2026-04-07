@@ -100,9 +100,16 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                 case .chunk(let chunk):
                     let relativePath = chunk.path
                     let destinationURL = workDir.appendingPathComponent(relativePath)
-                    let temporaryURL = URL(fileURLWithPath: destinationURL.path + ".tmp")
 
                     if temporaryHandles[relativePath] == nil {
+                        guard let entry = cliManifest.first(where: { $0.path == relativePath }) else {
+                            throw RPCError(
+                                code: .invalidArgument,
+                                message: "No manifest entry for \(relativePath)"
+                            )
+                        }
+                        let temporaryName = ".WENDY-\(entry.sha256)~\(destinationURL.lastPathComponent)"
+                        let temporaryURL = destinationURL.deletingLastPathComponent().appendingPathComponent(temporaryName)
                         try FileManager.default.createDirectory(
                             at: temporaryURL.deletingLastPathComponent(),
                             withIntermediateDirectories: true
@@ -124,13 +131,18 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                 case .commit(let commit):
                     let relativePath = commit.path
                     let destinationURL = workDir.appendingPathComponent(relativePath)
-                    let temporaryURL = temporaryURLs[relativePath] ?? URL(fileURLWithPath: destinationURL.path + ".tmp")
+
+                    guard let temporaryURL = temporaryURLs.removeValue(forKey: relativePath) else {
+                        throw RPCError(
+                            code: .invalidArgument,
+                            message: "No chunks received for \(relativePath)"
+                        )
+                    }
 
                     // Close the write handle before reading for verification.
                     if let fileHandle = temporaryHandles.removeValue(forKey: relativePath) {
                         try fileHandle.close()
                     }
-                    temporaryURLs.removeValue(forKey: relativePath)
 
                     // Verify SHA256 and size by streaming in 64 KiB reads.
                     guard let readHandle = FileHandle(forReadingAtPath: temporaryURL.path) else {
@@ -232,7 +244,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
     // MARK: - Manifest building
 
-    /// Walks workDir and returns a FileSyncEntry for every non-.tmp regular file.
+    /// Walks workDir and returns a FileSyncEntry for every non-temporary regular file.
     /// Exposed for unit testing.
     static func buildManifest(at workDir: URL) throws -> [Wendy_Agent_Services_V1_FileSyncEntry] {
         var entries: [Wendy_Agent_Services_V1_FileSyncEntry] = []
@@ -250,7 +262,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             let enumerator = FileManager.default.enumerator(
                 at: resolvedWorkDir,
                 includingPropertiesForKeys: [URLResourceKey.isRegularFileKey],
-                options: [.skipsHiddenFiles]
+                options: []
             )
         else {
             return entries
@@ -262,8 +274,8 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             )
             guard resourceValues.isRegularFile == true else { continue }
 
-            // Skip .tmp files.
-            if fileURL.pathExtension == "tmp" { continue }
+            // Skip Wendy temporary files.
+            if fileURL.lastPathComponent.hasPrefix(".WENDY-") { continue }
 
             let resolvedFileURL = fileURL.resolvingSymlinksInPath()
             let relativePath = String(resolvedFileURL.path.dropFirst(workDirPath.count + 1))

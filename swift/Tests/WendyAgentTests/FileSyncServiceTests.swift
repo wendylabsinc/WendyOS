@@ -57,14 +57,14 @@ struct BuildManifestTests {
         #expect(entries.count == 2)
     }
 
-    @Test(".tmp files are excluded from manifest")
-    func tmpFilesExcluded() throws {
+    @Test("Wendy temporary files are excluded from manifest")
+    func wendyTemporaryFilesExcluded() throws {
         let temporaryDirectory = try makeTempDir()
         defer { cleanup(temporaryDirectory) }
 
         let base = URL(fileURLWithPath: temporaryDirectory)
         try Data("data".utf8).write(to: base.appendingPathComponent("real.bin"))
-        try Data("partial".utf8).write(to: base.appendingPathComponent("real.bin.tmp"))
+        try Data("partial".utf8).write(to: base.appendingPathComponent(".WENDY-abc123~real.bin"))
 
         let entries = try FileSyncService.buildManifest(at: base)
         #expect(entries.count == 1)
