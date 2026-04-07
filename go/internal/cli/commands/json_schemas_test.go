@@ -510,7 +510,8 @@ func TestDiscoverCollectionJSON_EmptyCollection(t *testing.T) {
 
 // ---------- formatBytes helper ----------
 
-// TestFormatBytes verifies the byte-size formatting used in volumes list output.
+// TestFormatBytes_Units verifies the byte-size formatting used in volumes list output.
+// formatBytes uses SI units (powers of 1000: kB, MB, GB).
 func TestFormatBytes_Units(t *testing.T) {
 	cases := []struct {
 		bytes int64
@@ -518,13 +519,13 @@ func TestFormatBytes_Units(t *testing.T) {
 	}{
 		{0, "0 B"},
 		{500, "500 B"},
-		{1023, "1023 B"},
-		{1024, "1.0 KB"},
-		{1536, "1.5 KB"},
-		{1024 * 1024, "1.0 MB"},
-		{int64(1.5 * 1024 * 1024), "1.5 MB"},
-		{1024 * 1024 * 1024, "1.0 GB"},
-		{int64(2.5 * 1024 * 1024 * 1024), "2.5 GB"},
+		{999, "999 B"},
+		{1_000, "1.0 kB"},
+		{1_500, "1.5 kB"},
+		{1_000_000, "1.0 MB"},
+		{1_500_000, "1.5 MB"},
+		{1_000_000_000, "1.0 GB"},
+		{2_500_000_000, "2.5 GB"},
 	}
 
 	for _, tc := range cases {
