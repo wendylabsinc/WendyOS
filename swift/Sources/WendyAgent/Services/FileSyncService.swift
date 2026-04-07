@@ -229,9 +229,10 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
         // Clean up any remaining orphaned temporary files (shouldn't happen in normal flow).
         for path in Array(temporaryHandles.keys) { cleanupTemporary(path: path) }
 
-        // Prune stale files: in agent manifest but absent from CLI's declared set.
+        // Prune stale files: on disk after the session but absent from CLI's declared set.
+        let postSessionManifest = try buildManifest(at: workDir)
         let cliPaths = Set(cliManifest.map(\.path))
-        for entry in agentManifest where !cliPaths.contains(entry.path) {
+        for entry in postSessionManifest where !cliPaths.contains(entry.path) {
             let staleURL = workDir.appendingPathComponent(entry.path)
             try? FileManager.default.removeItem(at: staleURL)
             logger.info(
