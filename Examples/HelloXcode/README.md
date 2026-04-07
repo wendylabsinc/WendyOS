@@ -35,7 +35,7 @@ sibling `.bundle` directories) to the target device, and starts the container.
 
 | Key | Purpose |
 |-----|---------|
-| `scheme` | Override auto-detected scheme when the project has multiple schemes. |
+| `xcode.scheme` | Override auto-detected scheme when the project has multiple schemes. |
 
 Example:
 ```json
@@ -43,6 +43,8 @@ Example:
   "appId": "helloxcode",
   "version": "0.1.0",
   "language": "swift",
-  "scheme": "HelloXcode"
+  "xcode": {
+    "scheme": "HelloXcode"
+  }
 }
 ```

@@ -70,7 +70,7 @@ func parseXcodeSchemes(data []byte) ([]string, error) {
 
 // findXcodeScheme shells out to `xcodebuild -list -json` to discover the
 // available schemes in dir, then returns the single scheme found or an error.
-// Multiple schemes produce an error with a hint to set "scheme" in wendy.json.
+// Multiple schemes produce an error with a hint to set "xcode.scheme" in wendy.json.
 func findXcodeScheme(ctx context.Context, dir string) (string, error) {
 	cmd := execCommandContext(ctx, "xcodebuild", "-list", "-json")
 	cmd.Dir = dir
@@ -92,7 +92,7 @@ func findXcodeScheme(ctx context.Context, dir string) (string, error) {
 		return schemes[0], nil
 	}
 	return "", fmt.Errorf(
-		"multiple schemes found (%s); set \"scheme\" in wendy.json to specify which one to build",
+		"multiple schemes found (%s); set \"xcode.scheme\" in wendy.json to specify which one to build",
 		strings.Join(schemes, ", "),
 	)
 }
@@ -225,8 +225,11 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 		return fmt.Errorf("no .xcodeproj directory found in %s", cwd)
 	}
 
-	// Determine the scheme (wendy.json escape hatch → auto-detect).
-	scheme := appCfg.Scheme
+	// Determine the scheme (wendy.json xcode.scheme override → auto-detect).
+	scheme := ""
+	if appCfg.Xcode != nil {
+		scheme = appCfg.Xcode.Scheme
+	}
 	if scheme == "" {
 		scheme, err = findXcodeScheme(ctx, cwd)
 		if err != nil {

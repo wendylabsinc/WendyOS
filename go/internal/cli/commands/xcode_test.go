@@ -19,8 +19,8 @@ import (
 func TestBuildXcodeProject_SchemeFromWendyJSON(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a wendy.json with an explicit scheme.
-	cfg := map[string]string{"appId": "myapp", "scheme": "MyScheme"}
+	// Write a wendy.json with an explicit xcode.scheme override.
+	cfg := map[string]any{"appId": "myapp", "xcode": map[string]string{"scheme": "MyScheme"}}
 	data, _ := json.Marshal(cfg)
 	if err := os.WriteFile(filepath.Join(dir, "wendy.json"), data, 0o644); err != nil {
 		t.Fatal(err)

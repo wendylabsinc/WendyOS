@@ -276,8 +276,8 @@ func buildPythonProject(dir, imageName, platform string) error {
 func buildXcodeProject(ctx context.Context, dir, xcodeproj string) error {
 	// Resolve scheme: honour wendy.json override, then auto-detect.
 	scheme := ""
-	if cfg, err := appconfig.LoadFromFile(filepath.Join(dir, "wendy.json")); err == nil {
-		scheme = cfg.Scheme
+	if cfg, err := appconfig.LoadFromFile(filepath.Join(dir, "wendy.json")); err == nil && cfg.Xcode != nil {
+		scheme = cfg.Xcode.Scheme
 	}
 	if scheme == "" {
 		var err error
