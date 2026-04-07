@@ -193,7 +193,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
-	cmd.Flags().StringVar(&opts.branch, "branch", "", "Branch of the templates repo to use (default: main)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
@@ -490,11 +490,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	branchLabel := templateRepoBranch
-	if opts.branch != "" {
-		branchLabel = opts.branch
-	}
-	fmt.Printf("\nDownloading template %q for %s (branch: %s)...\n", tmpl, language, branchLabel)
+	fmt.Printf("\nDownloading template %q for %s (branch: %s)...\n", tmpl, language, resolveTemplateBranch(opts.branch))
 
 	files, manifest, err := downloadTemplateArchive(language, tmpl, opts.branch)
 	if err != nil {

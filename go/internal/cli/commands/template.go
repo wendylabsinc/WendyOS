@@ -23,6 +23,14 @@ const (
 	templateRepoBranch = "main"
 )
 
+// resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
+func resolveTemplateBranch(branch string) string {
+	if branch == "" {
+		return templateRepoBranch
+	}
+	return branch
+}
+
 // repoMeta is the parsed meta.json from the templates repo root.
 type repoMeta struct {
 	Templates []repoMetaTemplate `json:"templates"`
@@ -61,21 +69,23 @@ type templateVariable struct {
 // fetchRepoMeta downloads and parses meta.json from the templates repo.
 // If branch is empty, it defaults to templateRepoBranch ("main").
 func fetchRepoMeta(branch string) (*repoMeta, error) {
-	if branch == "" {
-		branch = templateRepoBranch
-	}
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/meta.json",
 		templateRepoOwner, templateRepoName, branch)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetching template registry: %w", err)
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("template registry not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching template registry: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetching template registry (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
 	var meta repoMeta
@@ -100,21 +110,23 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 // It also returns the parsed template.json manifest.
 // If branch is empty, it defaults to templateRepoBranch ("main").
 func downloadTemplateArchive(language, templateName, branch string) (map[string][]byte, *templateManifest, error) {
-	if branch == "" {
-		branch = templateRepoBranch
-	}
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
 		templateRepoOwner, templateRepoName, branch)
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, nil, fmt.Errorf("downloading template: %w", err)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil, fmt.Errorf("template archive not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("downloading template: HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
 	gz, err := gzip.NewReader(resp.Body)
