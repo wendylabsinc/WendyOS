@@ -24,7 +24,7 @@ Stale-file deletion is based on `agentManifest` built before the session ran, no
 
 ## ContainerService.swift
 
-**#7 — `try! process.run()`**
+**#7 — `try! process.run()`** ✅ resolved
 Force-try in a production gRPC handler. A missing binary or bad `executableURL` will crash the agent process entirely. Replace with `try process.run()` and propagate as an `RPCError`.
 
 **#8 — `WriteLayer` accumulates the whole layer in memory**
