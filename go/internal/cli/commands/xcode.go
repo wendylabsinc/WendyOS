@@ -10,11 +10,68 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"golang.org/x/term"
 )
+
+// runXcodebuild invokes xcodebuild with the given arguments, routing all
+// output to .xcode/build.log. It prints a single "follow along" line before
+// starting so the user can open a second terminal and tail the log. On a TTY
+// a spinner is shown; on a non-TTY the process runs silently. The log file is
+// truncated at the start of each build so it always reflects the latest run.
+func runXcodebuild(ctx context.Context, dir string, args ...string) error {
+	logDir := filepath.Join(dir, ".xcode")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("creating .xcode directory: %w", err)
+	}
+
+	logPath := filepath.Join(logDir, "build.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("creating build log: %w", err)
+	}
+	defer logFile.Close()
+
+	fmt.Fprintf(logFile, "xcodebuild %s\n%s\n\n", strings.Join(args, " "), time.Now().Format(time.RFC3339))
+
+	fmt.Printf("  .xcode/build.log  —  tail -f .xcode/build.log\n")
+
+	cmd := execCommandContext(ctx, "xcodebuild", args...)
+	cmd.Dir = dir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	wrapErr := func(err error) error {
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
+		}
+		return err
+	}
+
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return wrapErr(cmd.Run())
+	}
+
+	s := tui.NewSpinner("Building with xcodebuild...")
+	p := tea.NewProgram(s)
+
+	go func() {
+		p.Send(tui.SpinnerDoneMsg{Err: wrapErr(cmd.Run())})
+	}()
+
+	finalModel, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+	_, buildErr := finalModel.(tui.SpinnerModel).Result()
+	return buildErr
+}
 
 // findXcodeProj returns the name of the single .xcodeproj directory found in
 // dir (current directory only, not recursive). It returns ("", nil) when none
@@ -240,19 +297,12 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 	// Build with xcodebuild -configuration Release.
 	derivedDataPath := filepath.Join(cwd, ".xcode")
 	cliLogln("Building Xcode project %s (scheme: %s)...", xp, scheme)
-	buildCmd := execCommandContext(ctx, "xcodebuild",
+	if err := runXcodebuild(ctx, cwd,
 		"-project", xp,
 		"-scheme", scheme,
 		"-configuration", "Release",
 		"-derivedDataPath", ".xcode/",
-	)
-	buildCmd.Dir = cwd
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
-		}
+	); err != nil {
 		return fmt.Errorf("xcodebuild failed: %w", err)
 	}
 	cliLogln("Build completed.")

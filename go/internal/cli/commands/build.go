@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -288,52 +287,14 @@ func buildXcodeProject(ctx context.Context, dir, xcodeproj string) error {
 	}
 
 	fmt.Printf("Building Xcode project %s (scheme: %s)...\n", xcodeproj, scheme)
-
-	cmd := execCommandContext(ctx, "xcodebuild",
+	if err := runXcodebuild(ctx, dir,
 		"-project", xcodeproj,
 		"-scheme", scheme,
 		"-configuration", "Release",
 		"-derivedDataPath", ".xcode/",
-	)
-	cmd.Dir = dir
-
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			if errors.Is(err, exec.ErrNotFound) {
-				return fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
-			}
-			return err
-		}
-		fmt.Println("Build completed successfully.")
-		return nil
+	); err != nil {
+		return err
 	}
-
-	s := tui.NewSpinner("Building Xcode project...")
-	p := tea.NewProgram(s)
-
-	go func() {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-		if errors.Is(err, exec.ErrNotFound) {
-			err = fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
-		}
-		p.Send(tui.SpinnerDoneMsg{Err: err})
-	}()
-
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("TUI error: %w", err)
-	}
-
-	model := finalModel.(tui.SpinnerModel)
-	_, buildErr := model.Result()
-	if buildErr != nil {
-		return buildErr
-	}
-
 	fmt.Println("Build completed successfully.")
 	return nil
 }

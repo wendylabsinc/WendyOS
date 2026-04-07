@@ -13,6 +13,100 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// runXcodebuild
+// ---------------------------------------------------------------------------
+
+func TestRunXcodebuild_CreatesLogFile(t *testing.T) {
+	dir := t.TempDir()
+
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// Write a known string to stdout so we can verify it ends up in the log.
+		return exec.CommandContext(ctx, "sh", "-c", `echo "xcodebuild output"`)
+	}
+
+	if err := runXcodebuild(context.Background(), dir, "-project", "X.xcodeproj"); err != nil {
+		t.Fatalf("runXcodebuild error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".xcode", "build.log"))
+	if err != nil {
+		t.Fatalf("build.log not created: %v", err)
+	}
+	if !strings.Contains(string(data), "xcodebuild output") {
+		t.Errorf("build.log does not contain command output; got:\n%s", data)
+	}
+}
+
+func TestRunXcodebuild_LogFileContainsHeader(t *testing.T) {
+	dir := t.TempDir()
+
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
+	if err := runXcodebuild(context.Background(), dir, "-scheme", "MyScheme"); err != nil {
+		t.Fatalf("runXcodebuild error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".xcode", "build.log"))
+	if err != nil {
+		t.Fatalf("build.log not created: %v", err)
+	}
+	// Header must contain the args and a timestamp.
+	if !strings.Contains(string(data), "-scheme") {
+		t.Errorf("build.log header missing args; got:\n%s", data)
+	}
+}
+
+func TestRunXcodebuild_TruncatesLogOnEachRun(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".xcode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-populate the log with stale content.
+	if err := os.WriteFile(filepath.Join(dir, ".xcode", "build.log"), []byte("stale content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
+	if err := runXcodebuild(context.Background(), dir); err != nil {
+		t.Fatalf("runXcodebuild error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".xcode", "build.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "stale content") {
+		t.Error("build.log still contains stale content from previous run")
+	}
+}
+
+func TestRunXcodebuild_ReturnsErrorOnFailure(t *testing.T) {
+	dir := t.TempDir()
+
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "false")
+	}
+
+	if err := runXcodebuild(context.Background(), dir); err == nil {
+		t.Fatal("expected error on xcodebuild failure, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // buildXcodeProject
 // ---------------------------------------------------------------------------
 
