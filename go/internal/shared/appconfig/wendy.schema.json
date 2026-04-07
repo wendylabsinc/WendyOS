@@ -49,6 +49,13 @@
     },
     "python": {
       "$ref": "#/$defs/python"
+    },
+    "files": {
+      "type": "array",
+      "description": "Files or directories to sync to the device before the app starts.",
+      "items": {
+        "$ref": "#/$defs/fileSyncEntry"
+      }
     }
   },
   "$defs": {
@@ -234,6 +241,26 @@
         "agent": {
           "type": "string",
           "description": "Command to run on the device."
+        }
+      }
+    },
+    "fileSyncEntry": {
+      "type": "object",
+      "description": "A file or directory to sync to the device's app working directory.",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\.\\./|.*\\/\\.\\.$|^\\.\\.$)",
+          "description": "Source path relative to wendy.json (file or directory)."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\.\\./|.*\\/\\.\\.$|^\\.\\.$)",
+          "description": "Destination path relative to the app working directory. Defaults to path with any leading ./ stripped."
         }
       }
     },
