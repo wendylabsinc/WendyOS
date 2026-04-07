@@ -375,7 +375,7 @@ reset_target_slot_status() {
     local tmpfile
     tmpfile=$(mktemp)
     printf '\x07\x00\x00\x00\x00\x00\x00\x00' > "${tmpfile}"
-    if ! dd if="${tmpfile}" of="${varfile}" bs=8 2>/dev/null; then
+    if ! dd if="${tmpfile}" of="${varfile}" bs=8 count=1 2>/dev/null; then
         log "WARN: failed to write slot ${slot_name} RootfsStatus"
         rm -f "${tmpfile}"
         return 0
