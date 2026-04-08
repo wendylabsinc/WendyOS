@@ -43,13 +43,18 @@ do_install() {
     install -d ${D}${sysconfdir}/wendyos
 
     # Create Wendy/WendyOS version file
-    install -d ${D}${sysconfdir}/wendy
     echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/version.txt
-    install -m 0644 ${WORKDIR}/version.txt ${D}${sysconfdir}/wendy/version.txt
+    install -m 0644 ${WORKDIR}/version.txt ${D}${sysconfdir}/wendyos/version.txt
 
     # Create build ID file (actual date will be set at first boot if needed)
     echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/wendyos-build-id
     install -m 0644 ${WORKDIR}/wendyos-build-id ${D}${sysconfdir}/wendyos-build-id
+
+    # Write hardware platform identifier for OTA update device detection
+    if [ -n "${WENDYOS_DEVICE_TYPE}" ]; then
+        echo "${WENDYOS_DEVICE_TYPE}" > ${WORKDIR}/device-type
+        install -m 0644 ${WORKDIR}/device-type ${D}${sysconfdir}/wendyos/device-type
+    fi
 }
 
 FILES:${PN} += "${bindir}/generate-uuid.sh"
@@ -61,7 +66,8 @@ FILES:${PN} += "${systemd_system_unitdir}/wendyos-uuid-generate.service"
 FILES:${PN} += "${systemd_system_unitdir}/wendyos-device-name-generate.service"
 FILES:${PN} += "${systemd_system_unitdir}/wendyos-identity.service"
 FILES:${PN} += "${sysconfdir}/wendyos"
-FILES:${PN} += "${sysconfdir}/wendy/version.txt"
+FILES:${PN} += "${sysconfdir}/wendyos/device-type"
+FILES:${PN} += "${sysconfdir}/wendyos/version.txt"
 FILES:${PN} += "${sysconfdir}/wendyos-build-id"
 
 RDEPENDS:${PN} = "bash util-linux-uuidgen avahi-daemon coreutils iproute2"
