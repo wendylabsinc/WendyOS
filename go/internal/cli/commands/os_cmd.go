@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -163,7 +164,7 @@ so the device can download it directly.`,
 				}
 				token := hex.EncodeToString(tokenBytes)
 
-				artifactURL = "http://" + net.JoinHostPort(localIP, portStr) + "/" + urlPath + "/" + token + "/" + escapedFileName
+				artifactURL = "http://" + net.JoinHostPort(ipForURL(localIP), portStr) + "/" + urlPath + "/" + token + "/" + escapedFileName
 
 				// Serve the file in the background.
 				mux := http.NewServeMux()
@@ -345,6 +346,12 @@ func pickOTAArtifactURL() (string, error) {
 			Value:       ver,
 		})
 	}
+	// Sort newest-first for a stable, predictable picker.
+	sort.Slice(versionItems, func(i, j int) bool {
+		vi, _ := versionItems[i].Value.(string)
+		vj, _ := versionItems[j].Value.(string)
+		return version.CompareVersions(vi, vj) > 0
+	})
 
 	fmt.Println()
 	ver, err := pickFromItems("Select a version", versionItems)
@@ -403,52 +410,80 @@ func waitForDeviceOnline(ctx context.Context, host string) error {
 }
 
 // localIPForHost returns the local IP address used to reach the given host.
-// This works for any connection type including link-local USB-C addresses.
+// The returned string is suitable for net.Listen: for IPv6 link-local addresses
+// it includes the zone identifier (e.g. "fe80::1%en0"). Use ipForURL to convert
+// it to a safe form for embedding in HTTP URLs.
 func localIPForHost(host string) (string, error) {
 	// Strip port if present.
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
 
-	// Resolve hostname to IP if needed.
-	ips, err := net.LookupHost(host)
-	if err != nil {
-		return "", fmt.Errorf("resolving %s: %w", host, err)
+	// dialHost is what we pass to net.Dial (may include an IPv6 zone).
+	dialHost := host
+
+	// Detect whether the host is already an IP literal. For IPv6 link-local
+	// addresses the zone identifier (e.g. "%en0") must be stripped before
+	// calling net.ParseIP, but preserved for dialing.
+	var parsedIP net.IP
+	if i := strings.Index(host, "%"); i != -1 {
+		parsedIP = net.ParseIP(host[:i])
+	} else {
+		parsedIP = net.ParseIP(host)
 	}
 
-	// Prefer IPv4 addresses; fall back to IPv6 if no IPv4 is available.
-	var targetIP string
-	for _, ip := range ips {
-		parsed := net.ParseIP(ip)
-		if parsed != nil && parsed.To4() != nil {
-			targetIP = ip
-			break
+	if parsedIP == nil {
+		// Not an IP literal — resolve via DNS.
+		ips, err := net.LookupHost(host)
+		if err != nil {
+			return "", fmt.Errorf("resolving %s: %w", host, err)
+		}
+		// Prefer IPv4; fall back to the first result.
+		for _, ip := range ips {
+			if p := net.ParseIP(ip); p != nil && p.To4() != nil {
+				parsedIP = p
+				dialHost = ip
+				break
+			}
+		}
+		if parsedIP == nil && len(ips) > 0 {
+			dialHost = ips[0]
+			parsedIP = net.ParseIP(ips[0])
+		}
+		if parsedIP == nil {
+			return "", fmt.Errorf("no addresses found for %s", host)
 		}
 	}
-	if targetIP == "" && len(ips) > 0 {
-		targetIP = ips[0]
-	}
-	if targetIP == "" {
-		return "", fmt.Errorf("no addresses found for %s", host)
-	}
 
-	// Determine the network and dial address based on IP version.
 	network := "udp4"
-	if net.ParseIP(targetIP) == nil || net.ParseIP(targetIP).To4() == nil {
+	if parsedIP.To4() == nil {
 		network = "udp6"
 	}
-	dialAddr := net.JoinHostPort(targetIP, fmt.Sprintf("%d", defaultAgentPort))
+	dialAddr := net.JoinHostPort(dialHost, fmt.Sprintf("%d", defaultAgentPort))
 
 	// Use UDP dial to determine which local IP would be used to reach the target.
 	// No actual packets are sent — this just queries the routing table.
 	conn, err := net.Dial(network, dialAddr)
 	if err != nil {
-		return "", fmt.Errorf("determining route to %s: %w", targetIP, err)
+		return "", fmt.Errorf("determining route to %s: %w", dialHost, err)
 	}
 	defer conn.Close()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	if localAddr.Zone != "" {
+		return localAddr.IP.String() + "%" + localAddr.Zone, nil
+	}
 	return localAddr.IP.String(), nil
+}
+
+// ipForURL converts a local IP (possibly "fe80::1%en0") to the host component
+// for an HTTP URL. IPv6 zone IDs are percent-encoded per RFC 6874 so the raw
+// '%' does not produce an invalid URL.
+func ipForURL(ip string) string {
+	if i := strings.Index(ip, "%"); i != -1 {
+		return ip[:i] + "%25" + ip[i+1:]
+	}
+	return ip
 }
 
 // phaseLabel converts a Mender phase string to a user-friendly spinner label.

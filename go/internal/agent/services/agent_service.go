@@ -380,7 +380,7 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 	}
 
 	if _, err := os.Stat(efivarsDir); err != nil {
-		return fmt.Errorf("EFI vars not accessible at %s", efivarsDir)
+		return fmt.Errorf("EFI vars not accessible at %s: %w", efivarsDir, err)
 	}
 
 	if _, err := os.Stat("/dev/disk/by-partlabel/APP_b"); err != nil {
@@ -396,7 +396,7 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 
 	logger.Info("Enabling Jetson rootfs A/B redundancy")
 
-	writeVar := func(name, hexValue string) error {
+	writeVar := func(name string, value []byte) error {
 		path := fmt.Sprintf("%s/%s-%s", efivarsDir, name, guid)
 		if _, err := os.Stat(path); err == nil {
 			logger.Info("EFI var already exists, skipping", zap.String("name", name))
@@ -404,7 +404,7 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 		}
 		// EFI variable format: 4-byte attributes header + value bytes.
 		// Attributes: 0x07 = NV|BS|RT (non-volatile, boot-service, runtime-service).
-		data := append([]byte{0x07, 0x00, 0x00, 0x00}, []byte(hexValue)...)
+		data := append([]byte{0x07, 0x00, 0x00, 0x00}, value...)
 		if err := os.WriteFile(path, data, 0644); err != nil {
 			return fmt.Errorf("writing EFI var %s: %w", name, err)
 		}
@@ -413,10 +413,10 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 	}
 
 	// RootfsRedundancyLevel = 1, RootfsRetryCountMax = 3.
-	if err := writeVar("RootfsRedundancyLevel", "\x01\x00\x00\x00"); err != nil {
+	if err := writeVar("RootfsRedundancyLevel", []byte{0x01, 0x00, 0x00, 0x00}); err != nil {
 		return err
 	}
-	if err := writeVar("RootfsRetryCountMax", "\x03\x00\x00\x00"); err != nil {
+	if err := writeVar("RootfsRetryCountMax", []byte{0x03, 0x00, 0x00, 0x00}); err != nil {
 		return err
 	}
 
@@ -509,6 +509,7 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 
 	scanLines := func(r io.Reader) {
 		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			lower := strings.ToLower(line)
@@ -546,6 +547,9 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 					}
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			s.logger.Warn("mender output scan error", zap.Error(err))
 		}
 	}
 
@@ -600,17 +604,35 @@ func envWithPath(path string) []string {
 	return append(env, "PATH="+path)
 }
 
-// resolveMenderBinary finds the mender-update binary by checking PATH and
-// known installation directories (/usr/bin, /bin). Returns the resolved path
-// and whether it was found. mender-update is preferred over legacy mender.
+// resolveMenderBinary finds the mender-update binary. It checks PATH via
+// exec.LookPath and then probes absolute paths directly. The os.Stat fallback
+// is restricted to absolute paths to avoid accidentally executing a file from
+// the current working directory. mender-update is preferred over legacy mender.
 func resolveMenderBinary() (string, bool) {
-	candidates := []string{"mender-update", "/usr/bin/mender-update", "/bin/mender-update", "mender", "/usr/bin/mender", "/bin/mender"}
+	candidates := []string{
+		"mender-update",
+		"/usr/local/sbin/mender-update",
+		"/usr/local/bin/mender-update",
+		"/usr/sbin/mender-update",
+		"/usr/bin/mender-update",
+		"/sbin/mender-update",
+		"/bin/mender-update",
+		"mender",
+		"/usr/local/sbin/mender",
+		"/usr/local/bin/mender",
+		"/usr/sbin/mender",
+		"/usr/bin/mender",
+		"/sbin/mender",
+		"/bin/mender",
+	}
 	for _, c := range candidates {
 		if path, err := exec.LookPath(c); err == nil {
 			return path, true
 		}
-		if _, err := os.Stat(c); err == nil {
-			return c, true
+		if filepath.IsAbs(c) {
+			if _, err := os.Stat(c); err == nil {
+				return c, true
+			}
 		}
 	}
 	return "", false
