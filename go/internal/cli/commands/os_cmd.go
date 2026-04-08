@@ -142,40 +142,34 @@ so the device can download it directly.`,
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
 
-				// Start HTTP server bound to the specific local IP reachable by the
-				// device (not 0.0.0.0) with a random one-time token in the path.
-				listener, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
+				servedURL, cleanup, err := serveLocalArtifact(localPath, localIP)
 				if err != nil {
-					return fmt.Errorf("starting file server: %w", err)
+					return err
 				}
-				defer listener.Close()
-
-				// Extract the port assigned by the OS.
-				_, portStr, _ := net.SplitHostPort(listener.Addr().String())
-
-				fileName := filepath.Base(localPath)
-				escapedFileName := url.PathEscape(fileName)
-				urlPath := artifactURLPath(localPath)
-
-				// Generate a random one-time token to prevent unintended access.
-				tokenBytes := make([]byte, 16)
-				if _, err := rand.Read(tokenBytes); err != nil {
-					return fmt.Errorf("generating token: %w", err)
+				defer cleanup()
+				artifactURL = servedURL
+				fmt.Printf("Serving artifact at: %s\n", artifactURL)
+			} else if artifactURL != "" && !deviceHasWiFi(ctx, conn) {
+				// Device has no WiFi connection — it cannot reach GCP directly.
+				// Download the artifact on the Mac and serve it over a local HTTP
+				// server so the device can fetch it from the Mac instead.
+				fmt.Println("Device is not connected to WiFi — downloading artifact to serve locally...")
+				localPath, err := downloadArtifactToTemp(artifactURL)
+				if err != nil {
+					return fmt.Errorf("downloading artifact: %w", err)
 				}
-				token := hex.EncodeToString(tokenBytes)
 
-				artifactURL = "http://" + net.JoinHostPort(ipForURL(localIP), portStr) + "/" + urlPath + "/" + token + "/" + escapedFileName
+				localIP, err := localIPForHost(conn.Host)
+				if err != nil {
+					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
+				}
 
-				// Serve the file in the background.
-				mux := http.NewServeMux()
-				mux.HandleFunc("/"+urlPath+"/"+token+"/"+escapedFileName, func(w http.ResponseWriter, r *http.Request) {
-					w.Header().Set("Content-Type", "application/octet-stream")
-					http.ServeFile(w, r, localPath)
-				})
-				server := &http.Server{Handler: mux}
-				go server.Serve(listener) //nolint:errcheck
-				defer server.Close()
-
+				servedURL, cleanup, err := serveLocalArtifact(localPath, localIP)
+				if err != nil {
+					return err
+				}
+				defer cleanup()
+				artifactURL = servedURL
 				fmt.Printf("Serving artifact at: %s\n", artifactURL)
 			}
 
@@ -544,4 +538,128 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	fmt.Println(" done.")
 	return newConn, nil
+}
+
+// serveLocalArtifact starts a temporary HTTP server bound to localIP that
+// serves the file at localPath. It returns the URL at which the file is
+// accessible and a cleanup function that shuts down the server.
+func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
+	listener, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
+	if err != nil {
+		return "", nil, fmt.Errorf("starting file server: %w", err)
+	}
+
+	_, portStr, _ := net.SplitHostPort(listener.Addr().String())
+	fileName := filepath.Base(localPath)
+	escapedFileName := url.PathEscape(fileName)
+	urlPath := artifactURLPath(localPath)
+
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		listener.Close()
+		return "", nil, fmt.Errorf("generating token: %w", err)
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	servedURL := "http://" + net.JoinHostPort(ipForURL(localIP), portStr) + "/" + urlPath + "/" + token + "/" + escapedFileName
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+urlPath+"/"+token+"/"+escapedFileName, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		http.ServeFile(w, r, localPath)
+	})
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener) //nolint:errcheck
+
+	cleanup := func() {
+		server.Close()
+		listener.Close()
+	}
+	return servedURL, cleanup, nil
+}
+
+// downloadArtifactToTemp downloads a remote artifact URL to a temporary file,
+// showing a progress bar. The caller is responsible for removing the file.
+func downloadArtifactToTemp(artifactURL string) (string, error) {
+	client := &http.Client{Timeout: 30 * time.Minute}
+	resp, err := client.Get(artifactURL) //nolint:noctx
+	if err != nil {
+		return "", fmt.Errorf("downloading: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+
+	cacheDir, err := osCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving cache dir: %w", err)
+	}
+	tmpFile, err := os.CreateTemp(cacheDir, "wendyos-*.mender")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file: %w", err)
+	}
+
+	total := resp.ContentLength
+	prog := tui.NewProgress("Downloading artifact...")
+	p := tea.NewProgram(prog)
+
+	go func() {
+		var downloaded int64
+		buf := make([]byte, 64*1024)
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
+					p.Send(tui.ProgressDoneMsg{Err: writeErr})
+					return
+				}
+				downloaded += int64(n)
+				if total > 0 {
+					p.Send(tui.ProgressUpdateMsg{
+						Percent: float64(downloaded) / float64(total),
+						Written: downloaded,
+						Total:   total,
+					})
+				}
+			}
+			if readErr == io.EOF {
+				p.Send(tui.ProgressDoneMsg{})
+				return
+			}
+			if readErr != nil {
+				p.Send(tui.ProgressDoneMsg{Err: readErr})
+				return
+			}
+		}
+	}()
+
+	finalModel, err := p.Run()
+	if err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("progress TUI: %w", err)
+	}
+
+	model := finalModel.(tui.ProgressModel)
+	if model.Err() != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", model.Err()
+	}
+
+	tmpFile.Close()
+	return tmpFile.Name(), nil
+}
+
+// deviceHasWiFi returns true if the device reports an active WiFi connection.
+// On error (e.g. older firmware that doesn't support the call) it returns true
+// so we fall back to the GCP URL rather than breaking the update flow.
+func deviceHasWiFi(ctx context.Context, conn *grpcclient.AgentConnection) bool {
+	status, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
+	if err != nil {
+		return true
+	}
+	return status.GetConnected()
 }
