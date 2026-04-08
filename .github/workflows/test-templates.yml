@@ -99,7 +99,7 @@ jobs:
     name: Deploy (${{ matrix.os }})
     if: inputs.deploy == true
     needs: [generate-validate]
-    runs-on: [self-hosted, wendy-developer, '${{ matrix.os }}']
+    runs-on: [self-hosted, '${{ matrix.runner }}']
     concurrency:
       group: template-deploy-${{ matrix.os }}
       cancel-in-progress: false
@@ -107,7 +107,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macOS, Linux]
+        include:
+          - os: macOS
+            runner: Wendy-CLI-on-mac
+          - os: Linux
+            runner: wendy-developer-ubuntu
     defaults:
       run:
         working-directory: go
