@@ -67,25 +67,11 @@ so the device can download it directly.`,
 			// it is replaced by the agent pre-update step below.
 			defer func() { conn.Close() }()
 
-			// Check that the device has mender-update support.
+			// Step 1: Ensure the agent is at the latest release before updating the OS.
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
-				return fmt.Errorf("checking device capabilities: %w", err)
+				return fmt.Errorf("querying device version: %w", err)
 			}
-
-			checkMender := func(resp *agentpb.GetAgentVersionResponse) bool {
-				for _, f := range resp.GetFeatureset() {
-					if f == "mender" {
-						return true
-					}
-				}
-				return false
-			}
-			if !checkMender(versionResp) {
-				return fmt.Errorf("device does not support OTA updates (mender-update not found)")
-			}
-
-			// Step 1: Ensure the agent is at the latest release before updating the OS.
 			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly)
 			if err != nil {
 				return err
@@ -95,8 +81,17 @@ so the device can download it directly.`,
 			if err != nil {
 				return fmt.Errorf("querying device version after agent update: %w", err)
 			}
-			if !checkMender(versionResp) {
-				return fmt.Errorf("device does not support OTA updates after agent update (mender-update not found)")
+
+			// Check mender support after the agent update (a fresh agent may have it).
+			hasMender := false
+			for _, f := range versionResp.GetFeatureset() {
+				if f == "mender" {
+					hasMender = true
+					break
+				}
+			}
+			if !hasMender {
+				return fmt.Errorf("device does not support OTA updates (mender-update not found)")
 			}
 
 			// Step 2: Show current OS version.
@@ -111,7 +106,12 @@ so the device can download it directly.`,
 					otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType, nightly)
 					if autoErr == nil {
 						if osVer := versionResp.GetOsVersion(); osVer != "" && latestVer != "" {
-							if version.CompareVersions(latestVer, osVer) <= 0 {
+							// Strip the "WendyOS-" display prefix before comparing so that
+							// "WendyOS-0.10.4" and "0.12.0-nightly" compare correctly.
+							normalizedOsVer := strings.TrimPrefix(osVer, "WendyOS-")
+							alreadyCurrent := nightly && latestVer == normalizedOsVer ||
+								!nightly && version.CompareVersions(latestVer, normalizedOsVer) <= 0
+							if alreadyCurrent {
 								fmt.Printf("OS is already at the latest version (%s).\n", osVer)
 								return nil
 							}
@@ -520,14 +520,19 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return conn, nil
 	}
 
-	if version.CompareVersions(release.TagName, agentVer) <= 0 {
+	// For nightly builds, update whenever the device isn't already running that
+	// exact tag — a semver comparison would incorrectly treat nightly pre-release
+	// tags as older than a stable release of the same base version.
+	alreadyCurrent := nightly && release.TagName == agentVer ||
+		!nightly && version.CompareVersions(release.TagName, agentVer) <= 0
+	if alreadyCurrent {
 		fmt.Printf("Agent is up to date (%s)\n", agentVer)
 		return conn, nil
 	}
 
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, release.TagName)
 	addr := hostPort(conn.Host, defaultAgentPort)
-	if err := performAgentUpdate(ctx, conn, arch); err != nil {
+	if err := performAgentUpdate(ctx, conn, arch, nightly); err != nil {
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()

@@ -484,7 +484,7 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	arch := resp.GetCpuArchitecture()
 	addr := hostPort(conn.Host, defaultAgentPort)
 
-	if err := performAgentUpdate(ctx, conn, arch); err != nil {
+	if err := performAgentUpdate(ctx, conn, arch, false); err != nil {
 		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
@@ -501,14 +501,15 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	return newConn, nil
 }
 
-// performAgentUpdate downloads the latest stable release for the given arch and
-// uploads it to conn. The agent will restart after this returns successfully.
-func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string) error {
+// performAgentUpdate downloads the latest release for the given arch and uploads
+// it to conn. Pass nightly=true to fetch the latest prerelease instead of stable.
+// The agent will restart after this returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string, nightly bool) error {
 	if arch == "" {
 		return fmt.Errorf("device did not report CPU architecture")
 	}
 	fmt.Fprintf(os.Stderr, "Fetching latest release...\n")
-	release, err := fetchAgentRelease(false)
+	release, err := fetchAgentRelease(nightly)
 	if err != nil {
 		return fmt.Errorf("fetching release: %w", err)
 	}
