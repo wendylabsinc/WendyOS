@@ -39,6 +39,7 @@ func newOSCmd() *cobra.Command {
 
 func newOSUpdateCmd() *cobra.Command {
 	var artifactURL string
+	var nightly bool
 
 	cmd := &cobra.Command{
 		Use:   "update [artifact-path]",
@@ -84,7 +85,7 @@ so the device can download it directly.`,
 			}
 
 			// Step 1: Ensure the agent is at the latest release before updating the OS.
-			conn, err = ensureAgentUpToDate(ctx, conn, versionResp)
+			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly)
 			if err != nil {
 				return err
 			}
@@ -106,7 +107,7 @@ so the device can download it directly.`,
 			if len(args) == 0 && artifactURL == "" {
 				deviceType := versionResp.GetDeviceType()
 				if deviceType != "" {
-					otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType)
+					otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType, nightly)
 					if autoErr == nil {
 						if osVer := versionResp.GetOsVersion(); osVer != "" && latestVer != "" {
 							if version.CompareVersions(latestVer, osVer) <= 0 {
@@ -241,6 +242,7 @@ so the device can download it directly.`,
 	}
 
 	cmd.Flags().StringVar(&artifactURL, "artifact-url", "", "Mender artifact URL (remote)")
+	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use the latest nightly (prerelease) build for both agent and OS")
 
 	return cmd
 }
@@ -471,13 +473,13 @@ func phaseLabel(phase string) string {
 // uploads it (causing the agent to restart), waits for it to come back, and
 // returns a fresh connection. If the agent is already current or the check fails
 // non-fatally, the original connection is returned unchanged.
-func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, versionResp *agentpb.GetAgentVersionResponse) (*grpcclient.AgentConnection, error) {
+func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, versionResp *agentpb.GetAgentVersionResponse, nightly bool) (*grpcclient.AgentConnection, error) {
 	agentVer := versionResp.GetVersion()
 	arch := versionResp.GetCpuArchitecture()
 
 	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
 
-	release, err := fetchAgentRelease(false)
+	release, err := fetchAgentRelease(nightly)
 	if err != nil {
 		fmt.Printf("Could not check for agent updates: %v\n", err)
 		return conn, nil

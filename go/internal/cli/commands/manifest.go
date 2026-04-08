@@ -171,17 +171,10 @@ func getOTAUpdateURL(dm *deviceManifest, ver string) (string, error) {
 	return gcsBaseURL + "/" + v.OTAUpdatePath, nil
 }
 
-// getLatestOTAURLForDeviceType fetches the manifest and returns the OTA artifact
-// URL for the latest stable version of the given device type key (e.g. "jetson-orin-nano").
-// Returns an error if the device type is unknown or has no OTA artifact.
-func getLatestOTAURLForDeviceType(deviceType string) (string, error) {
-	u, _, err := getLatestOTAInfoForDeviceType(deviceType)
-	return u, err
-}
-
-// getLatestOTAInfoForDeviceType is like getLatestOTAURLForDeviceType but also
-// returns the version tag (e.g. "v2025.06.02") alongside the artifact URL.
-func getLatestOTAInfoForDeviceType(deviceType string) (artifactURL, latestVersion string, err error) {
+// getLatestOTAInfoForDeviceType fetches the manifest and returns the OTA artifact
+// URL and version tag for the given device type. When nightly is true the latest
+// nightly (prerelease) version is used instead of the latest stable version.
+func getLatestOTAInfoForDeviceType(deviceType string, nightly bool) (artifactURL, latestVersion string, err error) {
 	main, err := fetchMainManifest()
 	if err != nil {
 		return "", "", fmt.Errorf("fetching manifest: %w", err)
@@ -201,6 +194,9 @@ func getLatestOTAInfoForDeviceType(deviceType string) (artifactURL, latestVersio
 	}
 
 	latest := dev.Latest
+	if nightly && dev.LatestNightly != "" {
+		latest = dev.LatestNightly
+	}
 	if latest == "" {
 		return "", "", fmt.Errorf("no latest version for device type %q", deviceType)
 	}
