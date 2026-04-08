@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -627,8 +628,13 @@ func CommitMenderUpdate(logger *zap.Logger) {
 	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Exit code 2 means "nothing to commit" — not an error.
-		logger.Debug("mender-update commit", zap.String("output", strings.TrimSpace(string(out))), zap.Error(err))
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+			// Exit code 2 means "nothing to commit" — not an error.
+			logger.Debug("mender-update commit: nothing to commit", zap.String("output", strings.TrimSpace(string(out))))
+			return
+		}
+		logger.Warn("mender-update commit failed", zap.String("output", strings.TrimSpace(string(out))), zap.Error(err))
 		return
 	}
 	logger.Info("Committed Mender update", zap.String("output", strings.TrimSpace(string(out))))

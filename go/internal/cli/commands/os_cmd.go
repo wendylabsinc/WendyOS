@@ -2,11 +2,14 @@ package commands
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +17,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -56,31 +61,61 @@ so the device can download it directly.`,
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			// Use a closure so the defer always closes the current conn even if
+			// it is replaced by the agent pre-update step below.
+			defer func() { conn.Close() }()
 
 			// Check that the device has mender-update support.
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
 				return fmt.Errorf("checking device capabilities: %w", err)
 			}
-			hasMender := false
-			for _, f := range versionResp.GetFeatureset() {
-				if f == "mender" {
-					hasMender = true
-					break
+
+			checkMender := func(resp *agentpb.GetAgentVersionResponse) bool {
+				for _, f := range resp.GetFeatureset() {
+					if f == "mender" {
+						return true
+					}
 				}
+				return false
 			}
-			if !hasMender {
+			if !checkMender(versionResp) {
 				return fmt.Errorf("device does not support OTA updates (mender-update not found)")
+			}
+
+			// Step 1: Ensure the agent is at the latest release before updating the OS.
+			conn, err = ensureAgentUpToDate(ctx, conn, versionResp)
+			if err != nil {
+				return err
+			}
+			// Re-query after the potential agent restart.
+			versionResp, err = conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+			if err != nil {
+				return fmt.Errorf("querying device version after agent update: %w", err)
+			}
+			if !checkMender(versionResp) {
+				return fmt.Errorf("device does not support OTA updates after agent update (mender-update not found)")
+			}
+
+			// Step 2: Show current OS version.
+			if osVer := versionResp.GetOsVersion(); osVer != "" {
+				fmt.Printf("Current OS version: %s\n", osVer)
 			}
 
 			// No artifact provided — try to auto-detect from device type, then picker.
 			if len(args) == 0 && artifactURL == "" {
 				deviceType := versionResp.GetDeviceType()
 				if deviceType != "" {
-					url, autoErr := getLatestOTAURLForDeviceType(deviceType)
+					otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType)
 					if autoErr == nil {
-						artifactURL = url
+						if osVer := versionResp.GetOsVersion(); osVer != "" && latestVer != "" {
+							if version.CompareVersions(latestVer, osVer) <= 0 {
+								fmt.Printf("OS is already at the latest version (%s).\n", osVer)
+								return nil
+							}
+							fmt.Printf("Latest OS version: %s\n", latestVer)
+						}
+						artifactURL = otaURL
 					}
 				}
 				if artifactURL == "" {
@@ -105,8 +140,9 @@ so the device can download it directly.`,
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
 
-				// Start HTTP server on all interfaces with a random port.
-				listener, err := net.Listen("tcp", "0.0.0.0:0")
+				// Start HTTP server bound to the specific local IP reachable by the
+				// device (not 0.0.0.0) with a random one-time token in the path.
+				listener, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
 				if err != nil {
 					return fmt.Errorf("starting file server: %w", err)
 				}
@@ -116,18 +152,21 @@ so the device can download it directly.`,
 				_, portStr, _ := net.SplitHostPort(listener.Addr().String())
 
 				fileName := filepath.Base(localPath)
+				escapedFileName := url.PathEscape(fileName)
 				urlPath := artifactURLPath(localPath)
 
-				// IPv6 addresses need brackets in URLs.
-				hostForURL := localIP
-				if net.ParseIP(localIP) != nil && net.ParseIP(localIP).To4() == nil {
-					hostForURL = "[" + localIP + "]"
+				// Generate a random one-time token to prevent unintended access.
+				tokenBytes := make([]byte, 16)
+				if _, err := rand.Read(tokenBytes); err != nil {
+					return fmt.Errorf("generating token: %w", err)
 				}
-				artifactURL = fmt.Sprintf("http://%s:%s/%s/%s", hostForURL, portStr, urlPath, fileName)
+				token := hex.EncodeToString(tokenBytes)
+
+				artifactURL = "http://" + net.JoinHostPort(localIP, portStr) + "/" + urlPath + "/" + token + "/" + escapedFileName
 
 				// Serve the file in the background.
 				mux := http.NewServeMux()
-				mux.HandleFunc("/"+urlPath+"/"+fileName, func(w http.ResponseWriter, r *http.Request) {
+				mux.HandleFunc("/"+urlPath+"/"+token+"/"+escapedFileName, func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/octet-stream")
 					http.ServeFile(w, r, localPath)
 				})
@@ -149,33 +188,33 @@ so the device can download it directly.`,
 				return fmt.Errorf("starting OS update: %w", err)
 			}
 
-			prog := tui.NewProgress("Updating WendyOS...")
-			p := tea.NewProgram(prog)
+			spin := tui.NewSpinner("Downloading update...")
+			p := tea.NewProgram(spin)
 
 			go func() {
 				for {
 					resp, err := stream.Recv()
 					if err == io.EOF {
-						p.Send(tui.ProgressDoneMsg{})
+						p.Send(tui.SpinnerDoneMsg{})
 						return
 					}
 					if err != nil {
-						p.Send(tui.ProgressDoneMsg{Err: err})
+						p.Send(tui.SpinnerDoneMsg{Err: err})
 						return
 					}
 
 					if progress := resp.GetProgress(); progress != nil {
-						pct := float64(progress.GetPercent()) / 100.0
-						p.Send(tui.ProgressUpdateMsg{Percent: pct})
+						label := phaseLabel(progress.GetPhase())
+						p.Send(tui.SpinnerUpdateMsg{Label: label})
 					}
 
 					if completed := resp.GetCompleted(); completed != nil {
-						p.Send(tui.ProgressDoneMsg{})
+						p.Send(tui.SpinnerDoneMsg{})
 						return
 					}
 
 					if failed := resp.GetFailed(); failed != nil {
-						p.Send(tui.ProgressDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
+						p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
 						return
 					}
 				}
@@ -186,14 +225,14 @@ so the device can download it directly.`,
 				return fmt.Errorf("TUI error: %w", err)
 			}
 
-			model := finalModel.(tui.ProgressModel)
-			if model.Err() != nil {
-				return model.Err()
+			_, spinErr := finalModel.(tui.SpinnerModel).Result()
+			if spinErr != nil {
+				return spinErr
 			}
 
 			deviceHost := conn.Host
 			fmt.Println("WendyOS update applied. Device is rebooting...")
-			if err := waitForDeviceOnline(deviceHost); err != nil {
+			if err := waitForDeviceOnline(ctx, deviceHost); err != nil {
 				return err
 			}
 			fmt.Println("Device is back online.")
@@ -316,10 +355,10 @@ func pickOTAArtifactURL() (string, error) {
 
 // waitForDeviceOnline polls the device until it responds to GetAgentVersion,
 // or until a 5-minute timeout expires. Shows a spinner while waiting.
-func waitForDeviceOnline(host string) error {
+func waitForDeviceOnline(ctx context.Context, host string) error {
 	addr := hostPort(host, defaultAgentPort)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	spin := tui.NewSpinner("Waiting for device to come back online...")
@@ -393,12 +432,10 @@ func localIPForHost(host string) (string, error) {
 
 	// Determine the network and dial address based on IP version.
 	network := "udp4"
-	dialAddr := targetIP + ":50051"
 	if net.ParseIP(targetIP) == nil || net.ParseIP(targetIP).To4() == nil {
-		// IPv6 — need brackets and may include a zone (e.g. %en11).
 		network = "udp6"
-		dialAddr = "[" + targetIP + "]:50051"
 	}
+	dialAddr := net.JoinHostPort(targetIP, fmt.Sprintf("%d", defaultAgentPort))
 
 	// Use UDP dial to determine which local IP would be used to reach the target.
 	// No actual packets are sent — this just queries the routing table.
@@ -410,4 +447,59 @@ func localIPForHost(host string) (string, error) {
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String(), nil
+}
+
+// phaseLabel converts a Mender phase string to a user-friendly spinner label.
+func phaseLabel(phase string) string {
+	switch phase {
+	case "downloading":
+		return "Downloading update..."
+	case "installing":
+		return "Installing update..."
+	case "finalizing":
+		return "Finalizing..."
+	default:
+		if phase != "" {
+			return strings.ToUpper(phase[:1]) + phase[1:] + "..."
+		}
+		return "Updating WendyOS..."
+	}
+}
+
+// ensureAgentUpToDate checks the agent version on the device against the latest
+// stable GitHub release. If the device is behind, it downloads the latest binary,
+// uploads it (causing the agent to restart), waits for it to come back, and
+// returns a fresh connection. If the agent is already current or the check fails
+// non-fatally, the original connection is returned unchanged.
+func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, versionResp *agentpb.GetAgentVersionResponse) (*grpcclient.AgentConnection, error) {
+	agentVer := versionResp.GetVersion()
+	arch := versionResp.GetCpuArchitecture()
+
+	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
+
+	release, err := fetchAgentRelease(false)
+	if err != nil {
+		fmt.Printf("Could not check for agent updates: %v\n", err)
+		return conn, nil
+	}
+
+	if version.CompareVersions(release.TagName, agentVer) <= 0 {
+		fmt.Printf("Agent is up to date (%s)\n", agentVer)
+		return conn, nil
+	}
+
+	fmt.Printf("Updating agent: %s → %s\n", agentVer, release.TagName)
+	addr := hostPort(conn.Host, defaultAgentPort)
+	if err := performAgentUpdate(ctx, conn, arch); err != nil {
+		return nil, fmt.Errorf("agent update failed: %w", err)
+	}
+	conn.Close()
+
+	fmt.Print("Waiting for agent to restart...")
+	newConn, err := waitForAgentRestart(ctx, addr)
+	if err != nil {
+		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	}
+	fmt.Println(" done.")
+	return newConn, nil
 }

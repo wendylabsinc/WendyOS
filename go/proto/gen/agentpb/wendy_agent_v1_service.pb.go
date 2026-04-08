@@ -511,7 +511,7 @@ type GetAgentVersionResponse struct {
 	CpuArchitecture string   `protobuf:"bytes,4,opt,name=cpu_architecture,json=cpuArchitecture,proto3" json:"cpu_architecture,omitempty"`
 	PublicKey       *string  `protobuf:"bytes,5,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
 	Featureset      []string `protobuf:"bytes,6,rep,name=featureset,proto3" json:"featureset,omitempty"`
-	// Hardware platform read from /etc/wendyos/device-type (only present on WendyOS)
+	// Hardware platform identifier read from /etc/wendyos/device-type (only present on WendyOS)
 	DeviceType    *string `protobuf:"bytes,7,opt,name=device_type,json=deviceType,proto3,oneof" json:"device_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2489,7 +2489,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\xf4\x01\n" +
+	"\x16GetAgentVersionRequest\"\xaa\x02\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -2500,9 +2500,12 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"public_key\x18\x05 \x01(\tH\x01R\tpublicKey\x88\x01\x01\x12\x1e\n" +
 	"\n" +
 	"featureset\x18\x06 \x03(\tR\n" +
-	"featuresetB\r\n" +
+	"featureset\x12$\n" +
+	"\vdevice_type\x18\a \x01(\tH\x02R\n" +
+	"deviceType\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
-	"\v_public_key\"\x19\n" +
+	"\v_public_keyB\x0e\n" +
+	"\f_device_type\"\x19\n" +
 	"\x17ListWiFiNetworksRequest\"\xda\x01\n" +
 	"\x18ListWiFiNetworksResponse\x12Y\n" +
 	"\bnetworks\x18\x01 \x03(\v2=.wendy.agent.services.v1.ListWiFiNetworksResponse.WiFiNetworkR\bnetworks\x1ac\n" +

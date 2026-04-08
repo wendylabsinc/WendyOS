@@ -15,6 +15,11 @@ type SpinnerDoneMsg struct {
 	Err    error
 }
 
+// SpinnerUpdateMsg updates the label shown next to the spinner.
+type SpinnerUpdateMsg struct {
+	Label string
+}
+
 // SpinnerModel is a reusable Bubble Tea spinner that runs until it receives a SpinnerDoneMsg.
 type SpinnerModel struct {
 	spinner  spinner.Model
@@ -56,6 +61,10 @@ func (m SpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result = msg.Result
 		m.err = msg.Err
 		return m, tea.Quit
+
+	case SpinnerUpdateMsg:
+		m.title = msg.Label
+		return m, nil
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd

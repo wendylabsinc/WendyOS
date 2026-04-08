@@ -40,7 +40,7 @@ type deviceVersion struct {
 	IsNightly         bool   `json:"is_nightly"`
 	OTAUpdatePath     string `json:"ota_update_path"`
 	OTAUpdateChecksum string `json:"ota_update_checksum"`
-	OTAUpdateSize     int64  `json:"ota_update_size_bytes"`
+	OTAUpdateSizeBytes int64  `json:"ota_update_size_bytes"`
 }
 
 // deviceInfo is the aggregated info shown in the picker for one device.
@@ -175,30 +175,41 @@ func getOTAUpdateURL(dm *deviceManifest, ver string) (string, error) {
 // URL for the latest stable version of the given device type key (e.g. "jetson-orin-nano").
 // Returns an error if the device type is unknown or has no OTA artifact.
 func getLatestOTAURLForDeviceType(deviceType string) (string, error) {
+	u, _, err := getLatestOTAInfoForDeviceType(deviceType)
+	return u, err
+}
+
+// getLatestOTAInfoForDeviceType is like getLatestOTAURLForDeviceType but also
+// returns the version tag (e.g. "v2025.06.02") alongside the artifact URL.
+func getLatestOTAInfoForDeviceType(deviceType string) (artifactURL, latestVersion string, err error) {
 	main, err := fetchMainManifest()
 	if err != nil {
-		return "", fmt.Errorf("fetching manifest: %w", err)
+		return "", "", fmt.Errorf("fetching manifest: %w", err)
 	}
 
 	dev, ok := main.Devices[deviceType]
 	if !ok {
-		return "", fmt.Errorf("device type %q not found in manifest", deviceType)
+		return "", "", fmt.Errorf("device type %q not found in manifest", deviceType)
 	}
 	if dev.ManifestPath == "" {
-		return "", fmt.Errorf("no manifest path for device type %q", deviceType)
+		return "", "", fmt.Errorf("no manifest path for device type %q", deviceType)
 	}
 
 	dm, err := fetchDeviceManifest(dev.ManifestPath)
 	if err != nil {
-		return "", fmt.Errorf("fetching device manifest: %w", err)
+		return "", "", fmt.Errorf("fetching device manifest: %w", err)
 	}
 
 	latest := dev.Latest
 	if latest == "" {
-		return "", fmt.Errorf("no latest version for device type %q", deviceType)
+		return "", "", fmt.Errorf("no latest version for device type %q", deviceType)
 	}
 
-	return getOTAUpdateURL(dm, latest)
+	u, err := getOTAUpdateURL(dm, latest)
+	if err != nil {
+		return "", "", err
+	}
+	return u, latest, nil
 }
 
 // firmwareManifest contains version info for a specific chip.
