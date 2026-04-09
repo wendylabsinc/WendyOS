@@ -345,6 +345,39 @@ func TestSyncFiles_ContentChunksCarryCumulativeState(t *testing.T) {
 	}
 }
 
+func TestSyncFiles_DirectoryEntry_AllFilesTransferredWithPrefix(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "top.bin"), []byte("t"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "deep.bin"), []byte("d"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := &fakeSyncServer{agentManifest: nil}
+	conn, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	entries := []fileSyncEntry{{localPath: dir, remotePath: "data"}}
+	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
+		t.Fatalf("syncFiles: %v", err)
+	}
+
+	ackedSet := make(map[string]bool)
+	for _, path := range srv.ackedPaths {
+		ackedSet[path] = true
+	}
+	if !ackedSet["data/top.bin"] {
+		t.Errorf("missing ack for data/top.bin; got %v", srv.ackedPaths)
+	}
+	if !ackedSet["data/sub/deep.bin"] {
+		t.Errorf("missing ack for data/sub/deep.bin; got %v", srv.ackedPaths)
+	}
+}
+
 func TestSyncFiles_EmptyFileSendsOneEmptyChunk(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644); err != nil {
@@ -513,6 +546,45 @@ func TestSyncFiles_DeterministicOperationOrder(t *testing.T) {
 	}
 	if !strings.Contains(output, "deleted: stale.bin") {
 		t.Fatalf("stdout missing deletion line: %q", output)
+	}
+}
+
+func TestSyncFiles_ProgressReportedPerFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.bin"), []byte("aaaa"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.bin"), []byte("bbbb"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := &fakeSyncServer{agentManifest: nil}
+	conn, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	output := captureStdout(t, func() {
+		if err := syncFiles(context.Background(), conn, "sh.wendy.App", []fileSyncEntry{{
+			localPath:  dir,
+			remotePath: "",
+		}}); err != nil {
+			t.Fatalf("syncFiles: %v", err)
+		}
+	})
+
+	if len(srv.ackedPaths) != 2 {
+		t.Fatalf("ackedPaths count = %d, want 2", len(srv.ackedPaths))
+	}
+	if !strings.Contains(output, "Syncing files...") {
+		t.Fatalf("stdout missing sync header: %q", output)
+	}
+	if !strings.Contains(output, "a.bin") {
+		t.Fatalf("stdout missing a.bin progress line: %q", output)
+	}
+	if !strings.Contains(output, "b.bin") {
+		t.Fatalf("stdout missing b.bin progress line: %q", output)
+	}
+	if !strings.Contains(output, "Total: 8 B in 2 file(s)") {
+		t.Fatalf("stdout missing total line: %q", output)
 	}
 }
 

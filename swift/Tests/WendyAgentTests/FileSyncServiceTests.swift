@@ -30,6 +30,35 @@ struct BuildManifestTests {
         #expect(entry.mode == 0o755)
     }
 
+    @Test("nested directories produce correct relative paths")
+    func nestedPaths() throws {
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
+
+        let base = URL(fileURLWithPath: temporaryDirectory)
+        try FileManager.default.createDirectory(
+            at: base.appendingPathComponent("models/v1"),
+            withIntermediateDirectories: true
+        )
+        try Data("weight".utf8).write(to: base.appendingPathComponent("models/v1/weights.bin"))
+        try Data("cfg".utf8).write(to: base.appendingPathComponent("config.json"))
+
+        let entries = try FileSyncService.buildManifest(at: base)
+        let paths = Set(entries.map(\.path))
+        #expect(paths.contains("models/v1/weights.bin"))
+        #expect(paths.contains("config.json"))
+        #expect(entries.count == 2)
+    }
+
+    @Test("non-existent directory returns empty manifest")
+    func nonExistentDirectory() throws {
+        let missing = URL(
+            fileURLWithPath: "/tmp/wendy-test-does-not-exist-\(UUID().uuidString)"
+        )
+        let entries = try FileSyncService.buildManifest(at: missing)
+        #expect(entries.isEmpty)
+    }
+
     @Test("Wendy temporary files are excluded from manifest")
     func wendyTemporaryFilesExcluded() throws {
         let temporaryDirectory = try makeTempDir()
@@ -69,6 +98,37 @@ struct RunSessionTests {
             // expected
         } else {
             Issue.record("Expected complete as second response")
+        }
+    }
+
+    @Test("pre-seeded directory returns correct entries in manifest")
+    func startPreSeededDirReturnsManifest() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let appsBaseURL = URL(fileURLWithPath: appsBase)
+
+        let appDir = appsBaseURL.appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        let fileContent = Data("preexisting binary".utf8)
+        try fileContent.write(to: appDir.appendingPathComponent("MyApp"))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: appDir.appendingPathComponent("MyApp").path
+        )
+
+        let responses = try await runSession(
+            messages: [startRequest(appID: appID, manifest: [])],
+            appsBase: appsBaseURL
+        )
+
+        if case .manifest(let manifest) = responses[0].responseType {
+            #expect(manifest.files.count == 1)
+            #expect(manifest.files[0].path == "MyApp")
+            #expect(manifest.files[0].sha256 == sha256Digest(fileContent))
+            #expect(manifest.files[0].size == Int64(fileContent.count))
+        } else {
+            Issue.record("Expected manifest as first response")
         }
     }
 
@@ -134,6 +194,31 @@ struct RunSessionTests {
         let destinationURL = appsBaseURL.appendingPathComponent(appID).appendingPathComponent("MyApp")
         #expect(try Data(contentsOf: destinationURL) == fullContent)
         #expect(try permissions(of: destinationURL) == 0o755)
+    }
+
+    @Test("nested path creates parent directories automatically")
+    func nestedPathCreatesParentDirectories() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let appsBaseURL = URL(fileURLWithPath: appsBase)
+        let content = Data("config data".utf8)
+        let digest = sha256Digest(content)
+        let manifest = [entry(path: "config/app.json", size: Int64(content.count), sha256: digest, mode: 0o644)]
+
+        _ = try await runSession(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(path: "config/app.json", data: content, sequence: 0, cumulativeSize: Int64(content.count), sha256: digest),
+                commitRequest(path: "config/app.json", size: Int64(content.count), sha256: digest),
+            ],
+            appsBase: appsBaseURL
+        )
+
+        let destinationURL = appsBaseURL
+            .appendingPathComponent(appID)
+            .appendingPathComponent("config/app.json")
+        #expect(try Data(contentsOf: destinationURL) == content)
     }
 
     @Test("wrong cumulative hash fails immediately and removes temp file")
@@ -552,6 +637,15 @@ struct ValidatedDestinationTests {
         #expect(result.path == workDir.appendingPathComponent("config/app.json").path)
     }
 
+    @Test("hidden file is accepted")
+    func hiddenFile() throws {
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
+        let workDir = URL(fileURLWithPath: temporaryDirectory)
+        let result = try FileSyncService.validatedDestination(for: ".config", in: workDir)
+        #expect(result.path == workDir.appendingPathComponent(".config").path)
+    }
+
     @Test("empty path is rejected")
     func emptyPath() throws {
         let temporaryDirectory = try makeTempDir()
@@ -579,6 +673,16 @@ struct ValidatedDestinationTests {
         let workDir = URL(fileURLWithPath: temporaryDirectory)
         #expect(throws: (any Error).self) {
             try FileSyncService.validatedDestination(for: "../../etc/passwd", in: workDir)
+        }
+    }
+
+    @Test(". component is rejected")
+    func dotComponent() throws {
+        let temporaryDirectory = try makeTempDir()
+        defer { cleanup(temporaryDirectory) }
+        let workDir = URL(fileURLWithPath: temporaryDirectory)
+        #expect(throws: (any Error).self) {
+            try FileSyncService.validatedDestination(for: "config/./app.json", in: workDir)
         }
     }
 
