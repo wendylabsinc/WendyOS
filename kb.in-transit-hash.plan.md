@@ -293,11 +293,11 @@ Add/update tests for:
 - [x] Regenerate Go and Swift protobuf/gRPC bindings
 - [x] Update Go CLI manifest + diffing logic
 - [x] Update Go CLI chunk sending and mode-only update sending
-- [ ] Refactor Swift `FileSyncService` state machine
-- [ ] Implement chunk validation before write
-- [ ] Remove commit-time reread/rehash
-- [ ] Implement mode-only handling
-- [ ] Update Swift and Go tests
+- [x] Refactor Swift `FileSyncService` state machine
+- [x] Implement chunk validation before write
+- [x] Remove commit-time reread/rehash
+- [x] Implement mode-only handling
+- [x] Update Swift and Go tests
 - [ ] Run end-to-end validation on large files
 
 ## Implementation log
@@ -314,6 +314,19 @@ Add/update tests for:
 - Reworked manifest diffing into explicit content transfers, mode-only updates, and stale remote files, all sorted deterministically for reviewable output and stable tests.
 - Each transmitted chunk now carries cumulative size and hash checkpoints, empty files send one empty checkpoint chunk, and the CLI refuses to commit if the streamed bytes no longer match the manifest.
 - Mode-only changes now reuse normal file acks, while stale remote files are only printed because pruning still happens implicitly on the agent after EOF.
+
+### 2026-04-09 — Swift agent validation and cleanup
+
+- Replaced the loose temp-file dictionaries with a single active transfer state plus finalized-path tracking, which made the one-file-at-a-time stream contract explicit instead of accidental.
+- The agent now validates manifest digests up front, validates every chunk before writing, and commits directly from in-memory transfer state instead of reopening and hashing the temp file again.
+- Mode-only updates now share the same session bookkeeping as content transfers, including duplicate-path protection and ordinary file-level acknowledgements.
+- Automated verification now covers cumulative chunk checkpoints, mode-only updates, temp-file cleanup, and a commit path that succeeds even after the temp file has been made unreadable, proving the post-transfer reread is gone.
+
+### 2026-04-09 — Verification status
+
+- `cd go && go test ./...`
+- `cd swift && swift test -q`
+- Automated multi-chunk coverage now exercises large streamed payloads, but I have not yet run a separate live CLI↔agent manual sync outside the test suites.
 
 ## Expected outcome
 

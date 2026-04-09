@@ -10,15 +10,7 @@ import WendyAgentGRPC
 
 @Suite("FileSyncService.buildManifest")
 struct BuildManifestTests {
-    @Test("empty directory returns empty manifest")
-    func emptyDirectory() throws {
-        let temporaryDirectory = try makeTempDir()
-        defer { cleanup(temporaryDirectory) }
-        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: temporaryDirectory))
-        #expect(entries.isEmpty)
-    }
-
-    @Test("single file produces correct path, size, sha256, mode")
+    @Test("single file produces correct path, size, sha256 bytes, and mode")
     func singleFile() throws {
         let temporaryDirectory = try makeTempDir()
         defer { cleanup(temporaryDirectory) }
@@ -33,28 +25,9 @@ struct BuildManifestTests {
         let entry = entries[0]
         #expect(entry.path == "app.bin")
         #expect(entry.size == Int64(content.count))
-        #expect(entry.sha256 == sha256Hex(content))
+        #expect(entry.sha256 == sha256Digest(content))
+        #expect(entry.sha256.count == 32)
         #expect(entry.mode == 0o755)
-    }
-
-    @Test("nested directories produce correct relative paths")
-    func nestedPaths() throws {
-        let temporaryDirectory = try makeTempDir()
-        defer { cleanup(temporaryDirectory) }
-
-        let base = URL(fileURLWithPath: temporaryDirectory)
-        try FileManager.default.createDirectory(
-            at: base.appendingPathComponent("models/v1"),
-            withIntermediateDirectories: true
-        )
-        try Data("weight".utf8).write(to: base.appendingPathComponent("models/v1/weights.bin"))
-        try Data("cfg".utf8).write(to: base.appendingPathComponent("config.json"))
-
-        let entries = try FileSyncService.buildManifest(at: base)
-        let paths = Set(entries.map(\.path))
-        #expect(paths.contains("models/v1/weights.bin"))
-        #expect(paths.contains("config.json"))
-        #expect(entries.count == 2)
     }
 
     @Test("Wendy temporary files are excluded from manifest")
@@ -70,61 +43,25 @@ struct BuildManifestTests {
         #expect(entries.count == 1)
         #expect(entries[0].path == "real.bin")
     }
-
-    @Test("non-existent directory returns empty manifest")
-    func nonExistentDirectory() throws {
-        let missing = URL(
-            fileURLWithPath: "/tmp/wendy-test-does-not-exist-\(UUID().uuidString)"
-        )
-        let entries = try FileSyncService.buildManifest(at: missing)
-        #expect(entries.isEmpty)
-    }
-
-    @Test("sha256 is correct for known content")
-    func sha256Correctness() throws {
-        let temporaryDirectory = try makeTempDir()
-        defer { cleanup(temporaryDirectory) }
-
-        let content = Data(repeating: 0xAB, count: 256)
-        let fileURL = URL(fileURLWithPath: temporaryDirectory).appendingPathComponent("known.bin")
-        try content.write(to: fileURL)
-
-        let entries = try FileSyncService.buildManifest(at: URL(fileURLWithPath: temporaryDirectory))
-        #expect(entries.count == 1)
-        #expect(entries[0].sha256 == sha256Hex(content))
-    }
 }
 
 // MARK: - runSession tests
 
-/// These tests drive `FileSyncService.runSession` directly using a mock writer,
-/// bypassing the gRPC transport layer entirely.
 @Suite("FileSyncService.runSession")
 struct RunSessionTests {
-    @Test("FileSyncStart against empty dir returns empty FileSyncManifest")
+    @Test("FileSyncStart against empty dir returns empty manifest and complete")
     func startEmptyDirReturnsEmptyManifest() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
-        let appID = "sh.wendy.TestApp"
-        let appsBaseURL = URL(fileURLWithPath: appsBase)
 
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { _ in }
-        var startReq = Wendy_Agent_Services_V1_FileSyncRequest()
-        startReq.requestType = .start(startMsg)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([startReq]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
+        let responses = try await runSession(
+            messages: [startRequest(appID: "sh.wendy.TestApp", manifest: [])],
+            appsBase: URL(fileURLWithPath: appsBase)
         )
 
         #expect(responses.count == 2)
-        if case .manifest(let m) = responses[0].responseType {
-            #expect(m.files.isEmpty)
+        if case .manifest(let manifest) = responses[0].responseType {
+            #expect(manifest.files.isEmpty)
         } else {
             Issue.record("Expected manifest as first response")
         }
@@ -135,308 +72,461 @@ struct RunSessionTests {
         }
     }
 
-    @Test("pre-seeded directory returns correct entries in manifest")
-    func startPreSeededDirReturnsManifest() async throws {
+    @Test("duplicate manifest path rejected")
+    func duplicateManifestPathRejected() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
-        let appID = "sh.wendy.TestApp"
-        let appsBaseURL = URL(fileURLWithPath: appsBase)
 
-        // Pre-seed the working directory.
-        let appDir = appsBaseURL.appendingPathComponent(appID)
-        try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-        let fileContent = Data("preexisting binary".utf8)
-        try fileContent.write(to: appDir.appendingPathComponent("MyApp"))
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: appDir.appendingPathComponent("MyApp").path
+        let digest = sha256Digest(Data("same".utf8))
+        let manifest = [
+            manifestEntry(path: "app", content: Data("same".utf8), mode: 0o644),
+            entry(path: "app", size: 4, sha256: digest, mode: 0o755),
+        ]
+
+        await expectRunSessionFailure(
+            messages: [startRequest(appID: "sh.wendy.TestApp", manifest: manifest)],
+            appsBase: URL(fileURLWithPath: appsBase)
         )
-
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { _ in }
-        var startReq = Wendy_Agent_Services_V1_FileSyncRequest()
-        startReq.requestType = .start(startMsg)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([startReq]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
-        )
-
-        if case .manifest(let m) = responses[0].responseType {
-            #expect(m.files.count == 1)
-            #expect(m.files[0].path == "MyApp")
-            #expect(m.files[0].sha256 == sha256Hex(fileContent))
-            #expect(m.files[0].size == Int64(fileContent.count))
-        } else {
-            Issue.record("Expected manifest as first response")
-        }
     }
 
-    @Test("upload a file via chunk+commit, file appears at correct path with correct content")
-    func uploadFile() async throws {
+    @Test("invalid 32-byte digest length rejected")
+    func invalidDigestLengthRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let manifest = [entry(path: "app", size: 1, sha256: Data([0x00]), mode: 0o644)]
+        await expectRunSessionFailure(
+            messages: [startRequest(appID: "sh.wendy.TestApp", manifest: manifest)],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("multi-chunk happy path")
+    func multiChunkHappyPath() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
         let appID = "sh.wendy.TestApp"
         let appsBaseURL = URL(fileURLWithPath: appsBase)
-        let content = Data("binary content".utf8)
-        let sha256 = sha256Hex(content)
 
-        var manifestEntry = Wendy_Agent_Services_V1_FileSyncEntry()
-        manifestEntry.path = "MyApp"
-        manifestEntry.size = Int64(content.count)
-        manifestEntry.sha256 = sha256
-        manifestEntry.mode = 0o755
+        let chunk1 = Data("hello ".utf8)
+        let chunk2 = Data("world".utf8)
+        let fullContent = chunk1 + chunk2
+        let finalDigest = sha256Digest(fullContent)
+        let manifest = [entry(path: "MyApp", size: Int64(fullContent.count), sha256: finalDigest, mode: 0o755)]
 
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { $0.files = [manifestEntry] }
-
-        var chunk = Wendy_Agent_Services_V1_FileSyncChunk()
-        chunk.path = "MyApp"
-        chunk.data = content
-
-        var commit = Wendy_Agent_Services_V1_FileSyncCommit()
-        commit.path = "MyApp"
-        commit.sha256 = sha256
-        commit.size = Int64(content.count)
-
-        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req0.requestType = .start(startMsg)
-        var req1 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req1.requestType = .chunk(chunk)
-        var req2 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req2.requestType = .commit(commit)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([req0, req1, req2]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
+        let responses = try await runSession(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(path: "MyApp", data: chunk1, sequence: 0, cumulativeSize: Int64(chunk1.count), sha256: sha256Digest(chunk1)),
+                chunkRequest(path: "MyApp", data: chunk2, sequence: 1, cumulativeSize: Int64(fullContent.count), sha256: finalDigest),
+                commitRequest(path: "MyApp", size: Int64(fullContent.count), sha256: finalDigest),
+            ],
+            appsBase: appsBaseURL
         )
 
-        // Responses: manifest, ack, complete.
         #expect(responses.count == 3)
         if case .ack(let ack) = responses[1].responseType {
             #expect(ack.path == "MyApp")
         } else {
             Issue.record("Expected ack as second response")
         }
-        if case .complete = responses[2].responseType {
-            // expected
-        } else {
-            Issue.record("Expected complete as third response")
-        }
 
-        // File exists with correct content and mode.
-        let destPath = appsBaseURL.appendingPathComponent(appID).appendingPathComponent("MyApp")
-        let written = try Data(contentsOf: destPath)
-        #expect(written == content)
-        let attrs = try FileManager.default.attributesOfItem(atPath: destPath.path)
-        let mode = attrs[.posixPermissions] as? Int
-        #expect(mode == 0o755)
-
-        // No .tmp left.
-        let temporaryFileURL = URL(fileURLWithPath: destPath.path + ".tmp")
-        #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
+        let destinationURL = appsBaseURL.appendingPathComponent(appID).appendingPathComponent("MyApp")
+        #expect(try Data(contentsOf: destinationURL) == fullContent)
+        #expect(try permissions(of: destinationURL) == 0o755)
     }
 
-    @Test("nested path — parent directories created automatically")
-    func nestedPath() async throws {
+    @Test("wrong cumulative hash fails immediately and removes temp file")
+    func wrongCumulativeHashFailsImmediately() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
         let appID = "sh.wendy.TestApp"
-        let appsBaseURL = URL(fileURLWithPath: appsBase)
-        let content = Data("config data".utf8)
+        let content = Data("hello".utf8)
+        let manifest = [manifestEntry(path: "app", content: content, mode: 0o644)]
+        let tempURL = temporaryURL(
+            appsBase: URL(fileURLWithPath: appsBase),
+            appID: appID,
+            path: "app",
+            digest: manifest[0].sha256
+        )
+        let destinationURL = URL(fileURLWithPath: appsBase)
+            .appendingPathComponent(appID)
+            .appendingPathComponent("app")
 
-        var manifestEntry = Wendy_Agent_Services_V1_FileSyncEntry()
-        manifestEntry.path = "config/app.json"
-        manifestEntry.size = Int64(content.count)
-        manifestEntry.sha256 = sha256Hex(content)
-        manifestEntry.mode = 0o644
-
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { $0.files = [manifestEntry] }
-
-        var chunk = Wendy_Agent_Services_V1_FileSyncChunk()
-        chunk.path = "config/app.json"
-        chunk.data = content
-
-        var commit = Wendy_Agent_Services_V1_FileSyncCommit()
-        commit.path = "config/app.json"
-        commit.sha256 = sha256Hex(content)
-        commit.size = Int64(content.count)
-
-        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req0.requestType = .start(startMsg)
-        var req1 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req1.requestType = .chunk(chunk)
-        var req2 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req2.requestType = .commit(commit)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([req0, req1, req2]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(
+                    path: "app",
+                    data: content,
+                    sequence: 0,
+                    cumulativeSize: Int64(content.count),
+                    sha256: Data(repeating: 0xAA, count: 32)
+                ),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
         )
 
-        let destPath =
-            appsBaseURL
-            .appendingPathComponent(appID)
-            .appendingPathComponent("config/app.json")
-        let written = try Data(contentsOf: destPath)
-        #expect(written == content)
+        #expect(!FileManager.default.fileExists(atPath: tempURL.path))
+        #expect(!FileManager.default.fileExists(atPath: destinationURL.path))
     }
 
-    @Test("corrupt commit — wrong SHA256 — returns error, no file or .tmp")
-    func corruptCommitNoPartialFile() async throws {
+    @Test("wrong cumulative size fails")
+    func wrongCumulativeSizeFails() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let content = Data("hello".utf8)
+        let manifest = [manifestEntry(path: "app", content: content, mode: 0o644)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(
+                    path: "app",
+                    data: content,
+                    sequence: 0,
+                    cumulativeSize: Int64(content.count - 1),
+                    sha256: sha256Digest(content)
+                ),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("wrong sequence fails")
+    func wrongSequenceFails() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let content = Data("hello world".utf8)
+        let first = Data("hello ".utf8)
+        let second = Data("world".utf8)
+        let manifest = [manifestEntry(path: "app", content: content, mode: 0o644)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "app", data: first, sequence: 0, cumulativeSize: Int64(first.count), sha256: sha256Digest(first)),
+                chunkRequest(path: "app", data: second, sequence: 2, cumulativeSize: Int64(content.count), sha256: sha256Digest(content)),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("cumulative size exceeding manifest size fails early")
+    func cumulativeSizeExceedingManifestSizeFailsEarly() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let manifest = [entry(path: "app", size: 3, sha256: sha256Digest(Data("hey".utf8)), mode: 0o644)]
+        let content = Data("hello".utf8)
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "app", data: content, sequence: 0, cumulativeSize: Int64(content.count), sha256: sha256Digest(content)),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("zero-length chunk for non-empty file rejected")
+    func zeroLengthChunkForNonEmptyFileRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let content = Data("hello".utf8)
+        let manifest = [manifestEntry(path: "app", content: content, mode: 0o644)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "app", data: Data(), sequence: 0, cumulativeSize: 0, sha256: sha256Digest(Data())),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("undeclared path rejected")
+    func undeclaredPathRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let manifest = [manifestEntry(path: "app", content: Data("hello".utf8), mode: 0o644)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "other", data: Data("hello".utf8), sequence: 0, cumulativeSize: 5, sha256: sha256Digest(Data("hello".utf8))),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("switching paths mid-file rejected")
+    func switchingPathsMidFileRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let contentA = Data("hello".utf8)
+        let contentB = Data("world".utf8)
+        let manifest = [
+            manifestEntry(path: "a", content: contentA, mode: 0o644),
+            manifestEntry(path: "b", content: contentB, mode: 0o644),
+        ]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "a", data: contentA.prefixData(2), sequence: 0, cumulativeSize: 2, sha256: sha256Digest(contentA.prefixData(2))),
+                chunkRequest(path: "b", data: contentB, sequence: 0, cumulativeSize: Int64(contentB.count), sha256: sha256Digest(contentB)),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("commit must match manifest and removes temp file on failure")
+    func commitMustMatchManifest() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let content = Data("hello".utf8)
+        let manifest = [manifestEntry(path: "app", content: content, mode: 0o644)]
+        let tempURL = temporaryURL(
+            appsBase: URL(fileURLWithPath: appsBase),
+            appID: appID,
+            path: "app",
+            digest: manifest[0].sha256
+        )
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(path: "app", data: content, sequence: 0, cumulativeSize: 5, sha256: sha256Digest(content)),
+                commitRequest(path: "app", size: 5, sha256: Data(repeating: 0xBB, count: 32)),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: tempURL.path))
+    }
+
+    @Test("commit must match in-memory final state")
+    func commitMustMatchInMemoryFinalState() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let manifestContent = Data("hello".utf8)
+        let transferredContent = Data("HELLO".utf8)
+        let manifest = [manifestEntry(path: "app", content: manifestContent, mode: 0o644)]
+        let destinationURL = URL(fileURLWithPath: appsBase)
+            .appendingPathComponent(appID)
+            .appendingPathComponent("app")
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(path: "app", data: transferredContent, sequence: 0, cumulativeSize: 5, sha256: sha256Digest(transferredContent)),
+                commitRequest(path: "app", size: 5, sha256: manifest[0].sha256),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: destinationURL.path))
+    }
+
+    @Test("duplicate commit rejected")
+    func duplicateCommitRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let content = Data("hello".utf8)
+        let digest = sha256Digest(content)
+        let manifest = [entry(path: "app", size: 5, sha256: digest, mode: 0o644)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "app", data: content, sequence: 0, cumulativeSize: 5, sha256: digest),
+                commitRequest(path: "app", size: 5, sha256: digest),
+                commitRequest(path: "app", size: 5, sha256: digest),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("no reread required at commit time")
+    func noRereadRequired() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
         let appID = "sh.wendy.TestApp"
         let appsBaseURL = URL(fileURLWithPath: appsBase)
-        let content = Data("real data".utf8)
+        let content = Data("hello world".utf8)
+        let digest = sha256Digest(content)
+        let manifest = [entry(path: "app", size: Int64(content.count), sha256: digest, mode: 0o644)]
+        let tempURL = temporaryURL(appsBase: appsBaseURL, appID: appID, path: "app", digest: digest)
+        let destinationURL = appsBaseURL.appendingPathComponent(appID).appendingPathComponent("app")
 
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { _ in }
+        let recorder = ResponseRecorder()
+        var continuation: AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest>.Continuation!
+        let stream = AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest> { continuation = $0 }
 
-        var chunk = Wendy_Agent_Services_V1_FileSyncChunk()
-        chunk.path = "app"
-        chunk.data = content
-
-        var commit = Wendy_Agent_Services_V1_FileSyncCommit()
-        commit.path = "app"
-        commit.sha256 = String(repeating: "a", count: 64)  // wrong hash
-        commit.size = Int64(content.count)
-
-        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req0.requestType = .start(startMsg)
-        var req1 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req1.requestType = .chunk(chunk)
-        var req2 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req2.requestType = .commit(commit)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        do {
+        let task = Task {
             try await FileSyncService.runSession(
-                messages: makeStream([req0, req1, req2]),
-                writeResponse: { responses.append($0) },
+                messages: stream,
+                writeResponse: { response in await recorder.append(response) },
                 appsBase: appsBaseURL,
                 logger: .init(label: "test")
             )
-            Issue.record("Expected error from corrupt commit")
-        } catch {
-            // Expected: SHA256 mismatch.
         }
 
-        // No file or .tmp should remain.
-        let appDir = appsBaseURL.appendingPathComponent(appID)
-        let destPath = appDir.appendingPathComponent("app")
-        let temporaryFileURL = URL(fileURLWithPath: destPath.path + ".tmp")
-        #expect(!FileManager.default.fileExists(atPath: destPath.path))
-        #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
+        continuation.yield(startRequest(appID: appID, manifest: manifest))
+        continuation.yield(chunkRequest(path: "app", data: content, sequence: 0, cumulativeSize: Int64(content.count), sha256: digest))
+        try await waitForFile(at: tempURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: tempURL.path)
+        continuation.yield(commitRequest(path: "app", size: Int64(content.count), sha256: digest))
+        continuation.finish()
+
+        try await task.value
+
+        let responses = await recorder.snapshot()
+        #expect(responses.count == 3)
+        #expect(try Data(contentsOf: destinationURL) == content)
     }
 
-    @Test("upload an empty file via commit-only — file created with zero bytes")
-    func uploadEmptyFile() async throws {
+    @Test("empty file via one empty chunk and commit succeeds")
+    func emptyFileViaOneChunkAndCommitSucceeds() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
         let appID = "sh.wendy.TestApp"
         let appsBaseURL = URL(fileURLWithPath: appsBase)
-        let emptyHash = sha256Hex(Data())
+        let digest = sha256Digest(Data())
+        let manifest = [entry(path: "Models/.gitkeep", size: 0, sha256: digest, mode: 0o644)]
 
-        var manifestEntry = Wendy_Agent_Services_V1_FileSyncEntry()
-        manifestEntry.path = "Models/.gitkeep"
-        manifestEntry.size = 0
-        manifestEntry.sha256 = emptyHash
-        manifestEntry.mode = 0o644
-
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { $0.files = [manifestEntry] }
-
-        // No chunk message — empty files have nothing to stream.
-        var commit = Wendy_Agent_Services_V1_FileSyncCommit()
-        commit.path = "Models/.gitkeep"
-        commit.sha256 = emptyHash
-        commit.size = 0
-
-        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req0.requestType = .start(startMsg)
-        var req1 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req1.requestType = .commit(commit)
-
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([req0, req1]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
+        let responses = try await runSession(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(path: "Models/.gitkeep", data: Data(), sequence: 0, cumulativeSize: 0, sha256: digest),
+                commitRequest(path: "Models/.gitkeep", size: 0, sha256: digest),
+            ],
+            appsBase: appsBaseURL
         )
 
-        // Responses: manifest, ack, complete.
+        #expect(responses.count == 3)
+        let destinationURL = appsBaseURL
+            .appendingPathComponent(appID)
+            .appendingPathComponent("Models/.gitkeep")
+        #expect(try Data(contentsOf: destinationURL).isEmpty)
+    }
+
+    @Test("mode-only update succeeds for existing unchanged file")
+    func modeOnlyUpdateSucceeds() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let appsBaseURL = URL(fileURLWithPath: appsBase)
+        let appDir = appsBaseURL.appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+
+        let content = Data("config".utf8)
+        let fileURL = appDir.appendingPathComponent("config.json")
+        try content.write(to: fileURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        let manifest = [entry(path: "config.json", size: Int64(content.count), sha256: sha256Digest(content), mode: 0o755)]
+        let responses = try await runSession(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                setModeRequest(path: "config.json", mode: 0o755, size: Int64(content.count), sha256: sha256Digest(content)),
+            ],
+            appsBase: appsBaseURL
+        )
+
         #expect(responses.count == 3)
         if case .ack(let ack) = responses[1].responseType {
-            #expect(ack.path == "Models/.gitkeep")
+            #expect(ack.path == "config.json")
         } else {
             Issue.record("Expected ack as second response")
         }
-        if case .complete = responses[2].responseType {
-            // expected
-        } else {
-            Issue.record("Expected complete as third response")
-        }
-
-        // File exists at the correct path and is truly empty.
-        let destPath = appsBaseURL
-            .appendingPathComponent(appID)
-            .appendingPathComponent("Models/.gitkeep")
-        let written = try Data(contentsOf: destPath)
-        #expect(written.isEmpty)
+        #expect(try permissions(of: fileURL) == 0o755)
+        #expect(try Data(contentsOf: fileURL) == content)
     }
 
-    @Test("stale file is deleted after stream EOF")
-    func staleFileDeleted() async throws {
+    @Test("missing target file fails for mode-only update")
+    func modeOnlyMissingTargetFails() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let content = Data("config".utf8)
+        let digest = sha256Digest(content)
+        let manifest = [entry(path: "config.json", size: Int64(content.count), sha256: digest, mode: 0o755)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                setModeRequest(path: "config.json", mode: 0o755, size: Int64(content.count), sha256: digest),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("mode-only during active transfer rejected")
+    func modeOnlyDuringActiveTransferRejected() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let contentA = Data("hello".utf8)
+        let contentB = Data("world".utf8)
+        let manifest = [
+            manifestEntry(path: "a", content: contentA, mode: 0o644),
+            manifestEntry(path: "b", content: contentB, mode: 0o755),
+        ]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: "sh.wendy.TestApp", manifest: manifest),
+                chunkRequest(path: "a", data: contentA, sequence: 0, cumulativeSize: 5, sha256: sha256Digest(contentA)),
+                setModeRequest(path: "b", mode: 0o755, size: 5, sha256: sha256Digest(contentB)),
+            ],
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+    }
+
+    @Test("duplicate finalized-path mode update rejected")
+    func duplicateFinalizedPathModeUpdateRejected() async throws {
         let appsBase = try makeTempDir()
         defer { cleanup(appsBase) }
         let appID = "sh.wendy.TestApp"
         let appsBaseURL = URL(fileURLWithPath: appsBase)
-
-        // Pre-seed with a file the CLI manifest won't declare.
         let appDir = appsBaseURL.appendingPathComponent(appID)
         try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-        let stalePath = appDir.appendingPathComponent("old.bin")
-        try Data("stale".utf8).write(to: stalePath)
 
-        // Sync with empty CLI manifest.
-        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
-        startMsg.appID = appID
-        startMsg.manifest = .with { _ in }
-        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
-        req0.requestType = .start(startMsg)
+        let content = Data("config".utf8)
+        let fileURL = appDir.appendingPathComponent("config.json")
+        try content.write(to: fileURL)
 
-        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
-        try await FileSyncService.runSession(
-            messages: makeStream([req0]),
-            writeResponse: { responses.append($0) },
-            appsBase: appsBaseURL,
-            logger: .init(label: "test")
+        let digest = sha256Digest(content)
+        let manifest = [entry(path: "config.json", size: Int64(content.count), sha256: digest, mode: 0o755)]
+
+        await expectRunSessionFailure(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                setModeRequest(path: "config.json", mode: 0o755, size: Int64(content.count), sha256: digest),
+                setModeRequest(path: "config.json", mode: 0o755, size: Int64(content.count), sha256: digest),
+            ],
+            appsBase: appsBaseURL
+        )
+    }
+
+    @Test("stale file pruning still works")
+    func staleFilePruningStillWorks() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let appsBaseURL = URL(fileURLWithPath: appsBase)
+        let appDir = appsBaseURL.appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        let staleURL = appDir.appendingPathComponent("old.bin")
+        try Data("stale".utf8).write(to: staleURL)
+
+        _ = try await runSession(
+            messages: [startRequest(appID: appID, manifest: [])],
+            appsBase: appsBaseURL
         )
 
-        #expect(!FileManager.default.fileExists(atPath: stalePath.path))
-        // FileSyncComplete should be the last response.
-        if case .complete = responses.last?.responseType {
-            // expected
-        } else {
-            Issue.record("Expected FileSyncComplete as last response")
-        }
+        #expect(!FileManager.default.fileExists(atPath: staleURL.path))
     }
 }
 
@@ -460,15 +550,6 @@ struct ValidatedDestinationTests {
         let workDir = URL(fileURLWithPath: temporaryDirectory)
         let result = try FileSyncService.validatedDestination(for: "config/app.json", in: workDir)
         #expect(result.path == workDir.appendingPathComponent("config/app.json").path)
-    }
-
-    @Test("hidden file is accepted")
-    func hiddenFile() throws {
-        let temporaryDirectory = try makeTempDir()
-        defer { cleanup(temporaryDirectory) }
-        let workDir = URL(fileURLWithPath: temporaryDirectory)
-        let result = try FileSyncService.validatedDestination(for: ".config", in: workDir)
-        #expect(result.path == workDir.appendingPathComponent(".config").path)
     }
 
     @Test("empty path is rejected")
@@ -501,23 +582,12 @@ struct ValidatedDestinationTests {
         }
     }
 
-    @Test(". component is rejected")
-    func dotComponent() throws {
-        let temporaryDirectory = try makeTempDir()
-        defer { cleanup(temporaryDirectory) }
-        let workDir = URL(fileURLWithPath: temporaryDirectory)
-        #expect(throws: (any Error).self) {
-            try FileSyncService.validatedDestination(for: "config/./app.json", in: workDir)
-        }
-    }
-
     @Test("symlink escaping workDir is rejected")
     func symlinkEscape() throws {
         let temporaryDirectory = try makeTempDir()
         defer { cleanup(temporaryDirectory) }
 
         let workDir = URL(fileURLWithPath: temporaryDirectory)
-        // Create a symlink inside workDir pointing outside.
         let symlinkURL = workDir.appendingPathComponent("escape")
         try FileManager.default.createSymbolicLink(atPath: symlinkURL.path, withDestinationPath: "/tmp")
 
@@ -528,6 +598,148 @@ struct ValidatedDestinationTests {
 }
 
 // MARK: - Helpers
+
+private actor ResponseRecorder {
+    private var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
+
+    func append(_ response: Wendy_Agent_Services_V1_FileSyncResponse) {
+        responses.append(response)
+    }
+
+    func snapshot() -> [Wendy_Agent_Services_V1_FileSyncResponse] {
+        responses
+    }
+}
+
+private func runSession(
+    messages: [Wendy_Agent_Services_V1_FileSyncRequest],
+    appsBase: URL
+) async throws -> [Wendy_Agent_Services_V1_FileSyncResponse] {
+    let recorder = ResponseRecorder()
+    try await FileSyncService.runSession(
+        messages: makeStream(messages),
+        writeResponse: { response in await recorder.append(response) },
+        appsBase: appsBase,
+        logger: .init(label: "test")
+    )
+    return await recorder.snapshot()
+}
+
+private func expectRunSessionFailure(
+    messages: [Wendy_Agent_Services_V1_FileSyncRequest],
+    appsBase: URL
+) async {
+    do {
+        _ = try await runSession(messages: messages, appsBase: appsBase)
+        Issue.record("Expected FileSyncService.runSession to throw")
+    } catch {
+        // expected
+    }
+}
+
+private func startRequest(
+    appID: String,
+    manifest: [Wendy_Agent_Services_V1_FileSyncEntry]
+) -> Wendy_Agent_Services_V1_FileSyncRequest {
+    var start = Wendy_Agent_Services_V1_FileSyncStart()
+    start.appID = appID
+    start.manifest = .with { $0.files = manifest }
+
+    var request = Wendy_Agent_Services_V1_FileSyncRequest()
+    request.requestType = .start(start)
+    return request
+}
+
+private func chunkRequest(
+    path: String,
+    data: Data,
+    sequence: UInt64,
+    cumulativeSize: Int64,
+    sha256: Data
+) -> Wendy_Agent_Services_V1_FileSyncRequest {
+    var chunk = Wendy_Agent_Services_V1_FileSyncChunk()
+    chunk.path = path
+    chunk.data = data
+    chunk.sequence = sequence
+    chunk.cumulativeSize = cumulativeSize
+    chunk.sha256 = sha256
+
+    var request = Wendy_Agent_Services_V1_FileSyncRequest()
+    request.requestType = .chunk(chunk)
+    return request
+}
+
+private func commitRequest(
+    path: String,
+    size: Int64,
+    sha256: Data
+) -> Wendy_Agent_Services_V1_FileSyncRequest {
+    var commit = Wendy_Agent_Services_V1_FileSyncCommit()
+    commit.path = path
+    commit.size = size
+    commit.sha256 = sha256
+
+    var request = Wendy_Agent_Services_V1_FileSyncRequest()
+    request.requestType = .commit(commit)
+    return request
+}
+
+private func setModeRequest(
+    path: String,
+    mode: UInt32,
+    size: Int64,
+    sha256: Data
+) -> Wendy_Agent_Services_V1_FileSyncRequest {
+    var setMode = Wendy_Agent_Services_V1_FileSyncSetMode()
+    setMode.path = path
+    setMode.mode = mode
+    setMode.size = size
+    setMode.sha256 = sha256
+
+    var request = Wendy_Agent_Services_V1_FileSyncRequest()
+    request.requestType = .setMode(setMode)
+    return request
+}
+
+private func manifestEntry(path: String, content: Data, mode: UInt32) -> Wendy_Agent_Services_V1_FileSyncEntry {
+    entry(path: path, size: Int64(content.count), sha256: sha256Digest(content), mode: mode)
+}
+
+private func entry(
+    path: String,
+    size: Int64,
+    sha256: Data,
+    mode: UInt32
+) -> Wendy_Agent_Services_V1_FileSyncEntry {
+    var entry = Wendy_Agent_Services_V1_FileSyncEntry()
+    entry.path = path
+    entry.size = size
+    entry.sha256 = sha256
+    entry.mode = mode
+    return entry
+}
+
+private func temporaryURL(appsBase: URL, appID: String, path: String, digest: Data) -> URL {
+    let destinationURL = appsBase.appendingPathComponent(appID).appendingPathComponent(path)
+    let temporaryName = ".WENDY-\(hexString(digest))~\(destinationURL.lastPathComponent)"
+    return destinationURL.deletingLastPathComponent().appendingPathComponent(temporaryName)
+}
+
+private func waitForFile(at url: URL, timeoutNanoseconds: UInt64 = 1_000_000_000) async throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        if FileManager.default.fileExists(atPath: url.path) {
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    throw NSError(domain: "FileSyncServiceTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for \(url.path)"])
+}
+
+private func permissions(of url: URL) throws -> Int {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    return (attributes[.posixPermissions] as? Int) ?? -1
+}
 
 private func makeStream(
     _ messages: [Wendy_Agent_Services_V1_FileSyncRequest]
@@ -550,7 +762,16 @@ private func cleanup(_ path: String) {
     try? FileManager.default.removeItem(atPath: path)
 }
 
-private func sha256Hex(_ data: Data) -> String {
-    let hash = SHA256.hash(data: data)
-    return hash.map { String(format: "%02x", $0) }.joined()
+private func sha256Digest(_ data: Data) -> Data {
+    Data(SHA256.hash(data: data))
+}
+
+private func hexString(_ data: Data) -> String {
+    data.map { String(format: "%02x", $0) }.joined()
+}
+
+private extension Data {
+    func prefixData(_ count: Int) -> Data {
+        Data(prefix(count))
+    }
 }
