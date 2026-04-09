@@ -415,6 +415,56 @@ func TestSyncFiles_ProgressReportedPerFile(t *testing.T) {
 	}
 }
 
+func TestSyncFiles_EmptyFileTransferred(t *testing.T) {
+	dir := t.TempDir()
+	// Create an empty file (e.g. a .gitkeep placeholder).
+	if err := os.MkdirAll(filepath.Join(dir, "Models"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Models", ".gitkeep"), []byte{}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := &fakeSyncServer{agentManifest: nil}
+	conn, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	entries := []fileSyncEntry{
+		{localPath: dir, remotePath: ""},
+	}
+
+	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
+		t.Fatalf("syncFiles: %v", err)
+	}
+
+	// The empty file must be committed with no chunks.
+	if len(srv.ackedPaths) != 1 || srv.ackedPaths[0] != "Models/.gitkeep" {
+		t.Errorf("ackedPaths = %v, want [Models/.gitkeep]", srv.ackedPaths)
+	}
+	for _, r := range srv.received {
+		if c, ok := r.RequestType.(*agentpb.FileSyncRequest_Chunk); ok {
+			t.Errorf("unexpected chunk for empty file: path=%q", c.Chunk.Path)
+		}
+	}
+
+	// Commit must carry size=0 and the SHA256 of empty content.
+	var commitMsg *agentpb.FileSyncCommit
+	for _, r := range srv.received {
+		if c, ok := r.RequestType.(*agentpb.FileSyncRequest_Commit); ok {
+			commitMsg = c.Commit
+		}
+	}
+	if commitMsg == nil {
+		t.Fatal("no FileSyncCommit sent")
+	}
+	if commitMsg.Size != 0 {
+		t.Errorf("commit size = %d, want 0", commitMsg.Size)
+	}
+	if commitMsg.Sha256 != sha256Hex(nil) {
+		t.Errorf("commit sha256 = %q, want %q", commitMsg.Sha256, sha256Hex(nil))
+	}
+}
+
 func TestSyncFiles_NothingToSyncPrintsUpToDate(t *testing.T) {
 	dir := t.TempDir()
 	content := []byte("data")

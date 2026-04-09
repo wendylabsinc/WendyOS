@@ -344,6 +344,64 @@ struct RunSessionTests {
         #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
     }
 
+    @Test("upload an empty file via commit-only — file created with zero bytes")
+    func uploadEmptyFile() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let appID = "sh.wendy.TestApp"
+        let appsBaseURL = URL(fileURLWithPath: appsBase)
+        let emptyHash = sha256Hex(Data())
+
+        var manifestEntry = Wendy_Agent_Services_V1_FileSyncEntry()
+        manifestEntry.path = "Models/.gitkeep"
+        manifestEntry.size = 0
+        manifestEntry.sha256 = emptyHash
+        manifestEntry.mode = 0o644
+
+        var startMsg = Wendy_Agent_Services_V1_FileSyncStart()
+        startMsg.appID = appID
+        startMsg.manifest = .with { $0.files = [manifestEntry] }
+
+        // No chunk message — empty files have nothing to stream.
+        var commit = Wendy_Agent_Services_V1_FileSyncCommit()
+        commit.path = "Models/.gitkeep"
+        commit.sha256 = emptyHash
+        commit.size = 0
+
+        var req0 = Wendy_Agent_Services_V1_FileSyncRequest()
+        req0.requestType = .start(startMsg)
+        var req1 = Wendy_Agent_Services_V1_FileSyncRequest()
+        req1.requestType = .commit(commit)
+
+        var responses: [Wendy_Agent_Services_V1_FileSyncResponse] = []
+        try await FileSyncService.runSession(
+            messages: makeStream([req0, req1]),
+            writeResponse: { responses.append($0) },
+            appsBase: appsBaseURL,
+            logger: .init(label: "test")
+        )
+
+        // Responses: manifest, ack, complete.
+        #expect(responses.count == 3)
+        if case .ack(let ack) = responses[1].responseType {
+            #expect(ack.path == "Models/.gitkeep")
+        } else {
+            Issue.record("Expected ack as second response")
+        }
+        if case .complete = responses[2].responseType {
+            // expected
+        } else {
+            Issue.record("Expected complete as third response")
+        }
+
+        // File exists at the correct path and is truly empty.
+        let destPath = appsBaseURL
+            .appendingPathComponent(appID)
+            .appendingPathComponent("Models/.gitkeep")
+        let written = try Data(contentsOf: destPath)
+        #expect(written.isEmpty)
+    }
+
     @Test("stale file is deleted after stream EOF")
     func staleFileDeleted() async throws {
         let appsBase = try makeTempDir()

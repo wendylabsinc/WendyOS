@@ -313,6 +313,83 @@ func resolveRunWorkingDir(opts runOptions) (string, error) {
 	return abs, nil
 }
 
+// runMacOSNativeContainer creates, optionally starts, and optionally streams
+// from a container that was deployed via file sync (not an OCI image pull).
+// It is shared by both the SwiftPM and Xcode macOS run paths.
+func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
+	if opts.deploy {
+		if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
+			return fmt.Errorf("creating container: %w", err)
+		}
+		cliLogln("Container %s created (not started).", appCfg.AppID)
+		return nil
+	}
+
+	if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	cliLogln("Container %s created.", appCfg.AppID)
+
+	if opts.detach {
+		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		if err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+		if _, err := stream.Recv(); err != nil && err != io.EOF {
+			return fmt.Errorf("waiting for container start: %w", err)
+		}
+		cliLogln("Application %s running in detached mode.", appCfg.AppID)
+		return nil
+	}
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+		AppName: appCfg.AppID,
+	})
+	if err != nil {
+		return fmt.Errorf("starting container: %w", err)
+	}
+
+	cliLogln("Application %s started.", appCfg.AppID)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		cliLogln("\nStopping container...")
+		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		runCancel()
+	}()
+
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			if runCtx.Err() != nil {
+				break
+			}
+			return fmt.Errorf("receiving container output: %w", recvErr)
+		}
+		if out := resp.GetStdoutOutput(); out != nil {
+			_, _ = os.Stdout.Write(out.GetData())
+		}
+		if out := resp.GetStderrOutput(); out != nil {
+			_, _ = os.Stderr.Write(out.GetData())
+		}
+	}
+
+	cliLogln("\nApplication %s stopped.", appCfg.AppID)
+	return nil
+}
+
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
 // pushes the image directly to the device's registry. Then it creates and
 // starts the container on the agent.
@@ -377,11 +454,10 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
 }
 
-// runMacOSWithAgent builds a Swift project locally, syncs files to the device
-// via SyncFiles gRPC, and creates/starts the container. The binary is always
-// included; sandbox.sb is included if present; any entries declared in
-// appCfg.Files are appended.
-func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+// runMacOSSwiftPMWithAgent builds a Swift package locally via `swift build`,
+// syncs the binary (and optional sandbox.sb / wendy.json files) to the device
+// via SyncFiles gRPC, and creates/starts the container.
+func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Verify CPU architecture matches.
 	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
@@ -418,7 +494,6 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	}
 
 	// Assemble file sync entries.
-	// The binary is always included.
 	syncEntries := []fileSyncEntry{
 		{localPath: binaryPath, remotePath: product},
 	}
@@ -446,89 +521,19 @@ func runMacOSWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return fmt.Errorf("syncing files: %w", err)
 	}
 
-	// Create container: binary name via Cmd, no OCI digest.
 	createReq := &agentpb.CreateContainerRequest{
 		AppName: appCfg.AppID,
 		Cmd:     product,
 	}
-
-	if opts.deploy {
-		if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
-			return fmt.Errorf("creating container: %w", err)
-		}
-		cliLogln("Container %s created (not started).", appCfg.AppID)
-		return nil
-	}
-
-	if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
-		return fmt.Errorf("creating container: %w", err)
-	}
-	cliLogln("Container %s created.", appCfg.AppID)
-
-	if opts.detach {
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
-		}
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
-			return fmt.Errorf("waiting for container start: %w", err)
-		}
-		cliLogln("Application %s running in detached mode.", appCfg.AppID)
-		return nil
-	}
-
-	// Start and stream output.
-	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
-
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
-		AppName: appCfg.AppID,
-	})
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
-	}
-
-	cliLogln("Application %s started.", appCfg.AppID)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	go func() {
-		<-sigCh
-		cliLogln("\nStopping container...")
-		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
-			AppName: appCfg.AppID,
-		})
-		runCancel()
-	}()
-
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			if runCtx.Err() != nil {
-				break
-			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
-		}
-		if out := resp.GetStdoutOutput(); out != nil {
-			_, _ = os.Stdout.Write(out.GetData())
-		}
-		if out := resp.GetStderrOutput(); out != nil {
-			_, _ = os.Stderr.Write(out.GetData())
-		}
-	}
-
-	cliLogln("\nApplication %s stopped.", appCfg.AppID)
-	return nil
+	return runMacOSNativeContainer(ctx, conn, appCfg, createReq, opts)
 }
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	projectType := detectProjectType(projectPath)
+	projectType, err := detectProjectType(projectPath)
+	if err != nil {
+		return err
+	}
 
 	// Resolve Swift product name from Package.swift.
 	if projectType == "swift" {
@@ -548,6 +553,11 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	}
 
 	var app *providers.BuiltApp
+
+	// Xcode projects cannot be deployed via provider (requires darwin + file sync).
+	if projectType == "xcode" {
+		return fmt.Errorf("Xcode projects are not supported by the %s provider; use 'wendy run' with a macOS target instead", p.DisplayName())
+	}
 
 	// Swift projects without a Dockerfile: cross-compile on the host and
 	// build a Docker image, bypassing the provider's normal Build method.
@@ -626,7 +636,10 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Detect project type and ensure a Dockerfile exists.
-	projectType := detectProjectType(cwd)
+	projectType, err := detectProjectType(cwd)
+	if err != nil {
+		return err
+	}
 
 	// Resolve the target platform. Query the agent for its OS and architecture,
 	// then determine the effective platform from wendy.json or defaults.
@@ -642,12 +655,20 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
 
+	// Xcode projects: always use the local-build + file-sync path (darwin only).
+	if projectType == "xcode" {
+		if platformOS(platform) == "darwin" {
+			return runMacOSXcodeWithAgent(ctx, conn, cwd, appCfg, opts)
+		}
+		return fmt.Errorf("Xcode projects require a darwin target (got %s)", platform)
+	}
+
 	// Swift projects without a Dockerfile: check if the target platform is
 	// darwin (binary upload) or Linux (swift-container-plugin).
 	if projectType == "swift" {
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			if platformOS(platform) == "darwin" {
-				return runMacOSWithAgent(ctx, conn, cwd, appCfg, opts)
+				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts, agentOS)
 		}

@@ -786,11 +786,13 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 
 	// Detect language from the project files on disk.
 	language := ""
-	projectType := detectProjectType(dir)
+	projectType, _ := detectProjectType(dir) // ignore multiple-xcodeproj error for config init
 	switch projectType {
 	case "python":
 		language = "python"
 	case "swift":
+		language = "swift"
+	case "xcode":
 		language = "swift"
 	}
 

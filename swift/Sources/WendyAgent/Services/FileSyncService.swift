@@ -136,7 +136,23 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                         for: relativePath, in: workDir
                     )
 
-                    guard let temporaryURL = temporaryURLs.removeValue(forKey: relativePath) else {
+                    let temporaryURL: URL
+                    if let existingURL = temporaryURLs.removeValue(forKey: relativePath) {
+                        temporaryURL = existingURL
+                    } else if commit.size == 0 {
+                        // Empty file: no chunks were sent, so no temp file was opened.
+                        // Create an empty temp file here so the rest of the commit
+                        // path (verification, atomic rename) works uniformly.
+                        let temporaryName = ".WENDY-\(commit.sha256)~\(destinationURL.lastPathComponent)"
+                        let emptyTempURL = destinationURL.deletingLastPathComponent()
+                            .appendingPathComponent(temporaryName)
+                        try FileManager.default.createDirectory(
+                            at: emptyTempURL.deletingLastPathComponent(),
+                            withIntermediateDirectories: true
+                        )
+                        FileManager.default.createFile(atPath: emptyTempURL.path, contents: nil)
+                        temporaryURL = emptyTempURL
+                    } else {
                         throw RPCError(
                             code: .invalidArgument,
                             message: "No chunks received for \(relativePath)"

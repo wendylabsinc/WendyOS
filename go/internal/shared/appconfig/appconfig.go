@@ -79,12 +79,18 @@ type AppConfig struct {
 	Version      string           `json:"version,omitempty"`
 	Platform     string           `json:"platform,omitempty"`
 	Language     string           `json:"language,omitempty"`
+	Xcode        *XcodeConfig     `json:"xcode,omitempty"`
 	Entitlements []Entitlement    `json:"entitlements,omitempty"`
 	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
 	Hooks        *HooksConfig     `json:"hooks,omitempty"`
 	Python       *PythonConfig    `json:"python,omitempty"`
 	Debug        bool             `json:"debug,omitempty"`
 	Files        []FileSyncEntry  `json:"files,omitempty"`
+}
+
+// XcodeConfig holds Xcode-specific build settings.
+type XcodeConfig struct {
+	Scheme string `json:"scheme,omitempty"`
 }
 
 // ReadinessConfig defines a probe the CLI uses to determine when the app is ready.

@@ -47,23 +47,33 @@ func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) 
 
 // detectProjectType determines the project type from the directory contents.
 // It checks for Dockerfile first, then language-specific markers.
-func detectProjectType(dir string) string {
+//
+// Precedence: Dockerfile > Package.swift (swift) > *.xcodeproj (xcode) > Python markers.
+// Returns an error only when multiple .xcodeproj directories are found.
+func detectProjectType(dir string) (string, error) {
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
-		return "docker"
+		return "docker", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Package.swift")); err == nil {
-		return "swift"
+		return "swift", nil
+	}
+	xp, err := findXcodeProj(dir)
+	if err != nil {
+		return "", err
+	}
+	if xp != "" {
+		return "xcode", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "requirements.txt")); err == nil {
-		return "python"
+		return "python", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "setup.py")); err == nil {
-		return "python"
+		return "python", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
-		return "python"
+		return "python", nil
 	}
-	return "unknown"
+	return "unknown", nil
 }
 
 // BuildOption represents a detected build type in a project directory.
@@ -103,6 +113,19 @@ func detectBuildOptions(dir string) []BuildOption {
 			Type:  "swift",
 			File:  "Package.swift",
 		})
+	}
+
+	// Xcode — one entry per .xcodeproj found (independent of Package.swift).
+	if err == nil { // entries was read above
+		for _, e := range entries {
+			if e.IsDir() && strings.HasSuffix(e.Name(), ".xcodeproj") {
+				options = append(options, BuildOption{
+					Label: e.Name() + " (Xcode)",
+					Type:  "xcode",
+					File:  e.Name(),
+				})
+			}
+		}
 	}
 
 	// Python — only add once even if multiple markers exist.

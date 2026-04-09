@@ -11,13 +11,21 @@ import (
 	"testing"
 )
 
+func mustDetectProjectType(t *testing.T, dir string) string {
+	t.Helper()
+	got, err := detectProjectType(dir)
+	if err != nil {
+		t.Fatalf("detectProjectType unexpected error: %v", err)
+	}
+	return got
+}
+
 func TestDetectProjectType_Dockerfile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "docker" {
+	if got := mustDetectProjectType(t, dir); got != "docker" {
 		t.Errorf("detectProjectType = %q; want %q", got, "docker")
 	}
 }
@@ -27,8 +35,7 @@ func TestDetectProjectType_PackageSwift(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte("// swift"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "swift" {
+	if got := mustDetectProjectType(t, dir); got != "swift" {
 		t.Errorf("detectProjectType = %q; want %q", got, "swift")
 	}
 }
@@ -38,8 +45,7 @@ func TestDetectProjectType_RequirementsTxt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
@@ -49,8 +55,7 @@ func TestDetectProjectType_SetupPy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "setup.py"), []byte("setup()"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
@@ -60,16 +65,14 @@ func TestDetectProjectType_PyprojectToml(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.poetry]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
 
 func TestDetectProjectType_Unknown(t *testing.T) {
 	dir := t.TempDir()
-	got := detectProjectType(dir)
-	if got != "unknown" {
+	if got := mustDetectProjectType(t, dir); got != "unknown" {
 		t.Errorf("detectProjectType = %q; want %q", got, "unknown")
 	}
 }
@@ -82,9 +85,47 @@ func TestDetectProjectType_DockerfileTakesPrecedence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := detectProjectType(dir)
-	if got != "docker" {
+	if got := mustDetectProjectType(t, dir); got != "docker" {
 		t.Errorf("detectProjectType = %q; want %q (Dockerfile should take precedence)", got, "docker")
+	}
+}
+
+func TestDetectProjectType_XcodeOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustDetectProjectType(t, dir); got != "xcode" {
+		t.Errorf("detectProjectType = %q; want %q", got, "xcode")
+	}
+}
+
+func TestDetectProjectType_SwiftPMWinsOverXcode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte("// swift"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustDetectProjectType(t, dir); got != "swift" {
+		t.Errorf("detectProjectType = %q; want %q (Package.swift should take precedence)", got, "swift")
+	}
+}
+
+func TestDetectProjectType_MultipleXcodeprojs_Error(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"First.xcodeproj", "Second.xcodeproj"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := detectProjectType(dir)
+	if err == nil {
+		t.Fatal("detectProjectType expected error for multiple .xcodeproj dirs, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple .xcodeproj") {
+		t.Errorf("expected 'multiple .xcodeproj' in error, got: %v", err)
 	}
 }
 
