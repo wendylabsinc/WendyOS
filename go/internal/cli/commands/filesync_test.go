@@ -1,14 +1,17 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -52,12 +55,15 @@ func TestBuildLocalManifest_SingleFile(t *testing.T) {
 	if e.Size != int64(len(content)) {
 		t.Errorf("Size = %d, want %d", e.Size, len(content))
 	}
-	wantHash := sha256Hex(content)
-	if e.Sha256 != wantHash {
-		t.Errorf("SHA256 = %q, want %q", e.Sha256, wantHash)
+	wantHash := sha256Bytes(content)
+	if !bytes.Equal(e.Sha256, wantHash) {
+		t.Errorf("SHA256 = %x, want %x", e.Sha256, wantHash)
 	}
-	if e.Mode&0o755 != 0o755 {
-		t.Errorf("Mode = %o, want at least 0755", e.Mode)
+	if len(e.Sha256) != sha256.Size {
+		t.Errorf("SHA256 length = %d, want %d", len(e.Sha256), sha256.Size)
+	}
+	if e.Mode != 0o755 {
+		t.Errorf("Mode = %o, want 0755", e.Mode)
 	}
 }
 
@@ -84,6 +90,9 @@ func TestBuildLocalManifest_NestedFiles(t *testing.T) {
 	paths := make(map[string]bool)
 	for _, e := range entries {
 		paths[e.Path] = true
+		if len(e.Sha256) != sha256.Size {
+			t.Fatalf("SHA256 length for %s = %d, want %d", e.Path, len(e.Sha256), sha256.Size)
+		}
 	}
 	for _, want := range []string{"models/v1/weights.bin", "config.json"} {
 		if !paths[want] {
@@ -92,93 +101,68 @@ func TestBuildLocalManifest_NestedFiles(t *testing.T) {
 	}
 }
 
-func TestBuildLocalManifest_SHA256Correctness(t *testing.T) {
-	dir := t.TempDir()
-	content := []byte("known content for hash check")
-	if err := os.WriteFile(filepath.Join(dir, "data.bin"), content, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	entries, err := buildLocalManifest(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if got, want := entries[0].Sha256, sha256Hex(content); got != want {
-		t.Errorf("SHA256 = %q, want %q", got, want)
-	}
-}
-
 // ---- diffManifests tests ----
 
 func TestDiffManifests_Identical(t *testing.T) {
 	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc", Size: 10},
-		{Path: "config.json", Sha256: "def", Size: 5},
+		{Path: "app", Sha256: sha256Bytes([]byte("app")), Size: 10, Mode: 0o755},
+		{Path: "config.json", Sha256: sha256Bytes([]byte("config")), Size: 5, Mode: 0o644},
 	}}
 	remote := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc", Size: 10},
-		{Path: "config.json", Sha256: "def", Size: 5},
+		{Path: "app", Sha256: sha256Bytes([]byte("app")), Size: 10, Mode: 0o755},
+		{Path: "config.json", Sha256: sha256Bytes([]byte("config")), Size: 5, Mode: 0o644},
 	}}
 	result := diffManifests(local, remote)
-	if len(result) != 0 {
-		t.Errorf("expected empty diff for identical manifests, got %v", result)
+	if len(result.contentTransfers) != 0 || len(result.modeOnly) != 0 || len(result.staleRemote) != 0 {
+		t.Errorf("expected empty diff for identical manifests, got %+v", result)
 	}
 }
 
-func TestDiffManifests_MissingFromRemote(t *testing.T) {
-	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc"},
-		{Path: "new.bin", Sha256: "xyz"},
-	}}
-	remote := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc"},
-	}}
+func TestDiffManifests_ModeOnlyChangeSeparated(t *testing.T) {
+	sharedHash := sha256Bytes([]byte("same"))
+	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{{
+		Path: "app", Sha256: sharedHash, Size: 4, Mode: 0o755,
+	}}}
+	remote := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{{
+		Path: "app", Sha256: sharedHash, Size: 4, Mode: 0o644,
+	}}}
+
 	result := diffManifests(local, remote)
-	if len(result) != 1 || result[0] != "new.bin" {
-		t.Errorf("expected [new.bin], got %v", result)
+	if len(result.contentTransfers) != 0 {
+		t.Fatalf("expected no content transfer, got %v", result.contentTransfers)
+	}
+	if len(result.modeOnly) != 1 {
+		t.Fatalf("expected 1 mode-only change, got %d", len(result.modeOnly))
+	}
+	if result.modeOnly[0].path != "app" {
+		t.Fatalf("mode-only path = %q, want %q", result.modeOnly[0].path, "app")
+	}
+	if result.modeOnly[0].oldMode != 0o644 || result.modeOnly[0].newMode != 0o755 {
+		t.Fatalf("mode-only modes = %04o -> %04o, want 0644 -> 0755", result.modeOnly[0].oldMode, result.modeOnly[0].newMode)
 	}
 }
 
-func TestDiffManifests_SHA256Differs(t *testing.T) {
+func TestDiffManifests_SortsOperationsDeterministically(t *testing.T) {
 	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "newHash"},
+		{Path: "c.bin", Sha256: sha256Bytes([]byte("new-c")), Size: 5, Mode: 0o644},
+		{Path: "a.bin", Sha256: sha256Bytes([]byte("same-a")), Size: 6, Mode: 0o755},
+		{Path: "b.bin", Sha256: sha256Bytes([]byte("new-b")), Size: 5, Mode: 0o644},
 	}}
 	remote := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "oldHash"},
+		{Path: "stale.bin", Sha256: sha256Bytes([]byte("stale")), Size: 5, Mode: 0o644},
+		{Path: "b.bin", Sha256: sha256Bytes([]byte("old-b")), Size: 5, Mode: 0o644},
+		{Path: "a.bin", Sha256: sha256Bytes([]byte("same-a")), Size: 6, Mode: 0o644},
 	}}
-	result := diffManifests(local, remote)
-	if len(result) != 1 || result[0] != "app" {
-		t.Errorf("expected [app], got %v", result)
-	}
-}
 
-func TestDiffManifests_RemoteOnlyFileNotIncluded(t *testing.T) {
-	// A file present on the agent but not in the local manifest should
-	// not appear in the transfer list (the agent handles deletions).
-	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc"},
-	}}
-	remote := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc"},
-		{Path: "stale.bin", Sha256: "zzz"},
-	}}
 	result := diffManifests(local, remote)
-	if len(result) != 0 {
-		t.Errorf("expected empty diff (agent-only file not in transfer list), got %v", result)
+	if got, want := result.contentTransfers, []string{"b.bin", "c.bin"}; !equalStrings(got, want) {
+		t.Fatalf("contentTransfers = %v, want %v", got, want)
 	}
-}
-
-func TestDiffManifests_EmptyRemote(t *testing.T) {
-	local := &agentpb.FileSyncManifest{Files: []*agentpb.FileSyncEntry{
-		{Path: "app", Sha256: "abc"},
-		{Path: "config.json", Sha256: "def"},
-	}}
-	result := diffManifests(local, nil)
-	if len(result) != 2 {
-		t.Errorf("expected 2 entries to transfer against empty remote, got %v", result)
+	if len(result.modeOnly) != 1 || result.modeOnly[0].path != "a.bin" {
+		t.Fatalf("modeOnly = %+v, want a.bin", result.modeOnly)
+	}
+	if got, want := result.staleRemote, []string{"stale.bin"}; !equalStrings(got, want) {
+		t.Fatalf("staleRemote = %v, want %v", got, want)
 	}
 }
 
@@ -189,14 +173,14 @@ func TestDiffManifests_EmptyRemote(t *testing.T) {
 type fakeSyncServer struct {
 	agentpb.UnimplementedWendyFileSyncServiceServer
 
-	// agentManifest is what the fake agent returns in FileSyncManifest.
 	agentManifest []*agentpb.FileSyncEntry
 
-	// received collects all FileSyncRequest messages sent by the CLI.
-	received []*agentpb.FileSyncRequest
-
-	// ackedPaths records which paths were committed and acked.
-	ackedPaths []string
+	mu               sync.Mutex
+	received         []*agentpb.FileSyncRequest
+	ackedPaths       []string
+	modeUpdatedPaths []string
+	onStart          func(*agentpb.FileSyncStart)
+	onChunk          func(*agentpb.FileSyncChunk)
 }
 
 func (s *fakeSyncServer) SyncFiles(stream agentpb.WendyFileSyncService_SyncFilesServer) error {
@@ -208,11 +192,16 @@ func (s *fakeSyncServer) SyncFiles(stream agentpb.WendyFileSyncService_SyncFiles
 		if err != nil {
 			return err
 		}
+
+		s.mu.Lock()
 		s.received = append(s.received, req)
+		s.mu.Unlock()
 
 		switch r := req.RequestType.(type) {
 		case *agentpb.FileSyncRequest_Start:
-			// Send the agent's manifest back.
+			if s.onStart != nil {
+				s.onStart(r.Start)
+			}
 			var resp agentpb.FileSyncResponse
 			resp.ResponseType = &agentpb.FileSyncResponse_Manifest{
 				Manifest: &agentpb.FileSyncManifest{Files: s.agentManifest},
@@ -220,8 +209,14 @@ func (s *fakeSyncServer) SyncFiles(stream agentpb.WendyFileSyncService_SyncFiles
 			if err := stream.Send(&resp); err != nil {
 				return err
 			}
+		case *agentpb.FileSyncRequest_Chunk:
+			if s.onChunk != nil {
+				s.onChunk(r.Chunk)
+			}
 		case *agentpb.FileSyncRequest_Commit:
+			s.mu.Lock()
 			s.ackedPaths = append(s.ackedPaths, r.Commit.Path)
+			s.mu.Unlock()
 			var resp agentpb.FileSyncResponse
 			resp.ResponseType = &agentpb.FileSyncResponse_Ack{
 				Ack: &agentpb.FileSyncAck{Path: r.Commit.Path},
@@ -229,10 +224,20 @@ func (s *fakeSyncServer) SyncFiles(stream agentpb.WendyFileSyncService_SyncFiles
 			if err := stream.Send(&resp); err != nil {
 				return err
 			}
+		case *agentpb.FileSyncRequest_SetMode:
+			s.mu.Lock()
+			s.modeUpdatedPaths = append(s.modeUpdatedPaths, r.SetMode.Path)
+			s.mu.Unlock()
+			var resp agentpb.FileSyncResponse
+			resp.ResponseType = &agentpb.FileSyncResponse_Ack{
+				Ack: &agentpb.FileSyncAck{Path: r.SetMode.Path},
+			}
+			if err := stream.Send(&resp); err != nil {
+				return err
+			}
 		}
 	}
 
-	// Send FileSyncComplete.
 	var resp agentpb.FileSyncResponse
 	resp.ResponseType = &agentpb.FileSyncResponse_Complete{
 		Complete: &agentpb.FileSyncComplete{},
@@ -240,8 +245,12 @@ func (s *fakeSyncServer) SyncFiles(stream agentpb.WendyFileSyncService_SyncFiles
 	return stream.Send(&resp)
 }
 
-// startFakeServer registers srv on a random local port and returns a connected
-// AgentConnection plus a cleanup function.
+func (s *fakeSyncServer) snapshotRequests() []*agentpb.FileSyncRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*agentpb.FileSyncRequest(nil), s.received...)
+}
+
 func startFakeServer(t *testing.T, srv *fakeSyncServer) (*grpcclient.AgentConnection, func()) {
 	t.Helper()
 
@@ -274,194 +283,236 @@ func startFakeServer(t *testing.T, srv *fakeSyncServer) (*grpcclient.AgentConnec
 	return ac, cleanup
 }
 
-func TestSyncFiles_AllDiffedFilesTransferred(t *testing.T) {
+func TestSyncFiles_ContentChunksCarryCumulativeState(t *testing.T) {
 	dir := t.TempDir()
-	content := []byte("binary data")
+	content := bytes.Repeat([]byte("abc12345"), 80*1024) // ~640 KiB => multiple chunks
 	if err := os.WriteFile(filepath.Join(dir, "MyApp"), content, 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	srv := &fakeSyncServer{agentManifest: nil} // empty agent dir
+	srv := &fakeSyncServer{agentManifest: nil}
 	conn, cleanup := startFakeServer(t, srv)
 	defer cleanup()
 
-	entries := []fileSyncEntry{
-		{localPath: filepath.Join(dir, "MyApp"), remotePath: "MyApp"},
-	}
-
+	entries := []fileSyncEntry{{localPath: filepath.Join(dir, "MyApp"), remotePath: "MyApp"}}
 	if err := syncFiles(context.Background(), conn, "sh.wendy.MyApp", entries); err != nil {
 		t.Fatalf("syncFiles: %v", err)
 	}
 
-	if len(srv.ackedPaths) != 1 || srv.ackedPaths[0] != "MyApp" {
-		t.Errorf("ackedPaths = %v, want [MyApp]", srv.ackedPaths)
-	}
-
-	// Verify a commit was sent with the correct hash.
+	requests := srv.snapshotRequests()
+	var chunks []*agentpb.FileSyncChunk
 	var commitMsg *agentpb.FileSyncCommit
-	for _, r := range srv.received {
-		if c, ok := r.RequestType.(*agentpb.FileSyncRequest_Commit); ok {
-			commitMsg = c.Commit
+	for _, r := range requests {
+		switch msg := r.RequestType.(type) {
+		case *agentpb.FileSyncRequest_Chunk:
+			chunks = append(chunks, msg.Chunk)
+		case *agentpb.FileSyncRequest_Commit:
+			commitMsg = msg.Commit
 		}
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
 	if commitMsg == nil {
 		t.Fatal("no FileSyncCommit sent")
 	}
-	if commitMsg.Path != "MyApp" {
-		t.Errorf("commit path = %q, want %q", commitMsg.Path, "MyApp")
+	if !bytes.Equal(commitMsg.Sha256, sha256Bytes(content)) {
+		t.Fatalf("commit sha256 = %x, want %x", commitMsg.Sha256, sha256Bytes(content))
 	}
-	if commitMsg.Sha256 != sha256Hex(content) {
-		t.Errorf("commit sha256 = %q, want %q", commitMsg.Sha256, sha256Hex(content))
+	if commitMsg.Size != int64(len(content)) {
+		t.Fatalf("commit size = %d, want %d", commitMsg.Size, len(content))
+	}
+
+	h := sha256.New()
+	var cumulativeSize int64
+	for i, chunk := range chunks {
+		if chunk.Path != "MyApp" {
+			t.Fatalf("chunk path = %q, want %q", chunk.Path, "MyApp")
+		}
+		if chunk.Sequence != uint64(i) {
+			t.Fatalf("chunk sequence[%d] = %d, want %d", i, chunk.Sequence, i)
+		}
+		cumulativeSize += int64(len(chunk.Data))
+		if _, err := h.Write(chunk.Data); err != nil {
+			t.Fatalf("hash write: %v", err)
+		}
+		if chunk.CumulativeSize != cumulativeSize {
+			t.Fatalf("chunk cumulative size[%d] = %d, want %d", i, chunk.CumulativeSize, cumulativeSize)
+		}
+		if !bytes.Equal(chunk.Sha256, h.Sum(nil)) {
+			t.Fatalf("chunk sha256[%d] = %x, want %x", i, chunk.Sha256, h.Sum(nil))
+		}
 	}
 }
 
-func TestSyncFiles_UnchangedFileNotReSent(t *testing.T) {
+func TestSyncFiles_EmptyFileSendsOneEmptyChunk(t *testing.T) {
 	dir := t.TempDir()
-	content := []byte("unchanged binary")
-	if err := os.WriteFile(filepath.Join(dir, "MyApp"), content, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Agent already has the file with matching hash.
+	srv := &fakeSyncServer{agentManifest: nil}
+	conn, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	entries := []fileSyncEntry{{localPath: filepath.Join(dir, "empty.txt"), remotePath: "empty.txt"}}
+	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
+		t.Fatalf("syncFiles: %v", err)
+	}
+
+	requests := srv.snapshotRequests()
+	var chunks []*agentpb.FileSyncChunk
+	var commitMsg *agentpb.FileSyncCommit
+	for _, r := range requests {
+		switch msg := r.RequestType.(type) {
+		case *agentpb.FileSyncRequest_Chunk:
+			chunks = append(chunks, msg.Chunk)
+		case *agentpb.FileSyncRequest_Commit:
+			commitMsg = msg.Commit
+		}
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	chunk := chunks[0]
+	if chunk.Sequence != 0 {
+		t.Fatalf("empty chunk sequence = %d, want 0", chunk.Sequence)
+	}
+	if len(chunk.Data) != 0 {
+		t.Fatalf("empty chunk data length = %d, want 0", len(chunk.Data))
+	}
+	if chunk.CumulativeSize != 0 {
+		t.Fatalf("empty chunk cumulative size = %d, want 0", chunk.CumulativeSize)
+	}
+	if !bytes.Equal(chunk.Sha256, sha256Bytes(nil)) {
+		t.Fatalf("empty chunk sha256 = %x, want %x", chunk.Sha256, sha256Bytes(nil))
+	}
+	if commitMsg == nil {
+		t.Fatal("no commit sent")
+	}
+	if commitMsg.Size != 0 {
+		t.Fatalf("commit size = %d, want 0", commitMsg.Size)
+	}
+	if !bytes.Equal(commitMsg.Sha256, sha256Bytes(nil)) {
+		t.Fatalf("commit sha256 = %x, want %x", commitMsg.Sha256, sha256Bytes(nil))
+	}
+}
+
+func TestSyncFiles_FinalStreamedHashMustMatchManifestBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	originalPath := filepath.Join(dir, "original.bin")
+	updatedPath := filepath.Join(dir, "updated.bin")
+	symlinkPath := filepath.Join(dir, "current.bin")
+	original := bytes.Repeat([]byte("a"), 300*1024)
+	updated := bytes.Repeat([]byte("b"), 300*1024)
+	if err := os.WriteFile(originalPath, original, 0o755); err != nil {
+		t.Fatalf("WriteFile original: %v", err)
+	}
+	if err := os.WriteFile(updatedPath, updated, 0o755); err != nil {
+		t.Fatalf("WriteFile updated: %v", err)
+	}
+	if err := os.Symlink(originalPath, symlinkPath); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	startSeen := make(chan struct{})
+	allowManifest := make(chan struct{})
+	var once sync.Once
 	srv := &fakeSyncServer{
-		agentManifest: []*agentpb.FileSyncEntry{
-			{Path: "MyApp", Sha256: sha256Hex(content), Size: int64(len(content))},
+		agentManifest: nil,
+		onStart: func(start *agentpb.FileSyncStart) {
+			once.Do(func() {
+				close(startSeen)
+				<-allowManifest
+			})
 		},
 	}
 	conn, cleanup := startFakeServer(t, srv)
 	defer cleanup()
 
-	entries := []fileSyncEntry{
-		{localPath: filepath.Join(dir, "MyApp"), remotePath: "MyApp"},
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- syncFiles(context.Background(), conn, "sh.wendy.MyApp", []fileSyncEntry{{
+			localPath:  symlinkPath,
+			remotePath: "MyApp",
+		}})
+	}()
+
+	select {
+	case <-startSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for FileSyncStart")
 	}
 
-	if err := syncFiles(context.Background(), conn, "sh.wendy.MyApp", entries); err != nil {
-		t.Fatalf("syncFiles: %v", err)
+	if err := os.Remove(symlinkPath); err != nil {
+		t.Fatalf("Remove symlink: %v", err)
+	}
+	if err := os.Symlink(updatedPath, symlinkPath); err != nil {
+		t.Fatalf("Replace symlink: %v", err)
+	}
+	close(allowManifest)
+
+	if err := <-errCh; err == nil {
+		t.Fatal("expected syncFiles to fail after streamed file diverged from manifest")
 	}
 
-	// No commits should have been sent.
-	for _, r := range srv.received {
+	for _, r := range srv.snapshotRequests() {
 		if _, ok := r.RequestType.(*agentpb.FileSyncRequest_Commit); ok {
-			t.Error("FileSyncCommit sent for unchanged file")
+			t.Fatal("commit should not be sent when streamed file diverges from manifest")
 		}
 	}
 }
 
-func TestSyncFiles_DirectoryEntry_AllFilesTransferredWithPrefix(t *testing.T) {
-	// A fileSyncEntry whose localPath is a directory: every file under it
-	// should be transferred with the remotePath prefix.
+func TestSyncFiles_DeterministicOperationOrder(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "c.bin"), []byte("new-c"), 0o644); err != nil {
+		t.Fatalf("WriteFile c.bin: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "top.bin"), []byte("t"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "b.bin"), []byte("new-b"), 0o644); err != nil {
+		t.Fatalf("WriteFile b.bin: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "sub", "deep.bin"), []byte("d"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "a.bin"), []byte("same-a"), 0o755); err != nil {
+		t.Fatalf("WriteFile a.bin: %v", err)
 	}
 
-	srv := &fakeSyncServer{agentManifest: nil}
+	srv := &fakeSyncServer{
+		agentManifest: []*agentpb.FileSyncEntry{
+			{Path: "stale.bin", Sha256: sha256Bytes([]byte("stale")), Size: 5, Mode: 0o644},
+			{Path: "b.bin", Sha256: sha256Bytes([]byte("old-b")), Size: 5, Mode: 0o644},
+			{Path: "a.bin", Sha256: sha256Bytes([]byte("same-a")), Size: 6, Mode: 0o644},
+		},
+	}
 	conn, cleanup := startFakeServer(t, srv)
 	defer cleanup()
 
-	entries := []fileSyncEntry{
-		{localPath: dir, remotePath: "data"},
-	}
+	output := captureStdout(t, func() {
+		if err := syncFiles(context.Background(), conn, "sh.wendy.App", []fileSyncEntry{{
+			localPath:  dir,
+			remotePath: "",
+		}}); err != nil {
+			t.Fatalf("syncFiles: %v", err)
+		}
+	})
 
-	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
-		t.Fatalf("syncFiles: %v", err)
-	}
-
-	// Both files should have been committed with the "data/" prefix.
-	ackedSet := make(map[string]bool)
-	for _, p := range srv.ackedPaths {
-		ackedSet[p] = true
-	}
-	if !ackedSet["data/top.bin"] {
-		t.Errorf("missing ack for data/top.bin; got %v", srv.ackedPaths)
-	}
-	if !ackedSet["data/sub/deep.bin"] {
-		t.Errorf("missing ack for data/sub/deep.bin; got %v", srv.ackedPaths)
-	}
-}
-
-// ---- progress test ----
-
-func TestSyncFiles_ProgressReportedPerFile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.bin"), []byte("aaaa"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "b.bin"), []byte("bbbb"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	srv := &fakeSyncServer{agentManifest: nil}
-	conn, cleanup := startFakeServer(t, srv)
-	defer cleanup()
-
-	entries := []fileSyncEntry{
-		{localPath: dir, remotePath: ""},
-	}
-
-	// syncFiles should succeed and produce acks for both files.
-	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
-		t.Fatalf("syncFiles: %v", err)
-	}
-
-	if len(srv.ackedPaths) != 2 {
-		t.Errorf("ackedPaths count = %d, want 2", len(srv.ackedPaths))
-	}
-}
-
-func TestSyncFiles_EmptyFileTransferred(t *testing.T) {
-	dir := t.TempDir()
-	// Create an empty file (e.g. a .gitkeep placeholder).
-	if err := os.MkdirAll(filepath.Join(dir, "Models"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "Models", ".gitkeep"), []byte{}, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	srv := &fakeSyncServer{agentManifest: nil}
-	conn, cleanup := startFakeServer(t, srv)
-	defer cleanup()
-
-	entries := []fileSyncEntry{
-		{localPath: dir, remotePath: ""},
-	}
-
-	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
-		t.Fatalf("syncFiles: %v", err)
-	}
-
-	// The empty file must be committed with no chunks.
-	if len(srv.ackedPaths) != 1 || srv.ackedPaths[0] != "Models/.gitkeep" {
-		t.Errorf("ackedPaths = %v, want [Models/.gitkeep]", srv.ackedPaths)
-	}
-	for _, r := range srv.received {
-		if c, ok := r.RequestType.(*agentpb.FileSyncRequest_Chunk); ok {
-			t.Errorf("unexpected chunk for empty file: path=%q", c.Chunk.Path)
+	requests := srv.snapshotRequests()
+	var gotOrder []string
+	for _, r := range requests {
+		switch msg := r.RequestType.(type) {
+		case *agentpb.FileSyncRequest_Commit:
+			gotOrder = append(gotOrder, "commit:"+msg.Commit.Path)
+		case *agentpb.FileSyncRequest_SetMode:
+			gotOrder = append(gotOrder, "mode:"+msg.SetMode.Path)
 		}
 	}
-
-	// Commit must carry size=0 and the SHA256 of empty content.
-	var commitMsg *agentpb.FileSyncCommit
-	for _, r := range srv.received {
-		if c, ok := r.RequestType.(*agentpb.FileSyncRequest_Commit); ok {
-			commitMsg = c.Commit
-		}
+	wantOrder := []string{"commit:b.bin", "commit:c.bin", "mode:a.bin"}
+	if !equalStrings(gotOrder, wantOrder) {
+		t.Fatalf("operation order = %v, want %v", gotOrder, wantOrder)
 	}
-	if commitMsg == nil {
-		t.Fatal("no FileSyncCommit sent")
+	if !strings.Contains(output, "mode changed: a.bin 0644 -> 0755") {
+		t.Fatalf("stdout missing mode change line: %q", output)
 	}
-	if commitMsg.Size != 0 {
-		t.Errorf("commit size = %d, want 0", commitMsg.Size)
-	}
-	if commitMsg.Sha256 != sha256Hex(nil) {
-		t.Errorf("commit sha256 = %q, want %q", commitMsg.Sha256, sha256Hex(nil))
+	if !strings.Contains(output, "deleted: stale.bin") {
+		t.Fatalf("stdout missing deletion line: %q", output)
 	}
 }
 
@@ -473,32 +524,70 @@ func TestSyncFiles_NothingToSyncPrintsUpToDate(t *testing.T) {
 	}
 
 	srv := &fakeSyncServer{
-		agentManifest: []*agentpb.FileSyncEntry{
-			{Path: "app", Sha256: sha256Hex(content), Size: int64(len(content))},
-		},
+		agentManifest: []*agentpb.FileSyncEntry{{
+			Path: "app", Sha256: sha256Bytes(content), Size: int64(len(content)), Mode: 0o644,
+		}},
 	}
 	conn, cleanup := startFakeServer(t, srv)
 	defer cleanup()
 
-	entries := []fileSyncEntry{{localPath: filepath.Join(dir, "app"), remotePath: "app"}}
+	output := captureStdout(t, func() {
+		if err := syncFiles(context.Background(), conn, "sh.wendy.App", []fileSyncEntry{{
+			localPath:  filepath.Join(dir, "app"),
+			remotePath: "app",
+		}}); err != nil {
+			t.Fatalf("syncFiles: %v", err)
+		}
+	})
 
-	// Should complete without error.
-	if err := syncFiles(context.Background(), conn, "sh.wendy.App", entries); err != nil {
-		t.Fatalf("syncFiles: %v", err)
+	if !strings.Contains(output, "Files up to date.") {
+		t.Fatalf("stdout missing up-to-date line: %q", output)
 	}
-
-	// No commits, no chunks sent.
-	for _, r := range srv.received {
+	for _, r := range srv.snapshotRequests() {
 		switch r.RequestType.(type) {
-		case *agentpb.FileSyncRequest_Commit, *agentpb.FileSyncRequest_Chunk:
-			t.Error("unexpected chunk or commit when nothing to sync")
+		case *agentpb.FileSyncRequest_Commit, *agentpb.FileSyncRequest_Chunk, *agentpb.FileSyncRequest_SetMode:
+			t.Fatal("unexpected chunk, commit, or mode update when nothing to sync")
 		}
 	}
 }
 
 // ---- helpers ----
 
-func sha256Hex(data []byte) string {
+func sha256Bytes(data []byte) []byte {
 	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
+	return h[:]
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	outputCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		outputCh <- buf.String()
+	}()
+
+	fn()
+	_ = w.Close()
+	return <-outputCh
 }

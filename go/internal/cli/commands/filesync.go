@@ -1,14 +1,15 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/dustin/go-humanize"
@@ -27,8 +28,8 @@ type fileSyncEntry struct {
 }
 
 // buildLocalManifest walks root (a directory) and returns a FileSyncEntry for
-// every regular file found: path relative to root, size, SHA256 hex, and Unix
-// file mode as uint32. Symlinks and non-regular files are skipped.
+// every regular file found: path relative to root, size, SHA256 bytes, and
+// Unix permission bits as uint32. Symlinks and non-regular files are skipped.
 func buildLocalManifest(root string) ([]*agentpb.FileSyncEntry, error) {
 	var entries []*agentpb.FileSyncEntry
 
@@ -63,8 +64,8 @@ func buildLocalManifest(root string) ([]*agentpb.FileSyncEntry, error) {
 		entries = append(entries, &agentpb.FileSyncEntry{
 			Path:   path,
 			Size:   info.Size(),
-			Sha256: hex.EncodeToString(h.Sum(nil)),
-			Mode:   uint32(info.Mode()),
+			Sha256: append([]byte(nil), h.Sum(nil)...),
+			Mode:   uint32(info.Mode().Perm()),
 		})
 		return nil
 	})
@@ -74,22 +75,64 @@ func buildLocalManifest(root string) ([]*agentpb.FileSyncEntry, error) {
 	return entries, nil
 }
 
-// diffManifests returns the agent-relative paths of files that are missing from
-// the agent's manifest or whose SHA256 differs from the local manifest.
-// Agent-only files (stale files) are not included; the agent handles deletions.
-func diffManifests(local, remote *agentpb.FileSyncManifest) []string {
-	remoteByPath := make(map[string]string, len(remote.GetFiles())) // path → sha256
+type modeOnlyChange struct {
+	path    string
+	oldMode uint32
+	newMode uint32
+	entry   *agentpb.FileSyncEntry
+}
+
+type manifestDiff struct {
+	contentTransfers []string
+	modeOnly         []modeOnlyChange
+	staleRemote      []string
+}
+
+// diffManifests compares the full file identity and classifies files into
+// content transfers, mode-only changes, and stale remote files.
+func diffManifests(local, remote *agentpb.FileSyncManifest) manifestDiff {
+	remoteByPath := make(map[string]*agentpb.FileSyncEntry, len(remote.GetFiles()))
 	for _, e := range remote.GetFiles() {
-		remoteByPath[e.Path] = e.Sha256
+		remoteByPath[e.Path] = e
 	}
 
-	var toTransfer []string
+	localPaths := make(map[string]struct{}, len(local.GetFiles()))
+	var diff manifestDiff
 	for _, e := range local.GetFiles() {
-		if remoteHash, ok := remoteByPath[e.Path]; !ok || remoteHash != e.Sha256 {
-			toTransfer = append(toTransfer, e.Path)
+		localPaths[e.Path] = struct{}{}
+		remoteEntry, ok := remoteByPath[e.Path]
+		if !ok || remoteEntry == nil {
+			diff.contentTransfers = append(diff.contentTransfers, e.Path)
+			continue
+		}
+
+		sameContent := remoteEntry.Size == e.Size && bytes.Equal(remoteEntry.Sha256, e.Sha256)
+		sameMode := remoteEntry.Mode == e.Mode
+		switch {
+		case !sameContent:
+			diff.contentTransfers = append(diff.contentTransfers, e.Path)
+		case !sameMode:
+			diff.modeOnly = append(diff.modeOnly, modeOnlyChange{
+				path:    e.Path,
+				oldMode: remoteEntry.Mode,
+				newMode: e.Mode,
+				entry:   e,
+			})
 		}
 	}
-	return toTransfer
+
+	for _, e := range remote.GetFiles() {
+		if _, ok := localPaths[e.Path]; !ok {
+			diff.staleRemote = append(diff.staleRemote, e.Path)
+		}
+	}
+
+	sort.Strings(diff.contentTransfers)
+	sort.Slice(diff.modeOnly, func(i, j int) bool {
+		return diff.modeOnly[i].path < diff.modeOnly[j].path
+	})
+	sort.Strings(diff.staleRemote)
+	return diff
 }
 
 // syncFiles drives a complete SyncFiles session:
@@ -141,10 +184,9 @@ func syncFiles(
 	}
 
 	// Compute diff.
-	toTransfer := diffManifests(localManifest, agentManifestMsg.Manifest)
+	diff := diffManifests(localManifest, agentManifestMsg.Manifest)
 
-	if len(toTransfer) == 0 {
-		// Nothing to transfer. Close stream and wait for complete.
+	if len(diff.contentTransfers) == 0 && len(diff.modeOnly) == 0 && len(diff.staleRemote) == 0 {
 		if err := stream.CloseSend(); err != nil {
 			return fmt.Errorf("closing stream: %w", err)
 		}
@@ -167,22 +209,24 @@ func syncFiles(
 		localByPath[e.Path] = e
 	}
 	var totalBytes int64
-	for _, path := range toTransfer {
+	for _, path := range diff.contentTransfers {
 		if e, ok := localByPath[path]; ok {
 			totalBytes += e.Size
 		}
 	}
 
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	fileCount := len(toTransfer)
+	fileCount := len(diff.contentTransfers)
 	fileIdx := 0
 	var sentBytes int64
 
-	cliLogln("Syncing files...")
+	if fileCount > 0 {
+		cliLogln("Syncing files...")
+	}
 
 	// Transfer each file.
 	const chunkSize = 256 * 1024
-	for _, agentPath := range toTransfer {
+	for _, agentPath := range diff.contentTransfers {
 		localPath, ok := localFiles[agentPath]
 		if !ok {
 			return fmt.Errorf("no local path for %q", agentPath)
@@ -201,53 +245,71 @@ func syncFiles(
 		h := sha256.New()
 		buf := make([]byte, chunkSize)
 		var fileSent int64
+		var sequence uint64
 		fileDisplayName := agentPath
 
-		for {
-			n, readErr := f.Read(buf)
-			if n > 0 {
-				chunk := buf[:n]
-				h.Write(chunk)
-				if err := stream.Send(&agentpb.FileSyncRequest{
-					RequestType: &agentpb.FileSyncRequest_Chunk{
-						Chunk: &agentpb.FileSyncChunk{
-							Path: agentPath,
-							Data: chunk,
-						},
+		sendChunk := func(data []byte) error {
+			if _, err := h.Write(data); err != nil {
+				return err
+			}
+			fileSent += int64(len(data))
+			sentBytes += int64(len(data))
+			checkpoint := append([]byte(nil), h.Sum(nil)...)
+			return stream.Send(&agentpb.FileSyncRequest{
+				RequestType: &agentpb.FileSyncRequest_Chunk{
+					Chunk: &agentpb.FileSyncChunk{
+						Path:           agentPath,
+						Data:           append([]byte(nil), data...),
+						Sequence:       sequence,
+						CumulativeSize: fileSent,
+						Sha256:         checkpoint,
 					},
-				}); err != nil {
-					f.Close()
-					return fmt.Errorf("sending chunk for %s: %w", agentPath, err)
-				}
-				fileSent += int64(n)
-				sentBytes += int64(n)
+				},
+			})
+		}
 
-				printFileSyncProgress(isTTY, fileDisplayName, fileSent, entry.Size,
-					sentBytes, totalBytes, fileIdx+1, fileCount)
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
+		if entry.Size == 0 {
+			if err := sendChunk(nil); err != nil {
 				f.Close()
-				return fmt.Errorf("reading %s: %w", localPath, readErr)
+				return fmt.Errorf("sending empty chunk for %s: %w", agentPath, err)
+			}
+		} else {
+			for {
+				n, readErr := f.Read(buf)
+				if n > 0 {
+					if err := sendChunk(buf[:n]); err != nil {
+						f.Close()
+						return fmt.Errorf("sending chunk for %s: %w", agentPath, err)
+					}
+					printFileSyncProgress(isTTY, fileDisplayName, fileSent, entry.Size,
+						sentBytes, totalBytes, fileIdx+1, fileCount)
+					sequence++
+				}
+				if readErr == io.EOF {
+					break
+				}
+				if readErr != nil {
+					f.Close()
+					return fmt.Errorf("reading %s: %w", localPath, readErr)
+				}
 			}
 		}
 		f.Close()
 
-		// Verify the file wasn't mutated during streaming.
-		streamingHash := hex.EncodeToString(h.Sum(nil))
-		if streamingHash != entry.Sha256 {
-			return fmt.Errorf("file %q changed during transfer (manifest sha256 %s, streamed %s)",
-				agentPath, entry.Sha256, streamingHash)
+		streamingHash := h.Sum(nil)
+		if fileSent != entry.Size {
+			return fmt.Errorf("file %q changed during transfer (manifest size %d, streamed %d)",
+				agentPath, entry.Size, fileSent)
+		}
+		if !bytes.Equal(streamingHash, entry.Sha256) {
+			return fmt.Errorf("file %q changed during transfer", agentPath)
 		}
 
-		// Send FileSyncCommit.
 		if err := stream.Send(&agentpb.FileSyncRequest{
 			RequestType: &agentpb.FileSyncRequest_Commit{
 				Commit: &agentpb.FileSyncCommit{
 					Path:   agentPath,
-					Sha256: entry.Sha256,
+					Sha256: append([]byte(nil), entry.Sha256...),
 					Size:   entry.Size,
 				},
 			},
@@ -255,7 +317,6 @@ func syncFiles(
 			return fmt.Errorf("sending commit for %s: %w", agentPath, err)
 		}
 
-		// Wait for FileSyncAck.
 		resp, err := stream.Recv()
 		if err != nil {
 			return fmt.Errorf("receiving ack for %s: %w", agentPath, err)
@@ -269,17 +330,47 @@ func syncFiles(
 		}
 
 		fileIdx++
-		if isTTY {
+		if isTTY && entry.Size > 0 {
 			fmt.Print("\n")
 		}
 	}
 
-	// Signal EOF to the agent (triggers stale-file pruning).
+	for _, change := range diff.modeOnly {
+		cliLogln("mode changed: %s %04o -> %04o", change.path, change.oldMode, change.newMode)
+		if err := stream.Send(&agentpb.FileSyncRequest{
+			RequestType: &agentpb.FileSyncRequest_SetMode{
+				SetMode: &agentpb.FileSyncSetMode{
+					Path:   change.path,
+					Mode:   change.entry.Mode,
+					Size:   change.entry.Size,
+					Sha256: append([]byte(nil), change.entry.Sha256...),
+				},
+			},
+		}); err != nil {
+			return fmt.Errorf("sending mode update for %s: %w", change.path, err)
+		}
+
+		resp, err := stream.Recv()
+		if err != nil {
+			return fmt.Errorf("receiving ack for %s: %w", change.path, err)
+		}
+		ack, ok := resp.ResponseType.(*agentpb.FileSyncResponse_Ack)
+		if !ok {
+			return fmt.Errorf("expected FileSyncAck for %s, got %T", change.path, resp.ResponseType)
+		}
+		if ack.Ack.Path != change.path {
+			return fmt.Errorf("ack path mismatch: expected %q, got %q", change.path, ack.Ack.Path)
+		}
+	}
+
+	for _, path := range diff.staleRemote {
+		cliLogln("deleted: %s", path)
+	}
+
 	if err := stream.CloseSend(); err != nil {
 		return fmt.Errorf("closing stream: %w", err)
 	}
 
-	// Wait for FileSyncComplete.
 	resp, err = stream.Recv()
 	if err != nil && err != io.EOF {
 		return fmt.Errorf("receiving complete: %w", err)
@@ -290,7 +381,9 @@ func syncFiles(
 		}
 	}
 
-	cliLogln("Total: %s in %d file(s)", humanize.Bytes(uint64(totalBytes)), fileCount)
+	if fileCount > 0 {
+		cliLogln("Total: %s in %d file(s)", humanize.Bytes(uint64(totalBytes)), fileCount)
+	}
 	return nil
 }
 
@@ -325,8 +418,8 @@ func buildCombinedManifest(entries []fileSyncEntry) (*agentpb.FileSyncManifest, 
 			files = append(files, &agentpb.FileSyncEntry{
 				Path:   agentPath,
 				Size:   info.Size(),
-				Sha256: hex.EncodeToString(h.Sum(nil)),
-				Mode:   uint32(info.Mode()),
+				Sha256: append([]byte(nil), h.Sum(nil)...),
+				Mode:   uint32(info.Mode().Perm()),
 			})
 			localFiles[agentPath] = e.localPath
 		} else {

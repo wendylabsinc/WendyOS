@@ -291,8 +291,8 @@ Add/update tests for:
 
 - [x] Update `Proto/wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto`
 - [x] Regenerate Go and Swift protobuf/gRPC bindings
-- [ ] Update Go CLI manifest + diffing logic
-- [ ] Update Go CLI chunk sending and mode-only update sending
+- [x] Update Go CLI manifest + diffing logic
+- [x] Update Go CLI chunk sending and mode-only update sending
 - [ ] Refactor Swift `FileSyncService` state machine
 - [ ] Implement chunk validation before write
 - [ ] Remove commit-time reread/rehash
@@ -307,6 +307,13 @@ Add/update tests for:
 - Changed all file-sync SHA256 fields from text hex strings to raw `bytes` so both runtimes can validate exact 32-byte digests without repeated hex encoding/decoding.
 - Extended `FileSyncChunk` with `sequence`, `cumulative_size`, and cumulative `sha256`, and added `FileSyncSetMode` for metadata-only updates.
 - Regenerated both Go and Swift bindings immediately after the proto edit so later CLI/agent changes could stay mechanical and reviewable.
+
+### 2026-04-09 — Go CLI streaming and diffing
+
+- Switched local manifest hashing to raw 32-byte digests and normalized modes to permission bits only; the CLI and Swift agent were previously speaking slightly different mode dialects.
+- Reworked manifest diffing into explicit content transfers, mode-only updates, and stale remote files, all sorted deterministically for reviewable output and stable tests.
+- Each transmitted chunk now carries cumulative size and hash checkpoints, empty files send one empty checkpoint chunk, and the CLI refuses to commit if the streamed bytes no longer match the manifest.
+- Mode-only changes now reuse normal file acks, while stale remote files are only printed because pruning still happens implicitly on the agent after EOF.
 
 ## Expected outcome
 
