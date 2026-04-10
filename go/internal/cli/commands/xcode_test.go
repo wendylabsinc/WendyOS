@@ -567,8 +567,8 @@ func TestXcodeEntrypoint(t *testing.T) {
 		want        string
 	}{
 		{"/path/to/Build/Products/Release/MyCLI", false, "MyCLI"},
-		{"/path/to/Build/Products/Release/MyApp.app", true, "MyApp.app/Contents/MacOS/MyApp"},
-		{"/path/to/Build/Products/Release/HelloXcode.app", true, "HelloXcode.app/Contents/MacOS/HelloXcode"},
+		{"/path/to/Build/Products/Release/MyApp.app", true, "MyApp.app"},
+		{"/path/to/Build/Products/Release/HelloXcode.app", true, "HelloXcode.app"},
 		{"/path/to/Build/Products/Release/Tool", false, "Tool"},
 	}
 	for _, tt := range tests {

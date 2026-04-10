@@ -11,7 +11,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private let broadcaster: TelemetryBroadcaster
     private struct NativeLaunchInfo {
         let directory: String
-        let binaryName: String
+        let launchPath: String
         let args: [String]
         let currentDirectory: String?
     }
@@ -167,7 +167,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
             appDirectories[appName] = NativeLaunchInfo(
                 directory: appDirectory,
-                binaryName: binaryName,
+                launchPath: binaryName,
                 args: [],
                 currentDirectory: nil
             )
@@ -184,7 +184,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             }
             appDirectories[appName] = NativeLaunchInfo(
                 directory: appDirectory,
-                binaryName: imageName,
+                launchPath: imageName,
                 args: [],
                 currentDirectory: nil
             )
@@ -212,7 +212,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
             appDirectories[appName] = NativeLaunchInfo(
                 directory: appDirectory,
-                binaryName: cmd,
+                launchPath: cmd,
                 args: Array(request.message.userArgs),
                 currentDirectory: appDirectory
             )
@@ -319,7 +319,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let processArgs: [String]
         let currentDirectory: String?
         if let entry = appDirectories[appName] {
-            binaryPath = "\(entry.directory)/\(entry.binaryName)"
+            binaryPath = try resolveNativeExecutable(for: entry)
             let candidateProfile = "\(entry.directory)/sandbox.sb"
             profilePath =
                 FileManager.default.fileExists(atPath: candidateProfile) ? candidateProfile : nil
@@ -721,6 +721,81 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 message: "tar extraction failed with status \(status)"
             )
         }
+    }
+
+    private func resolveNativeExecutable(for entry: NativeLaunchInfo) throws -> String {
+        let launchURL = URL(fileURLWithPath: entry.directory).appendingPathComponent(entry.launchPath)
+        if launchURL.pathExtension == "app" {
+            return try resolveAppBundleExecutable(at: launchURL)
+        }
+        return launchURL.path
+    }
+
+    private func resolveAppBundleExecutable(at bundleURL: URL) throws -> String {
+        let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
+        let macOSURL = contentsURL.appendingPathComponent("MacOS", isDirectory: true)
+
+        if let infoPlistExecutable = try loadCFBundleExecutable(from: contentsURL) {
+            let candidate = macOSURL.appendingPathComponent(infoPlistExecutable)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+
+        let bundleStem = bundleURL.deletingPathExtension().lastPathComponent
+        let stemCandidate = macOSURL.appendingPathComponent(bundleStem)
+        if FileManager.default.isExecutableFile(atPath: stemCandidate.path) {
+            return stemCandidate.path
+        }
+
+        let entries: [URL]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(
+                at: macOSURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            throw RPCError(
+                code: .notFound,
+                message: "App bundle is missing Contents/MacOS: \(bundleURL.lastPathComponent)"
+            )
+        }
+
+        let executableCandidates = entries.filter { candidate in
+            FileManager.default.isExecutableFile(atPath: candidate.path)
+        }
+
+        if executableCandidates.count == 1, let only = executableCandidates.first {
+            return only.path
+        }
+
+        if executableCandidates.count > 1 {
+            let names = executableCandidates.map(\.lastPathComponent).sorted().joined(separator: ", ")
+            throw RPCError(
+                code: .invalidArgument,
+                message: "App bundle \(bundleURL.lastPathComponent) contains multiple plausible executables in Contents/MacOS: \(names)"
+            )
+        }
+
+        throw RPCError(
+            code: .notFound,
+            message: "Could not resolve app bundle executable for \(bundleURL.lastPathComponent)"
+        )
+    }
+
+    private func loadCFBundleExecutable(from contentsURL: URL) throws -> String? {
+        let infoPlistURL = contentsURL.appendingPathComponent("Info.plist")
+        guard FileManager.default.fileExists(atPath: infoPlistURL.path) else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: infoPlistURL)
+        let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
+        guard let dictionary = plist as? [String: Any] else {
+            return nil
+        }
+        return dictionary["CFBundleExecutable"] as? String
     }
 
     private static func broadcastLog(

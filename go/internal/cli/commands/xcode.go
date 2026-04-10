@@ -231,12 +231,11 @@ func assembleXcodeSyncEntries(productPath string, isApp bool, cwd string, appCfg
 
 // xcodeEntrypoint derives the container Cmd string from the build product. For
 // a plain binary it returns the filename; for a .app bundle it returns the
-// macOS launcher path: <Name>.app/Contents/MacOS/<Name>.
+// bundle root so the agent can resolve CFBundleExecutable on the target.
 func xcodeEntrypoint(productPath string, isAppBundle bool) string {
 	name := filepath.Base(productPath)
 	if isAppBundle {
-		stem := strings.TrimSuffix(name, ".app")
-		return name + "/Contents/MacOS/" + stem
+		return name
 	}
 	return name
 }

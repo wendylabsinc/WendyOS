@@ -81,6 +81,129 @@ struct ContainerServiceTests {
         #expect(stats.first?.memoryBytes == 0)
         #expect(stats.first?.storageBytes == 0)
     }
+
+    @Test("app bundle launch prefers CFBundleExecutable from Info.plist")
+    func appBundleLaunchPrefersCFBundleExecutable() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.AppBundlePreferredExecutable"
+        let appDirectory = URL(fileURLWithPath: appsBase).appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+
+        let bundleURL = appDirectory.appendingPathComponent("Fancy.app")
+        try writeAppBundle(
+            at: bundleURL,
+            infoPlistExecutable: "Runner",
+            executables: [
+                "Runner": "preferred",
+                "Fancy": "fallback",
+            ]
+        )
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        try await registerFileSyncApp(service: service, appID: appID, cmd: "Fancy.app")
+        let stdout = try await startAppAndCollectStdout(service: service, appID: appID)
+
+        #expect(stdout == "preferred")
+    }
+
+    @Test("app bundle launch falls back to bundle name when CFBundleExecutable is unavailable")
+    func appBundleLaunchFallsBackToBundleName() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.AppBundleBundleNameFallback"
+        let appDirectory = URL(fileURLWithPath: appsBase).appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+
+        let bundleURL = appDirectory.appendingPathComponent("Fancy.app")
+        try writeAppBundle(
+            at: bundleURL,
+            infoPlistExecutable: "MissingExecutable",
+            executables: [
+                "Fancy": "bundle-name",
+            ]
+        )
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        try await registerFileSyncApp(service: service, appID: appID, cmd: "Fancy.app")
+        let stdout = try await startAppAndCollectStdout(service: service, appID: appID)
+
+        #expect(stdout == "bundle-name")
+    }
+
+    @Test("app bundle launch falls back to the only executable in Contents/MacOS")
+    func appBundleLaunchFallsBackToSingleExecutable() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.AppBundleSingleExecutableFallback"
+        let appDirectory = URL(fileURLWithPath: appsBase).appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+
+        let bundleURL = appDirectory.appendingPathComponent("Fancy.app")
+        try writeAppBundle(
+            at: bundleURL,
+            infoPlistExecutable: "MissingExecutable",
+            executables: [
+                "OnlyExecutable": "single-executable",
+            ]
+        )
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        try await registerFileSyncApp(service: service, appID: appID, cmd: "Fancy.app")
+        let stdout = try await startAppAndCollectStdout(service: service, appID: appID)
+
+        #expect(stdout == "single-executable")
+    }
+
+    @Test("app bundle launch fails when Contents/MacOS contains multiple plausible executables")
+    func appBundleLaunchFailsWhenMultipleExecutablesExist() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.AppBundleMultipleExecutables"
+        let appDirectory = URL(fileURLWithPath: appsBase).appendingPathComponent(appID)
+        try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+
+        let bundleURL = appDirectory.appendingPathComponent("Fancy.app")
+        try writeAppBundle(
+            at: bundleURL,
+            infoPlistExecutable: "MissingExecutable",
+            executables: [
+                "One": "one",
+                "Two": "two",
+            ]
+        )
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        try await registerFileSyncApp(service: service, appID: appID, cmd: "Fancy.app")
+
+        await #expect(throws: Error.self) {
+            _ = try await startAppAndCollectStdout(service: service, appID: appID)
+        }
+    }
 }
 
 // MARK: - Helpers
@@ -193,6 +316,44 @@ private func makeServerContext(method: String) -> ServerContext {
 
 private func writePrintPWDScript(to url: URL) throws {
     try "#!/bin/sh\n/bin/pwd\n".write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+}
+
+private func writeAppBundle(
+    at bundleURL: URL,
+    infoPlistExecutable: String?,
+    executables: [String: String]
+) throws {
+    let macOSURL = bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    try FileManager.default.createDirectory(at: macOSURL, withIntermediateDirectories: true)
+
+    if let infoPlistExecutable {
+        let infoPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleExecutable</key>
+            <string>\(infoPlistExecutable)</string>
+        </dict>
+        </plist>
+        """
+        try infoPlist.write(
+            to: bundleURL.appendingPathComponent("Contents/Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    for (name, output) in executables {
+        let scriptURL = macOSURL.appendingPathComponent(name)
+        try writeStdoutScript(to: scriptURL, output: output)
+    }
+}
+
+private func writeStdoutScript(to url: URL, output: String) throws {
+    let script = "#!/bin/sh\nprintf '%s\\n' \"\(output)\"\n"
+    try script.write(to: url, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 

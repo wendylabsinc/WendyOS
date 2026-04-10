@@ -136,6 +136,47 @@ func TestRunMacOSXcodeWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	}
 }
 
+func TestRunMacOSXcodeWithAgent_SendsAppBundleRootForAgentSideResolution(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		productPath := filepath.Join(dir, ".xcode", "Build", "Products", "Release", "MyBundle.app", "Contents", "MacOS")
+		if err := os.MkdirAll(productPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(productPath, "ActualExecutable"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("WriteFile executable: %v", err)
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+
+	state := &fakeMacRunState{}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	appCfg := &appconfig.AppConfig{
+		AppID: "sh.wendy.MyBundleApp",
+		Xcode: &appconfig.XcodeConfig{Scheme: "MyBundle"},
+	}
+
+	err := runMacOSXcodeWithAgent(context.Background(), conn, dir, appCfg, runOptions{deploy: true})
+	if err != nil {
+		t.Fatalf("runMacOSXcodeWithAgent: %v", err)
+	}
+
+	if len(state.createReqs) != 1 {
+		t.Fatalf("CreateContainer calls = %d, want 1", len(state.createReqs))
+	}
+	if got := state.createReqs[0].Cmd; got != "MyBundle.app" {
+		t.Fatalf("Cmd = %q, want %q", got, "MyBundle.app")
+	}
+}
+
 func TestRunMacOSSwiftPMWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte("// test package\n"), 0o644); err != nil {
