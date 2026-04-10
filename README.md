@@ -64,8 +64,10 @@ swift build -c release
 
 The codesign script applies the stable macOS signing identifier
 `sh.wendy.agent.macos` and the camera, microphone, and Bluetooth
-entitlements from `swift/wendy-agent.entitlements`. Override the
-signing identity with `WENDY_CODESIGN_IDENTITY`, for example an Apple
+entitlements from `swift/wendy-agent.entitlements`. By default it uses
+an installed Apple Development identity when one is available, and
+falls back to ad-hoc signing otherwise. Override the signing identity
+with `WENDY_CODESIGN_IDENTITY`, for example to use a specific Apple
 Development or Developer ID certificate.
 
 After signing, run the one-time onboarding flow to trigger macOS
