@@ -659,6 +659,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	if platformOS(platform) == "darwin" {
+		maybeWarnAboutRuntimePermissions(appCfg)
+	}
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {
