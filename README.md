@@ -52,6 +52,30 @@ cd go
 go build -o wendy-agent ./cmd/wendy-agent
 ```
 
+### Agent (Swift, macOS)
+
+The standalone macOS agent lives under `swift/`.
+
+```sh
+cd swift
+swift build -c release
+./Scripts/Codesign-Wendy-Agent.sh
+```
+
+The codesign script applies the stable macOS signing identifier
+`sh.wendy.agent.macos` and the camera, microphone, and Bluetooth
+entitlements from `swift/Config/wendy-agent.entitlements`. Override the
+signing identity with `WENDY_CODESIGN_IDENTITY`, for example an Apple
+Development or Developer ID certificate.
+
+After signing, run the one-time onboarding flow to trigger macOS
+permission prompts from the agent itself:
+
+```sh
+cd swift
+swift run wendy-agent setup
+```
+
 ### Local Developer Tip
 
 Add a `wendy-dev` alias to your shell profile (`~/.zshrc` or `~/.bashrc`) so you can quickly iterate on CLI changes without overwriting your installed `wendy`:
