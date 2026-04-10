@@ -61,6 +61,7 @@ type initOptions struct {
 	target              string
 	language            string
 	template            string
+	branch              string
 	vars                []string
 	gitInit             string
 	entitlements        []string
@@ -115,6 +116,9 @@ func newInitCmd() *cobra.Command {
 
   # Non-interactive template scaffold with variable overrides
   wendy init --app-id my-api --template simple-api --language rust --var PORT=8080
+
+  # Use a template from a specific branch of the templates repo
+  wendy init --template simple-api --branch feature/new-template
 
   # Fully non-interactive WendyOS Python app with persist storage
   wendy init \
@@ -189,6 +193,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
@@ -332,7 +337,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 		tmpl := normalizeInitChoice(opts.template)
 
 		// Fetch meta.json to validate or show picker.
-		meta, err := fetchRepoMeta()
+		meta, err := fetchRepoMeta(opts.branch)
 		if err != nil {
 			return "", nil, err
 		}
@@ -363,7 +368,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 	}
 
 	// In interactive mode, fetch meta and offer templates for this target.
-	meta, err := fetchRepoMeta()
+	meta, err := fetchRepoMeta(opts.branch)
 	if err != nil {
 		return "", nil, err
 	}
@@ -485,9 +490,9 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Printf("\nDownloading template %q for %s...\n", tmpl, language)
+	fmt.Printf("\nDownloading template %q for %s (branch: %s)...\n", tmpl, language, resolveTemplateBranch(opts.branch))
 
-	files, manifest, err := downloadTemplateArchive(language, tmpl)
+	files, manifest, err := downloadTemplateArchive(language, tmpl, opts.branch)
 	if err != nil {
 		return err
 	}
