@@ -12,7 +12,8 @@ import WendyAgentGRPC
 struct WendyAgent: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wendy-agent",
-        abstract: "Wendy Agent"
+        abstract: "Wendy Agent",
+        subcommands: [Setup.self]
     )
 
     @Option(name: .shortAndLong, help: "The port to listen on for incoming connections.")
