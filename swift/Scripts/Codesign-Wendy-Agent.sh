@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-ENTITLEMENTS_PATH="${ROOT_DIR}/Config/wendy-agent.entitlements"
+ENTITLEMENTS_PATH="${ROOT_DIR}/wendy-agent.entitlements"
 IDENTIFIER="sh.wendy.agent.macos"
 IDENTITY="${WENDY_CODESIGN_IDENTITY:--}"
 BINARY_PATH="${1:-${ROOT_DIR}/.build/arm64-apple-macosx/release/wendy-agent}"
