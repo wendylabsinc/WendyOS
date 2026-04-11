@@ -409,7 +409,28 @@ If not detected:
 
 **Tip**: The button header pins are typically labeled on the carrier board silkscreen. Look for "FC REC" or "RECOVERY" and "GND" markings next to the pins.
 
-**4. Run the initrd-flash Script**
+**4. Disable Desktop Automounting**
+
+The initrd-flash process exposes the Jetson's storage as a USB mass storage device on the host. Desktop environments (GNOME, KDE, etc.) will automatically mount these partitions as they are created, which causes the flash script to fail with `ERR: unmount` / `udisks-error-quark` errors.
+
+Disable automounting before flashing:
+
+```bash
+# GNOME
+gsettings set org.gnome.desktop.media-handling automount false
+
+# KDE (Plasma 5+)
+qdbus org.freedesktop.UDisks2 /org/freedesktop/UDisks2/Manager org.freedesktop.DBus.Properties.Set org.freedesktop.UDisks2.Manager AutomaticMountingEnabled false
+```
+
+Re-enable after flashing:
+
+```bash
+# GNOME
+gsettings set org.gnome.desktop.media-handling automount true
+```
+
+**5. Run the initrd-flash Script**
 
 ```bash
 cd /path/to/project/deploy
@@ -474,7 +495,7 @@ Important Notes:
 - Do NOT disconnect USB or power during this process
 - **All data on the device will be erased** (bootloader, rootfs, data partition)
 
-**5. Monitor the Flash Process**
+**6. Monitor the Flash Process**
 
 The script will display progress:
 ```

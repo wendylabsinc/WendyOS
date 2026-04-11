@@ -98,7 +98,7 @@ resolve_inactive_part() {
             /dev/mmcblk*p*[0-9]*|/dev/nvme*n*p[0-9]*)
                 num="${cur_src##*p}"; base="${cur_src%p*}"
                 case "${num}" in
-                    *[!0-9]*) ;; # not purely numeric; skip
+                    *[!0-9]*) ;; # not purely numeric, skip
                     *)
                         if [ "${next_slot}" = "0" ]; then
                             cand="${base}p$(( num - 1 ))"
@@ -318,6 +318,85 @@ stage_capsule() {
     log "staged capsule to ESP OK"
 }
 
+# Reset target slot's UEFI RootfsStatusSlot variable to "normal" (0x00)
+#
+# On L4T R36.x, a previous rollback may have left the target slot marked as
+# "unbootable" (0xFF) in its RootfsStatusSlot UEFI variable. UEFI checks this
+# variable before attempting to boot the slot — if 0xFF, it refuses and falls
+# back immediately, regardless of rootfs content.
+#
+# Since Mender just wrote a fresh rootfs to this slot, the old 0xFF verdict is
+# stale. We reset it to allow UEFI to try booting. The UEFI retry_count
+# mechanism (3 attempts) still provides full fallback protection if the new
+# rootfs is genuinely bad.
+#
+# Non-fatal: if the reset fails, we log a warning and continue. The update may
+# still succeed if the variable was already 0x00.
+reset_target_slot_status() {
+    target_slot="${1}"  # 0 or 1
+
+    local efivar_dir="/sys/firmware/efi/efivars"
+    local guid="781e084c-a330-417c-b678-38e696380cb9"
+    local slot_name
+
+    case "${target_slot}" in
+        0) slot_name="A" ;;
+        1) slot_name="B" ;;
+        *) log "WARN: unexpected target slot '${target_slot}', skipping RootfsStatus reset"; return 0 ;;
+    esac
+
+    local varfile="${efivar_dir}/RootfsStatusSlot${slot_name}-${guid}"
+
+    if [ ! -f "${varfile}" ]; then
+        log "WARN: UEFI variable not found: ${varfile}, skipping RootfsStatus reset"
+        return 0
+    fi
+
+    # Read current status
+    local file_size status_byte
+    file_size=$(wc -c < "${varfile}")
+    status_byte=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+
+    if [ "${status_byte}" = "00" ] && [ "${file_size}" -eq 8 ]; then
+        log "target slot ${slot_name} RootfsStatus already normal"
+        return 0
+    fi
+
+    log "target slot ${slot_name} RootfsStatus: 0x${status_byte} (size: ${file_size}) -- resetting to normal"
+
+    # Remove immutable flag (efivarfs sets this by default)
+    if ! chattr -i "${varfile}" 2>/dev/null; then
+        log "WARN: failed to remove immutable flag on slot ${slot_name} RootfsStatus"
+        return 0
+    fi
+
+    # Write normal value using dd via temp file (matches NVIDIA official pattern)
+    # Format: 4-byte EFI attributes (0x07 = NV+BS+RT) + 4-byte UINT32 status (0x00 = normal)
+    local tmpfile
+    tmpfile=$(mktemp)
+    printf '\x07\x00\x00\x00\x00\x00\x00\x00' > "${tmpfile}"
+    if ! dd if="${tmpfile}" of="${varfile}" bs=8 count=1 2>/dev/null; then
+        log "WARN: failed to write slot ${slot_name} RootfsStatus"
+        rm -f "${tmpfile}"
+        return 0
+    fi
+    rm -f "${tmpfile}"
+    sync
+
+    # Verify
+    local new_status new_size
+    new_status=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    new_size=$(wc -c < "${varfile}")
+
+    if [ "${new_status}" = "00" ] && [ "${new_size}" -eq 8 ]; then
+        log "target slot ${slot_name} RootfsStatus reset to normal (verified)"
+    else
+        log "WARN: slot ${slot_name} RootfsStatus verification failed (status=0x${new_status}, size=${new_size})"
+    fi
+
+    return 0
+}
+
 # Boot Chain Switching Strategy
 #
 # NVIDIA's boot chain architecture links bootloader firmware and rootfs slots:
@@ -338,6 +417,11 @@ stage_capsule() {
 #    - Must call nvbootctrl to switch boot chain manually
 #    - HandleBootChainUpdate() processes BC_NEXT and updates BCT
 #    - System reboots to new boot chain with new rootfs
+
+# Ensure the target slot's UEFI RootfsStatus is "normal" before switching.
+# A previous rollback may have left it as 0xFF (unbootable), which would cause
+# UEFI to refuse booting the slot despite the fresh rootfs Mender just wrote.
+reset_target_slot_status "${next}"
 
 # Check for bootloader update marker and handle accordingly
 marker_rel="/var/lib/wendyos/update-bootloader"

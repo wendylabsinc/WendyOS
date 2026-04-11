@@ -10,6 +10,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 # Upstream provides: verify-slot, abort-blupdate (we keep those)
 SRC_URI += " \
     file://verify-bootloader-update \
+    file://reset-inactive-slot-status \
     "
 
 RDEPENDS:${PN} = "tegra-bootcontrol-overlay"
@@ -34,4 +35,9 @@ do_compile:append() {
     #   return triggers Mender rollback
     cp ${WORKDIR}/verify-bootloader-update \
         ${MENDER_STATE_SCRIPTS_DIR}/ArtifactCommit_Enter_50_verify-bootloader-update
+
+    # After successful commit, reset the inactive slot's UEFI RootfsStatus
+    # variable to prevent permanent "unbootable" state from prior rollbacks.
+    cp ${WORKDIR}/reset-inactive-slot-status \
+        ${MENDER_STATE_SCRIPTS_DIR}/ArtifactCommit_Leave_50_reset-inactive-slot-status
 }

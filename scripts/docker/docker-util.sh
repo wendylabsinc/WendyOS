@@ -95,6 +95,60 @@ DOCKER_CONFIG=""
 DOCKER_ENV="${WORK_DIR}/environment"
 DOCKER_USER="dev"
 DOCKER_HOST="yocto"
+# Docker named volumes for macOS case-sensitive storage.
+# Volume names must match the Makefile (VOLUME_BUILD, etc.).
+VOLUME_BUILD="${OS_NAME}-build-tmp"
+VOLUME_SSTATE="${OS_NAME}-sstate-cache"
+VOLUME_DOWNLOADS="${OS_NAME}-downloads"
+VOLUME_CACHE="${OS_NAME}-build-cache"
+
+###
+# On macOS, the host filesystem (APFS) is case-insensitive by default.
+# Yocto requires a case-sensitive filesystem for TMPDIR. Docker named volumes
+# use ext4 inside the Docker VM, which is case-sensitive.
+# This function creates the volumes if they don't exist, fixes ownership, and
+# appends the additional -v flags to mount them over the bind-mounted paths.
+ensure_macos_volumes() {
+    if [ "$(uname)" != "Darwin" ]; then
+        return
+    fi
+
+    # Compute workdir here (after argument parsing, so --user= is applied)
+    local workdir="/home/${DOCKER_USER}/${OS_NAME}"
+
+    printf "macOS detected: using Docker named volumes for case-sensitive storage\n"
+
+    local volumes=("${VOLUME_BUILD}" "${VOLUME_SSTATE}" "${VOLUME_DOWNLOADS}" "${VOLUME_CACHE}")
+    for vol in "${volumes[@]}"; do
+        if ! docker volume inspect "${vol}" >/dev/null 2>&1; then
+            printf "  Creating Docker volume: %s\n" "${vol}"
+            docker volume create "${vol}" >/dev/null
+        fi
+    done
+
+    # Fix ownership on volumes so the container user can write to them.
+    # Runs every time (idempotent) — handles the case where volumes were
+    # created before the Docker image existed (chown couldn't run then).
+    if docker_image_exists "${DOCKER_REPO}" "${DOCKER_TAG}"; then
+        printf "  Ensuring volume ownership for user %s (uid=%s)...\n" "${DOCKER_USER}" "$(id -u)"
+        docker run --rm \
+            -v "${VOLUME_BUILD}":"${workdir}/build/tmp" \
+            -v "${VOLUME_SSTATE}":"${workdir}/sstate-cache" \
+            -v "${VOLUME_DOWNLOADS}":"${workdir}/downloads" \
+            -v "${VOLUME_CACHE}":"${workdir}/build/cache" \
+            "${DOCKER_REPO}:${DOCKER_TAG}" \
+            chown "$(id -u):$(id -g)" \
+                "${workdir}/build/tmp" \
+                "${workdir}/sstate-cache" \
+                "${workdir}/downloads" \
+                "${workdir}/build/cache"
+    fi
+
+    DOCKER_ARGS="${DOCKER_ARGS} -v ${VOLUME_BUILD}:${workdir}/build/tmp"
+    DOCKER_ARGS="${DOCKER_ARGS} -v ${VOLUME_SSTATE}:${workdir}/sstate-cache"
+    DOCKER_ARGS="${DOCKER_ARGS} -v ${VOLUME_DOWNLOADS}:${workdir}/downloads"
+    DOCKER_ARGS="${DOCKER_ARGS} -v ${VOLUME_CACHE}:${workdir}/build/cache"
+}
 
 cleanup() {
     # preserve original exit code
@@ -258,12 +312,22 @@ done
 [ 1 -eq "${opts[remove]}" ] && {
     if docker_image_exists "${DOCKER_REPO}" "${DOCKER_TAG}"; then
         printf "Remove Docker image... (%s:%s)\n" "${DOCKER_REPO}" "${DOCKER_TAG}"
-        docker image rm "${DOCKER_REPO}:${DOCKER_TAG}"
-        exit $?
+        docker image rm "${DOCKER_REPO}:${DOCKER_TAG}" || printf "  Warning: could not remove image (may be in use by a container)\n"
     else
         printf "Docker image not found (%s:%s), nothing to remove.\n" "${DOCKER_REPO}" "${DOCKER_TAG}"
-        exit 0
     fi
+
+    if [ "$(uname)" = "Darwin" ]; then
+        mac_volumes=("${VOLUME_BUILD}" "${VOLUME_SSTATE}" "${VOLUME_DOWNLOADS}" "${VOLUME_CACHE}")
+        for vol in "${mac_volumes[@]}"; do
+            if docker volume inspect "${vol}" >/dev/null 2>&1; then
+                printf "Remove Docker volume: %s\n" "${vol}"
+                docker volume rm "${vol}" || printf "  Warning: could not remove %s (may be in use by a container)\n" "${vol}"
+            fi
+        done
+    fi
+
+    exit 0
 }
 
 if [[ 1 -eq "${opts[create]}" ]]
@@ -314,6 +378,8 @@ else
     [[ -f "${DOCKER_ENV}" ]] && {
         DOCKER_ARGS="${DOCKER_ARGS} --env-file ${DOCKER_ENV}"
     }
+
+    ensure_macos_volumes
 
     docker run \
         --interactive \
