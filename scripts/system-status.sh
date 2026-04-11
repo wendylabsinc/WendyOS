@@ -15,6 +15,7 @@
 # Usage:
 #   system-status.sh           # full diagnosis
 #   system-status.sh --fix     # diagnose and fix unbootable slots
+#   system-status.sh --dual    # enable rootfs A/B dual-slot redundancy
 #
 
 set -eu
@@ -43,10 +44,12 @@ log_err() {
 MODE="check"
 case "${1:-}" in
     --fix) MODE="fix" ;;
+    --dual) MODE="dual" ;;
     -h|--help)
-        log "Usage: $0 [--fix]"
+        log "Usage: $0 [--fix|--dual]"
         log "  (no args)  Full diagnosis, no changes"
         log "  --fix      Diagnose and fix unbootable slots"
+        log "  --dual     Enable rootfs A/B dual-slot redundancy"
         exit 0
         ;;
     "") ;;
@@ -142,12 +145,26 @@ done
 log ""
 
 # Check: rootfs A/B enabled?
+dual_slot_problem=""
 if [ "${rootfs_num_slots}" != "2" ]; then
     printf "Rootfs A/B: ${RED}NOT ENABLED (${rootfs_num_slots} slot(s))${NC}\n"
-    printf "  ${YELLOW}Mender OTA requires 2 rootfs slots. This device needs a reflash.${NC}\n"
     if [ -f /etc/nv_boot_control.conf ]; then
         tnspec=$(grep '^TNSPEC' /etc/nv_boot_control.conf | head -1)
         log "  ${tnspec}"
+    fi
+    # Check if this is fixable (APP_b partition exists but UEFI variable missing)
+    if [ -e /dev/disk/by-partlabel/APP_b ]; then
+        redundancy_var="${EFIVAR_DIR}/RootfsRedundancyLevel-${NVIDIA_GUID}"
+        if [ ! -f "${redundancy_var}" ]; then
+            dual_slot_problem="missing_variable"
+            printf "  ${YELLOW}APP_b partition exists but RootfsRedundancyLevel UEFI variable is missing.${NC}\n"
+            printf "  ${YELLOW}This can happen after a partial reflash (SPI only without NVMe).${NC}\n"
+            printf "  ${YELLOW}Fix: run '$0 --dual' to enable A/B redundancy, then reboot.${NC}\n"
+        else
+            printf "  ${YELLOW}RootfsRedundancyLevel exists but A/B still not enabled — may need reflash.${NC}\n"
+        fi
+    else
+        printf "  ${YELLOW}APP_b partition missing. Device needs a full reflash with A/B layout.${NC}\n"
     fi
 else
     printf "Rootfs A/B: ${GREEN}enabled (2 slots)${NC}\n"
@@ -399,73 +416,140 @@ if [ -z "${slots_to_fix}" ]; then
         printf "All UEFI slot variables are healthy, but ${RED}root device mismatch detected${NC}.\n"
         log "This likely means UEFI fell back after a previous slot was marked unbootable,"
         log "and the slot has since been repaired. Reboot to let UEFI boot the correct slot."
-    else
+    elif [ "${MODE}" != "dual" ]; then
         printf "All rootfs slots are ${GREEN}healthy${NC}.\n"
     fi
-    exit 0
+    if [ "${MODE}" != "dual" ]; then
+        exit 0
+    fi
 fi
 
-printf "Slots needing repair: ${RED}${slots_to_fix}${NC}\n"
-log ""
+if [ -n "${slots_to_fix}" ]; then
+    printf "Slots needing repair: ${RED}%s${NC}\n" "${slots_to_fix}"
+    log ""
+fi
 
-if [ "${MODE}" = "check" ]; then
+if [ -n "${slots_to_fix}" ] && [ "${MODE}" = "check" ]; then
     log "Run with --fix to repair."
     exit 1
 fi
 
-for slot_name in ${slots_to_fix}; do
-    varfile="${EFIVAR_DIR}/RootfsStatusSlot${slot_name}-${NVIDIA_GUID}"
-    log "Fixing slot ${slot_name}..."
+if [ "${MODE}" = "fix" ] && [ -n "${slots_to_fix}" ]; then
+    for slot_name in ${slots_to_fix}; do
+        varfile="${EFIVAR_DIR}/RootfsStatusSlot${slot_name}-${NVIDIA_GUID}"
+        log "Fixing slot ${slot_name}..."
 
-    if ! chattr -i "${varfile}" 2>/dev/null; then
-        log_err "failed to remove immutable flag on ${varfile}"
-        continue
-    fi
+        if ! chattr -i "${varfile}" 2>/dev/null; then
+            log_err "failed to remove immutable flag on ${varfile}"
+            continue
+        fi
 
-    tmpfile=$(mktemp)
-    printf "${NORMAL_VALUE}" > "${tmpfile}"
-    if ! dd if="${tmpfile}" of="${varfile}" bs=8 count=1 2>/dev/null; then
-        log_err "failed to write ${varfile}"
+        tmpfile=$(mktemp)
+        printf "${NORMAL_VALUE}" > "${tmpfile}"
+        if ! dd if="${tmpfile}" of="${varfile}" bs=8 count=1 2>/dev/null; then
+            log_err "failed to write ${varfile}"
+            rm -f "${tmpfile}"
+            continue
+        fi
         rm -f "${tmpfile}"
-        continue
+        sync
+
+        new_size=$(wc -c < "${varfile}")
+        new_status=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+
+        if [ "${new_size}" -eq 8 ] && [ "${new_status}" = "00" ]; then
+            printf "  Slot ${slot_name}: ${GREEN}fixed (verified normal)${NC}\n"
+        else
+            log_err "Slot ${slot_name}: verification failed (size=${new_size}, status=0x${new_status})"
+        fi
+    done
+
+    log ""
+
+    # Clean up stale marker
+    STALE_MARKER="/data/mender/tegra-bl-version-before"
+    if [ -f "${STALE_MARKER}" ]; then
+        rm -f "${STALE_MARKER}"
+        printf "Stale marker: ${GREEN}cleaned${NC} (${STALE_MARKER})\n"
     fi
-    rm -f "${tmpfile}"
+
+    if [ "${root_mismatch}" -eq 1 ]; then
+        log ""
+        printf "${YELLOW}Root device mismatch detected. Reboot after fix to let UEFI boot the correct slot.${NC}\n"
+    fi
+
+    log ""
+    log "=== Post-fix Slot Status ==="
+    log "--- Bootloader ---"
+    nvbootctrl dump-slots-info 2>&1 | while IFS= read -r line; do
+        print_slot_line "${line}"
+    done
+    log ""
+    log "--- Rootfs ---"
+    nvbootctrl -t rootfs dump-slots-info 2>&1 | while IFS= read -r line; do
+        print_slot_line "${line}"
+    done
+    log ""
+fi
+
+###############################################################################
+# --dual: Enable rootfs A/B dual-slot redundancy
+###############################################################################
+
+if [ "${MODE}" = "dual" ]; then
+    log "=== Enable Rootfs A/B Dual-Slot Redundancy ==="
+
+    # Pre-checks
+    if [ "${rootfs_num_slots}" = "2" ]; then
+        printf "Rootfs A/B is already ${GREEN}enabled${NC}. Nothing to do.\n"
+        log "Done."
+        exit 0
+    fi
+
+    if [ ! -e /dev/disk/by-partlabel/APP_b ]; then
+        log_err "APP_b partition not found. Device needs a full reflash with A/B partition layout."
+        log_err "Cannot enable A/B without both APP and APP_b partitions on disk."
+        exit 1
+    fi
+
+    # Write UEFI variables (skip if they already exist)
+    write_uefi_var() {
+        var_name="$1"
+        var_value="$2"
+        var_path="${EFIVAR_DIR}/${var_name}-${NVIDIA_GUID}"
+
+        if [ -f "${var_path}" ]; then
+            printf "  ${var_name}: already exists, ${GREEN}skipping${NC}\n"
+            return 0
+        fi
+
+        tmpfile=$(mktemp)
+        printf '\x07\x00\x00\x00'"${var_value}" > "${tmpfile}"
+        if cp "${tmpfile}" "${var_path}" 2>/dev/null; then
+            printf "  ${var_name}: ${GREEN}written${NC}\n"
+        else
+            log_err "${var_name}: failed to write"
+            rm -f "${tmpfile}"
+            return 1
+        fi
+        rm -f "${tmpfile}"
+    }
+
+    log "Writing UEFI variables..."
+    write_uefi_var "RootfsRedundancyLevel" '\x01\x00\x00\x00'
+    write_uefi_var "RootfsRetryCountMax" '\x03\x00\x00\x00'
     sync
 
-    new_size=$(wc -c < "${varfile}")
-    new_status=$(dd if="${varfile}" bs=1 skip=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
-
-    if [ "${new_size}" -eq 8 ] && [ "${new_status}" = "00" ]; then
-        printf "  Slot ${slot_name}: ${GREEN}fixed (verified normal)${NC}\n"
-    else
-        log_err "Slot ${slot_name}: verification failed (size=${new_size}, status=0x${new_status})"
-    fi
-done
-
-log ""
-
-# Clean up stale marker
-STALE_MARKER="/data/mender/tegra-bl-version-before"
-if [ -f "${STALE_MARKER}" ]; then
-    rm -f "${STALE_MARKER}"
-    printf "Stale marker: ${GREEN}cleaned${NC} (${STALE_MARKER})\n"
-fi
-
-if [ "${root_mismatch}" -eq 1 ]; then
     log ""
-    printf "${YELLOW}Root device mismatch detected. Reboot after fix to let UEFI boot the correct slot.${NC}\n"
+    printf "${YELLOW}Reboot required for UEFI to recognize the new A/B configuration.${NC}\n"
+    log ""
+
+    log "=== Current Slot Status (reboot required for A/B to take effect) ==="
+    log "--- Rootfs ---"
+    nvbootctrl -t rootfs dump-slots-info 2>&1 | while IFS= read -r line; do
+        print_slot_line "${line}"
+    done
+    log ""
 fi
 
-log ""
-log "=== Post-fix Slot Status ==="
-log "--- Bootloader ---"
-nvbootctrl dump-slots-info 2>&1 | while IFS= read -r line; do
-    print_slot_line "${line}"
-done
-log ""
-log "--- Rootfs ---"
-nvbootctrl -t rootfs dump-slots-info 2>&1 | while IFS= read -r line; do
-    print_slot_line "${line}"
-done
-log ""
 log "Done."
