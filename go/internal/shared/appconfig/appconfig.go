@@ -54,7 +54,7 @@ var allowedKeys = map[string][]string{
 	EntitlementGPU:       {"type"},
 	EntitlementPersist:   {"type", "name", "path"},
 	EntitlementAudio:     {"type"},
-	EntitlementCamera:    {"type"},
+	EntitlementCamera:    {"type", "mode", "allowlist"},
 	EntitlementUSB:       {"type"},
 	EntitlementI2C:       {"type", "device"},
 	EntitlementGPIO:      {"type", "pins"},

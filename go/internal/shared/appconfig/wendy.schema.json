@@ -138,11 +138,20 @@
         },
         {
           "properties": {
-            "type": { "const": "camera" }
+            "type": { "const": "camera" },
+            "mode": {
+              "type": "string",
+              "description": "Camera access mode. Accepted for compatibility with the deprecated video entitlement."
+            },
+            "allowlist": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowed camera device paths. Accepted for compatibility with the deprecated video entitlement."
+            }
           },
           "required": ["type"],
           "additionalProperties": false,
-          "description": "Camera/V4L2 device access."
+          "description": "Camera/V4L2 device access. Legacy video entitlement keys remain accepted for compatibility."
         },
         {
           "properties": {
