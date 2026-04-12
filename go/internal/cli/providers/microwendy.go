@@ -254,7 +254,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 				installTimer := time.NewTimer(microWendyInstallGrace)
 				output <- RunOutput{
 					Type: RunOutputStdout,
-					Data: []byte(fmt.Sprintf("Terminating server in %s seconds\n", microWendyInstallGrace)),
+					Data: []byte(fmt.Sprintf("Terminating server in %s\n", microWendyInstallGrace)),
 				}
 
 				select {
