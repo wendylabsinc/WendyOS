@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultVersion   = "6.2.3"
+	DefaultVersion   = "6.3"
 	WendySDKRelease  = "0.4.0"
 	WasmTargetTriple = "wasm32-unknown-none-wasm"
 	wasmSDKChecksum  = "394040ecd5260e68bb02f6c20aeede733b9b90702c2204e178f3e42413edad2a"

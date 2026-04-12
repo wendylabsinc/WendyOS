@@ -47,10 +47,16 @@ CGO_ENABLED=1 go build -o wendy ./cmd/wendy
 
 ### Agent (Go)
 
+To build and run the agent locally:
+
 ```sh
 cd go
 go build -o wendy-agent ./cmd/wendy-agent
 ```
+
+### Agent (Swift)
+
+The wendy-agent requires **Swift 6.3** or later. On macOS, install Swift 6.3 via Swiftly or use Xcode with a Swift 6.3 toolchain.
 
 ### Local Developer Tip
 
