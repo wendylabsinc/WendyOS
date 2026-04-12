@@ -878,12 +878,12 @@ jobs:
             -c "
             set -euo pipefail
             pacman -Sy --noconfirm base-devel shadow
-            PKGDIR=\$(dirname '${{ matrix.pkgbuild_path }}')
+            PKGDIR=$(dirname '${{ matrix.pkgbuild_path }}')
             if ! id -u builder >/dev/null 2>&1; then
               useradd -m builder
             fi
-            chown -R builder:builder \"\$PKGDIR\"
-            su builder -s /bin/bash -c \"cd '\$PKGDIR' && makepkg --printsrcinfo\" | tee \"\$PKGDIR/.SRCINFO\"
+            chown -R builder:builder \"$PKGDIR\"
+            su builder -s /bin/bash -c \"cd \\\"$PKGDIR\\\" && makepkg --printsrcinfo\" | tee \"$PKGDIR/.SRCINFO\"
             "
 
       - name: Publish to AUR
