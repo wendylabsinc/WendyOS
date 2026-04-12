@@ -78,13 +78,17 @@ func (m *Manager) Start(ctx context.Context, appID string) (string, error) {
 	}
 
 	// Launch xdg-dbus-proxy with a filter that only allows org.bluez.
-	cmd := exec.CommandContext(ctx,
+	// Use exec.Command (not CommandContext) so the proxy outlives the
+	// request context that started it. Pdeathsig ensures the proxy is
+	// cleaned up if the agent process crashes.
+	cmd := exec.Command(
 		"xdg-dbus-proxy",
 		"unix:path="+hostBusSocket,
 		socketPath,
 		"--filter",
 		"--talk=org.bluez",
 	)
+	setPdeathsig(cmd)
 
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(socketDir)
