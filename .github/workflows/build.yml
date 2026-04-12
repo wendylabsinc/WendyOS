@@ -876,14 +876,14 @@ jobs:
           entrypoint: /bin/bash
           args: |
             -c "
+            set -euo pipefail
             pacman -Sy --noconfirm base-devel shadow
-            cd $(dirname ${{ matrix.pkgbuild_path }})
+            PKGDIR=\$(dirname '${{ matrix.pkgbuild_path }}')
             if ! id -u builder >/dev/null 2>&1; then
               useradd -m builder
             fi
-            chown -R builder:builder .
-            su builder -s /bin/bash -c 'makepkg --printsrcinfo > .SRCINFO'
-            cat .SRCINFO
+            chown -R builder:builder \"\$PKGDIR\"
+            su builder -s /bin/bash -c \"cd '\$PKGDIR' && makepkg --printsrcinfo\" | tee \"\$PKGDIR/.SRCINFO\"
             "
 
       - name: Publish to AUR
@@ -908,6 +908,7 @@ jobs:
 
       - name: Update Winget package
         run: |
+          $ErrorActionPreference = "Stop"
           $version = "${{ needs.determine-version.outputs.version }}"
           $tag = "${{ needs.determine-version.outputs.tag_name }}"
           $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
@@ -915,18 +916,124 @@ jobs:
           $amd64Url = "$base/wendy-cli-windows-amd64-$version.msi"
           $arm64Url = "$base/wendy-cli-windows-arm64-$version.msi"
 
+          function Invoke-GitHubApi {
+            param(
+              [Parameter(Mandatory = $true)][string]$Method,
+              [Parameter(Mandatory = $true)][string]$Uri,
+              $Body = $null
+            )
+
+            $headers = @{
+              Authorization = "Bearer $token"
+              Accept = "application/vnd.github+json"
+              "X-GitHub-Api-Version" = "2022-11-28"
+            }
+
+            $params = @{
+              Method = $Method
+              Uri = $Uri
+              Headers = $headers
+            }
+
+            if ($null -ne $Body) {
+              $params.ContentType = "application/json"
+              $params.Body = $Body
+            }
+
+            Invoke-RestMethod @params
+          }
+
+          function Sync-WingetFork {
+            $viewer = Invoke-GitHubApi -Method Get -Uri "https://api.github.com/user"
+            $upstream = Invoke-GitHubApi -Method Get -Uri "https://api.github.com/repos/microsoft/winget-pkgs"
+            $syncBody = @{
+              branch = $upstream.default_branch
+            } | ConvertTo-Json
+
+            Write-Host "Syncing $($viewer.login)/winget-pkgs with microsoft/winget-pkgs@$($upstream.default_branch)..."
+
+            try {
+              $response = Invoke-GitHubApi -Method Post -Uri "https://api.github.com/repos/$($viewer.login)/winget-pkgs/merge-upstream" -Body $syncBody
+              if ($response.message) {
+                Write-Host $response.message
+              }
+            } catch {
+              $statusCode = $_.Exception.Response.StatusCode.value__
+              if ($statusCode -eq 409) {
+                Write-Host "winget-pkgs fork is already up to date."
+                return
+              }
+
+              throw
+            }
+          }
+
+          function Invoke-WingetCreate {
+            param(
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            $output = @(& .\wingetcreate.exe @Arguments 2>&1 | ForEach-Object { "$_" })
+            $exitCode = $LASTEXITCODE
+
+            foreach ($line in $output) {
+              Write-Host $line
+            }
+
+            [PSCustomObject]@{
+              ExitCode = $exitCode
+              Output = $output -join "`n"
+            }
+          }
+
+          function Test-WingetForkSyncError {
+            param(
+              [Parameter(Mandatory = $true)][string]$Output
+            )
+
+            $Output -match "The forked repository could not be synced with the upstream commits"
+          }
+
+          function Invoke-WingetCreateWithForkSyncRetry {
+            param(
+              [Parameter(Mandatory = $true)][string]$Operation,
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            $result = Invoke-WingetCreate -Arguments $Arguments
+            if ($result.ExitCode -eq 0) {
+              return $result
+            }
+
+            if (-not (Test-WingetForkSyncError -Output $result.Output)) {
+              return $result
+            }
+
+            Write-Host "wingetcreate $Operation failed because the winget-pkgs fork is out of sync. Retrying after syncing the fork..."
+            Sync-WingetFork
+            Invoke-WingetCreate -Arguments $Arguments
+          }
+
           # Try update first (works once the package exists in winget-pkgs)
-          .\wingetcreate.exe update WendyLabs.Wendy `
-            --version $version `
-            --urls $amd64Url $arm64Url `
-            --submit `
-            --token $token
-          if ($LASTEXITCODE -eq 0) {
+          $updateResult = Invoke-WingetCreateWithForkSyncRetry -Operation "update" -Arguments @(
+            "update",
+            "WendyLabs.Wendy",
+            "--version", $version,
+            "--urls", $amd64Url, $arm64Url,
+            "--submit",
+            "--token", $token
+          )
+          if ($updateResult.ExitCode -eq 0) {
             Write-Host "Winget package updated successfully."
             exit 0
           }
 
-          Write-Host "Update failed (package may not exist yet). Generating initial manifest..."
+          if (Test-WingetForkSyncError -Output $updateResult.Output) {
+            Write-Error "Winget update failed after syncing the winget-pkgs fork."
+            exit $updateResult.ExitCode
+          }
+
+          Write-Host "Update failed without a fork sync error. Generating initial manifest..."
 
           # Download installers to compute SHA256 hashes
           Invoke-WebRequest -Uri $amd64Url -OutFile amd64.msi
@@ -990,13 +1097,15 @@ jobs:
           "@ -replace '(?m)^          ', '' | Set-Content "$manifestDir\WendyLabs.Wendy.locale.en-US.yaml" -Encoding utf8
 
           # Submit the generated manifest
-          .\wingetcreate.exe submit `
-            --prtitle "New package: WendyLabs.Wendy version $version" `
-            --token $token `
+          $submitResult = Invoke-WingetCreateWithForkSyncRetry -Operation "submit" -Arguments @(
+            "submit",
+            "--prtitle", "New package: WendyLabs.Wendy version $version",
+            "--token", $token,
             $manifestDir
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Winget manifest submission failed with exit code $LASTEXITCODE."
-            exit $LASTEXITCODE
+          )
+          if ($submitResult.ExitCode -ne 0) {
+            Write-Error "Winget manifest submission failed with exit code $($submitResult.ExitCode)."
+            exit $submitResult.ExitCode
           }
           Write-Host "Initial Winget manifest submitted successfully."
 
