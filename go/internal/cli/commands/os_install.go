@@ -42,7 +42,16 @@ When called with manifest-backed flags, installs a specific version:
   wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
 
 Flags can be provided progressively — omitted values trigger interactive pickers.`,
-		Args: cobra.MaximumNArgs(2),
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch len(args) {
+			case 0, 2:
+				return nil
+			case 1:
+				return fmt.Errorf("positional arguments must be provided as [image] [drive]; got 1 argument")
+			default:
+				return cobra.MaximumNArgs(2)(cmd, args)
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Positional direct-install mode is incompatible with manifest-backed flags.
 			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "") {
@@ -231,6 +240,10 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// Resolve device — use flag or interactive picker.
 	var selected string
 	if flagDeviceType != "" {
+		// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
+		if flagDeviceType == "esp32-c6" || flagDeviceType == "esp32-c5" {
+			return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+		}
 		if _, ok := deviceMap[flagDeviceType]; !ok {
 			var available []string
 			for k, d := range deviceMap {
@@ -238,6 +251,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 					available = append(available, k)
 				}
 			}
+			sort.Strings(available)
 			return fmt.Errorf("device type %q not found in manifest; available: %s", flagDeviceType, strings.Join(available, ", "))
 		}
 		selected = flagDeviceType
@@ -258,13 +272,13 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, flagVersion, flagDrive, force)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
-// flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, flagVersion, flagDrive string, force bool) error {
-	// Step 1: Resolve version — use flag, or pick interactively from manifest.
+// nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool) error {
+	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
 	if flagVersion != "" {
 		// Validate the requested version exists in the manifest.
@@ -272,14 +286,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
 		selectedVersion = flagVersion
+	} else if nightly {
+		// --nightly: use the nightly version directly, skip the version picker.
+		selectedVersion = device.RawVersion
 	} else {
 		// Show version picker.
-		devInfo := deviceInfo{
-			Key:      deviceKey,
-			Name:     device.Name,
-			Manifest: device.Manifest,
-		}
-		picked, err := pickInstallVersion(devInfo)
+		picked, err := pickManifestVersion("Select a version", device.Manifest)
 		if err != nil {
 			return err
 		}
@@ -407,16 +419,17 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	return nil
 }
 
-// pickInstallVersion presents an interactive picker for available versions of a
-// device, sorted newest-first using semantic version comparison. It marks
-// "latest" and "nightly" versions in the picker description.
-func pickInstallVersion(dev deviceInfo) (string, error) {
-	if dev.Manifest == nil || len(dev.Manifest.Versions) == 0 {
-		return "", fmt.Errorf("no versions available for %s", dev.Name)
+// pickManifestVersion presents an interactive picker for available versions in a
+// device manifest, sorted newest-first using semantic version comparison. It
+// marks "latest" and "nightly" versions in the picker description.
+// This is shared by both os install and os download flows.
+func pickManifestVersion(title string, manifest *deviceManifest) (string, error) {
+	if manifest == nil || len(manifest.Versions) == 0 {
+		return "", fmt.Errorf("no versions available")
 	}
 
 	var versionKeys []string
-	for v := range dev.Manifest.Versions {
+	for v := range manifest.Versions {
 		versionKeys = append(versionKeys, v)
 	}
 	sort.Slice(versionKeys, func(i, j int) bool {
@@ -425,7 +438,7 @@ func pickInstallVersion(dev deviceInfo) (string, error) {
 
 	var items []tui.PickerItem
 	for _, v := range versionKeys {
-		ver := dev.Manifest.Versions[v]
+		ver := manifest.Versions[v]
 		desc := ""
 		if ver.IsLatest {
 			desc = "latest"
@@ -440,7 +453,7 @@ func pickInstallVersion(dev deviceInfo) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("Select a version", items)
+	return pickFromItems(title, items)
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.

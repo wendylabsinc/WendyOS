@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -60,20 +61,48 @@ func TestNewOSInstallCmd_PositionalArgsIncompatibleWithFlags(t *testing.T) {
 	}
 }
 
-func TestPickInstallVersion_SemverOrdering(t *testing.T) {
+func TestNewOSInstallCmd_SinglePositionalArgRejected(t *testing.T) {
+	cmd := newOSInstallCmd()
+	cmd.SetArgs([]string{"image.img"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when exactly 1 positional arg is provided")
+	}
+	expected := "positional arguments must be provided as [image] [drive]; got 1 argument"
+	if got := err.Error(); got != expected {
+		t.Errorf("unexpected error: %q; want %q", got, expected)
+	}
+}
+
+func TestNewOSInstallCmd_ESP32DeviceTypeRejected(t *testing.T) {
+	for _, dt := range []string{"esp32-c6", "esp32-c5"} {
+		t.Run(dt, func(t *testing.T) {
+			cmd := newOSInstallCmd()
+			cmd.SetArgs([]string{"--device-type", dt})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error for ESP32 --device-type")
+			}
+			if !strings.Contains(err.Error(), "does not support ESP32") {
+				t.Errorf("unexpected error: %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestPickManifestVersion_SemverOrdering(t *testing.T) {
 	// Verify that version keys are sorted semantically, not lexicographically.
 	// "0.10.0" should come after "0.9.0" semantically but before it lexicographically.
 	versions := []string{"0.2.0", "0.10.0", "0.9.0", "0.1.0", "0.10.1"}
 
-	// Use the same sorting logic as pickInstallVersion.
+	// Use the same sorting logic as pickManifestVersion.
 	sorted := make([]string, len(versions))
 	copy(sorted, versions)
-	// Import sort inline since the test file uses testing directly.
 	sortFunc := func(i, j int) bool {
 		return version.CompareVersions(sorted[i], sorted[j]) > 0
 	}
 
-	// Manual sort to avoid importing "sort" — just use a simple bubble sort for testing.
+	// Simple bubble sort for testing.
 	for i := 0; i < len(sorted); i++ {
 		for j := i + 1; j < len(sorted); j++ {
 			if !sortFunc(i, j) {
