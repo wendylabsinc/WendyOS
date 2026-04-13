@@ -119,7 +119,13 @@ jobs:
 
       - name: Run integration tests
         run: |
-          TEST_ARGS="-w ./bin/wendy"
+          # Run tests via SSH to localhost to bypass macOS Local Network
+          # privacy restrictions that block Go binaries launched by the
+          # LaunchAgent-based GitHub Actions runner.
+          WORKDIR="$(pwd)"
+          SSH="ssh -o StrictHostKeyChecking=no localhost"
+
+          TEST_ARGS="-w $WORKDIR/bin/wendy"
 
           if [[ -n "$INPUT_TESTS" ]]; then
             HAS_TESTS=false
@@ -146,7 +152,7 @@ jobs:
             DEVICES=("$INPUT_HOSTNAME")
           else
             echo "==> Discovering LAN devices..."
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>/tmp/wendy-discover-stderr.txt)
+            DISCOVER_JSON=$($SSH "cd '$WORKDIR' && ./bin/wendy discover --json --timeout 10s" 2>/tmp/wendy-discover-stderr.txt)
             cat /tmp/wendy-discover-stderr.txt >&2 || true
             DEVICES=()
             while IFS= read -r line; do
@@ -163,32 +169,7 @@ jobs:
           for device in "${DEVICES[@]}"; do
             echo ""
             echo "==> Testing device: $device"
-
-            # Resolve to IP for diagnostics
-            IP=$(python3 -c "import socket; print(socket.gethostbyname('$device'))" 2>/dev/null || echo "")
-            echo "Resolved: $device -> ${IP:-FAILED}"
-
-            echo "==> Connectivity diagnostics:"
-            echo "--- routing ---"
-            route -n get ${IP:-$device} 2>&1 || true
-            echo "--- interfaces ---"
-            ifconfig | grep -E "^[a-z]|inet " || true
-            echo "--- nc (hostname) ---"
-            nc -zw 5 "$device" 50051 2>&1 && echo "OK" || echo "FAILED"
-            echo "--- nc (IP) ---"
-            nc -zw 5 "$IP" 50051 2>&1 && echo "OK" || echo "FAILED"
-            echo "--- curl (IP) ---"
-            curl -s --connect-timeout 5 "http://${IP}:50051/" 2>&1 | head -3 || true
-            echo "--- python socket (IP) ---"
-            python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('${IP}', 50051)); print('OK'); s.close()" 2>&1 || true
-            echo "--- go tcp dial tests (IP) ---"
-            go run scripts/tcpdial.go "$IP:50051" 2>&1 || true
-            echo "--- wendy device version (IP) ---"
-            ./bin/wendy device version --device "$IP" 2>&1 || true
-            echo "--- nc AFTER wendy (IP) ---"
-            nc -zw 5 "$IP" 50051 2>&1 && echo "OK" || echo "FAILED"
-
-            scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
+            $SSH "cd '$WORKDIR' && scripts/test-ci.sh $TEST_ARGS -h '$device'" || OVERALL_FAIL=1
             docker buildx rm wendy --force 2>/dev/null || true
           done
           exit $OVERALL_FAIL
