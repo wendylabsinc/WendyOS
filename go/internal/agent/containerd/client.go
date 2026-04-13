@@ -365,10 +365,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Start D-Bus proxy if bluetooth entitlement is present.
+	var dbusProxyStarted bool
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
 			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
 		}
+		dbusProxyStarted = true
+		defer func() {
+			if dbusProxyStarted {
+				_ = c.proxyManager.Stop(appName)
+			}
+		}()
 	}
 
 	// For local-registry images, always pull from the embedded HTTP registry
@@ -503,6 +510,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	// Container created successfully; keep the D-Bus proxy running.
+	dbusProxyStarted = false
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 
