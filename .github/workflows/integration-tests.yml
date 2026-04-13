@@ -181,10 +181,8 @@ jobs:
             curl -s --connect-timeout 5 "http://${IP}:50051/" 2>&1 | head -3 || true
             echo "--- python socket (IP) ---"
             python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('${IP}', 50051)); print('OK'); s.close()" 2>&1 || true
-            echo "--- go raw tcp dial CGO=1 (IP) ---"
-            CGO_ENABLED=1 go run scripts/tcpdial.go "$IP:50051" 2>&1 || true
-            echo "--- go raw tcp dial CGO=0 (IP) ---"
-            CGO_ENABLED=0 go run scripts/tcpdial.go "$IP:50051" 2>&1 || true
+            echo "--- go tcp dial tests (IP) ---"
+            go run scripts/tcpdial.go "$IP:50051" 2>&1 || true
             echo "--- wendy device version (IP) ---"
             ./bin/wendy device version --device "$IP" 2>&1 || true
             echo "--- nc AFTER wendy (IP) ---"
