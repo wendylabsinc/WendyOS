@@ -181,7 +181,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
-	sdk, err := swifttoolchain.FindSwiftSDK(architecture)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, architecture)
 	if err != nil {
 		return err
 	}
@@ -1025,7 +1025,7 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 // supports pushing to registries).
 func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, error) {
 	arch := runtime.GOARCH
-	sdk, err := swifttoolchain.FindSwiftSDK(arch)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, arch)
 	if err != nil {
 		return "", fmt.Errorf("finding Swift SDK: %w", err)
 	}

@@ -80,7 +80,11 @@ func SwiftCommand(args ...string) *exec.Cmd {
 	return execCommand("swiftly", append([]string{"run", "+" + DefaultVersion, "swift"}, args...)...)
 }
 
-func FindSwiftSDK(architecture string) (string, error) {
+func FindSwiftSDK(ctx context.Context, architecture string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	sdkArch := architecture
 	switch sdkArch {
 	case "arm64":
@@ -91,7 +95,7 @@ func FindSwiftSDK(architecture string) (string, error) {
 
 	isWasm := sdkArch == "wasm" || sdkArch == "wasm32"
 
-	sdk, err := lookupSwiftSDK(sdkArch, isWasm)
+	sdk, err := lookupSwiftSDK(ctx, sdkArch, isWasm)
 	if err != nil {
 		return "", err
 	}
@@ -100,16 +104,16 @@ func FindSwiftSDK(architecture string) (string, error) {
 	}
 
 	if isWasm {
-		if err := installWasmSwiftSDK(); err != nil {
+		if err := installWasmSwiftSDK(ctx); err != nil {
 			return "", err
 		}
 	} else {
-		if err := installWendySwiftSDK(sdkArch); err != nil {
+		if err := installWendySwiftSDK(ctx, sdkArch); err != nil {
 			return "", err
 		}
 	}
 
-	sdk, err = lookupSwiftSDK(sdkArch, isWasm)
+	sdk, err = lookupSwiftSDK(ctx, sdkArch, isWasm)
 	if err != nil {
 		return "", err
 	}
@@ -119,8 +123,12 @@ func FindSwiftSDK(architecture string) (string, error) {
 	return sdk, nil
 }
 
-func lookupSwiftSDK(sdkArch string, isWasm bool) (string, error) {
-	out, err := SwiftCommand("sdk", "list").Output()
+func lookupSwiftSDK(ctx context.Context, sdkArch string, isWasm bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	out, err := SwiftCommandContext(ctx, "sdk", "list").Output()
 	if err != nil {
 		return "", fmt.Errorf("running 'swift sdk list': %w (is swiftly installed?)", err)
 	}
@@ -154,7 +162,11 @@ func lookupSwiftSDK(sdkArch string, isWasm bool) (string, error) {
 	return "", nil
 }
 
-func installWendySwiftSDK(sdkArch string) error {
+func installWendySwiftSDK(ctx context.Context, sdkArch string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	sdkName := fmt.Sprintf("%s-RELEASE_wendyos_%s", DefaultVersion, sdkArch)
 	url := fmt.Sprintf(
 		"https://github.com/wendylabsinc/wendy-swift-tools/releases/download/%s/%s.artifactbundle.zip",
@@ -168,7 +180,7 @@ func installWendySwiftSDK(sdkArch string) error {
 		return fmt.Errorf("no checksum available for architecture %s", sdkArch)
 	}
 
-	cmd := SwiftCommand("sdk", "install", url, "--checksum", checksum)
+	cmd := SwiftCommandContext(ctx, "sdk", "install", url, "--checksum", checksum)
 	cmd.Stdout = os.Stdout
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -184,7 +196,11 @@ func installWendySwiftSDK(sdkArch string) error {
 	return nil
 }
 
-func installWasmSwiftSDK() error {
+func installWasmSwiftSDK(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	sdkName := fmt.Sprintf("swift-%s-RELEASE", DefaultVersion)
 	url := fmt.Sprintf(
 		"https://download.swift.org/swift-%s-release/wasm-sdk/%s/%s_wasm.artifactbundle.tar.gz",
@@ -193,7 +209,7 @@ func installWasmSwiftSDK() error {
 
 	fmt.Printf("Installing Swift WASM SDK (%s)...\n", sdkName)
 
-	cmd := SwiftCommand("sdk", "install", url, "--checksum", wasmSDKChecksum)
+	cmd := SwiftCommandContext(ctx, "sdk", "install", url, "--checksum", wasmSDKChecksum)
 	cmd.Stdout = os.Stdout
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
