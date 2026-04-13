@@ -181,8 +181,14 @@ jobs:
             curl -s --connect-timeout 5 "http://${IP}:50051/" 2>&1 | head -3 || true
             echo "--- python socket (IP) ---"
             python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('${IP}', 50051)); print('OK'); s.close()" 2>&1 || true
+            echo "--- go raw tcp dial (IP) ---"
+            go run ../scripts/tcpdial.go "$IP:50051" 2>&1 || true
             echo "--- wendy device version (IP) ---"
             ./bin/wendy device version --device "$IP" 2>&1 || true
+            echo "--- nc AFTER wendy (IP) ---"
+            nc -zw 5 "$IP" 50051 2>&1 && echo "OK" || echo "FAILED"
+            echo "--- routing table ---"
+            /sbin/netstat -rn 2>/dev/null | grep -E "default|192\.168" || true
 
             scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
             docker buildx rm wendy --force 2>/dev/null || true
