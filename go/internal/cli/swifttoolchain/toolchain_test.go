@@ -9,11 +9,11 @@ import (
 )
 
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
-	original := ExecCommandContext
-	t.Cleanup(func() { ExecCommandContext = original })
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
 
 	var calls [][]string
-	ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		calls = append(calls, append([]string{name}, args...))
 		return exec.CommandContext(ctx, "true")
 	}
@@ -31,11 +31,11 @@ func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 }
 
 func TestEnsureSwiftVersion_InstallsWhenMissing(t *testing.T) {
-	original := ExecCommandContext
-	t.Cleanup(func() { ExecCommandContext = original })
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
 
 	var calls [][]string
-	ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		call := append([]string{name}, args...)
 		calls = append(calls, call)
 		if len(args) > 0 && args[0] == "which" {
@@ -60,10 +60,10 @@ func TestEnsureSwiftVersion_InstallsWhenMissing(t *testing.T) {
 }
 
 func TestEnsureSwiftVersion_SwiftlyNotFound(t *testing.T) {
-	original := ExecCommandContext
-	t.Cleanup(func() { ExecCommandContext = original })
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
 
-	ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "nonexistent-binary-that-does-not-exist")
 	}
 
@@ -77,10 +77,10 @@ func TestEnsureSwiftVersion_SwiftlyNotFound(t *testing.T) {
 }
 
 func TestEnsureSwiftVersion_InstallFails(t *testing.T) {
-	original := ExecCommandContext
-	t.Cleanup(func() { ExecCommandContext = original })
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
 
-	ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "false")
 	}
 
@@ -94,10 +94,10 @@ func TestEnsureSwiftVersion_InstallFails(t *testing.T) {
 }
 
 func TestEnsureSwiftVersion_Cancellation(t *testing.T) {
-	original := ExecCommandContext
-	t.Cleanup(func() { ExecCommandContext = original })
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
 
-	ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "true")
 	}
 

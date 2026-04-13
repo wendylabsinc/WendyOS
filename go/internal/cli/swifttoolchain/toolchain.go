@@ -24,8 +24,8 @@ var wendySDKChecksums = map[string]string{
 	"aarch64": "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e",
 }
 
-var ExecCommandContext = exec.CommandContext
-var ExecCommand = exec.Command
+var execCommandContext = exec.CommandContext
+var execCommand = exec.Command
 
 func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 	if err := ctx.Err(); err != nil {
@@ -38,7 +38,7 @@ func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 
-	checkCmd := ExecCommandContext(ctx, "swiftly", "which", DefaultVersion)
+	checkCmd := execCommandContext(ctx, "swiftly", "which", DefaultVersion)
 	checkCmd.Stdout = io.Discard
 	checkCmd.Stderr = io.Discard
 	if err := checkCmd.Run(); err == nil {
@@ -56,7 +56,7 @@ func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	cmd := ExecCommandContext(ctx, "swiftly", "install", DefaultVersion)
+	cmd := execCommandContext(ctx, "swiftly", "install", DefaultVersion)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	err := cmd.Run()
@@ -73,11 +73,11 @@ func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 }
 
 func SwiftCommandContext(ctx context.Context, args ...string) *exec.Cmd {
-	return ExecCommandContext(ctx, "swiftly", append([]string{"run", "+" + DefaultVersion, "swift"}, args...)...)
+	return execCommandContext(ctx, "swiftly", append([]string{"run", "+" + DefaultVersion, "swift"}, args...)...)
 }
 
 func SwiftCommand(args ...string) *exec.Cmd {
-	return ExecCommand("swiftly", append([]string{"run", "+" + DefaultVersion, "swift"}, args...)...)
+	return execCommand("swiftly", append([]string{"run", "+" + DefaultVersion, "swift"}, args...)...)
 }
 
 func FindSwiftSDK(architecture string) (string, error) {

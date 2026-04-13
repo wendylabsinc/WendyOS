@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -36,7 +37,7 @@ func (p *MicroWendyProvider) Key() string         { return "wendy-lite" }
 func (p *MicroWendyProvider) DisplayName() string { return "Micro Wendy (WASM)" }
 
 func (p *MicroWendyProvider) IsAvailable(ctx context.Context) bool {
-	cmd := swifttoolchain.ExecCommandContext(ctx, "swiftly", "--version")
+	cmd := exec.CommandContext(ctx, "swiftly", "--version")
 	return cmd.Run() == nil
 }
 
