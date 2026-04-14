@@ -387,7 +387,7 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 
 	buildType := normalizeBuildType(requestedType)
 	if buildType != "docker" && buildType != "swift" && buildType != "python" {
-		return "", fmt.Errorf("run build type must be one of docker, swift, or python")
+		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, or python", requestedType)
 	}
 
 	switch buildType {

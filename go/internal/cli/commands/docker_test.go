@@ -118,6 +118,19 @@ func TestResolveDetectedBuildOption_PrefersDockerfileOverPython(t *testing.T) {
 	}
 }
 
+func TestPreferredBuildOption_InteractiveMultipleDockerfilesDoesNotAutoPrefer(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got := preferredBuildOption(options, true)
+	if got != nil {
+		t.Fatalf("got %+v, want nil so the picker can choose among Dockerfiles", got)
+	}
+}
+
 func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
 	options := []BuildOption{
 		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
@@ -125,7 +138,7 @@ func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
 		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
 	}
 
-	got, err := buildOptionForType(options, "docker")
+	got, err := buildOptionForType(options, "docker", false)
 	if err != nil {
 		t.Fatalf("buildOptionForType: %v", err)
 	}
@@ -187,8 +200,12 @@ func TestResolveRunProjectType_PythonOverride(t *testing.T) {
 
 func TestResolveRunProjectType_InvalidOverride(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := resolveRunProjectType(dir, "ruby"); err == nil {
+	_, err := resolveRunProjectType(dir, "ruby")
+	if err == nil {
 		t.Fatal("expected error for invalid run build type override")
+	}
+	if !strings.Contains(err.Error(), `invalid value "ruby" for --build-type`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
