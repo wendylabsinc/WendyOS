@@ -67,14 +67,13 @@ final class StatusMenuController: NSObject {
         button.toolTip = "WendyAgent — \(self.currentStatus.menuTitle)"
     }
 
-    private func makeStatusImage(for status: WendyAgentStatus) -> NSImage {
-        let image = NSImage(size: NSSize(width: 10, height: 10))
-        image.lockFocus()
-        defer { image.unlockFocus() }
+    private func makeStatusImage(for status: WendyAgentStatus) -> NSImage? {
+        guard let image = NSImage(named: NSImage.Name(status.menuImageName))?.copy() as? NSImage else {
+            return nil
+        }
 
-        status.menuStatusColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 8, height: 8)).fill()
         image.isTemplate = false
+        image.size = NSSize(width: 10, height: 10)
         return image
     }
 

@@ -1,4 +1,3 @@
-import AppKit
 import WendyAgent
 
 internal extension WendyAgentStatus {
@@ -19,16 +18,16 @@ internal extension WendyAgentStatus {
         }
     }
 
-    var menuStatusColor: NSColor {
+    var menuImageName: String {
         switch self {
         case .running:
-            .systemGreen
+            "MenuStatusRunning"
         case .starting, .stopping:
-            .systemYellow
+            "MenuStatusTransition"
         case .failed:
-            .systemRed
+            "MenuStatusFailed"
         case .idle, .stopped:
-            .systemGray
+            "MenuStatusIdle"
         }
     }
 
