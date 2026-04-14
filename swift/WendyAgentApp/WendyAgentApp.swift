@@ -31,6 +31,7 @@ struct WendyAgentApp: App {
             ZStack(alignment: .topTrailing) {
                 Image("StatusIcon")
                     .renderingMode(.template)
+                    .foregroundStyle(.primary)
 
                 if case .failed = self.appState.status {
                     Image(systemName: "exclamationmark.circle.fill")
