@@ -103,6 +103,21 @@ func TestResolveDetectedBuildOption_PrefersDockerfileOverSwift(t *testing.T) {
 	}
 }
 
+func TestResolveDetectedBuildOption_PrefersDockerfileOverPython(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "requirements.txt (Python)", Type: "python", File: "requirements.txt"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
 func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
 	options := []BuildOption{
 		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
@@ -153,9 +168,26 @@ func TestResolveRunProjectType_SwiftOverride(t *testing.T) {
 	}
 }
 
+func TestResolveRunProjectType_PythonOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "requirements.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "python")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "python" {
+		t.Fatalf("got %q, want python", got)
+	}
+}
+
 func TestResolveRunProjectType_InvalidOverride(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := resolveRunProjectType(dir, "python"); err == nil {
+	if _, err := resolveRunProjectType(dir, "ruby"); err == nil {
 		t.Fatal("expected error for invalid run build type override")
 	}
 }

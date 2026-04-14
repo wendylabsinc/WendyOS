@@ -176,16 +176,16 @@ func pickBuildOption(options []BuildOption) (*BuildOption, error) {
 }
 
 func preferredBuildOption(options []BuildOption) *BuildOption {
-	hasSwift := false
+	hasLanguageMarker := false
 	for i := range options {
 		switch {
-		case options[i].Type == "swift":
-			hasSwift = true
-		case hasSwift && options[i].Type == "docker" && options[i].File == "Dockerfile":
+		case options[i].Type == "swift" || options[i].Type == "python":
+			hasLanguageMarker = true
+		case hasLanguageMarker && options[i].Type == "docker" && options[i].File == "Dockerfile":
 			return &options[i]
 		}
 	}
-	if !hasSwift {
+	if !hasLanguageMarker {
 		return nil
 	}
 	for i := range options {

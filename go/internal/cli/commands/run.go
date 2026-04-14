@@ -200,7 +200,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when both Dockerfile and Package.swift are present: docker or swift")
+	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when Dockerfile is present alongside Package.swift or Python project markers: docker, swift, or python")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
@@ -386,8 +386,8 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	}
 
 	buildType := normalizeBuildType(requestedType)
-	if buildType != "docker" && buildType != "swift" {
-		return "", fmt.Errorf("run build type must be one of docker or swift")
+	if buildType != "docker" && buildType != "swift" && buildType != "python" {
+		return "", fmt.Errorf("run build type must be one of docker, swift, or python")
 	}
 
 	switch buildType {
@@ -404,6 +404,15 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 			return "swift", nil
 		} else if !os.IsNotExist(err) {
 			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		}
+	case "python":
+		for _, marker := range []string{"requirements.txt", "pyproject.toml", "setup.py"} {
+			path := filepath.Join(dir, marker)
+			if _, err := os.Stat(path); err == nil {
+				return "python", nil
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("checking for %s: %w", path, err)
+			}
 		}
 	}
 
