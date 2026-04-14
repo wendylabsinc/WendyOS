@@ -15,7 +15,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A10000010000000000000010"
+               BlueprintIdentifier = "B00000000000000000000003"
                BuildableName = "WendyAgent.app"
                BlueprintName = "WendyAgentApp"
                ReferencedContainer = "container:WendyAgentApp.xcodeproj">
@@ -44,7 +44,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A10000010000000000000010"
+            BlueprintIdentifier = "B00000000000000000000003"
             BuildableName = "WendyAgent.app"
             BlueprintName = "WendyAgentApp"
             ReferencedContainer = "container:WendyAgentApp.xcodeproj">
@@ -61,7 +61,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A10000010000000000000010"
+            BlueprintIdentifier = "B00000000000000000000003"
             BuildableName = "WendyAgent.app"
             BlueprintName = "WendyAgentApp"
             ReferencedContainer = "container:WendyAgentApp.xcodeproj">
