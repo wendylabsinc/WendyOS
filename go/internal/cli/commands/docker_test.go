@@ -88,6 +88,78 @@ func TestDetectProjectType_DockerfileTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestResolveDetectedBuildOption_PrefersDockerfileOverSwift(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
+func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := buildOptionForType(options, "docker")
+	if err != nil {
+		t.Fatalf("buildOptionForType: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile", got)
+	}
+}
+
+func TestResolveRunProjectType_DefaultPrefersDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "docker" {
+		t.Fatalf("got %q, want docker", got)
+	}
+}
+
+func TestResolveRunProjectType_SwiftOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "swift")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "swift" {
+		t.Fatalf("got %q, want swift", got)
+	}
+}
+
+func TestResolveRunProjectType_InvalidOverride(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := resolveRunProjectType(dir, "python"); err == nil {
+		t.Fatal("expected error for invalid run build type override")
+	}
+}
+
 func TestGeneratePythonDockerfile_WithRequirements(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644); err != nil {
