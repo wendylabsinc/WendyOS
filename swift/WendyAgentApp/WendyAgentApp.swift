@@ -19,7 +19,7 @@ struct WendyAgentApp: App {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Divider()
-            case .starting, .running:
+            case .idle, .starting, .running, .stopping, .stopped:
                 EmptyView()
             }
 

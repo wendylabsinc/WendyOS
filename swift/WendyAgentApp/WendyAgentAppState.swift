@@ -4,20 +4,25 @@ import WendyAgent
 
 @MainActor
 final class WendyAgentAppState: ObservableObject {
-    enum Status: Equatable {
-        case starting
-        case running
-        case failed(String)
-    }
+    @Published private(set) var status: WendyAgentStatus = .idle
 
-    @Published private(set) var status: Status = .starting
-
-    private let agent: Agent
+    private let agent: WendyAgent
+    private var observationTask: Task<Void, Never>?
     private var startupTask: Task<Void, Never>?
     private var quitTask: Task<Void, Never>?
 
-    init(agent: Agent = Agent()) {
+    init(agent: WendyAgent = WendyAgent()) {
         self.agent = agent
+        self.observationTask = Task {
+            let updates = await agent.statusUpdates()
+            for await status in updates {
+                self.status = status
+            }
+        }
+    }
+
+    deinit {
+        self.observationTask?.cancel()
     }
 
     func startIfNeeded() {
@@ -26,9 +31,8 @@ final class WendyAgentAppState: ObservableObject {
         self.startupTask = Task {
             do {
                 try await self.agent.start()
-                self.status = .running
             } catch {
-                self.status = .failed(Self.errorMessage(for: error))
+                // WendyAgent publishes failure state directly.
             }
         }
     }
@@ -40,17 +44,5 @@ final class WendyAgentAppState: ObservableObject {
             await self.agent.stop()
             NSApplication.shared.terminate(nil)
         }
-    }
-
-    private static func errorMessage(for error: any Error) -> String {
-        if let localizedError = error as? LocalizedError,
-           let description = localizedError.errorDescription,
-           !description.isEmpty
-        {
-            return description
-        }
-
-        let description = String(describing: error)
-        return description.isEmpty ? "WendyAgent failed to start." : description
     }
 }

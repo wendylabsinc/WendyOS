@@ -1,4 +1,4 @@
-public struct AgentConfiguration: Sendable {
+public struct WendyAgentConfiguration: Sendable {
     public var port: Int
     public var otelPort: Int
     public var configDirectory: String
