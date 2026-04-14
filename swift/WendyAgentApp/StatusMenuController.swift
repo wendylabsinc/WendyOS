@@ -31,12 +31,19 @@ final class StatusMenuController: NSObject {
         menu.autoenablesItems = false
 
         let statusItem = NSMenuItem(
-            title: self.title(for: self.currentStatus),
+            title: self.currentStatus.menuTitle,
             action: nil,
             keyEquivalent: ""
         )
+        statusItem.image = self.makeStatusImage(for: self.currentStatus)
         statusItem.isEnabled = false
         menu.addItem(statusItem)
+
+        for detail in self.currentStatus.menuFailureDetails {
+            let detailItem = NSMenuItem(title: detail, action: nil, keyEquivalent: "")
+            detailItem.isEnabled = false
+            menu.addItem(detailItem)
+        }
 
         menu.addItem(.separator())
 
@@ -57,24 +64,18 @@ final class StatusMenuController: NSObject {
         button.image = NSImage(named: NSImage.Name("StatusIcon"))
         button.image?.isTemplate = true
         button.imagePosition = .imageOnly
-        button.toolTip = "WendyAgent"
+        button.toolTip = "WendyAgent — \(self.currentStatus.menuTitle)"
     }
 
-    private func title(for status: WendyAgentStatus) -> String {
-        switch status {
-        case .idle:
-            "Idle"
-        case .starting:
-            "Starting"
-        case .running:
-            "Running"
-        case .stopping:
-            "Stopping"
-        case .stopped:
-            "Stopped"
-        case .failed:
-            "Failed"
-        }
+    private func makeStatusImage(for status: WendyAgentStatus) -> NSImage {
+        let image = NSImage(size: NSSize(width: 10, height: 10))
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        status.menuStatusColor.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 8, height: 8)).fill()
+        image.isTemplate = false
+        return image
     }
 
     @objc
