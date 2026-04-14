@@ -7,39 +7,9 @@ import OpenTelemetryGRPC
 import ServiceLifecycle
 import WendyAgentGRPC
 
-public enum WendyAgentError: LocalizedError, Sendable {
-    case stoppedDuringStartup
-
-    public var errorDescription: String? {
-        switch self {
-        case .stoppedDuringStartup:
-            "WendyAgent stopped before startup completed."
-        }
-    }
-}
-
 public actor WendyAgent {
-    private enum StartupOutcome {
-        case running
-    }
-
-    private static let startupProbeDelay: Duration = .milliseconds(300)
-    private static let bootstrapLogging: Void = {
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardError(label: label)
-            handler.logLevel = .info
-            return handler
-        }
-    }()
-
     public let configuration: WendyAgentConfiguration
     public private(set) var status: WendyAgentStatus = .idle
-
-    private var serviceGroup: ServiceGroup?
-    private var runTask: Task<Void, Error>?
-    private var runTaskMonitor: Task<Void, Never>?
-    private var runIdentifier: UInt64 = 0
-    private var statusSubscribers: [UUID: AsyncStream<WendyAgentStatus>.Continuation] = [:]
 
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.configuration = configuration
@@ -189,6 +159,27 @@ public actor WendyAgent {
             }
         }
     }
+
+    // MARK: - Private
+
+    private enum StartupOutcome {
+        case running
+    }
+
+    private static let startupProbeDelay: Duration = .milliseconds(300)
+    private static let bootstrapLogging: Void = {
+        LoggingSystem.bootstrap { label in
+            var handler = StreamLogHandler.standardError(label: label)
+            handler.logLevel = .info
+            return handler
+        }
+    }()
+
+    private var serviceGroup: ServiceGroup?
+    private var runTask: Task<Void, Error>?
+    private var runTaskMonitor: Task<Void, Never>?
+    private var runIdentifier: UInt64 = 0
+    private var statusSubscribers: [UUID: AsyncStream<WendyAgentStatus>.Continuation] = [:]
 
     private func monitorRunTask(_ runTask: Task<Void, Error>, runIdentifier: UInt64) async {
         do {

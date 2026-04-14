@@ -4,12 +4,9 @@ import WendyAgent
 
 @MainActor
 final class WendyAgentAppState: ObservableObject {
-    @Published private(set) var status: WendyAgentStatus = .idle
+    // MARK: - Internal
 
-    private let agent: WendyAgent
-    private var observationTask: Task<Void, Never>?
-    private var startupTask: Task<Void, Never>?
-    private var quitTask: Task<Void, Never>?
+    @Published private(set) var status: WendyAgentStatus = .idle
 
     init(agent: WendyAgent = WendyAgent()) {
         self.agent = agent
@@ -45,4 +42,11 @@ final class WendyAgentAppState: ObservableObject {
             NSApplication.shared.terminate(nil)
         }
     }
+
+    // MARK: - Private
+
+    private let agent: WendyAgent
+    private var observationTask: Task<Void, Never>?
+    private var startupTask: Task<Void, Never>?
+    private var quitTask: Task<Void, Never>?
 }
