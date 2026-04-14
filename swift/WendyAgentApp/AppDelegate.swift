@@ -9,13 +9,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusObservation: WendyObservation?
     private var hasBootstrapped = false
     private var isQuitting = false
-    private let statusMenuController = StatusMenuController(status: .idle)
+    private var statusMenuController: StatusMenuController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        self.statusMenuController.setQuitHandler { [weak self] in
+        let statusMenuController = StatusMenuController(status: self.status)
+        statusMenuController.setQuitHandler { [weak self] in
             self?.quitSelected()
         }
-        self.statusMenuController.update(status: self.status)
+        self.statusMenuController = statusMenuController
         self.bootstrapIfNeeded()
     }
 
@@ -40,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatus(_ status: WendyAgentStatus) {
         self.status = status
-        self.statusMenuController.update(status: status)
+        self.statusMenuController?.update(status: status)
     }
 
     private func quitSelected() {

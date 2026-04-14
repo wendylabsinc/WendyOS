@@ -5,9 +5,10 @@ import WendyAgent
 final class StatusMenuController: NSObject {
     init(status: WendyAgentStatus) {
         self.currentStatus = status
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
+        self.statusItem.isVisible = true
         self.updateStatusButton()
         self.rebuildMenu()
     }
@@ -61,10 +62,26 @@ final class StatusMenuController: NSObject {
     private func updateStatusButton() {
         guard let button = self.statusItem.button else { return }
 
-        button.image = NSImage(named: NSImage.Name("StatusIcon"))
-        button.image?.isTemplate = true
-        button.imagePosition = .imageOnly
+        let image = self.makeButtonImage()
+        image?.isTemplate = true
+
+        button.image = image
+        button.title = image == nil ? "W" : ""
+        button.imagePosition = image == nil ? .noImage : .imageOnly
+        button.imageScaling = .scaleProportionallyDown
         button.toolTip = "WendyAgent — \(self.currentStatus.menuTitle)"
+        button.setAccessibilityTitle("WendyAgent")
+    }
+
+    private func makeButtonImage() -> NSImage? {
+        if let image = NSImage(named: NSImage.Name("StatusIcon"))?.copy() as? NSImage {
+            return image
+        }
+
+        return NSImage(
+            systemSymbolName: "diamond.fill",
+            accessibilityDescription: "WendyAgent"
+        )
     }
 
     private func makeStatusImage(for status: WendyAgentStatus) -> NSImage? {
