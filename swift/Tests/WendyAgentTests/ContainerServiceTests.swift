@@ -4,7 +4,7 @@ import GRPCCore
 import Testing
 import WendyAgentGRPC
 
-@testable import wendy_agent
+@testable import WendyAgent
 
 @Suite("ContainerService.startContainer")
 struct ContainerServiceTests {
