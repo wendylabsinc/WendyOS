@@ -1,3 +1,4 @@
 bootloader --ptable gpt
 part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align 4096 --size 128M --uuid "${WENDYOS_BOOT_PARTUUID}"
+part --ondisk mmcblk0 --fstype=vfat --label config --align 4096 --size ${WENDYOS_CONFIG_PART_SIZE_MB}M --uuid "${WENDYOS_CONFIG_PARTUUID}"
 part / --source rootfs --ondisk mmcblk0 --fstype=ext4 --label root --align 4096 --size 8192M --uuid "${WENDYOS_ROOT_PARTUUID}"
