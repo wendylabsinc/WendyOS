@@ -32,9 +32,15 @@ fi
 
 echo -e "  Memory: ${MEM_COLOR}${MEM_USED}${NC}/${MEM_TOTAL} (${MEM_COLOR}${MEM_PERCENT}%${NC} used)"
 
-# Disk information
-DISK_USAGE=$(df -h / | tail -1 | awk '{print $3"/"$2" ("$5" used)"}')
-DISK_PERCENT=$(df / | tail -1 | awk '{gsub("%",""); print $5}')
+# Disk information — report /data (user storage) when mounted as own partition (Jetson), else fall back to / (RPi5, QEMU, /data mount failure).
+# `stat -c %d` returns the kernel device ID; if /data and / differ, /data is on a separate filesystem (i.e. actually mounted).
+if [ -d /data ] && [ "$(stat -c %d /data 2>/dev/null)" != "$(stat -c %d / 2>/dev/null)" ]; then
+    DISK_TARGET=/data
+else
+    DISK_TARGET=/
+fi
+DISK_USAGE=$(df -h "$DISK_TARGET" | tail -1 | awk '{print $3"/"$2" ("$5" used)"}')
+DISK_PERCENT=$(df "$DISK_TARGET" | tail -1 | awk '{gsub("%",""); print $5}')
 
 if [ "$DISK_PERCENT" -gt 80 ]; then
     DISK_COLOR="${RED}"
