@@ -101,7 +101,7 @@
 			mainGroup = B00000000000000000000006;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				B00000000000000000000012 /* XCLocalSwiftPackageReference "." */,
+				B00000000000000000000012 /* XCLocalSwiftPackageReference "../WendyAgentCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B00000000000000000000007 /* Products */;
@@ -328,16 +328,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		B00000000000000000000012 /* XCLocalSwiftPackageReference "." */ = {
+		B00000000000000000000012 /* XCLocalSwiftPackageReference "../WendyAgentCore" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = .;
+			relativePath = ../WendyAgentCore;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		B00000000000000000000011 /* WendyAgentCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B00000000000000000000012 /* XCLocalSwiftPackageReference "." */;
+			package = B00000000000000000000012 /* XCLocalSwiftPackageReference "../WendyAgentCore" */;
 			productName = WendyAgentCore;
 		};
 /* End XCSwiftPackageProductDependency section */
