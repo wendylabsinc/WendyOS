@@ -182,13 +182,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B00000000000000000000018 /* WendyAgentMac.xcconfig */;
 			buildSettings = {
-				INFOPLIST_KEY_CFBundleDisplayName = "Wendy Agent";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Wendy Agent uses Bluetooth so the Wendy CLI can discover this device and transfer apps and data.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Wendy Agent needs camera access so apps deployed through Wendy can use the camera without separate permission prompts, including headless apps running in the background.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Wendy Agent needs microphone access so apps deployed through Wendy can use the microphone without separate permission prompts, including headless apps running in the background.";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 			};
 			name = Debug;
 		};
@@ -196,13 +189,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B00000000000000000000018 /* WendyAgentMac.xcconfig */;
 			buildSettings = {
-				INFOPLIST_KEY_CFBundleDisplayName = "Wendy Agent";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Wendy Agent uses Bluetooth so the Wendy CLI can discover this device and transfer apps and data.";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Wendy Agent needs camera access so apps deployed through Wendy can use the camera without separate permission prompts, including headless apps running in the background.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Wendy Agent needs microphone access so apps deployed through Wendy can use the microphone without separate permission prompts, including headless apps running in the background.";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 			};
 			name = Release;
 		};
