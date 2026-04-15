@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B00000000000000000000003"
-               BuildableName = "WendyAgent.app"
-               BlueprintName = "WendyAgentApp"
-               ReferencedContainer = "container:WendyAgentApp.xcodeproj">
+               BuildableName = "WendyAgentMac.app"
+               BlueprintName = "WendyAgentMac"
+               ReferencedContainer = "container:WendyAgentMac.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -45,9 +45,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B00000000000000000000003"
-            BuildableName = "WendyAgent.app"
-            BlueprintName = "WendyAgentApp"
-            ReferencedContainer = "container:WendyAgentApp.xcodeproj">
+            BuildableName = "WendyAgentMac.app"
+            BlueprintName = "WendyAgentMac"
+            ReferencedContainer = "container:WendyAgentMac.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -62,9 +62,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B00000000000000000000003"
-            BuildableName = "WendyAgent.app"
-            BlueprintName = "WendyAgentApp"
-            ReferencedContainer = "container:WendyAgentApp.xcodeproj">
+            BuildableName = "WendyAgentMac.app"
+            BlueprintName = "WendyAgentMac"
+            ReferencedContainer = "container:WendyAgentMac.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
