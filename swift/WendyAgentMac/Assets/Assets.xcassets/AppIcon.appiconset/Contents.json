@@ -7,6 +7,12 @@
       "size" : "16x16"
     },
     {
+      "filename" : "appicon_16@2x.png",
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "16x16"
+    },
+    {
       "filename" : "appicon_32.png",
       "idiom" : "mac",
       "scale" : "1x",
@@ -16,7 +22,7 @@
       "filename" : "appicon_32@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
-      "size" : "16x16"
+      "size" : "32x32"
     },
     {
       "filename" : "appicon_128.png",
