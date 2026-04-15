@@ -12,6 +12,10 @@
 
 /* Begin PBXFileReference section */
 		B00000000000000000000004 /* WendyAgentMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WendyAgentMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000015 /* Default.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Default.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000016 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000017 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000018 /* WendyAgentMac.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = WendyAgentMac.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -50,6 +54,7 @@
 				B00000000000000000000005 /* Sources */,
 				B00000000000000000000013 /* Assets */,
 				B00000000000000000000014 /* Design */,
+				B00000000000000000000019 /* Configuration */,
 				B00000000000000000000007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -60,6 +65,17 @@
 				B00000000000000000000004 /* WendyAgentMac.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B00000000000000000000019 /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000015 /* Default.xcconfig */,
+				B00000000000000000000016 /* Debug.xcconfig */,
+				B00000000000000000000017 /* Release.xcconfig */,
+				B00000000000000000000018 /* WendyAgentMac.xcconfig */,
+			);
+			path = Configuration;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -150,6 +166,7 @@
 /* Begin XCBuildConfiguration section */
 		B0000000000000000000000C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000016 /* Debug.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -214,6 +231,7 @@
 		};
 		B0000000000000000000000D /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000017 /* Release.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -270,6 +288,7 @@
 		};
 		B0000000000000000000000E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000018 /* WendyAgentMac.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
@@ -295,6 +314,7 @@
 		};
 		B0000000000000000000000F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000018 /* WendyAgentMac.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
