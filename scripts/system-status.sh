@@ -382,9 +382,9 @@ log ""
 log "=== Mender Markers ==="
 
 if [ -f /var/lib/wendyos/update-bootloader ]; then
-    printf "Bootloader update marker: ${YELLOW}PRESENT${NC}\n"
+    printf "Bootloader capsule updates: ${GREEN}enabled${NC}\n"
 else
-    printf "Bootloader update marker: ${GREEN}absent (clean)${NC}\n"
+    printf "Bootloader capsule updates: ${YELLOW}disabled${NC}\n"
 fi
 
 if [ -f /data/mender/tegra-bl-version-before ]; then

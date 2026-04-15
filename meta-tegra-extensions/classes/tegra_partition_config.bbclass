@@ -123,6 +123,13 @@ python do_modify_partition_layout() {
     # "parted resizepart 17 100%" targets the right partition regardless
     # of where config (id=16) sits physically.
     def modify_device(device, layout_path):
+        # Idempotency guard: if config partition already exists, this task
+        # has already run on this XML (e.g. BitBake re-ran the task without
+        # re-running do_install first).  Skip to avoid duplicate partitions.
+        if device.find('./partition[@name="config"]') is not None:
+            bb.note('  Partitions already modified (config exists), skipping')
+            return
+
         # Step 1: Remove 'reserved' partition
         #
         # NVIDIA includes a ~480 MB 'reserved' partition between UDA and APP

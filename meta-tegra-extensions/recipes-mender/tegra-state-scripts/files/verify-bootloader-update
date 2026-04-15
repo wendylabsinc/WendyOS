@@ -60,8 +60,8 @@ if [ -f "${VERSION_BEFORE_FILE}" ]; then
         log "SUCCESS: bootloader version changed (${version_before} → ${version_after})"
         log "capsule update verified via version comparison"
 
-        # Cleanup marker and version files
-        rm -f "${MARKER_FILE}" "${VERSION_BEFORE_FILE}"
+        # Cleanup transient version file
+        rm -f "${VERSION_BEFORE_FILE}"
         exit 0
     else
         log "WARNING: bootloader version unchanged (${version_before})"
@@ -88,8 +88,8 @@ if [ -r "${ESRT_STATUS_FILE}" ]; then
             log "SUCCESS: ESRT status indicates successful capsule update"
             log "capsule update verified via ESRT"
 
-            # Cleanup marker and version files
-            rm -f "${MARKER_FILE}" "${VERSION_BEFORE_FILE}"
+            # Cleanup transient version file
+            rm -f "${VERSION_BEFORE_FILE}"
             exit 0
             ;;
         1)
@@ -199,8 +199,8 @@ nvbootctrl dump-slots-info 2>/dev/null | while read line; do
 done
 
 # Consider this a success (boot succeeded)
-# Cleanup marker and version files
-rm -f "${MARKER_FILE}" "${VERSION_BEFORE_FILE}"
+# Cleanup transient version file
+rm -f "${VERSION_BEFORE_FILE}"
 
 log "verification complete (fallback to boot success)"
 exit 0
