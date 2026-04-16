@@ -23,30 +23,47 @@ public final class WendyAgent {
         self.updateStatus(.starting)
 
         let logger = Logger(label: "sh.wendy.agent")
-        logger.info("Starting Wendy Agent on port \(self.configuration.port)")
+        logger.info(
+            "Starting Wendy Agent",
+            metadata: [
+                "grpc_port": "\(self.configuration.port)",
+                "otel_port": "\(self.configuration.otelPort)",
+            ]
+        )
 
+        var startupStage = "telemetry broadcaster initialization"
+        logger.info("Startup stage: \(startupStage)")
         let broadcaster = TelemetryBroadcaster()
 
         let docker = DockerCLI()
+        startupStage = "Docker availability probe"
+        logger.info("Startup stage: \(startupStage)")
         let dockerAvailable = await docker.checkAvailable()
         if dockerAvailable {
+            startupStage = "Docker local registry startup"
             logger.info(
-                "Docker detected, starting local registry on port \(DockerCLI.registryPort) for Linux container support"
+                "Startup stage: \(startupStage)",
+                metadata: ["registry_port": "\(DockerCLI.registryPort)"]
             )
             do {
                 try await docker.ensureRegistry()
+                logger.info("Startup stage complete: \(startupStage)")
             } catch {
                 logger.warning(
                     "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
                 )
             }
         } else {
-            logger.info("Docker not found, Linux container support disabled")
+            logger.info("Docker not available, Linux container support disabled")
         }
 
+        startupStage = "application support path setup"
+        logger.info("Startup stage: \(startupStage)")
         let appsBase = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/wendy-agent/apps")
 
+        startupStage = "main Wendy Agent gRPC service construction"
+        logger.info("Startup stage: \(startupStage)")
         let services: [any RegistrableRPCService] = [
             AgentService(),
             ContainerService(
@@ -64,6 +81,11 @@ public final class WendyAgent {
             FileSyncService(appsBase: appsBase),
         ]
 
+        startupStage = "main Wendy Agent gRPC server creation"
+        logger.info(
+            "Startup stage: \(startupStage)",
+            metadata: ["grpc_port": "\(self.configuration.port)"]
+        )
         let server = GRPCServer(
             transport: HTTP2ServerTransport.Posix(
                 address: .ipv6(host: "::", port: self.configuration.port),
@@ -72,12 +94,19 @@ public final class WendyAgent {
             services: services
         )
 
+        startupStage = "local OpenTelemetry gRPC service construction"
+        logger.info("Startup stage: \(startupStage)")
         let otelServices: [any RegistrableRPCService] = [
             LocalOTelLogsReceiver(broadcaster: broadcaster),
             LocalOTelMetricsReceiver(broadcaster: broadcaster),
             LocalOTelTracesReceiver(broadcaster: broadcaster),
         ]
 
+        startupStage = "local OpenTelemetry gRPC server creation"
+        logger.info(
+            "Startup stage: \(startupStage)",
+            metadata: ["otel_port": "\(self.configuration.otelPort)"]
+        )
         let otelServer = GRPCServer(
             transport: HTTP2ServerTransport.Posix(
                 address: .ipv4(host: "127.0.0.1", port: self.configuration.otelPort),
@@ -86,12 +115,16 @@ public final class WendyAgent {
             services: otelServices
         )
 
+        startupStage = "Bonjour advertiser creation"
+        logger.info("Startup stage: \(startupStage)")
         let bonjour = BonjourAdvertiser(
             port: self.configuration.port,
             displayName: ProcessInfo.processInfo.hostName,
             deviceID: ProcessInfo.processInfo.hostName
         )
 
+        startupStage = "service group creation"
+        logger.info("Startup stage: \(startupStage)")
         let serviceGroup = ServiceGroup(
             configuration: .init(
                 services: [
@@ -103,9 +136,9 @@ public final class WendyAgent {
             )
         )
 
-        let runTask = Task {
-            try await serviceGroup.run()
-        }
+        startupStage = "service group launch"
+        logger.info("Startup stage: \(startupStage)")
+        let runTask = Self.makeRunTask(serviceGroup: serviceGroup)
 
         self.runIdentifier &+= 1
         let runIdentifier = self.runIdentifier
@@ -120,14 +153,11 @@ public final class WendyAgent {
             "Listening on port \(self.configuration.port), OTel on port \(self.configuration.otelPort)"
         )
 
-        do {
-            try await Self.waitForStartup(of: runTask)
-            guard self.runIdentifier == runIdentifier, self.runTask != nil else { return }
-            self.updateStatus(.running)
-        } catch {
-            self.finalizeRunTaskIfNeeded(runIdentifier: runIdentifier, error: error)
-            throw error
-        }
+        startupStage = "status transition to running"
+        logger.info("Startup stage: \(startupStage)")
+        guard self.runIdentifier == runIdentifier, self.runTask != nil else { return }
+        self.updateStatus(.running)
+        logger.info("Startup complete: Wendy Agent is running")
     }
 
     public func stop() async {
@@ -160,7 +190,6 @@ public final class WendyAgent {
 
     // MARK: - Private
 
-    private static let startupProbeDelay: Duration = .milliseconds(300)
     private static let bootstrapLogging: Void = {
         LoggingSystem.bootstrap { label in
             var handler = StreamLogHandler.standardError(label: label)
@@ -251,18 +280,9 @@ public final class WendyAgent {
         await task?.value
     }
 
-    private static func waitForStartup(of runTask: Task<Void, Error>) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await runTask.value
-                throw WendyAgentError.stoppedDuringStartup
-            }
-            group.addTask {
-                try await Task.sleep(for: Self.startupProbeDelay)
-            }
-
-            _ = try await group.next()
-            group.cancelAll()
+    nonisolated private static func makeRunTask(serviceGroup: ServiceGroup) -> Task<Void, Error> {
+        Task {
+            try await serviceGroup.run()
         }
     }
 
