@@ -79,7 +79,7 @@ final class StatusMenuController: NSObject {
     }
 
     private func addRunningAppsSection() {
-        self.menu.addItem(self.makeDisabledMenuItem(title: "Running Apps"))
+        self.menu.addItem(self.makeDisabledMenuItem(title: "Apps:"))
 
         let runningApps = self.runningApps
         guard !runningApps.isEmpty else {
