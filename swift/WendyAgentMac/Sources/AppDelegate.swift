@@ -61,16 +61,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
         }
 
         self.onboardingWindow = nil
-        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     private func showOnboardingWindow() {
         self.onboarding.prepareForPresentation()
 
         if let onboardingWindow = self.onboardingWindow {
-            NSApplication.shared.setActivationPolicy(.regular)
+            self.sizeOnboardingWindowToFit(onboardingWindow)
             NSApplication.shared.activate(ignoringOtherApps: true)
             onboardingWindow.makeKeyAndOrderFront(nil)
+            onboardingWindow.center()
             return
         }
 
@@ -87,14 +87,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
         onboardingWindow.title = "Welcome to \(AppDisplayName.current)"
         onboardingWindow.contentViewController = hostingController
         onboardingWindow.delegate = self
-        onboardingWindow.center()
         onboardingWindow.isReleasedWhenClosed = false
 
         self.onboardingWindow = onboardingWindow
 
-        NSApplication.shared.setActivationPolicy(.regular)
+        self.sizeOnboardingWindowToFit(onboardingWindow)
         NSApplication.shared.activate(ignoringOtherApps: true)
         onboardingWindow.makeKeyAndOrderFront(nil)
+        onboardingWindow.center()
     }
 
+    private func sizeOnboardingWindowToFit(_ window: NSWindow) {
+        guard let contentView = window.contentView else { return }
+
+        contentView.layoutSubtreeIfNeeded()
+        let fittingSize = contentView.fittingSize
+        let contentSize = NSSize(
+            width: max(620, fittingSize.width),
+            height: max(320, fittingSize.height)
+        )
+        window.setContentSize(contentSize)
+    }
 }

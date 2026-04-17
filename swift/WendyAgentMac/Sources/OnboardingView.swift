@@ -23,7 +23,7 @@ struct OnboardingView: View {
             )
         }
         .padding(28)
-        .frame(width: 620, height: 500)
+        .frame(width: 620, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.onboarding.refresh()
         }
