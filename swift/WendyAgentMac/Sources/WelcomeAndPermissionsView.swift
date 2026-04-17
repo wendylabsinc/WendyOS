@@ -31,7 +31,7 @@ struct WelcomeAndPermissionsView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .center, spacing: 16) {
             Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable()
                 .frame(width: 64, height: 64)
@@ -41,10 +41,6 @@ struct WelcomeAndPermissionsView: View {
                 Text("Welcome to Wendy Agent")
                     .font(.largeTitle)
                     .fontWeight(.semibold)
-
-                Text(AppDisplayName.current)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
             }
         }
     }
