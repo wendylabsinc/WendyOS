@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -199,7 +198,12 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 	return nil
 }
 
-func createContainerWithProgressTUI(ctx context.Context, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
+func progressModelUserCancelled(model tea.Model) bool {
+	pm, ok := model.(tui.ProgressModel)
+	return ok && pm.Err() == context.Canceled
+}
+
+func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
 	prog := tea.NewProgram(tui.NewProgress("Pulling image on device..."))
 
 	var (
@@ -268,11 +272,13 @@ func createContainerWithProgressTUI(ctx context.Context, stream agentpb.WendyCon
 
 	finalModel, err := prog.Run()
 	if err != nil {
+		cancel()
 		<-done
 		return fmt.Errorf("progress TUI: %w", err)
 	}
 
-	if pm, ok := finalModel.(tui.ProgressModel); ok && errors.Is(pm.Err(), context.Canceled) {
+	if progressModelUserCancelled(finalModel) {
+		cancel()
 		<-done
 		return ErrUserCancelled
 	}
@@ -305,11 +311,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
-	err = createContainerWithProgressTUI(progressCtx, stream)
-	if errors.Is(err, ErrUserCancelled) {
-		cancel()
-	}
-	return err
+	return createContainerWithProgressTUI(cancel, stream)
 }
 
 // runOptions holds the parsed flags for the run command.
