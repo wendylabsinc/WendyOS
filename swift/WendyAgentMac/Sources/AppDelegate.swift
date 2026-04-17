@@ -63,17 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
         self.onboardingWindow = nil
     }
 
-    private func showOnboardingWindow() {
-        self.onboarding.prepareForPresentation()
-
-        if let onboardingWindow = self.onboardingWindow {
-            self.sizeOnboardingWindowToFit(onboardingWindow)
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            onboardingWindow.makeKeyAndOrderFront(nil)
-            onboardingWindow.center()
-            return
-        }
-
+    private func makeOnboardingWindow() -> NSWindow {
         let rootView = OnboardingView(onboarding: self.onboarding)
         let hostingController = NSHostingController(rootView: rootView)
 
@@ -84,7 +74,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
             defer: false
         )
 
-        onboardingWindow.title = "Welcome to \(AppDisplayName.current)"
         onboardingWindow.contentViewController = hostingController
         onboardingWindow.delegate = self
         onboardingWindow.isReleasedWhenClosed = false
@@ -94,16 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
             closeButton.keyEquivalentModifierMask = [.command]
         }
 
-        self.onboardingWindow = onboardingWindow
-
-        self.sizeOnboardingWindowToFit(onboardingWindow)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        onboardingWindow.makeKeyAndOrderFront(nil)
-        onboardingWindow.center()
-    }
-
-    private func sizeOnboardingWindowToFit(_ window: NSWindow) {
-        guard let contentView = window.contentView else { return }
+        let contentView = onboardingWindow.contentView!
 
         contentView.layoutSubtreeIfNeeded()
         let fittingSize = contentView.fittingSize
@@ -111,6 +91,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Stat
             width: max(620, fittingSize.width),
             height: max(320, fittingSize.height)
         )
-        window.setContentSize(contentSize)
+        onboardingWindow.setContentSize(contentSize)
+
+        return onboardingWindow
+    }
+
+    private func showOnboardingWindow() {
+        guard self.onboardingWindow == nil else { return }
+        let onboardingWindow = self.makeOnboardingWindow()
+        self.onboardingWindow = onboardingWindow
+
+        self.onboarding.prepareForPresentation()
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        onboardingWindow.makeKeyAndOrderFront(nil)
+        onboardingWindow.center()
+        onboardingWindow.setFrameAutosaveName("OnboardingWindow")
     }
 }
