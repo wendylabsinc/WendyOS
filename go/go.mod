@@ -1,6 +1,6 @@
 module github.com/wendylabsinc/wendy
 
-go 1.25.6
+go 1.25.9
 
 require (
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819
