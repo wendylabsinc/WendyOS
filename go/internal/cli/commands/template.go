@@ -3,6 +3,7 @@ package commands
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,14 @@ const (
 	templateRepoName   = "templates"
 	templateRepoBranch = "main"
 )
+
+// resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
+func resolveTemplateBranch(branch string) string {
+	if branch == "" {
+		return templateRepoBranch
+	}
+	return branch
+}
 
 // repoMeta is the parsed meta.json from the templates repo root.
 type repoMeta struct {
@@ -59,19 +68,30 @@ type templateVariable struct {
 }
 
 // fetchRepoMeta downloads and parses meta.json from the templates repo.
-func fetchRepoMeta() (*repoMeta, error) {
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If ctx is cancelled, the in-flight request is aborted.
+func fetchRepoMeta(ctx context.Context, branch string) (*repoMeta, error) {
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/meta.json",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+		templateRepoOwner, templateRepoName, branch)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetching template registry: %w", err)
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("template registry not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching template registry: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetching template registry (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
 	var meta repoMeta
@@ -91,25 +111,89 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 	return false
 }
 
+// progressCallback reports download progress. total is the expected content
+// length in bytes (0 if unknown); written is the cumulative number of bytes
+// read from the response body so far.
+type progressCallback func(written, total int64)
+
+// progressReader wraps an io.Reader and invokes onProgress after each Read.
+type progressReader struct {
+	r          io.Reader
+	total      int64
+	written    int64
+	onProgress progressCallback
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	if n > 0 {
+		pr.written += int64(n)
+		if pr.onProgress != nil {
+			pr.onProgress(pr.written, pr.total)
+		}
+	}
+	return n, err
+}
+
 // downloadTemplateArchive fetches the templates repo tarball and extracts
 // the files for {language}/{templateName}/ into a map of relative path -> content.
 // It also returns the parsed template.json manifest.
-func downloadTemplateArchive(language, templateName string) (map[string][]byte, *templateManifest, error) {
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If onProgress is non-nil, it is invoked as the response body is read.
+// If ctx is cancelled, the in-flight request is aborted.
+func downloadTemplateArchive(ctx context.Context, language, templateName, branch string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+		templateRepoOwner, templateRepoName, branch)
+	return downloadTemplateArchiveFromURL(ctx, url, branch, language, templateName, onProgress)
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+// downloadTemplateArchiveFromURL is the testable core of downloadTemplateArchive:
+// it performs the HTTP GET against the caller-supplied URL and delegates
+// tarball parsing to extractTemplateArchive.
+func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("downloading template: %w", err)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil, fmt.Errorf("template archive not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("downloading template: HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	var reader io.Reader = resp.Body
+	if onProgress != nil {
+		// Normalize ContentLength to the progressCallback contract:
+		// http.Response.ContentLength is -1 when unknown, but callers expect 0.
+		total := resp.ContentLength
+		if total < 0 {
+			total = 0
+		}
+		reader = &progressReader{
+			r:          resp.Body,
+			total:      total,
+			onProgress: onProgress,
+		}
+	}
+
+	return extractTemplateArchive(reader, language, templateName)
+}
+
+// extractTemplateArchive reads a gzipped tarball from r and extracts files
+// matching {language}/{templateName}/ into a map of relative path -> content.
+// It also returns the parsed template.json manifest.
+func extractTemplateArchive(r io.Reader, language, templateName string) (map[string][]byte, *templateManifest, error) {
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decompressing template archive: %w", err)
 	}

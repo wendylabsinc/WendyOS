@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -61,6 +63,7 @@ type initOptions struct {
 	target              string
 	language            string
 	template            string
+	branch              string
 	vars                []string
 	gitInit             string
 	entitlements        []string
@@ -115,6 +118,9 @@ func newInitCmd() *cobra.Command {
 
   # Non-interactive template scaffold with variable overrides
   wendy init --app-id my-api --template simple-api --language rust --var PORT=8080
+
+  # Use a template from a specific branch of the templates repo
+  wendy init --template simple-api --branch feature/new-template
 
   # Fully non-interactive WendyOS Python app with persist storage
   wendy init \
@@ -189,6 +195,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
@@ -332,7 +339,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 		tmpl := normalizeInitChoice(opts.template)
 
 		// Fetch meta.json to validate or show picker.
-		meta, err := fetchRepoMeta()
+		meta, err := fetchRepoMetaWithUI(opts.branch)
 		if err != nil {
 			return "", nil, err
 		}
@@ -363,7 +370,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 	}
 
 	// In interactive mode, fetch meta and offer templates for this target.
-	meta, err := fetchRepoMeta()
+	meta, err := fetchRepoMetaWithUI(opts.branch)
 	if err != nil {
 		return "", nil, err
 	}
@@ -471,6 +478,110 @@ func metaTemplateNames(meta *repoMeta) string {
 	return strings.Join(names, ", ")
 }
 
+// fetchRepoMetaWithUI wraps fetchRepoMeta with a bubbletea spinner when
+// stdout is a TTY. In non-interactive contexts it falls back to a plain
+// printf so logs stay readable. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func fetchRepoMetaWithUI(branch string) (*repoMeta, error) {
+	if !isInteractiveTerminal() {
+		fmt.Println("Fetching template registry...")
+		return fetchRepoMeta(context.Background(), branch)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner("Fetching template registry..."))
+
+	var (
+		meta     *repoMeta
+		fetchErr error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		meta, fetchErr = fetchRepoMeta(ctx, branch)
+		prog.Send(tui.SpinnerDoneMsg{Err: fetchErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	// If the user quit before the fetch completed, cancel the request and
+	// wait for the goroutine to finish so we don't leak it.
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-done
+		return nil, ErrUserCancelled
+	}
+
+	<-done
+	return meta, fetchErr
+}
+
+// downloadTemplateArchiveWithUI wraps downloadTemplateArchive with a
+// bubbletea progress bar when stdout is a TTY. In non-interactive contexts
+// it falls back to plain text. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]byte, *templateManifest, error) {
+	title := fmt.Sprintf("Downloading template %q for %s (branch: %s)", tmpl, language, resolveTemplateBranch(branch))
+
+	if !isInteractiveTerminal() {
+		fmt.Printf("\n%s...\n", title)
+		return downloadTemplateArchive(context.Background(), language, tmpl, branch, nil)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewProgress(title))
+
+	var (
+		files    map[string][]byte
+		manifest *templateManifest
+		dlErr    error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		files, manifest, dlErr = downloadTemplateArchive(ctx, language, tmpl, branch, func(written, total int64) {
+			if total > 0 {
+				prog.Send(tui.ProgressUpdateMsg{
+					Percent: float64(written) / float64(total),
+					Written: written,
+					Total:   total,
+				})
+			}
+		})
+		prog.Send(tui.ProgressDoneMsg{Err: dlErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, nil, fmt.Errorf("progress TUI: %w", err)
+	}
+
+	// If the user quit via q / ctrl+c, ProgressModel.Err() returns
+	// context.Canceled. Cancel the in-flight request and surface
+	// ErrUserCancelled so the caller doesn't dereference nil manifest/files.
+	if pm, ok := finalModel.(tui.ProgressModel); ok {
+		if errors.Is(pm.Err(), context.Canceled) {
+			cancel()
+			<-done
+			return nil, nil, ErrUserCancelled
+		}
+	}
+
+	<-done
+	return files, manifest, dlErr
+}
+
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
@@ -485,9 +596,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Printf("\nDownloading template %q for %s...\n", tmpl, language)
-
-	files, manifest, err := downloadTemplateArchive(language, tmpl)
+	files, manifest, err := downloadTemplateArchiveWithUI(language, tmpl, opts.branch)
 	if err != nil {
 		return err
 	}

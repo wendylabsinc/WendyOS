@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,11 +20,15 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
 )
 
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
+	var deviceType string
+	var versionFlag string
+	var driveFlag string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -31,18 +36,46 @@ func newOSInstallCmd() *cobra.Command {
 		Long: `Interactively select a supported device, download the latest OS image or firmware, and write it to the target.
 
 When called with positional arguments, skips interactive prompts:
-  wendy os install <image-path> <drive-id> --force`,
-		Args: cobra.MaximumNArgs(2),
+  wendy os install <image-path> <drive-id> --force
+
+When called with manifest-backed flags, installs a specific version:
+  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+
+Flags can be provided progressively — omitted values trigger interactive pickers.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch len(args) {
+			case 0, 2:
+				return nil
+			case 1:
+				return fmt.Errorf("positional arguments must be provided as [image] [drive]; got 1 argument")
+			default:
+				return cobra.MaximumNArgs(2)(cmd, args)
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Positional direct-install mode is incompatible with manifest-backed flags.
+			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "") {
+				return fmt.Errorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, or --drive")
+			}
+
+			// --nightly and --version are mutually exclusive.
+			if nightly && versionFlag != "" {
+				return fmt.Errorf("--nightly and --version are mutually exclusive")
+			}
+
 			if len(args) == 2 {
 				return runOSInstallDirect(args[0], args[1], force)
 			}
-			return runOSInstall(cmd.Context(), nightly)
+
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force)
 		},
 	}
 
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
+	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
+	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 
 	return cmd
 }
@@ -140,7 +173,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool) error {
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -180,36 +213,58 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 		})
 	}
 
-	// Add ESP32 entries.
-	espVersion := "(latest)"
-	for _, esp := range []struct {
-		key, name, chip string
-	}{
-		{"esp32-c6", "ESP32-C6", "esp32c6"},
-		{"esp32-c5", "ESP32-C5", "esp32c5"},
-	} {
-		deviceMap[esp.key] = pickerDevice{
-			Name:      esp.name,
-			Version:   espVersion,
-			Category:  "Wendy Lite",
-			IsESP32:   true,
-			ESP32Chip: esp.chip,
+	// When --device-type is not provided, also offer ESP32 entries in the picker.
+	if flagDeviceType == "" {
+		espVersion := "(latest)"
+		for _, esp := range []struct {
+			key, name, chip string
+		}{
+			{"esp32-c6", "ESP32-C6", "esp32c6"},
+			{"esp32-c5", "ESP32-C5", "esp32c5"},
+		} {
+			deviceMap[esp.key] = pickerDevice{
+				Name:      esp.name,
+				Version:   espVersion,
+				Category:  "Wendy Lite",
+				IsESP32:   true,
+				ESP32Chip: esp.chip,
+			}
+			items = append(items, tui.PickerItem{
+				Name:        esp.name,
+				Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
+				Value:       esp.key,
+			})
 		}
-		items = append(items, tui.PickerItem{
-			Name:        esp.name,
-			Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
-			Value:       esp.key,
-		})
 	}
 
-	if len(items) == 0 {
-		return fmt.Errorf("no devices available")
-	}
+	// Resolve device — use flag or interactive picker.
+	var selected string
+	if flagDeviceType != "" {
+		// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
+		if flagDeviceType == "esp32-c6" || flagDeviceType == "esp32-c5" {
+			return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+		}
+		if _, ok := deviceMap[flagDeviceType]; !ok {
+			var available []string
+			for k, d := range deviceMap {
+				if !d.IsESP32 {
+					available = append(available, k)
+				}
+			}
+			sort.Strings(available)
+			return fmt.Errorf("device type %q not found in manifest; available: %s", flagDeviceType, strings.Join(available, ", "))
+		}
+		selected = flagDeviceType
+	} else {
+		if len(items) == 0 {
+			return fmt.Errorf("no devices available")
+		}
 
-	fmt.Println()
-	selected, err := pickFromItems("Select a device", items)
-	if err != nil {
-		return err
+		fmt.Println()
+		selected, err = pickFromItems("Select a device", items)
+		if err != nil {
+			return err
+		}
 	}
 
 	device := deviceMap[selected]
@@ -217,57 +272,98 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force)
 }
 
-// installLinuxImage handles the Linux device path: pick drive → download → write.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice) error {
-	// List external drives.
-	drives, err := listExternalDrives()
-	if err != nil {
-		return fmt.Errorf("listing drives: %w", err)
-	}
-	if len(drives) == 0 {
-		return fmt.Errorf("no external drives found — insert an SD card or USB drive and try again")
-	}
-
-	// Drive picker.
-	var driveItems []tui.PickerItem
-	driveMap := make(map[string]drive)
-	for _, d := range drives {
-		desc := d.DevicePath
-		if d.Size != "" {
-			desc += "  " + d.Size
+// installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
+// nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool) error {
+	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
+	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
+	if flagVersion != "" {
+		// Validate the requested version exists in the manifest.
+		if _, err := getImageInfo(device.Manifest, flagVersion); err != nil {
+			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
-		driveItems = append(driveItems, tui.PickerItem{
-			Name:        d.Name,
-			Description: desc,
-			Value:       d.DevicePath,
-		})
-		driveMap[d.DevicePath] = d
+		selectedVersion = flagVersion
+	} else if nightly {
+		// --nightly: use the nightly version directly, skip the version picker.
+		selectedVersion = device.RawVersion
+	} else {
+		// Show version picker.
+		picked, err := pickManifestVersion("Select a version", device.Manifest)
+		if err != nil {
+			return err
+		}
+		selectedVersion = picked
 	}
 
-	fmt.Println()
-	sel, err := pickFromItems("Select target drive", driveItems)
-	if err != nil {
-		return err
-	}
-	targetDrive := driveMap[sel]
+	// Step 2: Resolve target drive — use flag or interactive picker.
+	var targetDrive drive
+	if flagDrive != "" {
+		drives, err := listAllDrives()
+		if err != nil {
+			return fmt.Errorf("listing drives: %w", err)
+		}
+		var found bool
+		for _, d := range drives {
+			if d.DevicePath == flagDrive {
+				targetDrive = d
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("drive %s not found", flagDrive)
+		}
+	} else {
+		drives, err := listExternalDrives()
+		if err != nil {
+			return fmt.Errorf("listing drives: %w", err)
+		}
+		if len(drives) == 0 {
+			return fmt.Errorf("no external drives found — insert an SD card or USB drive and try again")
+		}
 
-	// Confirm destructive write.
-	fmt.Println()
-	confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
-	if err != nil {
-		return err
-	}
-	if !confirmed {
-		fmt.Println("Cancelled.")
-		return nil
+		var driveItems []tui.PickerItem
+		driveMap := make(map[string]drive)
+		for _, d := range drives {
+			desc := d.DevicePath
+			if d.Size != "" {
+				desc += "  " + d.Size
+			}
+			driveItems = append(driveItems, tui.PickerItem{
+				Name:        d.Name,
+				Description: desc,
+				Value:       d.DevicePath,
+			})
+			driveMap[d.DevicePath] = d
+		}
+
+		fmt.Println()
+		sel, err := pickFromItems("Select target drive", driveItems)
+		if err != nil {
+			return err
+		}
+		targetDrive = driveMap[sel]
 	}
 
-	// Resolve image (cached or download).
-	fmt.Printf("\nPreparing %s image...\n", device.Name)
-	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
+	// Step 3: Confirm destructive write (unless --force).
+	if !force {
+		fmt.Println()
+		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	// Step 4: Resolve image (cached or download).
+	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
+	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
@@ -290,7 +386,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
-	// Write image to drive with progress bar.
+	// Step 5: Write image to drive with progress bar.
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	wp := tea.NewProgram(writeProg)
@@ -321,6 +417,43 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
 	fmt.Println("You can now insert the drive into your device and power it on.")
 	return nil
+}
+
+// pickManifestVersion presents an interactive picker for available versions in a
+// device manifest, sorted newest-first using semantic version comparison. It
+// marks "latest" and "nightly" versions in the picker description.
+// This is shared by both os install and os download flows.
+func pickManifestVersion(title string, manifest *deviceManifest) (string, error) {
+	if manifest == nil || len(manifest.Versions) == 0 {
+		return "", fmt.Errorf("no versions available")
+	}
+
+	var versionKeys []string
+	for v := range manifest.Versions {
+		versionKeys = append(versionKeys, v)
+	}
+	sort.Slice(versionKeys, func(i, j int) bool {
+		return version.CompareVersions(versionKeys[i], versionKeys[j]) > 0
+	})
+
+	var items []tui.PickerItem
+	for _, v := range versionKeys {
+		ver := manifest.Versions[v]
+		desc := ""
+		if ver.IsLatest {
+			desc = "latest"
+		} else if ver.IsNightly {
+			desc = "nightly"
+		}
+		items = append(items, tui.PickerItem{
+			Name:        v,
+			Description: desc,
+			Value:       v,
+		})
+	}
+
+	fmt.Println()
+	return pickFromItems(title, items)
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.

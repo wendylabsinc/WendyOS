@@ -176,6 +176,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 
 // runOptions holds the parsed flags for the run command.
 type runOptions struct {
+	buildType            string
 	debug                bool
 	deploy               bool
 	detach               bool
@@ -199,6 +200,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when Dockerfile is present alongside Package.swift or Python project markers: docker, swift, or python")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
@@ -227,6 +229,9 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	if err := appCfg.Validate(); err != nil {
 		return fmt.Errorf("invalid wendy.json: %w", err)
+	}
+	if err := warnAppConfigFile(cfgPath); err != nil {
+		return fmt.Errorf("reading wendy.json warnings: %w", err)
 	}
 
 	// Debug mode requires host networking for remote debugger access
@@ -393,17 +398,18 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
 // pushes the image directly to the device's registry. Then it creates and
 // starts the container on the agent.
-func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, agentOS string) error {
+func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Verify auth certs are available if the device's registry requires mTLS.
 	if err := requireRegistryAuth(ctx, conn); err != nil {
 		return err
 	}
 
-	// Query the device architecture.
+	// Query the device OS and architecture.
 	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
 		return fmt.Errorf("querying device version: %w", err)
 	}
+	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
 		architecture = "arm64"
@@ -533,9 +539,48 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	return runMacOSNativeContainer(ctx, conn, appCfg, createReq, opts)
 }
 
+func resolveRunProjectType(dir, requestedType string) (string, error) {
+	if strings.TrimSpace(requestedType) == "" {
+		return detectProjectType(dir)
+	}
+
+	buildType := normalizeBuildType(requestedType)
+	if buildType != "docker" && buildType != "swift" && buildType != "python" {
+		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, or python", requestedType)
+	}
+
+	switch buildType {
+	case "docker":
+		marker := filepath.Join(dir, "Dockerfile")
+		if _, err := os.Stat(marker); err == nil {
+			return "docker", nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		}
+	case "swift":
+		marker := filepath.Join(dir, "Package.swift")
+		if _, err := os.Stat(marker); err == nil {
+			return "swift", nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		}
+	case "python":
+		for _, marker := range []string{"requirements.txt", "pyproject.toml", "setup.py"} {
+			path := filepath.Join(dir, marker)
+			if _, err := os.Stat(path); err == nil {
+				return "python", nil
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("checking for %s: %w", path, err)
+			}
+		}
+	}
+
+	return "", fmt.Errorf("build type %q is not available in %s", requestedType, dir)
+}
+
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	projectType, err := detectProjectType(projectPath)
+	projectType, err := resolveRunProjectType(projectPath, opts.buildType)
 	if err != nil {
 		return err
 	}
@@ -641,7 +686,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Detect project type and ensure a Dockerfile exists.
-	projectType, err := detectProjectType(cwd)
+	projectType, err := resolveRunProjectType(cwd, opts.buildType)
 	if err != nil {
 		return err
 	}
@@ -668,14 +713,21 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("Xcode projects require a darwin target (got %s)", platform)
 	}
 
-	// Swift projects without a Dockerfile: check if the target platform is
-	// darwin (binary upload) or Linux (swift-container-plugin).
+	// Swift projects use a native darwin path for macOS targets and
+	// swift-container-plugin for Linux targets when --build-type=swift
+	// explicitly selects that path or when no Dockerfile is present.
 	if projectType == "swift" {
+		if normalizeBuildType(opts.buildType) == "swift" {
+			if platformOS(platform) == "darwin" {
+				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
+			}
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
+		}
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			if platformOS(platform) == "darwin" {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
-			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts, agentOS)
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 	}
 

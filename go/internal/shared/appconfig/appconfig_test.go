@@ -232,6 +232,41 @@ func TestValidateJSON_InputUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestValidateJSON_VideoEntitlementDeprecated(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "video"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 1 {
+		t.Fatalf("ValidateJSON() got %d warnings, want 1", len(warnings))
+	}
+	if got := warnings[0]; got != `entitlement[0]: "video" is deprecated; use "camera" instead` {
+		t.Fatalf("ValidateJSON() warning = %q", got)
+	}
+}
+
+func TestValidateJSON_CameraLegacyKeysNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{
+				"type": "camera",
+				"mode": "legacy",
+				"allowlist": ["/dev/video0"]
+			}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Fatalf("ValidateJSON() got %d warnings, want 0", len(warnings))
+	}
+}
+
 func TestLoadFromFile_WithHooksPostStart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wendy.json")

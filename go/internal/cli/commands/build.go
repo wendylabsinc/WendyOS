@@ -23,7 +23,13 @@ type BuildResult struct {
 	ProviderApp *providers.BuiltApp
 }
 
+type buildOptions struct {
+	buildType string
+}
+
 func newBuildCmd() *cobra.Command {
+	var opts buildOptions
+
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Build the application in the current directory",
@@ -36,6 +42,14 @@ func newBuildCmd() *cobra.Command {
 
 			cfgPath := filepath.Join(cwd, "wendy.json")
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
+			if cfgErr == nil {
+				if err := appCfg.Validate(); err != nil {
+					return fmt.Errorf("invalid wendy.json: %w", err)
+				}
+				if err := warnAppConfigFile(cfgPath); err != nil {
+					return fmt.Errorf("reading wendy.json warnings: %w", err)
+				}
+			}
 
 			target, _ := resolveTarget(cmd.Context())
 
@@ -69,7 +83,7 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("no supported build type found for this target; check that the project contains the right files")
 			}
 
-			selected, err := pickBuildOption(options)
+			selected, err := resolveDetectedBuildOption(options, opts.buildType)
 			if err != nil {
 				return err
 			}
@@ -105,12 +119,32 @@ func newBuildCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when multiple project markers are present: docker, swift, or python")
+
 	return cmd
+}
+
+func resolveDetectedBuildOption(options []BuildOption, requestedType string) (*BuildOption, error) {
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+
+	if strings.TrimSpace(requestedType) != "" {
+		return buildOptionForType(options, requestedType, interactive)
+	}
+
+	if preferred := preferredBuildOption(options, interactive); preferred != nil {
+		return preferred, nil
+	}
+
+	return pickBuildOption(options)
 }
 
 // pickBuildOption presents an interactive picker when multiple build options
 // are detected. If only one option exists, it is returned directly.
 func pickBuildOption(options []BuildOption) (*BuildOption, error) {
+	return pickBuildOptionWithTitle(options, "Select a build type")
+}
+
+func pickBuildOptionWithTitle(options []BuildOption, title string) (*BuildOption, error) {
 	if len(options) == 1 {
 		return &options[0], nil
 	}
@@ -123,7 +157,7 @@ func pickBuildOption(options []BuildOption) (*BuildOption, error) {
 		return nil, fmt.Errorf("multiple build types detected (%s); run in an interactive terminal or remove extra build markers so that only one remains", strings.Join(names, ", "))
 	}
 
-	picker := tui.NewPickerWithTitle("Select a build type")
+	picker := tui.NewPickerWithTitle(title)
 	p := tea.NewProgram(picker)
 
 	go func() {
@@ -157,6 +191,87 @@ func pickBuildOption(options []BuildOption) (*BuildOption, error) {
 		return nil, fmt.Errorf("invalid selection")
 	}
 	return opt, nil
+}
+
+func preferredBuildOption(options []BuildOption, interactive bool) *BuildOption {
+	hasLanguageMarker := false
+	dockerCount := 0
+	dockerfile := (*BuildOption)(nil)
+	for i := range options {
+		switch {
+		case options[i].Type == "swift" || options[i].Type == "python":
+			hasLanguageMarker = true
+		case options[i].Type == "docker":
+			dockerCount++
+			if options[i].File == "Dockerfile" {
+				dockerfile = &options[i]
+			}
+		}
+	}
+	if !hasLanguageMarker || dockerfile == nil {
+		return nil
+	}
+	if dockerCount == 1 || !interactive {
+		return dockerfile
+	}
+	return nil
+}
+
+func buildOptionForType(options []BuildOption, requestedType string, interactive bool) (*BuildOption, error) {
+	buildType := normalizeBuildType(requestedType)
+	if buildType == "" {
+		return nil, fmt.Errorf("build type must be one of docker, swift, or python")
+	}
+
+	var matches []BuildOption
+	for _, option := range options {
+		if option.Type == buildType {
+			matches = append(matches, option)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("build type %q is not available; detected %s", requestedType, strings.Join(buildOptionLabels(options), ", "))
+	}
+
+	if buildType == "docker" {
+		var dockerfile *BuildOption
+		for i := range matches {
+			if matches[i].File == "Dockerfile" {
+				dockerfile = &matches[i]
+				if !interactive {
+					return dockerfile, nil
+				}
+			}
+		}
+		if len(matches) > 1 {
+			if interactive {
+				return pickBuildOptionWithTitle(matches, "Select a Dockerfile")
+			}
+			return nil, fmt.Errorf("multiple Dockerfiles detected (%s); keep only one Dockerfile or omit --build-type to choose interactively", strings.Join(buildOptionLabels(matches), ", "))
+		}
+		if dockerfile != nil {
+			return dockerfile, nil
+		}
+	}
+
+	return &matches[0], nil
+}
+
+func buildOptionLabels(options []BuildOption) []string {
+	labels := make([]string, 0, len(options))
+	for _, option := range options {
+		labels = append(labels, option.Label)
+	}
+	return labels
+}
+
+func normalizeBuildType(buildType string) string {
+	switch strings.ToLower(strings.TrimSpace(buildType)) {
+	case "docker", "swift", "python":
+		return strings.ToLower(strings.TrimSpace(buildType))
+	default:
+		return ""
+	}
 }
 
 // filterBuildOptions removes options whose Type is not in the provider's

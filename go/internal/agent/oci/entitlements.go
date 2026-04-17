@@ -50,8 +50,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec, cfg.AppID)
 			}
-		case appconfig.EntitlementVideo:
-			applyVideo(spec)
+		case appconfig.EntitlementVideo, appconfig.EntitlementCamera:
+			applyCamera(spec)
 			if !didSetDeviceCapabilities {
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec, cfg.AppID)
@@ -60,8 +60,6 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
 			applyBluetooth(spec, cfg.AppID, opts.DBusProxyAvailable)
-		case appconfig.EntitlementCamera:
-			applyCamera(spec)
 		case appconfig.EntitlementUSB:
 			applyUSB(spec)
 		case appconfig.EntitlementI2C:
@@ -281,21 +279,63 @@ func applyAudio(spec *Spec) {
 		Access: "rwm",
 	})
 
-	// Mount PipeWire socket if available.
-	spec.Mounts = append(spec.Mounts, Mount{
-		Destination: "/run/pipewire",
-		Source:      "/run/pipewire",
-		Type:        "bind",
-		Options:     []string{"rbind", "nosuid", "noexec"},
-	})
+	// isSocket reports whether path is a Unix domain socket. Uses Lstat
+	// so symlinks are not followed — runc can't resolve symlink targets
+	// through bind mounts.
+	isSocket := func(path string) bool {
+		fi, err := os.Lstat(path)
+		return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
+	}
 
-	spec.Process.Env = append(spec.Process.Env,
-		"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
-	)
+	// Find the PipeWire socket. Check the system path first, then probe
+	// for a user session socket (e.g. /run/user/1000/pipewire-0 on RPi OS
+	// where PipeWire runs as a user service).
+	var pipewireSocketSource string
+	if isSocket("/run/pipewire/pipewire-0") {
+		pipewireSocketSource = "/run/pipewire/pipewire-0"
+	} else {
+		userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
+		for _, s := range userSockets {
+			if isSocket(s) {
+				pipewireSocketSource = s
+				break
+			}
+		}
+	}
+
+	if pipewireSocketSource != "" {
+		// Mount the individual socket file into the container.
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/run/pipewire/pipewire-0",
+			Source:      pipewireSocketSource,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		})
+		spec.Process.Env = append(spec.Process.Env,
+			"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
+		)
+
+		// Check for PulseAudio compat socket in the same source directory.
+		// PipeWire provides a PulseAudio emulation socket that GStreamer's
+		// autoaudiosink needs (pulsesink has the highest rank).
+		sourceDir := filepath.Dir(pipewireSocketSource)
+		pulseNative := filepath.Join(sourceDir, "pulse", "native")
+		if isSocket(pulseNative) {
+			spec.Mounts = append(spec.Mounts, Mount{
+				Destination: "/run/pipewire/pulse-native",
+				Source:      pulseNative,
+				Type:        "bind",
+				Options:     []string{"rbind", "nosuid", "noexec"},
+			})
+			spec.Process.Env = append(spec.Process.Env,
+				"PULSE_SERVER=unix:/run/pipewire/pulse-native",
+			)
+		}
+	}
 }
 
-// applyVideo adds video device access.
-func applyVideo(spec *Spec) {
+// applyCamera adds camera/V4L2 device access.
+func applyCamera(spec *Spec) {
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, videoGroupGID)
 
 	// Allow video4linux devices (major 81).
@@ -318,6 +358,11 @@ func applyVideo(spec *Spec) {
 		Type:        "bind",
 		Options:     []string{"rbind", "rw", "nosuid", "noexec"},
 	})
+}
+
+// applyVideo is a deprecated alias for camera/V4L2 device access.
+func applyVideo(spec *Spec) {
+	applyCamera(spec)
 }
 
 // applyPersist adds a persistent volume bind mount, creating the host
@@ -368,12 +413,6 @@ func applyBluetooth(spec *Spec, appID string, proxyAvailable bool) {
 	spec.Process.Env = append(spec.Process.Env,
 		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
 	)
-}
-
-// applyCamera adds camera/V4L2 device access.
-func applyCamera(spec *Spec) {
-	// Camera uses the same V4L2 devices as video.
-	applyVideo(spec)
 }
 
 // applyUSB adds USB device access.

@@ -5,7 +5,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"sort"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -39,7 +38,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 	// Resolve version — use flag, or pick interactively from available versions.
 	version := flagVersion
 	if version == "" {
-		version, err = pickVersion(dev)
+		version, err = pickManifestVersion("Select a version", dev.Manifest)
 		if err != nil {
 			return err
 		}
@@ -86,37 +85,4 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 
 	fmt.Printf("\nCached at: %s\n", path)
 	return nil
-}
-
-// pickVersion presents an interactive picker for available versions of a device.
-func pickVersion(dev deviceInfo) (string, error) {
-	if dev.Manifest == nil || len(dev.Manifest.Versions) == 0 {
-		return "", fmt.Errorf("no versions available for %s", dev.Name)
-	}
-
-	// Collect and sort versions (newest first by string sort, reversed).
-	var versions []string
-	for v := range dev.Manifest.Versions {
-		versions = append(versions, v)
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
-
-	var items []tui.PickerItem
-	for _, v := range versions {
-		ver := dev.Manifest.Versions[v]
-		desc := ""
-		if ver.IsLatest {
-			desc = "latest"
-		} else if ver.IsNightly {
-			desc = "nightly"
-		}
-		items = append(items, tui.PickerItem{
-			Name:        v,
-			Description: desc,
-			Value:       v,
-		})
-	}
-
-	fmt.Println()
-	return pickFromItems("Select a version", items)
 }

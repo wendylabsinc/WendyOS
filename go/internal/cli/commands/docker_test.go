@@ -129,6 +129,143 @@ func TestDetectProjectType_MultipleXcodeprojs_Error(t *testing.T) {
 	}
 }
 
+func TestResolveDetectedBuildOption_PrefersDockerfileOverSwift(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
+func TestResolveDetectedBuildOption_PrefersDockerfileOverPython(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "requirements.txt (Python)", Type: "python", File: "requirements.txt"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
+func TestPreferredBuildOption_InteractiveMultipleDockerfilesDoesNotAutoPrefer(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got := preferredBuildOption(options, true)
+	if got != nil {
+		t.Fatalf("got %+v, want nil so the picker can choose among Dockerfiles", got)
+	}
+}
+
+func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := buildOptionForType(options, "docker", false)
+	if err != nil {
+		t.Fatalf("buildOptionForType: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile", got)
+	}
+}
+
+func TestResolveRunProjectType_DefaultPrefersDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "docker" {
+		t.Fatalf("got %q, want docker", got)
+	}
+}
+
+func TestResolveRunProjectType_SwiftOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "swift")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "swift" {
+		t.Fatalf("got %q, want swift", got)
+	}
+}
+
+func TestResolveRunProjectType_PythonOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "requirements.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "python")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "python" {
+		t.Fatalf("got %q, want python", got)
+	}
+}
+
+func TestResolveRunProjectType_InvalidOverride(t *testing.T) {
+	dir := t.TempDir()
+	_, err := resolveRunProjectType(dir, "ruby")
+	if err == nil {
+		t.Fatal("expected error for invalid run build type override")
+	}
+	if !strings.Contains(err.Error(), `invalid value "ruby" for --build-type`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveRunProjectType_PropagatesMarkerStatErrors(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := resolveRunProjectType(notDir, "docker")
+	if err == nil {
+		t.Fatal("expected stat error for invalid project path")
+	}
+	if !strings.Contains(err.Error(), "checking for") {
+		t.Fatalf("expected wrapped stat error, got %v", err)
+	}
+}
+
 func TestGeneratePythonDockerfile_WithRequirements(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644); err != nil {
