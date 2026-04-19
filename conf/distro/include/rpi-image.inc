@@ -44,3 +44,9 @@ do_image_wic[depends] += " \
 "
 do_image_wic[depends] += "${PN}:do_generate_partuuids"
 WIC_CREATE_EXTRA_ARGS ?= "--no-fstab-update"
+
+# Create /config mount point directory (fstab entry is in rpi-fstab)
+create_config_mountpoint() {
+    mkdir -p ${IMAGE_ROOTFS}/config
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " create_config_mountpoint;"
