@@ -1,14 +1,15 @@
-# WendyOS for NVIDIA Jetson Developer Kits
+# WendyOS
 
-This repository provides the meta-layer and build flow to build **WendyOS** for **NVIDIA Jetson Developer Kits**, including:
-- **Jetson Orin Nano Developer Kit** (8GB)
-- **Jetson AGX Orin Developer Kit** (64GB)
+This repository provides the meta-layer and build flow to build **WendyOS** — a Yocto-based embedded Linux distribution — for:
+- **NVIDIA Jetson** Developer Kits (Orin Nano 8GB, AGX Orin 64GB)
+- **Raspberry Pi 5** (SD card and NVMe boot)
+- **QEMU ARM64** (virtual machine, for development)
 
 ### Supported Hardware
 
 | Hardware | SoC | RAM | Machine Config | Boot Device |
 |----------|-----|-----|----------------|-------------|
-| Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-wendyos` | eMMC/SD |
+| Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-wendyos` | SD |
 | Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-nvme-wendyos` | NVMe |
 | Jetson AGX Orin DevKit | Tegra234 | 64GB | `jetson-agx-orin-devkit-nvme-wendyos` | NVMe |
 | Raspberry Pi 5 | Broadcom BCM2712 | 8GB | `raspberrypi5-wendyos` | SD |
@@ -30,7 +31,7 @@ make flash-to-external  # Flash to external NVMe/USB drive
   - [Directory Structure Requirements](#directory-structure-requirements)
   - [Steps to Build](#steps-to-build)
   - [Flash the SD Card or NVMe](#flash-the-sd-card-or-nvme)
-    - [For eMMC/SD Card Builds](#for-emmcsd-card-builds)
+    - [For SD Card Builds](#for-sd-card-builds)
     - [For NVMe Builds](#for-nvme-builds)
     - [Flashing the .img File](#flashing-the-img-file)
     - [Alternative: Flashing with initrd-flash (USB Recovery Mode)](#alternative-flashing-with-initrd-flash-usb-recovery-mode)
@@ -48,6 +49,8 @@ make flash-to-external  # Flash to external NVMe/USB drive
 - [Advanced Configuration](#advanced-configuration)
   - [Custom Variables in bootstrap.sh](#custom-variables-in-bootstrapsh)
   - [Build Configuration Variables](#build-configuration-variables)
+  - [Runtime Identity](#runtime-identity)
+  - [Per-Board Repo Overrides](#per-board-repo-overrides)
 - [Raspberry Pi 5](#raspberry-pi-5)
   - [Supported Machines](#supported-machines)
   - [Build](#build)
@@ -141,22 +144,40 @@ make shell
 
 **Build for different targets:**
 ```bash
-# Jetson (Orin Nano NVMe — default)
-make setup MACHINE=jetson
+# Jetson Orin Nano (NVMe)
+make setup BOARD=jetson-orin-nano-nvme
 make build
 
-# Raspberry Pi 5
-make setup MACHINE=rpi5
+# Jetson Orin Nano (SD card)
+make setup BOARD=jetson-orin-nano-sd
+make build
+
+# Jetson AGX Orin (NVMe)
+make setup BOARD=jetson-agx-orin
+make build
+
+# Raspberry Pi 5 (SD card)
+make setup BOARD=rpi5-sd
+make build
+
+# Raspberry Pi 5 (NVMe)
+make setup BOARD=rpi5-nvme
 make build
 
 # QEMU (ARM64, for development)
-make setup MACHINE=qemu
+make setup BOARD=qemu-arm64
 make build
 ```
 
-> To build for a different Jetson variant (e.g., AGX Orin or eMMC/SD card), run
-> `make setup MACHINE=jetson` then edit `build/conf/local.conf` to set the desired
-> `MACHINE` value before running `make build`.
+> `BOARD` must be set to a board id matching a directory
+> `conf/template/boards/<board-id>/`. There is no silent default — pick the
+> correct board id up front. Each board directory contains `local.conf` and
+> `bblayers.conf`, which pull in shared fragments from
+> `conf/template/include/{local,bblayers}/` via BitBake `require`.
+>
+> `MACHINE=<board-id>` still works as a deprecated alias (prints a one-line
+> warning). `BOARD` is preferred because `MACHINE` collides with bitbake's
+> own `MACHINE` variable (the yocto machine name, e.g. `raspberrypi5-wendyos`).
 
 #### Option B: Manual Steps
 
@@ -171,19 +192,32 @@ make build
 2. **Run the bootstrap script**:
 
    Switch back to working folder and run the `bootstrap` script, setting
-   the `MACHINE` environment variable to the target machine:
+   the `BOARD` environment variable to the target board id:
 
    ```bash
    cd /path/to/project
-   MACHINE=<machine> ./meta-wendyos/bootstrap.sh
+   BOARD=<board-id> ./meta-wendyos/bootstrap.sh
    ```
 
-   Supported machines: `jetson`, `rpi5`, `qemu`. For example:
+   The full list of supported board ids lives in `conf/template/boards/`
+   (one directory per board). Each board directory contains a self-contained
+   `local.conf` and `bblayers.conf` that pull in shared fragments from
+   `conf/template/include/{local,bblayers}/` via BitBake `require`. Adding a
+   new board means creating one directory with those two files — no
+   `bootstrap.sh` change required. For example:
 
    ```bash
-   MACHINE=jetson ./meta-wendyos/bootstrap.sh
-   MACHINE=rpi5 ./meta-wendyos/bootstrap.sh
+   BOARD=jetson-orin-nano-nvme ./meta-wendyos/bootstrap.sh
+   BOARD=jetson-orin-nano-sd   ./meta-wendyos/bootstrap.sh
+   BOARD=jetson-agx-orin       ./meta-wendyos/bootstrap.sh
+   BOARD=rpi5-sd               ./meta-wendyos/bootstrap.sh
+   BOARD=rpi5-nvme             ./meta-wendyos/bootstrap.sh
+   BOARD=qemu-arm64            ./meta-wendyos/bootstrap.sh
    ```
+
+   `MACHINE=<board-id>` remains supported as a deprecated alias (prints a
+   warning). Prefer `BOARD=` — it avoids collision with bitbake's `MACHINE`
+   (the yocto machine name like `raspberrypi5-wendyos`, a different concept).
 
    The bootstrap script will:
    - Validate that the meta-layer is within the working directory
@@ -197,10 +231,16 @@ make build
    Edit `build/conf/local.conf` to customize:
    - `DL_DIR` - Download directory for source tarballs (recommended for caching)
    - `SSTATE_DIR` - Shared state cache directory (speeds up rebuilds)
-   - `MACHINE` - Target machine configuration:
-     - `jetson-orin-nano-devkit-nvme-wendyos` (Orin Nano - NVMe boot) [**default**]
-     - `jetson-orin-nano-devkit-wendyos` (Orin Nano - eMMC/SD card boot)
-     - `jetson-agx-orin-devkit-nvme-wendyos` (AGX Orin 64GB - NVMe boot)
+   - `MACHINE` - Yocto machine name. This is written to `build/conf/local.conf`
+     by `bootstrap.sh` based on the board id you passed in. The board id must
+     match a directory `conf/template/boards/<board-id>/`; that directory's
+     `local.conf` sets the Yocto `MACHINE` variable. Current mapping:
+     - `jetson-orin-nano-nvme`   → `jetson-orin-nano-devkit-nvme-wendyos`
+     - `jetson-orin-nano-sd`     → `jetson-orin-nano-devkit-wendyos`
+     - `jetson-agx-orin`         → `jetson-agx-orin-devkit-nvme-wendyos`
+     - `rpi5-sd`                 → `raspberrypi5-wendyos`
+     - `rpi5-nvme`               → `raspberrypi5-nvme-wendyos`
+     - `qemu-arm64`              → `qemuarm64-wendyos`
    - `WENDYOS_FLASH_IMAGE_SIZE` - Flash image size: "64GB"):
      - `"4GB"` - 3.2GB Mender storage (~1.3GB per rootfs partition)
      - `"8GB"` - 6.4GB Mender storage (~2.9GB per rootfs partition)
@@ -234,9 +274,9 @@ build/tmp/deploy/images/<machine>/wendyos-image-<machine>.rootfs.tegraflash.tar.
 
 **Important**: The flashing script differs based on your target machine:
 - **NVMe** (`jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`) → use `doexternal.sh`
-- **eMMC/SD card** (`jetson-orin-nano-devkit-wendyos`) → use `dosdcard.sh`
+- **SD card** (`jetson-orin-nano-devkit-wendyos`) → use `dosdcard.sh`
 
-#### For eMMC/SD Card Builds
+#### For SD Card Builds
 
 **Option 1: Directly Flash to SD Card**
 
@@ -593,7 +633,7 @@ The system includes Mender for Over-The-Air updates with A/B partition redundanc
 
 ### Partition Layout
 
-**eMMC/SD Card:**
+**SD Card (mmcblk0):**
 - `/dev/mmcblk0p1` - Root filesystem A
 - `/dev/mmcblk0p2` - Root filesystem B
 - `/dev/mmcblk0p11` - Boot partition (shared)
@@ -743,13 +783,93 @@ You can modify these variables in `bootstrap.sh` before running:
 ### Build Configuration Variables
 
 In `build/conf/local.conf`:
-- `WENDYOS_FLASH_IMAGE_SIZE` - Flash image size: "4GB", "8GB", "16GB", "32GB", "64GB" (default: "8GB")
+- `WENDYOS_FLASH_IMAGE_SIZE` - Flash image size: "4GB", "8GB", "16GB", "32GB", "64GB" (default: "64GB" — set per-board in `conf/template/boards/<id>/local.conf`; Tegra only)
 - `WENDYOS_DEBUG` - Enable debug packages (default: 0)
 - `WENDYOS_DEBUG_UART` - Enable UART debug output (default: 0)
 - `WENDYOS_USB_GADGET` - Enable USB gadget mode (default: 0)
 - `WENDYOS_PERSIST_JOURNAL_LOGS` - Persist logs to storage (default: 0)
 
 **Note**: Choose `WENDYOS_FLASH_IMAGE_SIZE` based on your target storage device capacity and expected rootfs size. Larger images provide more space for root filesystems and future updates.
+
+### Runtime Identity
+
+Runtime consumers (e.g. the wendy agent) read two files from `/etc/wendyos/`:
+
+- **`/etc/wendyos/device-type`** — shell-sourceable, board + yocto machine.
+  Example for Jetson Orin Nano (NVMe):
+
+  ```
+  BOARD=jetson-orin-nano-nvme
+  MACHINE=jetson-orin-nano-devkit-nvme-wendyos
+  ```
+
+  `BOARD` is the WendyOS board id (the value you pass to `bootstrap.sh` as
+  `BOARD=`), set by `WENDYOS_BOARD_ID` in `conf/machine/<machine>.conf`.
+  `MACHINE` is bitbake's full yocto machine name.
+
+- **`/etc/wendyos/version.txt`** — the installed OS version, e.g.
+  `WendyOS-0.14.0`. Reflects the currently running rootfs (always fresh after
+  an OTA update).
+
+Runtime consumers can `. /etc/wendyos/device-type` and branch on `$BOARD`
+without maintaining their own board-to-machine lookup table.
+
+#### Where these files live on disk
+
+The `/etc/wendyos/` directory is bind-mounted from `/data/etc/wendyos/` on
+Tegra (via `setup-etc-binds.sh`), so runtime-generated identity (`device-uuid`,
+`device-name`) persists across Mender OTA updates. The two build-time files
+above have different refresh semantics and are seeded differently:
+
+| File | Installed by recipe to | Runtime lifecycle |
+|---|---|---|
+| `device-type` | `/etc/wendyos/device-type` (rootfs) | `setup-etc-binds.sh` seeds to `/data` on first boot only — hardware identity, never changes |
+| `version.txt` | `/usr/lib/wendyos/version.txt` (authoritative) + `/etc/wendyos/version.txt` symlink | `setup-etc-binds.sh` overwrites `/etc/wendyos/version.txt` from `/usr/lib/` on every boot — stays current across OTA |
+
+On RPi and QEMU (no `/data`), `setup-etc-binds.sh` doesn't run. `device-type`
+lives directly on rootfs and `version.txt` is a symlink to the `/usr/lib/`
+copy — both always current.
+
+### Per-Board Repo Overrides
+
+The default upstream layer pinning (commit hashes for `poky`, `meta-tegra`,
+`meta-raspberrypi`, etc.) lives in `bootstrap.sh` as `SRCREV_*` variables.
+A single default is shared by every board and is fine for today's targets —
+all machines build against the same layer commits.
+
+Each board directory contains an optional `repos.overrides` file
+(`conf/template/boards/<board-id>/repos.overrides`). When present, it is
+`source`d by `bootstrap.sh` after the defaults are set and before the repos
+list is built, letting a board override one or more layers without touching
+the shared defaults or the other boards.
+
+Three override shapes are supported:
+
+- **Pin a different commit** — uncomment and edit the relevant line in the
+  placeholder:
+  ```sh
+  SRCREV_TEGRA="<commit-hash>"
+  ```
+- **Replace a source URL** (e.g. to use a fork):
+  ```sh
+  URL_TEGRA="https://github.com/my-org/meta-tegra-fork.git"
+  ```
+- **Add an extra clone** that coexists with the defaults — useful when a
+  board needs a parallel copy of a layer at a different branch:
+  ```sh
+  SRCREV_TEGRA_THOR="<commit-hash>"
+  REPOS_EXTRA+=(
+      "1|https://github.com/OE4T/meta-tegra.git|meta-tegra-thor|${SRCREV_TEGRA_THOR}"
+  )
+  ```
+  The board's `bblayers.conf` then points at `${TOPDIR}/../repos/meta-tegra-thor`
+  (via an appropriate include fragment) instead of the default `repos/meta-tegra`.
+
+A `repos.overrides` file with every line commented out is equivalent to no
+overrides — today's shipped placeholders are exactly that. The shared
+`repos/` directory holds at most one clone per folder name, so two boards
+that override the same folder to different commits will cause a re-checkout
+when switching. Use `REPOS_EXTRA` with a different folder name to avoid that.
 
 ## Raspberry Pi 5
 
@@ -773,13 +893,17 @@ enabled on `ttyAMA0` at 115200 baud.
 
    ```bash
    cd /path/to/project
-   MACHINE=rpi5 ./meta-wendyos/bootstrap.sh
+   # SD card boot (yocto MACHINE = raspberrypi5-wendyos)
+   BOARD=rpi5-sd ./meta-wendyos/bootstrap.sh
+   # or NVMe boot (yocto MACHINE = raspberrypi5-nvme-wendyos)
+   BOARD=rpi5-nvme ./meta-wendyos/bootstrap.sh
    ```
 
-   This copies `conf/template/bblayers.conf.rpi5` and `conf/template/local.conf.rpi5`
-   into `build/conf/`. The default machine is `raspberrypi5-wendyos` (SD card boot).
-   The NVMe variant (`raspberrypi5-nvme-wendyos`) is also supported and can be selected
-   by editing `build/conf/local.conf`.
+   The bootstrap script copies `build/conf/bblayers.conf` and
+   `build/conf/local.conf` from the per-board directory
+   `conf/template/boards/<board-id>/`. Those files `require` shared fragments
+   from `conf/template/include/{local,bblayers}/`. Choose the right board id
+   up front — there is no in-tree switch after bootstrap.
 
 2. **Build the image** inside the Docker container:
 
@@ -849,7 +973,7 @@ sudo pacman -S qemu-system-aarch64
 ### QEMU Build
 
 ```bash
-make setup MACHINE=qemu
+make setup BOARD=qemu-arm64
 make build
 ```
 

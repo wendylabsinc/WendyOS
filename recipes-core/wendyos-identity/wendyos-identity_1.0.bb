@@ -42,19 +42,30 @@ do_install() {
     # Create directory for identity storage
     install -d ${D}${sysconfdir}/wendyos
 
-    # Create Wendy/WendyOS version file
+    # Authoritative version.txt on the read-only rootfs (never shadowed by
+    # the /etc/wendyos bind mount on Tegra).
+    install -d ${D}${nonarch_libdir}/wendyos
     echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/version.txt
-    install -m 0644 ${WORKDIR}/version.txt ${D}${sysconfdir}/wendyos/version.txt
+    install -m 0644 ${WORKDIR}/version.txt ${D}${nonarch_libdir}/wendyos/version.txt
+
+    # Consumer-facing path: symlink on rootfs so /etc/wendyos/version.txt
+    # resolves on non-Tegra. On Tegra the bind mount shadows this symlink;
+    # setup-etc-binds.sh writes a real file at /etc/wendyos/version.txt
+    # (via the /data bind mount) on every boot to stay OTA-fresh.
+    ln -sf ../../usr/lib/wendyos/version.txt ${D}${sysconfdir}/wendyos/version.txt
 
     # Create build ID file (actual date will be set at first boot if needed)
     echo "WendyOS-${DISTRO_VERSION}" > ${WORKDIR}/wendyos-build-id
     install -m 0644 ${WORKDIR}/wendyos-build-id ${D}${sysconfdir}/wendyos-build-id
+}
 
-    # Write hardware platform identifier for OTA update device detection
-    if [ -n "${WENDYOS_DEVICE_TYPE}" ]; then
-        echo "${WENDYOS_DEVICE_TYPE}" > ${WORKDIR}/device-type
-        install -m 0644 ${WORKDIR}/device-type ${D}${sysconfdir}/wendyos/device-type
-    fi
+do_install:append() {
+    # Stable board identity for the wendy agent. Sourced as shell.
+    # BOARD is set in conf/machine/<machine>.conf; MACHINE is the yocto machine name.
+    install -d ${D}${sysconfdir}/wendyos
+    printf 'BOARD=%s\n'   "${WENDYOS_BOARD_ID}" >  ${D}${sysconfdir}/wendyos/device-type
+    printf 'MACHINE=%s\n' "${MACHINE}"          >> ${D}${sysconfdir}/wendyos/device-type
+    chmod 0644 ${D}${sysconfdir}/wendyos/device-type
 }
 
 FILES:${PN} += "${bindir}/generate-uuid.sh"
@@ -68,6 +79,9 @@ FILES:${PN} += "${systemd_system_unitdir}/wendyos-identity.service"
 FILES:${PN} += "${sysconfdir}/wendyos"
 FILES:${PN} += "${sysconfdir}/wendyos/device-type"
 FILES:${PN} += "${sysconfdir}/wendyos/version.txt"
+FILES:${PN} += "${nonarch_libdir}/wendyos/version.txt"
 FILES:${PN} += "${sysconfdir}/wendyos-build-id"
+
+CONFFILES:${PN} += "${sysconfdir}/wendyos/device-type"
 
 RDEPENDS:${PN} = "bash util-linux-uuidgen avahi-daemon coreutils iproute2"
