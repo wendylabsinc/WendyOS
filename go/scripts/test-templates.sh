@@ -170,6 +170,14 @@ for lang in "${LANGUAGES[@]}"; do
         app_id="test-${lang}-${tmpl}"
         test_name="${lang}/${tmpl}"
 
+        # Some templates only exist for a subset of languages (e.g.
+        # camera-feed-yolo is python-only). Skip combinations that aren't in
+        # the templates repo rather than counting them as failures.
+        if [[ ! -f "$TEMPLATES_DIR/$lang/$tmpl/template.json" ]]; then
+            skip_test "init $test_name (not available for $lang)"
+            continue
+        fi
+
         run_test "init $test_name" \
             bash -c "cd '$WORK_DIR/$lang' && '$WENDY' init \
                 --app-id '$app_id' \
@@ -191,6 +199,11 @@ for lang in "${LANGUAGES[@]}"; do
         app_id="test-${lang}-${tmpl}"
         project_dir="$WORK_DIR/$lang/$app_id"
         test_name="${lang}/${tmpl}"
+
+        if [[ ! -f "$TEMPLATES_DIR/$lang/$tmpl/template.json" ]]; then
+            skip_test "validate $test_name (not available for $lang)"
+            continue
+        fi
 
         if [[ ! -f "$project_dir/wendy.json" ]]; then
             skip_test "validate $test_name (no wendy.json)"
