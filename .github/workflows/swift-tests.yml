@@ -172,7 +172,7 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          make lint 2>&1 | tee lint_output.txt
+          bash ./Scripts/Lint.sh 2>&1 | tee lint_output.txt
           status=${PIPESTATUS[0]}
           {
             echo "lint_output<<EOF"

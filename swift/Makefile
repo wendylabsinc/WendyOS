@@ -17,7 +17,7 @@ format: ## Format Swift code using swift-format
 	swift format --recursive --in-place $(SWIFT_FORMAT_TARGETS)
 
 lint: ## Lint Swift code using swift-format
-	swift format lint --recursive --strict $(SWIFT_FORMAT_TARGETS)
+	bash ./Scripts/Lint.sh
 
 test: ## Run Swift package tests
 	cd WendyAgentCore && swift test
