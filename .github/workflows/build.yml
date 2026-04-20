@@ -18,6 +18,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  XCODE_VERSION: '26.3'
+
 jobs:
   determine-version:
     name: Determine Version
@@ -183,6 +186,86 @@ jobs:
           ARCHIVE="${{ matrix.artifact-name }}-${VERSION}.tar.gz"
           tar -czvf "$ARCHIVE" ${{ matrix.artifact-name }}/
           echo "archive=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.archive }}
+          path: ${{ env.archive }}
+          retention-days: 14
+          if-no-files-found: error
+
+  build-agent-macos-app:
+    name: wendy-agent-macos-app
+    runs-on: macos-26
+    needs: [determine-version]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Resolve Swift package dependencies
+        working-directory: swift
+        env:
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PACKAGE_CACHE_DIR" "$SOURCE_PACKAGES_DIR"
+
+          xcodebuild -resolvePackageDependencies \
+            -workspace WendyAgent.xcworkspace \
+            -scheme WendyAgentMac \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -packageCachePath "$PACKAGE_CACHE_DIR" \
+            -skipMacroValidation
+
+      - name: Archive macOS app
+        working-directory: swift
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARCHIVE_PATH="$RUNNER_TEMP/WendyAgentMac.xcarchive"
+          EXPORT_DIR="$RUNNER_TEMP/WendyAgentMac-export"
+          APP_NAME="WendyAgentMac.app"
+          ARTIFACT="wendy-agent-macos-universal-${VERSION}.zip"
+
+          rm -rf "$ARCHIVE_PATH" "$EXPORT_DIR"
+
+          xcodebuild archive \
+            -workspace WendyAgent.xcworkspace \
+            -scheme WendyAgentMac \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -packageCachePath "$PACKAGE_CACHE_DIR" \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            -skipMacroValidation
+
+          mkdir -p "$EXPORT_DIR"
+          ditto "$ARCHIVE_PATH/Products/Applications/$APP_NAME" "$EXPORT_DIR/$APP_NAME"
+
+          codesign --force --deep --sign - "$EXPORT_DIR/$APP_NAME"
+          codesign --verify --deep --strict "$EXPORT_DIR/$APP_NAME"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$EXPORT_DIR/$APP_NAME" \
+            "$GITHUB_WORKSPACE/$ARTIFACT"
+
+          echo "archive=$ARTIFACT" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -521,7 +604,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, package-linux, package-windows, test-templates]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, package-linux, package-windows, test-templates]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     steps:
       - name: Download artifact
@@ -669,7 +752,7 @@ jobs:
             echo "DISCORD_WEBHOOK_URL not configured, skipping notification"
           fi
 
-      # Bump the formula in homebrew-tap
+      # Bump Homebrew tap metadata
       - name: Create GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -687,111 +770,177 @@ jobs:
           ref: main
           path: tap
 
-      - name: Calculate binary checksums
+      - name: Calculate release artifact checksums
         id: checksums
         run: |
           set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
           TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
 
-          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-darwin-arm64-${VERSION}.tar.gz"
-          MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
+          artifact_path() {
+            local name="$1"
+            find . -name "$name" -print -quit
+          }
 
-          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-arm64-${VERSION}.tar.gz"
-          LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
+          sha_for_artifact() {
+            local name="$1"
+            local path
+            path=$(artifact_path "$name")
+            if [ -z "$path" ]; then
+              echo "::error::Could not find artifact ${name}" >&2
+              exit 1
+            fi
+            sha256sum "$path" | awk '{print $1}'
+          }
 
-          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-amd64-${VERSION}.tar.gz"
-          LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
+          CLI_MACOS_FILE="wendy-cli-darwin-arm64-${VERSION}.tar.gz"
+          CLI_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${CLI_MACOS_FILE}"
+          CLI_MACOS_SHA=$(sha_for_artifact "$CLI_MACOS_FILE")
+
+          LINUX_ARM_FILE="wendy-cli-linux-arm64-${VERSION}.tar.gz"
+          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_ARM_FILE}"
+          LINUX_ARM_SHA=$(sha_for_artifact "$LINUX_ARM_FILE")
+
+          LINUX_X86_FILE="wendy-cli-linux-amd64-${VERSION}.tar.gz"
+          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_X86_FILE}"
+          LINUX_X86_SHA=$(sha_for_artifact "$LINUX_X86_FILE")
+
+          AGENT_MACOS_FILE="wendy-agent-macos-universal-${VERSION}.zip"
+          AGENT_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${AGENT_MACOS_FILE}"
+          AGENT_MACOS_SHA=$(sha_for_artifact "$AGENT_MACOS_FILE")
 
           echo "URLs and SHA256s:"
-          echo "  macOS ARM64: ${MACOS_URL} -> ${MACOS_SHA}"
-          echo "  Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
-          echo "  Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
+          echo "  CLI macOS ARM64: ${CLI_MACOS_URL} -> ${CLI_MACOS_SHA}"
+          echo "  CLI Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
+          echo "  CLI Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
+          echo "  Agent macOS app: ${AGENT_MACOS_URL} -> ${AGENT_MACOS_SHA}"
 
-          echo "macos_url=${MACOS_URL}" >> $GITHUB_OUTPUT
-          echo "macos_sha=${MACOS_SHA}" >> $GITHUB_OUTPUT
+          echo "cli_macos_url=${CLI_MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "cli_macos_sha=${CLI_MACOS_SHA}" >> $GITHUB_OUTPUT
           echo "linux_arm_url=${LINUX_ARM_URL}" >> $GITHUB_OUTPUT
           echo "linux_arm_sha=${LINUX_ARM_SHA}" >> $GITHUB_OUTPUT
           echo "linux_x86_url=${LINUX_X86_URL}" >> $GITHUB_OUTPUT
           echo "linux_x86_sha=${LINUX_X86_SHA}" >> $GITHUB_OUTPUT
+          echo "agent_macos_url=${AGENT_MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "agent_macos_sha=${AGENT_MACOS_SHA}" >> $GITHUB_OUTPUT
 
-      # Nightly: update wendy-nightly.rb and push directly to main
-      - name: Bump nightly formula
+      # Nightly: update Homebrew formula and cask directly on main
+      - name: Bump nightly Homebrew metadata
         if: needs.determine-version.outputs.is_release != 'true'
         run: |
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
           FORMULA="Formula/wendy-nightly.rb"
+          CASK="Casks/wendy-agent-nightly.rb"
 
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.cli_macos_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
 
-          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.cli_macos_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
 
           # Update bottle root_url version
           sed -i "s|wendy-nightly-[^\"]*|wendy-nightly-${VERSION}|" "$FORMULA"
 
+          mkdir -p "$(dirname "$CASK")"
+          cat > "$CASK" <<EOF
+          cask "wendy-agent-nightly" do
+            version "${VERSION}"
+            sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
+
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-universal-#{version}.zip"
+            name "Wendy Agent"
+            desc "Wendy Agent for macOS (nightly)"
+            homepage "https://github.com/wendylabsinc/wendy-agent"
+
+            app "WendyAgentMac.app"
+          end
+          EOF
+
           # Verify all URLs and checksums were actually updated
-          echo "Verifying formula was updated correctly..."
+          echo "Verifying nightly Homebrew metadata..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
-          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.cli_macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
+          grep -q "version \"${VERSION}\"" "$CASK" || { echo "::error::Failed to update nightly cask version"; exit 1; }
+          grep -q "sha256 \"${{ steps.checksums.outputs.agent_macos_sha }}\"" "$CASK" || { echo "::error::Failed to update nightly cask SHA256"; exit 1; }
 
           echo "Updated nightly formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
+          echo "Updated nightly cask:"
+          grep -E "version|sha256|url" "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FORMULA"
+          git add "$FORMULA" "$CASK"
           git commit -m "wendy-nightly: update to ${VERSION}"
           git push origin main
 
-      # Stable: update wendy.rb via PR
-      - name: Bump stable formula
+      # Stable: update the CLI formula and macOS agent cask via PR
+      - name: Bump stable Homebrew metadata
         if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
         run: |
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
-          BRANCH="ci/bump-wendy-${VERSION}"
+          BRANCH="ci/bump-homebrew-${VERSION}"
           FORMULA="Formula/wendy.rb"
+          CASK="Casks/wendy-agent.rb"
 
           git checkout -b "$BRANCH"
 
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.cli_macos_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
 
-          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.cli_macos_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
 
           # Update bottle root_url version
           sed -i "s|wendy-[0-9][^\"]*|wendy-${VERSION}|" "$FORMULA"
 
+          mkdir -p "$(dirname "$CASK")"
+          cat > "$CASK" <<EOF
+          cask "wendy-agent" do
+            version "${VERSION}"
+            sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
+
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-universal-#{version}.zip"
+            name "Wendy Agent"
+            desc "Wendy Agent for macOS"
+            homepage "https://github.com/wendylabsinc/wendy-agent"
+
+            app "WendyAgentMac.app"
+          end
+          EOF
+
           # Verify all URLs and checksums were actually updated
-          echo "Verifying formula was updated correctly..."
+          echo "Verifying stable Homebrew metadata..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
-          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.cli_macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
+          grep -q "version \"${VERSION}\"" "$CASK" || { echo "::error::Failed to update macOS agent cask version"; exit 1; }
+          grep -q "sha256 \"${{ steps.checksums.outputs.agent_macos_sha }}\"" "$CASK" || { echo "::error::Failed to update macOS agent cask SHA256"; exit 1; }
 
           echo "Updated stable formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
+          echo "Updated stable cask:"
+          grep -E "version|sha256|url" "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FORMULA"
-          git commit -m "wendy: bump to ${VERSION}"
+          git add "$FORMULA" "$CASK"
+          git commit -m "homebrew: bump stable artifacts to ${VERSION}"
           git push -u origin "$BRANCH"
 
       - name: Create PR
@@ -802,15 +951,17 @@ jobs:
           VERSION="${{ needs.determine-version.outputs.version }}"
           gh pr create \
             --repo wendylabsinc/homebrew-tap \
-            --head "ci/bump-wendy-${VERSION}" \
+            --head "ci/bump-homebrew-${VERSION}" \
             --base main \
-            --title "wendy: bump to ${VERSION}" \
+            --title "homebrew: bump stable artifacts to ${VERSION}" \
             --label pr-pull \
             --body "Automated bump from release ${VERSION}
 
-          This PR updates the wendy formula to version ${VERSION}.
+          This PR updates the stable Homebrew formula for the CLI and the
+          stable cask for the macOS agent app.
 
-          All platforms use pre-built Go binaries."
+          The formula continues to use pre-built Go binaries, and the cask
+          points at the GitHub release app zip."
 
   publish-aur:
     name: Publish AUR Packages

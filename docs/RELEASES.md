@@ -91,6 +91,7 @@ https://github.com/wendylabsinc/wendy-agent/releases/download/v0.2.0/wendy-agent
 All platform builds are included:
 - `wendy-agent-linux-arm64-${VERSION}.tar.gz`
 - `wendy-agent-linux-amd64-${VERSION}.tar.gz`
+- `wendy-agent-macos-universal-${VERSION}.zip`
 - `wendy-cli-linux-arm64-${VERSION}.tar.gz`
 - `wendy-cli-linux-amd64-${VERSION}.tar.gz`
 - `wendy-cli-darwin-arm64-${VERSION}.tar.gz`
@@ -102,7 +103,9 @@ All platform builds are included:
 
 - **Pre-releases**: Fully automated on every `main` push
 - **Homebrew nightly formula**: Auto-updated (direct push) for every pre-release
+- **Homebrew nightly cask**: Auto-updated (direct push) for every pre-release
 - **Homebrew stable formula**: Auto-updated via PR for semver releases
+- **Homebrew stable cask**: Auto-updated via PR for semver releases
 - **Winget**: Auto-updated for semver releases
 - **Semver releases**: Manual promotion via workflow dispatch
 - **Latest tag**: Auto-updated to point to the most recent pre-release
