@@ -33,6 +33,7 @@ func newOSInstallCmd() *cobra.Command {
 	var driveFlag string
 	var wifiSSID string
 	var wifiPassword string
+	var deviceName string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -71,7 +72,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				return runOSInstallDirect(args[0], args[1], force)
 			}
 
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, wifiSSID, wifiPassword)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, wifiSSID, wifiPassword, deviceName)
 		},
 	}
 
@@ -82,6 +83,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure WiFi SSID on first boot")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Pre-configure WiFi password on first boot")
+	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
 
 	return cmd
 }
@@ -179,7 +181,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword string) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword, deviceName string) error {
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -278,12 +280,12 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifiSSID, wifiPassword)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifiSSID, wifiPassword, deviceName)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword string) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword, deviceName string) error {
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
 	if flagVersion != "" {
@@ -372,6 +374,11 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
+	provDeviceName, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return err
+	}
+
 	// Step 4: Resolve image (cached or download).
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
 	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
@@ -426,7 +433,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	fmt.Printf("\nWriting provisioning data to config partition...\n")
-	if err := provisionConfigPartition(targetDrive, provSSID, provPassword); err != nil {
+	if err := provisionConfigPartition(targetDrive, provSSID, provPassword, provDeviceName); err != nil {
 		fmt.Printf("Warning: could not write config partition: %v\n", err)
 		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
 	}
@@ -817,9 +824,56 @@ func resolveWiFiCredentials(flagSSID, flagPassword string) (ssid, password strin
 	return ssid, strings.TrimSpace(string(pwBytes)), nil
 }
 
+// resolveDeviceName returns the device name to pre-configure on first boot.
+// If flagName is set it is validated and returned directly. In interactive mode
+// the user is prompted; an empty response skips naming (auto-generated on device).
+func resolveDeviceName(flagName string) (string, error) {
+	validate := func(name string) error {
+		if len(name) < 3 || len(name) > 64 {
+			return fmt.Errorf("device name must be 3–64 characters")
+		}
+		for i, c := range name {
+			switch {
+			case c >= 'a' && c <= 'z':
+			case (c >= '0' && c <= '9') || c == '-':
+				if i == 0 {
+					return fmt.Errorf("device name must start with a lowercase letter")
+				}
+			default:
+				return fmt.Errorf("device name may only contain lowercase letters, digits, and hyphens")
+			}
+		}
+		return nil
+	}
+
+	if flagName != "" {
+		if err := validate(flagName); err != nil {
+			return "", fmt.Errorf("--device-name: %w", err)
+		}
+		return flagName, nil
+	}
+
+	if !isInteractiveTerminal() {
+		return "", nil
+	}
+
+	fmt.Print("\nDevice name (leave empty to auto-generate): ")
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	name := strings.TrimSpace(line)
+	if name == "" {
+		return "", nil
+	}
+	if err := validate(name); err != nil {
+		return "", fmt.Errorf("invalid device name: %w", err)
+	}
+	return name, nil
+}
+
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
-// and writes it (along with optional WiFi credentials) to the config partition on d.
-func provisionConfigPartition(d drive, ssid, password string) error {
+// and writes it (along with optional WiFi credentials and device name) to the
+// config partition on d.
+func provisionConfigPartition(d drive, ssid, password, deviceName string) error {
 	release, err := fetchAgentRelease(false)
 	if err != nil {
 		return fmt.Errorf("fetching latest agent release: %w", err)
@@ -844,7 +898,7 @@ func provisionConfigPartition(d drive, ssid, password string) error {
 		return fmt.Errorf("downloading agent binary: %w", err)
 	}
 
-	return writeConfigPartition(d, agentBinary, ssid, password)
+	return writeConfigPartition(d, agentBinary, ssid, password, deviceName)
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.

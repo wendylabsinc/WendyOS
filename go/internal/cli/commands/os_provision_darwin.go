@@ -10,8 +10,8 @@ import (
 
 // writeConfigPartition finds, mounts, populates, and unmounts the FAT32 config
 // partition on d after a dd write. agentBinary is the arm64 agent binary content.
-// ssid/password are written to wendy.conf if ssid is non-empty.
-func writeConfigPartition(d drive, agentBinary []byte, ssid, password string) error {
+// ssid/password and deviceName are written to wendy.conf when non-empty.
+func writeConfigPartition(d drive, agentBinary []byte, ssid, password, deviceName string) error {
 	partDev, err := findConfigPartition(d.DevicePath)
 	if err != nil {
 		return fmt.Errorf("locating config partition on %s: %w", d.DevicePath, err)
@@ -23,7 +23,7 @@ func writeConfigPartition(d drive, agentBinary []byte, ssid, password string) er
 	}
 	defer exec.Command("diskutil", "unmount", partDev).Run() //nolint:errcheck
 
-	return writeConfigFiles(mountPoint, agentBinary, ssid, password)
+	return writeConfigFiles(mountPoint, agentBinary, ssid, password, deviceName)
 }
 
 // findConfigPartition runs `diskutil list <diskDev>` (which also rescans the
