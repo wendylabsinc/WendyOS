@@ -5,40 +5,13 @@ on:
     branches: [main]
 
 concurrency:
-  group: tests-${{ github.event.pull_request.number }}
+  group: go-tests-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  XCODE_VERSION: '26.3'
-
 jobs:
-  changes:
-    name: Detect Swift changes
-    runs-on: ubuntu-latest
-    outputs:
-      swift: ${{ steps.filter.outputs.swift }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect Swift/Proto/workflow changes
-        id: filter
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CHANGED_FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
-
-          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(swift/|Proto/|\.github/workflows/)'; then
-            echo "swift=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "swift=false" >> "$GITHUB_OUTPUT"
-          fi
-
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -100,116 +73,3 @@ jobs:
             echo "Run 'gofmt -w -s .' to fix."
             exit 1
           fi
-
-  swift-tests:
-    name: Swift package tests
-    runs-on: macos-26
-    needs: [changes]
-    if: needs.changes.outputs.swift == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Capture selected Xcode version
-        id: xcode
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
-
-      - name: Cache SwiftPM package resolution
-        uses: actions/cache@v4
-        with:
-          path: |
-            swift/WendyAgentCore/.build/checkouts
-            swift/WendyAgentCore/.build/repositories
-            ~/Library/Caches/org.swift.swiftpm
-            ~/.cache/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
-          restore-keys: |
-            swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
-            swiftpm-${{ runner.os }}-
-
-      - name: Run swift test
-        working-directory: swift/WendyAgentCore
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift test
-
-  swift-build-macos:
-    name: Swift macOS app build
-    runs-on: macos-26
-    needs: [changes]
-    if: needs.changes.outputs.swift == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Capture selected Xcode version
-        id: xcode
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Xcode package resolution
-        uses: actions/cache@v4
-        with:
-          path: |
-            swift/.ci/PackageCache
-            swift/.ci/SourcePackages
-          key: xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
-          restore-keys: |
-            xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
-            xcode-packages-${{ runner.os }}-
-
-      - name: Resolve Swift package dependencies
-        working-directory: swift
-        env:
-          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
-          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$PACKAGE_CACHE_DIR" "$SOURCE_PACKAGES_DIR"
-
-          xcodebuild -resolvePackageDependencies \
-            -workspace WendyAgent.xcworkspace \
-            -scheme WendyAgentMac \
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
-            -packageCachePath "$PACKAGE_CACHE_DIR" \
-            -skipMacroValidation
-
-      - name: Build Release universal app
-        working-directory: swift
-        env:
-          DERIVED_DATA_PATH: ${{ runner.temp }}/DerivedData
-          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
-          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf "$DERIVED_DATA_PATH"
-
-          xcodebuild build \
-            -workspace WendyAgent.xcworkspace \
-            -scheme WendyAgentMac \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            -derivedDataPath "$DERIVED_DATA_PATH" \
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
-            -packageCachePath "$PACKAGE_CACHE_DIR" \
-            ARCHS="arm64 x86_64" \
-            ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            -skipMacroValidation
