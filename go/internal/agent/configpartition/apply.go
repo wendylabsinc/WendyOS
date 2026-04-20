@@ -1,14 +1,16 @@
 package configpartition
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/internal/agent/network"
 )
 
 // elfMachineByArch maps GOARCH values to ELF e_machine field values (little-endian uint16).
@@ -183,7 +185,7 @@ func applyWiFiConfig(logger *zap.Logger, cfgDir string) {
 	if ssid == "" {
 		logger.Warn("wendy.conf [wifi] section has no ssid, skipping WiFi provisioning")
 	} else {
-		if err := nmcliConnect(ssid, wifi["password"]); err != nil {
+		if err := network.Connect(context.Background(), ssid, wifi["password"]); err != nil {
 			logger.Error("Failed to connect to WiFi from config partition",
 				zap.String("ssid", ssid), zap.Error(err))
 		} else {
@@ -196,20 +198,6 @@ func applyWiFiConfig(logger *zap.Logger, cfgDir string) {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
 	}
-}
-
-func nmcliConnect(ssid, password string) error {
-	var cmd *exec.Cmd
-	if password != "" {
-		cmd = exec.Command("nmcli", "device", "wifi", "connect", ssid, "password", password)
-	} else {
-		cmd = exec.Command("nmcli", "device", "wifi", "connect", ssid)
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nmcli: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
 }
 
 // Apply checks the config partition for a pending agent binary and WiFi config,
