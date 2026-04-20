@@ -707,6 +707,16 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		architecture = "arm64"
 	}
 	platform := "linux/" + architecture
+	deviceType := versionResp.GetDeviceType()
+	buildArgs := map[string]string{
+		"WENDY_PLATFORM": wendyPlatform(deviceType),
+		"WENDY_DEBUG":    fmt.Sprintf("%t", opts.debug),
+	}
+	// Only set WENDY_DEVICE_TYPE when the agent reports it, so Dockerfiles can
+	// apply their own default on older agents where the field is empty.
+	if deviceType != "" {
+		buildArgs["WENDY_DEVICE_TYPE"] = deviceType
+	}
 
 	// Verify auth certs are available if the device's registry requires mTLS.
 	if err := requireRegistryAuth(ctx, conn); err != nil {
@@ -726,7 +736,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -734,7 +744,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}
@@ -958,6 +968,19 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	}
 	cliLogln("Hook postStart: %s", expanded)
 	return cmd
+}
+
+// wendyPlatform maps a WendyOS device type to a platform tier used for
+// Dockerfile base stage selection. Adding a new device only requires adding
+// a case here; templates need no changes until a new platform tier is introduced.
+// Unknown device types fall back to "generic" (CPU-only).
+func wendyPlatform(deviceType string) string {
+	switch deviceType {
+	case "jetson-agx-orin", "jetson-orin-nano":
+		return "nvidia-jetson"
+	default:
+		return "generic"
+	}
 }
 
 // resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.
