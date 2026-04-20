@@ -3,7 +3,6 @@ package commands
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -20,7 +20,9 @@ import (
 
 	"strconv"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -451,54 +453,83 @@ func installWasmSwiftSDK() error {
 }
 
 // findSwiftProduct determines the product name from Package.swift using
-// `swift package dump-package`. Returns an error with a suggestion when
-// no executable product can be determined.
-func findSwiftProduct(dir string) (string, error) {
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+// When productOverride is non-empty it is returned immediately. When multiple
+// candidates exist and interactive is true a picker is shown; otherwise an
+// error is returned. The manifest is parsed directly from Package.swift to
+// avoid the several-second cold-start of the Swift compiler.
+func findSwiftProduct(dir, productOverride string, interactive bool) (string, error) {
+	if productOverride != "" {
+		return productOverride, nil
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "Package.swift"))
 	if err != nil {
-		return "", fmt.Errorf("swift package dump-package failed: %s: %w", strings.TrimSpace(string(out)), err)
+		return "", fmt.Errorf("reading Package.swift: %w", err)
 	}
 
-	var manifest struct {
-		Products []struct {
-			Name string `json:"name"`
-		} `json:"products"`
-		Targets []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"targets"`
-	}
-	if err := json.Unmarshal(out, &manifest); err != nil {
-		return "", fmt.Errorf("could not parse Package.swift manifest: %w", err)
+	// Match executable products: .executable(name: "Foo", ...)
+	names := reSwiftExecutableProduct.FindAllSubmatch(data, -1)
+	var candidates []string
+	for _, m := range names {
+		candidates = append(candidates, string(m[1]))
 	}
 
-	if len(manifest.Products) == 1 {
-		return manifest.Products[0].Name, nil
-	}
-	if len(manifest.Products) > 1 {
-		var productNames []string
-		for _, p := range manifest.Products {
-			productNames = append(productNames, p.Name)
-		}
-		return "", fmt.Errorf("Package.swift declares multiple products (%s); wendy run requires a single executable product", strings.Join(productNames, ", "))
-	}
-
-	// No products — look for executable targets.
-	var execTargets []string
-	for _, t := range manifest.Targets {
-		if t.Type == "executable" {
-			execTargets = append(execTargets, t.Name)
+	// Fall back to executable targets: .executableTarget(name: "Foo", ...)
+	if len(candidates) == 0 {
+		names = reSwiftExecutableTarget.FindAllSubmatch(data, -1)
+		for _, m := range names {
+			candidates = append(candidates, string(m[1]))
 		}
 	}
-	if len(execTargets) == 1 {
-		return execTargets[0], nil
+
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("Package.swift has no executable targets or products")
 	}
-	if len(execTargets) > 1 {
-		return "", fmt.Errorf("Package.swift has multiple executable targets but no products; add an executable product for the target you want to run")
+	if len(candidates) == 1 {
+		return candidates[0], nil
 	}
-	return "", fmt.Errorf("Package.swift has no executable targets or products")
+	return pickSwiftProduct(candidates, interactive)
+}
+
+var (
+	reSwiftExecutableProduct = regexp.MustCompile(`\.executable\s*\(\s*name:\s*"([^"]+)"`)
+	reSwiftExecutableTarget  = regexp.MustCompile(`\.executableTarget\s*\(\s*name:\s*"([^"]+)"`)
+)
+
+// pickSwiftProduct presents a selection menu when interactive, or returns an
+// error listing the options when running non-interactively.
+func pickSwiftProduct(names []string, interactive bool) (string, error) {
+	if !interactive {
+		return "", fmt.Errorf("Package.swift has multiple executable products (%s); use --product to select one", strings.Join(names, ", "))
+	}
+
+	picker := tui.NewPickerWithTitle("Select a Swift product")
+	p := tea.NewProgram(picker)
+
+	go func() {
+		var items []tui.PickerItem
+		for _, name := range names {
+			n := name
+			items = append(items, tui.PickerItem{Name: n, Value: n})
+		}
+		p.Send(tui.PickerAddMsg{Items: items})
+		p.Send(tui.PickerDoneMsg{})
+	}()
+
+	finalModel, err := p.Run()
+	if err != nil {
+		return "", fmt.Errorf("product picker: %w", err)
+	}
+
+	pm := finalModel.(tui.PickerModel)
+	if pm.Cancelled() {
+		return "", ErrUserCancelled
+	}
+	sel := pm.Selected()
+	if sel == nil {
+		return "", fmt.Errorf("no product selected")
+	}
+	return sel.Value.(string), nil
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
