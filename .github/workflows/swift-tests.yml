@@ -153,8 +153,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             -skipMacroValidation
 
-  format:
-    name: Format Check
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     container: swift:6.2.3
     needs: [changes]
@@ -165,28 +165,24 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Run Swift Format Check
-        id: format_check
+      - name: Run Swift Lint
+        id: lint
         working-directory: swift
         shell: bash
         run: |
           set +e
           set -o pipefail
-          swift format lint --recursive --strict \
-            WendyAgentCore/Sources \
-            WendyAgentCore/Tests \
-            WendyAgentMac/Sources \
-            2>&1 | tee format_output.txt
+          make lint 2>&1 | tee lint_output.txt
           status=${PIPESTATUS[0]}
           {
             echo "lint_output<<EOF"
-            cat format_output.txt
+            cat lint_output.txt
             echo "EOF"
             echo "exit_code=$status"
           } >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Remove Previous Format Comment
+      - name: Remove Previous Lint Comment
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -197,7 +193,7 @@ jobs:
               issue_number: context.issue.number,
               per_page: 100,
             });
-            const targetHeader = '## Swift Format Check Failed';
+            const targetHeader = '## Swift Lint Failed';
             for (const comment of comments) {
               if (comment.user?.type === 'Bot' && comment.body?.includes(targetHeader)) {
                 await github.rest.issues.deleteComment({
@@ -209,30 +205,30 @@ jobs:
             }
 
       - name: Comment on PR
-        if: steps.format_check.outputs.exit_code != '0'
+        if: steps.lint.outputs.exit_code != '0'
         uses: actions/github-script@v6
         env:
-          LINT_OUTPUT: ${{ steps.format_check.outputs.lint_output }}
+          LINT_OUTPUT: ${{ steps.lint.outputs.lint_output }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const lintOutput = process.env.LINT_OUTPUT?.trim();
-            const formattedOutput = lintOutput ? `\`\`\`\n${lintOutput}\n\`\`\`` : '_No formatter output captured._';
+            const formattedOutput = lintOutput ? `\`\`\`\n${lintOutput}\n\`\`\`` : '_No linter output captured._';
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## Swift Format Check Failed
+              body: `## Swift Lint Failed
             
-            The Swift formatter found issues with your code. Please run the following commands to fix them:
+            The Swift linter found issues with your code. Please run the following commands to fix them:
             
             \`\`\`
             cd swift
-            swift format --recursive --in-place WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources
+            make format
             \`\`\`
             
             <details>
-            <summary>Formatting issues</summary>
+            <summary>Lint issues</summary>
             
             ${formattedOutput}
             
@@ -241,6 +237,6 @@ jobs:
             Then commit and push the changes.`
             });
 
-      - name: Fail workflow on format issues
-        if: steps.format_check.outputs.exit_code != '0'
+      - name: Fail workflow on lint issues
+        if: steps.lint.outputs.exit_code != '0'
         run: exit 1
