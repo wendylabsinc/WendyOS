@@ -32,6 +32,11 @@ type ApplyOptions struct {
 	// When true, the bluetooth entitlement mounts from the proxy socket
 	// directory instead of the host D-Bus socket directly.
 	DBusProxyAvailable bool
+
+	// Warnings is an optional slice that receives non-fatal warnings generated
+	// during entitlement application (e.g. security degradation notices).
+	// Callers may pass nil to ignore warnings.
+	Warnings *[]string
 }
 
 // ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
@@ -59,7 +64,7 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		case appconfig.EntitlementPersist:
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
-			applyBluetooth(spec, cfg.AppID, opts.DBusProxyAvailable)
+			applyBluetooth(spec, cfg.AppID, opts)
 		case appconfig.EntitlementUSB:
 			applyUSB(spec)
 		case appconfig.EntitlementI2C:
@@ -390,29 +395,48 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 }
 
 // applyBluetooth adds D-Bus socket mounts for Bluetooth access.
-// When proxyAvailable is true, it mounts from the xdg-dbus-proxy filtered
-// socket directory (only org.bluez allowed). Otherwise, it falls back to
-// mounting the host D-Bus sockets directly (unrestricted access).
-func applyBluetooth(spec *Spec, appID string, proxyAvailable bool) {
-	if proxyAvailable {
-		// Mount the filtered proxy socket directory.
-		proxyDir := filepath.Join("/run/wendy/dbus-proxy", appID)
+// When opts.DBusProxyAvailable is true, it mounts from the xdg-dbus-proxy
+// filtered socket directory (only org.bluez allowed). Otherwise, it falls
+// back to mounting the host D-Bus socket directory directly and records a
+// security warning.
+func applyBluetooth(spec *Spec, appID string, opts ApplyOptions) {
+	var source string
+	if opts.DBusProxyAvailable {
+		source = filepath.Join("/run/wendy/dbus-proxy", appID)
+	} else {
+		// Fall back to the host socket. Prefer /run/dbus (symlinked on most
+		// systemd distros) so the socket is reachable at the standard path.
+		switch {
+		case dbusSocketExists("/run/dbus/system_bus_socket"):
+			source = "/run/dbus"
+		case dbusSocketExists("/var/run/dbus/system_bus_socket"):
+			source = "/var/run/dbus"
+		}
+		if source != "" && opts.Warnings != nil {
+			*opts.Warnings = append(*opts.Warnings,
+				"xdg-dbus-proxy not available: mounting host D-Bus socket directly; "+
+					"container has unrestricted D-Bus access (install xdg-dbus-proxy to restrict to org.bluez)",
+			)
+		}
+	}
+
+	if source != "" {
 		spec.Mounts = append(spec.Mounts, Mount{
 			Destination: "/var/run/dbus",
-			Source:      proxyDir,
+			Source:      source,
 			Type:        "bind",
 			Options:     []string{"rbind", "nosuid", "noexec"},
 		})
 	}
-	// When the proxy is not available, we intentionally skip mounting the
-	// raw host D-Bus sockets. Mounting /var/run/dbus or /run/dbus directly
-	// exposes every D-Bus service (NetworkManager, systemd, polkit, etc.)
-	// giving the container root-level network control. Bluetooth access
-	// requires xdg-dbus-proxy to scope D-Bus visibility to org.bluez only.
 
 	spec.Process.Env = append(spec.Process.Env,
 		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
 	)
+}
+
+func dbusSocketExists(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSocket != 0
 }
 
 // applyUSB adds USB device access.

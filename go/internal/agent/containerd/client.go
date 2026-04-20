@@ -503,11 +503,16 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		c.applyCDIGPU(spec)
 	}
 
+	var entitlementWarnings []string
 	opts := localoci.ApplyOptions{
 		DBusProxyAvailable: c.proxyManager != nil,
+		Warnings:           &entitlementWarnings,
 	}
 	if err := localoci.ApplyEntitlements(spec, appCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
+	}
+	for _, w := range entitlementWarnings {
+		c.logger.Warn(w, zap.String("app_id", appName))
 	}
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
