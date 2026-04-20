@@ -100,7 +100,6 @@ done < <(find "$APP_PATH/Contents" \
 sign_path "$APP_PATH" "$ENTITLEMENTS_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-spctl -a -vv --type exec "$APP_PATH"
 
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
 
@@ -110,6 +109,7 @@ xcrun notarytool submit "$NOTARY_ZIP" \
 
 xcrun stapler staple -v "$APP_PATH"
 xcrun stapler validate "$APP_PATH"
+spctl -a -vv --type exec "$APP_PATH"
 
 ditto -c -k --sequesterRsrc --keepParent \
   "$APP_PATH" \
