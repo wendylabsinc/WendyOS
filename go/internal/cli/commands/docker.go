@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -452,49 +452,62 @@ func installWasmSwiftSDK() error {
 	return nil
 }
 
-// findSwiftProduct determines the product name from Package.swift using
-// When productOverride is non-empty it is returned immediately. When multiple
-// candidates exist and interactive is true a picker is shown; otherwise an
-// error is returned. The manifest is parsed directly from Package.swift to
-// avoid the several-second cold-start of the Swift compiler.
+// findSwiftProduct determines the executable product name from Package.swift
+// using `swift package dump-package`. When productOverride is non-empty it is
+// returned immediately. When multiple candidates exist and interactive is true
+// a picker is shown; otherwise an error is returned.
 func findSwiftProduct(dir, productOverride string, interactive bool) (string, error) {
 	if productOverride != "" {
 		return productOverride, nil
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "Package.swift"))
+	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("reading Package.swift: %w", err)
+		return "", fmt.Errorf("swift package dump-package failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
-	// Match executable products: .executable(name: "Foo", ...)
-	names := reSwiftExecutableProduct.FindAllSubmatch(data, -1)
+	// dump-package product type is a JSON object whose key names the kind:
+	// {"executable": null}, {"library": {"type": "automatic"}}, {"plugin": null}, etc.
+	var manifest struct {
+		Products []struct {
+			Name string                     `json:"name"`
+			Type map[string]json.RawMessage `json:"type"`
+		} `json:"products"`
+		Targets []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(out, &manifest); err != nil {
+		return "", fmt.Errorf("could not parse Package.swift manifest: %w", err)
+	}
+
 	var candidates []string
-	for _, m := range names {
-		candidates = append(candidates, string(m[1]))
+	for _, p := range manifest.Products {
+		if _, ok := p.Type["executable"]; ok {
+			candidates = append(candidates, p.Name)
+		}
 	}
 
-	// Fall back to executable targets: .executableTarget(name: "Foo", ...)
+	// No executable products — fall back to executable targets.
 	if len(candidates) == 0 {
-		names = reSwiftExecutableTarget.FindAllSubmatch(data, -1)
-		for _, m := range names {
-			candidates = append(candidates, string(m[1]))
+		for _, t := range manifest.Targets {
+			if t.Type == "executable" {
+				candidates = append(candidates, t.Name)
+			}
 		}
 	}
 
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("Package.swift has no executable targets or products")
+		return "", fmt.Errorf("Package.swift has no executable products or targets")
 	}
 	if len(candidates) == 1 {
 		return candidates[0], nil
 	}
 	return pickSwiftProduct(candidates, interactive)
 }
-
-var (
-	reSwiftExecutableProduct = regexp.MustCompile(`\.executable\s*\(\s*name:\s*"([^"]+)"`)
-	reSwiftExecutableTarget  = regexp.MustCompile(`\.executableTarget\s*\(\s*name:\s*"([^"]+)"`)
-)
 
 // pickSwiftProduct presents a selection menu when interactive, or returns an
 // error listing the options when running non-interactively.
