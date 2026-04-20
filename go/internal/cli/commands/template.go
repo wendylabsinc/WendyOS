@@ -600,12 +600,15 @@ func renameTemplatePath(relPath, templateName, appID string) string {
 }
 
 // isTextFile returns true if a file path looks like a text file that should
-// have template tokens replaced. Binary files are left as-is.
+// have template tokens replaced. Binary files are left as-is. JSX/TSX files
+// are excluded because they routinely contain `{{ … }}` object expressions
+// (e.g. `icons={{ success: ... }}`) that collide with Go template syntax;
+// they don't need variable interpolation in practice.
 func isTextFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".html", ".css",
-		".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".swift", ".go",
+		".js", ".ts", ".py", ".rs", ".swift", ".go",
 		".cpp", ".c", ".h", ".hpp", ".cmake", ".sh", ".bash", ".zsh",
 		".dockerfile", ".gitignore", ".env", ".cfg", ".ini", ".xml",
 		".svg", ".lock":
