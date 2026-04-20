@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +24,12 @@ const (
 	templateRepoOwner  = "wendylabsinc"
 	templateRepoName   = "templates"
 	templateRepoBranch = "main"
+)
+
+var (
+	templateArchiveAttemptTimeout = 2 * time.Minute
+	templateArchiveMaxAttempts    = 3
+	templateArchiveRetryDelay     = 750 * time.Millisecond
 )
 
 // resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
@@ -143,7 +151,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 // If ctx is cancelled, the in-flight request is aborted.
 func downloadTemplateArchive(ctx context.Context, language, templateName, branch string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
 	branch = resolveTemplateBranch(branch)
-	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
+	// Use codeload directly to avoid an extra redirect through github.com for the
+	// repository archive download.
+	url := fmt.Sprintf("https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s",
 		templateRepoOwner, templateRepoName, branch)
 	return downloadTemplateArchiveFromURL(ctx, url, branch, language, templateName, onProgress)
 }
@@ -152,11 +162,35 @@ func downloadTemplateArchive(ctx context.Context, language, templateName, branch
 // it performs the HTTP GET against the caller-supplied URL and delegates
 // tarball parsing to extractTemplateArchive.
 func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var lastErr error
+	for attempt := 1; attempt <= templateArchiveMaxAttempts; attempt++ {
+		files, manifest, err := downloadTemplateArchiveAttempt(ctx, url, branch, language, templateName, onProgress)
+		if err == nil {
+			return files, manifest, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil || attempt == templateArchiveMaxAttempts || !shouldRetryTemplateArchiveError(err) {
+			return nil, nil, err
+		}
+
+		if err := waitForTemplateArchiveRetry(ctx, templateArchiveRetryDelay); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return nil, nil, lastErr
+}
+
+func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, templateArchiveAttemptTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
@@ -187,6 +221,35 @@ func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, 
 	}
 
 	return extractTemplateArchive(reader, language, templateName)
+}
+
+func shouldRetryTemplateArchiveError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "Client.Timeout") || strings.Contains(msg, "while reading body")
+}
+
+func waitForTemplateArchiveRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // extractTemplateArchive reads a gzipped tarball from r and extracts files

@@ -87,21 +87,45 @@ func (n *NMCLINetworkManager) ListWiFiNetworks(ctx context.Context) ([]*agentpb.
 	return networks, nil
 }
 
+// Connect connects to a WiFi network using nmcli, resolving the binary path
+// with the same fallback logic used by NewNMCLINetworkManager. Suitable for
+// callers that don't hold an NMCLINetworkManager instance.
+func Connect(ctx context.Context, ssid, password string) error {
+	path, err := exec.LookPath("nmcli")
+	if err != nil {
+		for _, p := range []string{"/usr/bin/nmcli", "/usr/sbin/nmcli", "/usr/local/bin/nmcli"} {
+			if _, statErr := os.Stat(p); statErr == nil {
+				path = p
+				break
+			}
+		}
+		if path == "" {
+			return fmt.Errorf("nmcli not found")
+		}
+	}
+	return runNMCLIConnect(ctx, path, ssid, password)
+}
+
 // ConnectToWiFi connects to a WiFi network.
 func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, ssid, password string) error {
+	if err := runNMCLIConnect(ctx, n.nmcliPath, ssid, password); err != nil {
+		return err
+	}
+	n.logger.Info("Connected to WiFi", zap.String("ssid", ssid))
+	return nil
+}
+
+func runNMCLIConnect(ctx context.Context, nmcliPath, ssid, password string) error {
 	var cmd *exec.Cmd
 	if password != "" {
-		cmd = exec.CommandContext(ctx, n.nmcliPath, "device", "wifi", "connect", ssid, "password", password)
+		cmd = exec.CommandContext(ctx, nmcliPath, "device", "wifi", "connect", ssid, "password", password)
 	} else {
-		cmd = exec.CommandContext(ctx, n.nmcliPath, "device", "wifi", "connect", ssid)
+		cmd = exec.CommandContext(ctx, nmcliPath, "device", "wifi", "connect", ssid)
 	}
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nmcli connect: %s: %w", strings.TrimSpace(string(output)), err)
 	}
-
-	n.logger.Info("Connected to WiFi", zap.String("ssid", ssid))
 	return nil
 }
 

@@ -47,7 +47,7 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 	target := img.Target()
 
 	// Resolve through index if needed (platform selection).
-	manifest, err := images.Manifest(ctx, cs, target, nil)
+	manifest, err := images.Manifest(ctx, cs, target, img.Platform())
 	if err != nil {
 		return "", fmt.Errorf("reading manifest for %q: %w", imageName, err)
 	}

@@ -538,7 +538,7 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	prog := tea.NewProgram(tui.NewProgress(title))
+	prog := tea.NewProgram(tui.NewProgress(title).WithoutErrorView())
 
 	var (
 		files    map[string][]byte

@@ -48,7 +48,7 @@ func newAppsCmd() *cobra.Command {
 func newAppsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List known applications and their status",
+		Short: "List deployed applications",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
@@ -123,7 +123,7 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications running.")
+		fmt.Println("No applications deployed.")
 		return nil
 	}
 	headers := []string{"", "Name", "Version", "Failures"}
@@ -219,7 +219,7 @@ func appsListProvider(ctx context.Context, cm providers.ContainerManager) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications found.")
+		fmt.Println("No applications deployed.")
 		return nil
 	}
 
