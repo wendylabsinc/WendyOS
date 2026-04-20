@@ -461,3 +461,101 @@ func keys(m map[string][]byte) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestRenderTemplateContent(t *testing.T) {
+	cases := []struct {
+		name    string
+		path    string
+		content string
+		vals    map[string]interface{}
+		want    string
+	}{
+		{
+			name:    "simple variable substitution",
+			path:    "Dockerfile",
+			content: "EXPOSE {{.PORT}}\n",
+			vals:    map[string]interface{}{"PORT": 3005},
+			want:    "EXPOSE 3005\n",
+		},
+		{
+			name: "if/else branches on variable (jetson)",
+			path: "Dockerfile",
+			content: `{{if eq .TARGET "jetson"}}FROM dustynv/pytorch:latest
+{{else}}FROM python:3.11-slim-bookworm
+{{end}}`,
+			vals: map[string]interface{}{"TARGET": "jetson"},
+			want: `FROM dustynv/pytorch:latest
+`,
+		},
+		{
+			name: "if/else branches on variable (generic)",
+			path: "Dockerfile",
+			content: `{{if eq .TARGET "jetson"}}FROM dustynv/pytorch:latest
+{{else}}FROM python:3.11-slim-bookworm
+{{end}}`,
+			vals: map[string]interface{}{"TARGET": "generic"},
+			want: `FROM python:3.11-slim-bookworm
+`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := renderTemplateContent(tc.path, []byte(tc.content), tc.vals)
+			if err != nil {
+				t.Fatalf("renderTemplateContent: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("got %q, want %q", string(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderTemplateContentParseError(t *testing.T) {
+	// An invalid template action must surface a path-scoped parse error rather
+	// than silently producing a file with unrendered actions.
+	_, err := renderTemplateContent(
+		"weird.txt",
+		[]byte("{{ not valid go template }} but {{.PORT}} should still work"),
+		map[string]interface{}{"PORT": 8080},
+	)
+	if err == nil {
+		t.Fatal("expected parse error, got nil")
+	}
+	if !strings.Contains(err.Error(), "weird.txt") {
+		t.Errorf("error should mention the file path, got: %v", err)
+	}
+}
+
+func TestRenderTemplateContentMissingKeyError(t *testing.T) {
+	// Referencing an undeclared variable must surface an error rather than
+	// silently rendering as "<no value>".
+	_, err := renderTemplateContent(
+		"Dockerfile",
+		[]byte("EXPOSE {{.MISSING}}\n"),
+		map[string]interface{}{"PORT": 3005},
+	)
+	if err == nil {
+		t.Fatal("expected error for missing key, got nil")
+	}
+	if !strings.Contains(err.Error(), "Dockerfile") {
+		t.Errorf("error should mention the file path, got: %v", err)
+	}
+}
+
+func TestRenderTemplateContentExecuteError(t *testing.T) {
+	// Parse succeeds but Execute fails — calling a method that doesn't exist
+	// on the data map. The error must be surfaced so the user sees it.
+	_, err := renderTemplateContent(
+		"Dockerfile",
+		[]byte(`{{.PORT.NonExistentMethod}}`),
+		map[string]interface{}{"PORT": 3005},
+	)
+	if err == nil {
+		t.Fatal("expected error from Execute, got nil")
+	}
+	if !strings.Contains(err.Error(), "Dockerfile") {
+		t.Errorf("error should mention the file path, got: %v", err)
+	}
+}
