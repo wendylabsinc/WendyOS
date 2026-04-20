@@ -42,7 +42,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS]
     needs: [changes]
     if: needs.changes.outputs.swift == 'true'
     steps:
@@ -82,7 +82,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS]
     needs: [changes]
     if: needs.changes.outputs.swift == 'true'
     steps:
