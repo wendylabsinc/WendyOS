@@ -19,6 +19,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/internal/agent/bluetooth"
 	"github.com/wendylabsinc/wendy/internal/agent/cdi"
+	"github.com/wendylabsinc/wendy/internal/agent/configpartition"
 	"github.com/wendylabsinc/wendy/internal/agent/container"
 	agentcontainerd "github.com/wendylabsinc/wendy/internal/agent/containerd"
 	"github.com/wendylabsinc/wendy/internal/agent/dbusproxy"
@@ -61,7 +62,7 @@ func main() {
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
-	// Commit any pending Mender A/B update so it isn't rolled back on next reboot.
+	configpartition.Apply(logger)
 	services.CommitMenderUpdate(logger)
 
 	// Clean up old agent binary backups from previous updates.

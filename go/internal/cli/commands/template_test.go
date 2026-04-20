@@ -5,13 +5,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // buildTestTarball constructs a minimal gzipped tarball that mirrors the
@@ -307,6 +310,111 @@ func TestDownloadTemplateArchiveFromURL_404MentionsBranch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error = %q, want it to mention 'not found'", err.Error())
+	}
+}
+
+func TestDownloadTemplateArchiveFromURL_RetriesTransientTimeout(t *testing.T) {
+	archive := buildTestTarball(t, "templates-main", "python", "simple-api", map[string]string{
+		"template.json": `{"name":"simple-api"}`,
+		"app.py":        "print('hi')\n",
+	})
+
+	origTimeout := templateArchiveAttemptTimeout
+	origAttempts := templateArchiveMaxAttempts
+	origDelay := templateArchiveRetryDelay
+	templateArchiveAttemptTimeout = 50 * time.Millisecond
+	templateArchiveMaxAttempts = 2
+	templateArchiveRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() {
+		templateArchiveAttemptTimeout = origTimeout
+		templateArchiveMaxAttempts = origAttempts
+		templateArchiveRetryDelay = origDelay
+	})
+
+	var (
+		mu       sync.Mutex
+		attempts int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		attempt := attempts
+		mu.Unlock()
+
+		if attempt == 1 {
+			flusher, _ := w.(http.Flusher)
+			w.Header().Set("Content-Type", "application/gzip")
+			w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+			_, _ = w.Write(archive[:len(archive)/2])
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(2 * templateArchiveAttemptTimeout)
+			_, _ = w.Write(archive[len(archive)/2:])
+			return
+		}
+
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	files, manifest, err := downloadTemplateArchiveFromURL(context.Background(), srv.URL, "main", "python", "simple-api", nil)
+	if err != nil {
+		t.Fatalf("downloadTemplateArchiveFromURL after retry: %v", err)
+	}
+	if manifest == nil || manifest.Name != "simple-api" {
+		t.Fatalf("manifest = %+v, want simple-api", manifest)
+	}
+	if string(files["app.py"]) != "print('hi')\n" {
+		t.Fatalf("app.py = %q", files["app.py"])
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestDownloadTemplateArchiveFromURL_CancelledDuringRetryWaitReturnsContextError(t *testing.T) {
+	origTimeout := templateArchiveAttemptTimeout
+	origAttempts := templateArchiveMaxAttempts
+	origDelay := templateArchiveRetryDelay
+	templateArchiveAttemptTimeout = 20 * time.Millisecond
+	templateArchiveMaxAttempts = 3
+	templateArchiveRetryDelay = 200 * time.Millisecond
+	t.Cleanup(func() {
+		templateArchiveAttemptTimeout = origTimeout
+		templateArchiveMaxAttempts = origAttempts
+		templateArchiveRetryDelay = origDelay
+	})
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		time.Sleep(2 * templateArchiveAttemptTimeout)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := downloadTemplateArchiveFromURL(ctx, srv.URL, "main", "python", "simple-api", nil)
+		errCh <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
 	}
 }
 

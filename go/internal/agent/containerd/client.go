@@ -17,7 +17,6 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
-	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -320,6 +319,26 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
 }
 
+func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainerProgress {
+	switch progress.Phase {
+	case "start":
+		return &agentpb.CreateContainerProgress{
+			Phase:       agentpb.CreateContainerProgress_UNPACKING,
+			TotalLayers: int32(progress.TotalLayers),
+		}
+	case "layer":
+		return &agentpb.CreateContainerProgress{
+			Phase:          agentpb.CreateContainerProgress_APPLYING_LAYER,
+			LayerIndex:     int32(progress.LayerIndex),
+			TotalLayers:    int32(progress.TotalLayers),
+			LayerSize:      progress.LayerSize,
+			ReusedSnapshot: progress.Reused,
+		}
+	default:
+		return nil
+	}
+}
+
 func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -365,38 +384,34 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Start D-Bus proxy if bluetooth entitlement is present.
+	var dbusProxyStarted bool
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
 			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
 		}
+		dbusProxyStarted = true
+		defer func() {
+			if dbusProxyStarted {
+				_ = c.proxyManager.Stop(appName)
+			}
+		}()
 	}
 
-	// For local-registry images, always pull from the embedded HTTP registry
-	// so containerd properly resolves manifest lists and unpacks layers.
-	// For remote images, try the local store first, then pull.
+	// Local-registry images are pushed directly into containerd's content store
+	// via the embedded registry, so they're already present — just look them up.
+	// For remote images, try the local store first, then pull from the registry.
 	var image containerd.Image
 	var err error
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	if shouldRefreshImageFromRegistry(imageName) {
-		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
-		image, err = c.client.Pull(ctx, imageName,
-			containerd.WithPullUnpack,
-			containerd.WithResolver(resolver),
+	image, err = c.client.GetImage(ctx, imageName)
+	if err != nil && !shouldRefreshImageFromRegistry(imageName) {
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
 		)
-		if err != nil {
-			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-		}
-	} else {
-		image, err = c.client.GetImage(ctx, imageName)
-		if err != nil {
-			c.logger.Info("Image not in local store, attempting pull from registry",
-				zap.String("image", imageName),
-			)
-			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
-			if err != nil {
-				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-			}
-		}
+		image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
+	}
+	if err != nil {
+		return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 	}
 
 	// Unpack the image into the snapshotter if not already done.
@@ -406,7 +421,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if err := image.Unpack(ctx, ""); err != nil {
+		if _, err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+			if mapped := toCreateContainerProgress(progress); mapped != nil {
+				report(mapped)
+			}
+		}); err != nil {
 			return fmt.Errorf("unpacking image %q: %w", imageName, err)
 		}
 	}
@@ -466,17 +485,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:wendy-agent:%s", appName)
 
+	// Apply the NVIDIA CDI spec before entitlements so that entitlements can
+	// override CDI-injected env vars (e.g. NVIDIA_VISIBLE_DEVICES=void → =all).
+	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
+		c.applyCDIGPU(spec)
+	}
+
 	opts := localoci.ApplyOptions{
 		DBusProxyAvailable: c.proxyManager != nil,
 	}
 	if err := localoci.ApplyEntitlements(spec, appCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
-	}
-
-	// If the app has a GPU entitlement, apply the NVIDIA CDI spec to get
-	// platform-correct library mounts (paths vary across Jetson models).
-	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
-		c.applyCDIGPU(spec)
 	}
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
@@ -503,6 +522,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	// Container created successfully; keep the D-Bus proxy running.
+	dbusProxyStarted = false
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 

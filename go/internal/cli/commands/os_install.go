@@ -4,6 +4,7 @@ package commands
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
+	"golang.org/x/term"
 )
 
 func newOSInstallCmd() *cobra.Command {
@@ -29,6 +31,8 @@ func newOSInstallCmd() *cobra.Command {
 	var deviceType string
 	var versionFlag string
 	var driveFlag string
+	var wifiSSID string
+	var wifiPassword string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -67,7 +71,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				return runOSInstallDirect(args[0], args[1], force)
 			}
 
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, wifiSSID, wifiPassword)
 		},
 	}
 
@@ -76,6 +80,8 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
+	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure WiFi SSID on first boot")
+	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Pre-configure WiFi password on first boot")
 
 	return cmd
 }
@@ -173,7 +179,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword string) error {
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -272,12 +278,12 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifiSSID, wifiPassword)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifiSSID, wifiPassword string) error {
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
 	if flagVersion != "" {
@@ -361,6 +367,11 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
+	provSSID, provPassword, err := resolveWiFiCredentials(wifiSSID, wifiPassword)
+	if err != nil {
+		return err
+	}
+
 	// Step 4: Resolve image (cached or download).
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
 	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
@@ -413,6 +424,14 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	if writeModel.Err() != nil {
 		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
+
+	fmt.Printf("\nWriting provisioning data to config partition...\n")
+	if err := provisionConfigPartition(targetDrive, provSSID, provPassword); err != nil {
+		fmt.Printf("Warning: could not write config partition: %v\n", err)
+		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+	}
+
+	ejectDisk(targetDrive.DevicePath)
 
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
 	fmt.Println("You can now insert the drive into your device and power it on.")
@@ -708,6 +727,124 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	}
 
 	return cached, nil
+}
+
+// resolveWiFiCredentials determines the WiFi SSID and password to pre-configure
+// on the device's config partition. If flagSSID is provided, it uses that; if
+// stdin is not a terminal and no flag is set, it skips WiFi setup silently.
+func resolveWiFiCredentials(flagSSID, flagPassword string) (ssid, password string, err error) {
+	if flagPassword != "" && flagSSID == "" {
+		return "", "", fmt.Errorf("--wifi-password requires --wifi-ssid")
+	}
+
+	if flagSSID != "" {
+		ssid = flagSSID
+		if flagPassword != "" {
+			return ssid, flagPassword, nil
+		}
+		// SSID provided but no password — try keychain then prompt.
+		if pw, kerr := lookupKeychainPassword(ssid); kerr == nil && pw != "" {
+			return ssid, pw, nil
+		}
+		if !isInteractiveTerminal() {
+			return ssid, "", nil
+		}
+		fmt.Print("WiFi password (leave empty for open network): ")
+		pwBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if readErr != nil {
+			return "", "", fmt.Errorf("reading WiFi password: %w", readErr)
+		}
+		return ssid, strings.TrimSpace(string(pwBytes)), nil
+	}
+
+	if !isInteractiveTerminal() {
+		return "", "", nil
+	}
+
+	fmt.Print("\nSet up WiFi on first boot? [Y/n] ")
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	if answer := strings.TrimSpace(strings.ToLower(line)); answer != "" && answer != "y" && answer != "yes" {
+		return "", "", nil
+	}
+
+	// Try to scan for local WiFi networks to pick from.
+	networks, scanErr := scanLocalWifiNetworks()
+	if scanErr == nil && len(networks) > 0 {
+		var items []tui.PickerItem
+		for _, n := range networks {
+			signal := ""
+			if n.SignalStrength > 0 {
+				signal = fmt.Sprintf("%d%%", n.SignalStrength)
+			}
+			items = append(items, tui.PickerItem{Name: n.SSID, Type: signal, Value: n.SSID})
+		}
+		fmt.Println()
+		picked, pickErr := pickFromItems("Select WiFi network", items)
+		if pickErr == nil {
+			ssid = picked
+		}
+	}
+	if ssid == "" {
+		fmt.Print("WiFi SSID: ")
+		line2, _ := reader.ReadString('\n')
+		ssid = strings.TrimSpace(line2)
+		if ssid == "" {
+			return "", "", nil
+		}
+	}
+
+	if supportsKeychainLookup {
+		fmt.Printf("Look up password for '%s' from keychain? (macOS will ask for permission) [Y/n] ", ssid)
+		kline, _ := reader.ReadString('\n')
+		kanswer := strings.TrimSpace(strings.ToLower(kline))
+		if kanswer == "" || kanswer == "y" || kanswer == "yes" {
+			if pw, kerr := lookupKeychainPassword(ssid); kerr == nil && pw != "" {
+				fmt.Println("Using saved password from keychain.")
+				return ssid, pw, nil
+			}
+			fmt.Println("Password not available from keychain.")
+		}
+	}
+
+	fmt.Print("WiFi password (leave empty for open network): ")
+	pwBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if readErr != nil {
+		return "", "", fmt.Errorf("reading WiFi password: %w", readErr)
+	}
+	return ssid, strings.TrimSpace(string(pwBytes)), nil
+}
+
+// provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
+// and writes it (along with optional WiFi credentials) to the config partition on d.
+func provisionConfigPartition(d drive, ssid, password string) error {
+	release, err := fetchAgentRelease(false)
+	if err != nil {
+		return fmt.Errorf("fetching latest agent release: %w", err)
+	}
+
+	const assetPrefix = "wendy-agent-linux-arm64-"
+	var matched *githubReleaseAsset
+	for i := range release.Assets {
+		a := &release.Assets[i]
+		if strings.HasPrefix(a.Name, assetPrefix) && strings.HasSuffix(a.Name, ".tar.gz") {
+			matched = a
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Errorf("no arm64 asset found in release %s", release.TagName)
+	}
+
+	fmt.Printf("Downloading wendy-agent %s for device...\n", release.TagName)
+	agentBinary, err := downloadAgentBinary(*matched)
+	if err != nil {
+		return fmt.Errorf("downloading agent binary: %w", err)
+	}
+
+	return writeConfigPartition(d, agentBinary, ssid, password)
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -121,23 +121,48 @@ func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
-// createContainerWithProgress calls CreateContainerWithProgress and prints
-// phase updates so the user sees feedback during long image pulls/unpacks.
-func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
-	stream, err := svc.CreateContainerWithProgress(ctx, req)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
+	total := progress.GetTotalLayers()
+	if total <= 0 {
+		return "Pulling image on device..."
 	}
 
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	clearLine := func() {
-		if isTTY {
-			fmt.Print("\033[2K\r")
-		} else {
-			fmt.Println()
-		}
+	completed := progress.GetLayerIndex()
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER {
+		completed++
+	}
+	if completed > total {
+		completed = total
 	}
 
+	title := fmt.Sprintf("Unpacking image on device... (%d/%d layers", completed, total)
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER && progress.GetReusedSnapshot() {
+		title += ", reused snapshot"
+	}
+	return title + ")"
+}
+
+func unpackProgressPercent(progress *agentpb.CreateContainerProgress) float64 {
+	total := progress.GetTotalLayers()
+	if total <= 0 {
+		return 0
+	}
+
+	completed := progress.GetLayerIndex()
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER {
+		completed++
+	}
+	if completed < 0 {
+		completed = 0
+	}
+	if completed > total {
+		completed = total
+	}
+
+	return float64(completed) / float64(total)
+}
+
+func createContainerWithProgressPlain(stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
 	completed := false
 	for {
 		resp, recvErr := stream.Recv()
@@ -152,12 +177,11 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		case *agentpb.CreateContainerProgressResponse_Progress:
 			switch r.Progress.GetPhase() {
 			case agentpb.CreateContainerProgress_UNPACKING:
-				cliLog("Pulling and unpacking image on device...")
+				cliLogln("%s", unpackProgressTitle(r.Progress))
+			case agentpb.CreateContainerProgress_APPLYING_LAYER:
+				cliLogln("%s", unpackProgressTitle(r.Progress))
 			case agentpb.CreateContainerProgress_CREATING_CONTAINER:
-				clearLine()
-				cliLog("Creating container...")
-			case agentpb.CreateContainerProgress_COMPLETE:
-				clearLine()
+				cliLogln("Creating container...")
 			}
 		case *agentpb.CreateContainerProgressResponse_Completed:
 			completed = true
@@ -172,6 +196,122 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		return fmt.Errorf("creating container: progress stream ended without completion")
 	}
 	return nil
+}
+
+func progressModelUserCancelled(model tea.Model) bool {
+	pm, ok := model.(tui.ProgressModel)
+	return ok && pm.Err() == context.Canceled
+}
+
+func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
+	prog := tea.NewProgram(tui.NewProgress("Pulling image on device..."))
+
+	var (
+		createErr error
+		done      = make(chan struct{})
+		creating  = make(chan struct{}, 1)
+		completed bool
+	)
+
+	go func() {
+		defer close(done)
+		progressDone := false
+		for {
+			resp, recvErr := stream.Recv()
+			if recvErr == io.EOF {
+				if !completed && createErr == nil {
+					createErr = fmt.Errorf("creating container: progress stream ended without completion")
+				}
+				if !progressDone {
+					prog.Send(tui.ProgressDoneMsg{Err: createErr})
+				}
+				return
+			}
+			if recvErr != nil {
+				createErr = fmt.Errorf("creating container: %w", recvErr)
+				if !progressDone {
+					prog.Send(tui.ProgressDoneMsg{Err: createErr})
+				}
+				return
+			}
+
+			switch r := resp.GetResponseType().(type) {
+			case *agentpb.CreateContainerProgressResponse_Progress:
+				switch r.Progress.GetPhase() {
+				case agentpb.CreateContainerProgress_UNPACKING, agentpb.CreateContainerProgress_APPLYING_LAYER:
+					prog.Send(tui.ProgressUpdateMsg{
+						Percent: unpackProgressPercent(r.Progress),
+						Title:   unpackProgressTitle(r.Progress),
+					})
+				case agentpb.CreateContainerProgress_CREATING_CONTAINER:
+					if !progressDone {
+						progressDone = true
+						select {
+						case creating <- struct{}{}:
+						default:
+						}
+						prog.Send(tui.ProgressDoneMsg{})
+					}
+				case agentpb.CreateContainerProgress_COMPLETE:
+					completed = true
+					if !progressDone {
+						progressDone = true
+						prog.Send(tui.ProgressDoneMsg{})
+					}
+				}
+			case *agentpb.CreateContainerProgressResponse_Completed:
+				completed = true
+				if !progressDone {
+					progressDone = true
+					prog.Send(tui.ProgressDoneMsg{})
+				}
+				return
+			}
+		}
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return fmt.Errorf("progress TUI: %w", err)
+	}
+
+	if progressModelUserCancelled(finalModel) {
+		cancel()
+		<-done
+		return ErrUserCancelled
+	}
+
+	select {
+	case <-creating:
+		cliLogln("Creating container...")
+	default:
+	}
+
+	<-done
+	return createErr
+}
+
+// createContainerWithProgress calls CreateContainerWithProgress and prints
+// phase updates so the user sees feedback during long image pulls/unpacks.
+func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	if !isInteractiveTerminal() {
+		stream, err := svc.CreateContainerWithProgress(ctx, req)
+		if err != nil {
+			return fmt.Errorf("creating container: %w", err)
+		}
+		return createContainerWithProgressPlain(stream)
+	}
+
+	progressCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := svc.CreateContainerWithProgress(progressCtx, req)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	return createContainerWithProgressTUI(cancel, stream)
 }
 
 // runOptions holds the parsed flags for the run command.
