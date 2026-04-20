@@ -235,8 +235,9 @@ log_info "USB gadget initialised"
 ip link set usb0 txqueuelen 2000 2>/dev/null || true
 
 # Pin USB IRQ to CPUs 0-3 for cache locality
-# Covers Jetson (3550000.usb / tegra-xudc) and RPi5 (fe980000.usb)
-USB_IRQ=$(grep -E "3550000\.usb|fe980000\.usb" /proc/interrupts 2>/dev/null \
+# Covers Jetson (3550000.usb / tegra-xudc), RPi3 (3f980000.usb),
+# RPi4 (fe980000.usb), and RPi5 (1000480000.usb via RP1)
+USB_IRQ=$(grep -E "3550000\.usb|3f980000\.usb|fe980000\.usb|1000480000\.usb" /proc/interrupts 2>/dev/null \
           | cut -d: -f1 | tr -d ' ' | head -1) || true
 if [ -n "$USB_IRQ" ]; then
     echo "0f" > /proc/irq/"$USB_IRQ"/smp_affinity 2>/dev/null || true
