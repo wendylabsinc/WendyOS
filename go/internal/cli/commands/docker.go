@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -243,18 +242,6 @@ func ensureContainerPlugin(dir string) error {
 	}
 
 	return nil
-}
-
-func findSwiftProduct(dir, productOverride string, interactive bool) (string, error) {
-	product, err := swifttoolchain.FindSwiftProductWithOptions(dir, productOverride, interactive)
-	if err != nil {
-		if errors.Is(err, swifttoolchain.ErrUserCancelled) {
-			return "", ErrUserCancelled
-		}
-		return "", err
-	}
-
-	return product, nil
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
