@@ -45,6 +45,51 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	return conn.IsMTLS, resp, err
 }
 
+var isInteractiveTerminalFn = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner(label))
+
+	var (
+		conn   *grpcclient.AgentConnection
+		runErr error
+		doneCh = make(chan struct{})
+	)
+	go func() {
+		defer close(doneCh)
+		conn, runErr = fn(ctx)
+		// Keep spinner teardown quiet; callers handle the returned error.
+		prog.Send(tui.SpinnerDoneMsg{})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, ErrUserCancelled
+	}
+
+	<-doneCh
+	return conn, runErr
+}
+
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
 var ErrUserCancelled = errors.New("cancelled")
 
@@ -296,19 +341,61 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 // isInteractiveTerminal returns true when both stdin and stdout are TTYs,
 // meaning it is safe to show interactive Bubble Tea prompts.
 func isInteractiveTerminal() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return isInteractiveTerminalFn()
 }
 
 // handleDefaultDeviceRecovery runs the recovery flow after a default device
 // connection failure. Shows a warning and immediately opens the device picker
 // where the user can select a new device and optionally set/unset default
 // via 'd'/'x' shortcuts.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
 	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable.", hostname)))
+	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable after %s.", hostname, formatElapsedSeconds(elapsed))))
 	fmt.Println()
 
 	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
+}
+
+func defaultDeviceSearchLabel(hostname string) string {
+	return fmt.Sprintf("Searching for default device %q...", hostname)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	roundedElapsed := elapsed.Round(10 * time.Millisecond)
+	seconds := roundedElapsed.Seconds()
+	unit := "seconds"
+	if roundedElapsed == time.Second {
+		unit = "second"
+	}
+	return fmt.Sprintf("%.2f %s", seconds, unit)
+}
+
+func connectAgentAtAddress(ctx context.Context, addr string, probePlaintext bool) (*grpcclient.AgentConnection, error) {
+	conn, err := connectWithAutoTLS(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if probePlaintext && !conn.IsMTLS {
+		// gRPC plaintext connections are lazy — probe to detect unreachable
+		// default devices early so recovery can be offered immediately.
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr != nil {
+			conn.Close()
+			return nil, probeErr
+		}
+	}
+	return conn, nil
+}
+
+func connectResolvedAgent(ctx context.Context, hostname, addr string, isDefault bool) (*grpcclient.AgentConnection, error) {
+	if isDefault && !jsonOutput && isInteractiveTerminal() {
+		return runAgentConnectionSpinner(ctx, defaultDeviceSearchLabel(hostname), func(spinCtx context.Context) (*grpcclient.AgentConnection, error) {
+			return connectAgentAtAddress(spinCtx, addr, true)
+		})
+	}
+	return connectAgentAtAddress(ctx, addr, isDefault)
 }
 
 // connectToAgent establishes a gRPC connection to the target device.
@@ -324,25 +411,20 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
-		conn, connErr := connectWithAutoTLS(ctx, addr)
-		if connErr == nil && isDefault && !conn.IsMTLS {
-			// gRPC plaintext connections are lazy — probe to detect
-			// unreachable default devices early so the recovery menu
-			// can be shown instead of a cryptic error later.
-			// mTLS connections are already probed inside connectWithAutoTLS.
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				connErr = probeErr
-			}
+		startedAt := time.Now()
+		hostname := addr
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			hostname = host
 		}
+		conn, connErr := connectResolvedAgent(ctx, hostname, addr, isDefault)
 		if connErr != nil {
+			if errors.Is(connErr, ErrUserCancelled) {
+				return nil, connErr
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
-				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 				if recErr != nil {
 					return nil, recErr
 				}
@@ -693,20 +775,15 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	// If a device hostname was given, connect via gRPC (with mTLS if authenticated).
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
-		conn, err := connectWithAutoTLS(ctx, addr)
-		if err == nil && isDefault && !conn.IsMTLS {
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				err = probeErr
-			}
-		}
+		startedAt := time.Now()
+		conn, err := connectResolvedAgent(ctx, device, addr, isDefault)
 		if err != nil {
+			if errors.Is(err, ErrUserCancelled) {
+				return nil, err
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
-				return handleDefaultDeviceRecovery(ctx, device, err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 			}
 			return nil, err
 		}

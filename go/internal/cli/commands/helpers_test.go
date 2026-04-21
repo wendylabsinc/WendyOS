@@ -6,7 +6,9 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -349,5 +351,78 @@ func TestResolveLANVersionsKeepsDevicesWhenMetadataLookupFails(t *testing.T) {
 		if got[i].AgentVersion != "" {
 			t.Fatalf("resolveLANVersions()[%d].AgentVersion = %q, want empty", i, got[i].AgentVersion)
 		}
+	}
+}
+
+func TestDefaultDeviceSearchLabel(t *testing.T) {
+	got := defaultDeviceSearchLabel("wendyos-daring-razorbill.local")
+	want := `Searching for default device "wendyos-daring-razorbill.local"...`
+	if got != want {
+		t.Fatalf("defaultDeviceSearchLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatElapsedSeconds(t *testing.T) {
+	tests := []struct {
+		name    string
+		elapsed time.Duration
+		want    string
+	}{
+		{name: "fractional seconds", elapsed: 3420 * time.Millisecond, want: "3.42 seconds"},
+		{name: "rounding", elapsed: 3449 * time.Millisecond, want: "3.45 seconds"},
+		{name: "singular", elapsed: time.Second, want: "1.00 second"},
+		{name: "rounds to singular", elapsed: 1004 * time.Millisecond, want: "1.00 second"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatElapsedSeconds(tt.elapsed); got != tt.want {
+				t.Fatalf("formatElapsedSeconds(%v) = %q, want %q", tt.elapsed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConnectResolvedAgent_UsesSpinnerForInteractiveDefaultDevice(t *testing.T) {
+	origInteractive := isInteractiveTerminalFn
+	origSpinner := runAgentConnectionSpinner
+	origJSON := jsonOutput
+	defer func() {
+		isInteractiveTerminalFn = origInteractive
+		runAgentConnectionSpinner = origSpinner
+		jsonOutput = origJSON
+	}()
+
+	isInteractiveTerminalFn = func() bool { return true }
+	jsonOutput = false
+
+	wantConn := &grpcclient.AgentConnection{Host: "wendyos-daring-razorbill.local"}
+	var (
+		gotLabel       string
+		spinnerInvoked bool
+	)
+	runAgentConnectionSpinner = func(_ context.Context, label string, _ func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+		spinnerInvoked = true
+		gotLabel = label
+		return wantConn, nil
+	}
+
+	gotConn, err := connectResolvedAgent(
+		context.Background(),
+		"wendyos-daring-razorbill.local",
+		hostPort("wendyos-daring-razorbill.local", defaultAgentPort),
+		true,
+	)
+	if err != nil {
+		t.Fatalf("connectResolvedAgent() error = %v", err)
+	}
+	if !spinnerInvoked {
+		t.Fatal("expected interactive default-device connection to use spinner")
+	}
+	if gotLabel != `Searching for default device "wendyos-daring-razorbill.local"...` {
+		t.Fatalf("spinner label = %q, want %q", gotLabel, `Searching for default device "wendyos-daring-razorbill.local"...`)
+	}
+	if gotConn != wantConn {
+		t.Fatal("connectResolvedAgent() did not return spinner result")
 	}
 }

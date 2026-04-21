@@ -39,6 +39,11 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
+		B373CFB12F96576D00C31493 /* Support */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Support;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +67,7 @@
 				B00000000000000000000007 /* Products */,
 				B36D0EDB2F8FE8C70070FEB2 /* Resources */,
 				B00000000000000000000005 /* Sources */,
+				B373CFB12F96576D00C31493 /* Support */,
 			);
 			sourceTree = "<group>";
 		};
@@ -104,6 +110,7 @@
 				B00000000000000000000013 /* Assets */,
 				B00000000000000000000014 /* Design */,
 				B36D0EDB2F8FE8C70070FEB2 /* Resources */,
+				B373CFB12F96576D00C31493 /* Support */,
 			);
 			name = WendyAgentMac;
 			packageProductDependencies = (
