@@ -91,7 +91,7 @@ https://github.com/wendylabsinc/wendy-agent/releases/download/v0.2.0/wendy-agent
 All platform builds are included:
 - `wendy-agent-linux-arm64-${VERSION}.tar.gz`
 - `wendy-agent-linux-amd64-${VERSION}.tar.gz`
-- `wendy-agent-macos-universal-${VERSION}.zip` (Developer ID signed and notarized)
+- `wendy-agent-macos-arm64-${VERSION}.zip` (Developer ID signed and notarized)
 - `wendy-cli-linux-arm64-${VERSION}.tar.gz`
 - `wendy-cli-linux-amd64-${VERSION}.tar.gz`
 - `wendy-cli-darwin-arm64-${VERSION}.tar.gz`

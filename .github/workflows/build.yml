@@ -792,7 +792,7 @@ jobs:
           LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_X86_FILE}"
           LINUX_X86_SHA=$(sha_for_artifact "$LINUX_X86_FILE")
 
-          AGENT_MACOS_FILE="wendy-agent-macos-universal-${VERSION}.zip"
+          AGENT_MACOS_FILE="wendy-agent-macos-arm64-${VERSION}.zip"
           AGENT_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${AGENT_MACOS_FILE}"
           AGENT_MACOS_SHA=$(sha_for_artifact "$AGENT_MACOS_FILE")
 
@@ -838,7 +838,7 @@ jobs:
             version "${VERSION}"
             sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
 
-            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-universal-#{version}.zip"
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-arm64-#{version}.zip"
             name "Wendy Agent"
             desc "Wendy Agent for macOS (nightly)"
             homepage "https://github.com/wendylabsinc/wendy-agent"
@@ -899,7 +899,7 @@ jobs:
             version "${VERSION}"
             sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
 
-            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-universal-#{version}.zip"
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-arm64-#{version}.zip"
             name "Wendy Agent"
             desc "Wendy Agent for macOS"
             homepage "https://github.com/wendylabsinc/wendy-agent"

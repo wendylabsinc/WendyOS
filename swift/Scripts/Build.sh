@@ -14,7 +14,7 @@ TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$SWIFT_DIR/Build/WendyAgentMac.xcarchive}"
 APP_PATH="${OUTPUT_DIR}/${APP_NAME}"
 NOTARY_ZIP="${TEMP_DIR}/WendyAgentMac-notary.zip"
-ARTIFACT_NAME="wendy-agent-macos-universal-${VERSION}.zip"
+ARTIFACT_NAME="wendy-agent-macos-arm64-${VERSION}.zip"
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-wendy-notary-profile}"
 ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
@@ -92,7 +92,7 @@ xcodebuild archive \
   -destination 'generic/platform=macOS' \
   -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
-  ARCHS="arm64 x86_64" \
+  ARCHS="arm64" \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
