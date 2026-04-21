@@ -764,37 +764,21 @@ jobs:
           VERSION="${{ needs.determine-version.outputs.version }}"
           TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
 
-          artifact_path() {
-            local name="$1"
-            find . -name "$name" -print -quit
-          }
-
-          sha_for_artifact() {
-            local name="$1"
-            local path
-            path=$(artifact_path "$name")
-            if [ -z "$path" ]; then
-              echo "::error::Could not find artifact ${name}" >&2
-              exit 1
-            fi
-            sha256sum "$path" | awk '{print $1}'
-          }
-
           CLI_MACOS_FILE="wendy-cli-darwin-arm64-${VERSION}.tar.gz"
           CLI_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${CLI_MACOS_FILE}"
-          CLI_MACOS_SHA=$(sha_for_artifact "$CLI_MACOS_FILE")
+          CLI_MACOS_SHA=$(curl -fsSL "$CLI_MACOS_URL" | sha256sum | awk '{print $1}')
 
           LINUX_ARM_FILE="wendy-cli-linux-arm64-${VERSION}.tar.gz"
           LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_ARM_FILE}"
-          LINUX_ARM_SHA=$(sha_for_artifact "$LINUX_ARM_FILE")
+          LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
 
           LINUX_X86_FILE="wendy-cli-linux-amd64-${VERSION}.tar.gz"
           LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_X86_FILE}"
-          LINUX_X86_SHA=$(sha_for_artifact "$LINUX_X86_FILE")
+          LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
 
           AGENT_MACOS_FILE="wendy-agent-macos-arm64-${VERSION}.zip"
           AGENT_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${AGENT_MACOS_FILE}"
-          AGENT_MACOS_SHA=$(sha_for_artifact "$AGENT_MACOS_FILE")
+          AGENT_MACOS_SHA=$(curl -fsSL "$AGENT_MACOS_URL" | sha256sum | awk '{print $1}')
 
           echo "URLs and SHA256s:"
           echo "  CLI macOS ARM64: ${CLI_MACOS_URL} -> ${CLI_MACOS_SHA}"
