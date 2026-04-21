@@ -415,6 +415,9 @@ jobs:
     runs-on: windows-latest
     needs: [determine-version, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       matrix:
         include:
@@ -422,6 +425,10 @@ jobs:
             goarch: amd64
           - arch: arm64
             goarch: arm64
+    env:
+      SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      SIGNING_ACCOUNT: wendy-signing
+      SIGNING_PROFILE: wendy-cli
     steps:
       - uses: actions/checkout@v6
 
@@ -436,6 +443,41 @@ jobs:
       - name: Extract artifact
         run: |
           Expand-Archive "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip" -DestinationPath .
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign wendy.exe
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files-folder: wendy-cli-windows-${{ matrix.goarch }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Re-zip with signed exe
+        run: |
+          $VERSION = "${{ needs.determine-version.outputs.version }}"
+          $ARCHIVE = "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.zip"
+          Remove-Item $ARCHIVE
+          Compress-Archive -Path "wendy-cli-windows-${{ matrix.goarch }}" -DestinationPath $ARCHIVE
+
+      - name: Upload signed zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+          path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
 
       - name: Build MSI
         run: |
@@ -456,6 +498,17 @@ jobs:
             -arch $MSI_ARCH `
             -o "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.msi" `
             go/installer/windows/wendy.wxs
+
+      - name: Sign MSI
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Upload MSI
         uses: actions/upload-artifact@v7
