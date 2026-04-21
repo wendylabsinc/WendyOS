@@ -267,11 +267,59 @@ func (s *AgentService) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectTo
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.ConnectToWiFi(ctx, req.GetSsid(), req.GetPassword()); err != nil {
+	if err := s.networkManager.ConnectToWiFi(ctx, req); err != nil {
 		errMsg := err.Error()
 		return &agentpb.ConnectToWiFiResponse{Success: false, ErrorMessage: &errMsg}, nil
 	}
 	return &agentpb.ConnectToWiFiResponse{Success: true}, nil
+}
+
+// ListKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ListKnownWiFiNetworks(ctx context.Context, _ *agentpb.ListKnownWiFiNetworksRequest) (*agentpb.ListKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	known, err := s.networkManager.ListKnownWiFiNetworks(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list known WiFi networks: %v", err)
+	}
+	return &agentpb.ListKnownWiFiNetworksResponse{Networks: known}, nil
+}
+
+// SetWiFiNetworkPriority delegates to the NetworkManager.
+func (s *AgentService) SetWiFiNetworkPriority(ctx context.Context, req *agentpb.SetWiFiNetworkPriorityRequest) (*agentpb.SetWiFiNetworkPriorityResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.SetWiFiNetworkPriority(ctx, req.GetSsid(), req.GetPriority()); err != nil {
+		msg := err.Error()
+		return &agentpb.SetWiFiNetworkPriorityResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.SetWiFiNetworkPriorityResponse{Success: true}, nil
+}
+
+// ReorderKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ReorderKnownWiFiNetworks(ctx context.Context, req *agentpb.ReorderKnownWiFiNetworksRequest) (*agentpb.ReorderKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ReorderKnownWiFiNetworks(ctx, req.GetOrderSsids()); err != nil {
+		msg := err.Error()
+		return &agentpb.ReorderKnownWiFiNetworksResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ReorderKnownWiFiNetworksResponse{Success: true}, nil
+}
+
+// ForgetWiFiNetwork delegates to the NetworkManager.
+func (s *AgentService) ForgetWiFiNetwork(ctx context.Context, req *agentpb.ForgetWiFiNetworkRequest) (*agentpb.ForgetWiFiNetworkResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ForgetWiFiNetwork(ctx, req.GetSsid()); err != nil {
+		msg := err.Error()
+		return &agentpb.ForgetWiFiNetworkResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ForgetWiFiNetworkResponse{Success: true}, nil
 }
 
 // GetWiFiStatus delegates to the NetworkManager.

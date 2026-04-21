@@ -2,6 +2,8 @@ package commands
 
 import (
 	"encoding/json"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -221,46 +223,73 @@ func TestWifiStatusJSON_Disconnected(t *testing.T) {
 // ---------- device wifi list --json ----------
 
 // TestWifiNetworksJSON verifies the JSON schema produced by `wendy device wifi list --json`.
-// The command marshals []*agentpb.ListWiFiNetworksResponse_WiFiNetwork directly.
-// Proto-generated JSON tags use snake_case (signal_strength, not signalStrength).
+// The command now renders a custom camelCase view of the extended WiFiNetwork proto.
 func TestWifiNetworksJSON_Schema(t *testing.T) {
 	strength := int32(75)
+	priority := int32(3)
 	networks := []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{
-		{Ssid: "HomeWiFi", SignalStrength: &strength},
-		{Ssid: "OfficeWiFi"}, // no signal strength
+		{
+			Ssid:           "HomeWiFi",
+			SignalStrength: &strength,
+			Security:       agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK,
+			IsKnown:        true,
+			IsConnected:    true,
+			Priority:       &priority,
+		},
+		{Ssid: "OfficeWiFi"},
 	}
 
-	data, err := json.MarshalIndent(networks, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	// Capture stdout from printNetworksJSON to validate the real output.
+	r, w, _ := os.Pipe()
+	old := os.Stdout
+	os.Stdout = w
+	if err := printNetworksJSON(networks); err != nil {
+		os.Stdout = old
+		w.Close()
+		t.Fatalf("printNetworksJSON: %v", err)
 	}
+	w.Close()
+	os.Stdout = old
+
+	data, _ := io.ReadAll(r)
 
 	var parsed []map[string]interface{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf("unmarshal: %v\nraw=%s", err, data)
 	}
 	if len(parsed) != 2 {
 		t.Fatalf("expected 2 networks, got %d", len(parsed))
 	}
 
-	// First network: ssid and signal_strength present.
 	net0 := parsed[0]
 	if net0["ssid"] != "HomeWiFi" {
 		t.Errorf("net[0].ssid = %v; want HomeWiFi", net0["ssid"])
 	}
-	if sig, ok := net0["signal_strength"]; !ok {
-		t.Error("net[0].signal_strength should be present")
-	} else if sig != float64(75) {
-		t.Errorf("net[0].signal_strength = %v; want 75", sig)
+	if net0["security"] != "WPA2" {
+		t.Errorf("net[0].security = %v; want WPA2", net0["security"])
+	}
+	if net0["isKnown"] != true {
+		t.Errorf("net[0].isKnown = %v; want true", net0["isKnown"])
+	}
+	if net0["isConnected"] != true {
+		t.Errorf("net[0].isConnected = %v; want true", net0["isConnected"])
+	}
+	if sig := net0["signal"]; sig != float64(75) {
+		t.Errorf("net[0].signal = %v; want 75", sig)
+	}
+	if p := net0["priority"]; p != float64(3) {
+		t.Errorf("net[0].priority = %v; want 3", p)
 	}
 
-	// Second network: signal_strength absent (nil pointer → omitempty).
 	net1 := parsed[1]
 	if net1["ssid"] != "OfficeWiFi" {
 		t.Errorf("net[1].ssid = %v; want OfficeWiFi", net1["ssid"])
 	}
-	if _, ok := net1["signal_strength"]; ok {
-		t.Error("net[1].signal_strength should be absent (nil pointer, omitempty)")
+	if _, ok := net1["signal"]; ok {
+		t.Error("net[1].signal should be absent (nil pointer, omitempty)")
+	}
+	if _, ok := net1["priority"]; ok {
+		t.Error("net[1].priority should be absent (nil pointer, omitempty)")
 	}
 }
 

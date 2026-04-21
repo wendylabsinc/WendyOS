@@ -93,12 +93,27 @@ func (c *AgentClient) sendCommand(cmd *agentpb.BluetoothCommand) (*agentpb.Bluet
 
 // WifiConnect sends a WiFi connect command over BLE.
 func (c *AgentClient) WifiConnect(ssid, password string) error {
+	return c.WifiConnectWith(ssid, password, agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED, false)
+}
+
+// WifiConnectWith sends a WiFi connect command over BLE with optional security
+// hint and hidden-network flag.
+func (c *AgentClient) WifiConnectWith(ssid, password string, security agentpb.WiFiSecurityType, hidden bool) error {
+	inner := &agentpb.WifiConnectCommand{
+		Ssid:     ssid,
+		Password: password,
+	}
+	if security != agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED {
+		s := security
+		inner.Security = &s
+	}
+	if hidden {
+		h := true
+		inner.Hidden = &h
+	}
 	cmd := &agentpb.BluetoothCommand{
 		Command: &agentpb.BluetoothCommand_WifiConnect{
-			WifiConnect: &agentpb.WifiConnectCommand{
-				Ssid:     ssid,
-				Password: password,
-			},
+			WifiConnect: inner,
 		},
 	}
 
@@ -185,6 +200,102 @@ func (c *AgentClient) WifiDisconnect() error {
 			msg = "unknown error"
 		}
 		return fmt.Errorf("WiFi disconnect failed: %s", msg)
+	}
+	return nil
+}
+
+// WifiKnownList lists saved WiFi profiles on the device over BLE.
+func (c *AgentClient) WifiKnownList() ([]*agentpb.KnownWifiNetworkInfo, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiKnownList{
+			WifiKnownList: &agentpb.WifiKnownListCommand{},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	inner := resp.GetWifiKnownList()
+	if inner == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return inner.GetNetworks(), nil
+}
+
+// WifiSetPriority sets the priority for a saved network by SSID.
+func (c *AgentClient) WifiSetPriority(ssid string, priority int32) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiSetPriority{
+			WifiSetPriority: &agentpb.WifiSetPriorityCommand{
+				Ssid:     ssid,
+				Priority: priority,
+			},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+	inner := resp.GetWifiSetPriority()
+	if inner == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !inner.GetSuccess() {
+		msg := inner.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("WiFi set priority failed: %s", msg)
+	}
+	return nil
+}
+
+// WifiReorder reorders saved networks by SSID.
+func (c *AgentClient) WifiReorder(order []string) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiReorder{
+			WifiReorder: &agentpb.WifiReorderCommand{OrderSsids: order},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+	inner := resp.GetWifiReorder()
+	if inner == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !inner.GetSuccess() {
+		msg := inner.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("WiFi reorder failed: %s", msg)
+	}
+	return nil
+}
+
+// WifiForget removes a saved WiFi profile by SSID.
+func (c *AgentClient) WifiForget(ssid string) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiForget{
+			WifiForget: &agentpb.WifiForgetCommand{Ssid: ssid},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+	inner := resp.GetWifiForget()
+	if inner == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !inner.GetSuccess() {
+		msg := inner.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("WiFi forget failed: %s", msg)
 	}
 	return nil
 }
