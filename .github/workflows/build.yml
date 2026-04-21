@@ -3,7 +3,9 @@ name: Build products and release
 on:
   push:
     branches: [main]
-    paths: ['go/**']
+    paths:
+      - 'go/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       publish:
