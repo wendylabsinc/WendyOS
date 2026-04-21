@@ -65,6 +65,7 @@ func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 	cmd.Stderr = stderr
 	err := cmd.Run()
 	flushWriter(stdout)
+	flushWriter(stderr)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
