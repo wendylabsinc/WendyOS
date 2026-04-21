@@ -739,7 +739,7 @@ jobs:
             echo "DISCORD_WEBHOOK_URL not configured, skipping notification"
           fi
 
-      # Bump Homebrew tap metadata
+      # Bump Homebrew tap formula and cask
       - name: Create GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -795,8 +795,8 @@ jobs:
           echo "agent_macos_url=${AGENT_MACOS_URL}" >> $GITHUB_OUTPUT
           echo "agent_macos_sha=${AGENT_MACOS_SHA}" >> $GITHUB_OUTPUT
 
-      # Nightly: update Homebrew formula and cask directly on main
-      - name: Bump nightly Homebrew metadata
+      # Nightly: update formula and cask directly on main
+      - name: Bump nightly formula and cask
         if: needs.determine-version.outputs.is_release != 'true'
         run: |
           set -euo pipefail
@@ -832,7 +832,7 @@ jobs:
           EOF
 
           # Verify all URLs and checksums were actually updated
-          echo "Verifying nightly Homebrew metadata..."
+          echo "Verifying nightly formula and cask..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
@@ -854,13 +854,13 @@ jobs:
           git push origin main
 
       # Stable: update the CLI formula and macOS agent cask via PR
-      - name: Bump stable Homebrew metadata
+      - name: Bump stable formula and cask
         if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
         run: |
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
-          BRANCH="ci/bump-homebrew-${VERSION}"
+          BRANCH="ci/bump-wendy-tap-${VERSION}"
           FORMULA="Formula/wendy.rb"
           CASK="Casks/wendy-agent.rb"
 
@@ -893,7 +893,7 @@ jobs:
           EOF
 
           # Verify all URLs and checksums were actually updated
-          echo "Verifying stable Homebrew metadata..."
+          echo "Verifying stable formula and cask..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
@@ -911,7 +911,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$FORMULA" "$CASK"
-          git commit -m "homebrew: bump stable artifacts to ${VERSION}"
+          git commit -m "wendy: bump to ${VERSION}"
           git push -u origin "$BRANCH"
 
       - name: Create PR
@@ -922,9 +922,9 @@ jobs:
           VERSION="${{ needs.determine-version.outputs.version }}"
           gh pr create \
             --repo wendylabsinc/homebrew-tap \
-            --head "ci/bump-homebrew-${VERSION}" \
+            --head "ci/bump-wendy-tap-${VERSION}" \
             --base main \
-            --title "homebrew: bump stable artifacts to ${VERSION}" \
+            --title "wendy: bump to ${VERSION}" \
             --label pr-pull \
             --body "Automated bump from release ${VERSION}
 
