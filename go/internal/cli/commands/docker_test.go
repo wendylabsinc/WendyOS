@@ -451,6 +451,120 @@ func TestStartRegistryProxy(t *testing.T) {
 	}
 }
 
+func TestFindSwiftProduct_SingleExecutableProduct(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[{"name":"MyApp","type":{"executable":null}}],"targets":[]}`)
+	}
+
+	got, err := findSwiftProduct(t.TempDir(), "", false)
+	if err != nil {
+		t.Fatalf("findSwiftProduct: %v", err)
+	}
+	if got != "MyApp" {
+		t.Errorf("got %q, want %q", got, "MyApp")
+	}
+}
+
+func TestFindSwiftProduct_MultipleExecutableProductsNonInteractive(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[{"name":"App1","type":{"executable":null}},{"name":"App2","type":{"executable":null}}],"targets":[]}`)
+	}
+
+	_, err := findSwiftProduct(t.TempDir(), "", false)
+	if err == nil {
+		t.Fatal("expected error for multiple executable candidates, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple executable candidates") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--product") {
+		t.Errorf("error should mention --product flag: %v", err)
+	}
+}
+
+func TestFindSwiftProduct_FallbackToExecutableTargets(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[],"targets":[{"name":"TargetApp","type":"executable"}]}`)
+	}
+
+	got, err := findSwiftProduct(t.TempDir(), "", false)
+	if err != nil {
+		t.Fatalf("findSwiftProduct: %v", err)
+	}
+	if got != "TargetApp" {
+		t.Errorf("got %q, want %q", got, "TargetApp")
+	}
+}
+
+func TestFindSwiftProduct_ProductOverrideValid(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[{"name":"App1","type":{"executable":null}},{"name":"App2","type":{"executable":null}}],"targets":[]}`)
+	}
+
+	got, err := findSwiftProduct(t.TempDir(), "App2", false)
+	if err != nil {
+		t.Fatalf("findSwiftProduct: %v", err)
+	}
+	if got != "App2" {
+		t.Errorf("got %q, want %q", got, "App2")
+	}
+}
+
+func TestFindSwiftProduct_ProductOverrideInvalid(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[{"name":"App1","type":{"executable":null}}],"targets":[]}`)
+	}
+
+	_, err := findSwiftProduct(t.TempDir(), "NonExistent", false)
+	if err == nil {
+		t.Fatal("expected error for invalid product override, got nil")
+	}
+	if !strings.Contains(err.Error(), "NonExistent") {
+		t.Errorf("error should mention the invalid product name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "App1") {
+		t.Errorf("error should list available products: %v", err)
+	}
+}
+
+func TestFindSwiftProduct_NoExecutableProductsOrTargets(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"products":[{"name":"MyLib","type":{"library":{"type":"automatic"}}}],"targets":[{"name":"MyLib","type":"library"}]}`)
+	}
+
+	_, err := findSwiftProduct(t.TempDir(), "", false)
+	if err == nil {
+		t.Fatal("expected error for no executable products/targets, got nil")
+	}
+	if !strings.Contains(err.Error(), "no executable") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
 	// This test would invoke findIPv4ViaNeighborTable, which may spawn real ndp/arp/ip
 	// commands and read the host's neighbor tables, making it environment-dependent.

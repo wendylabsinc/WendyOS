@@ -454,14 +454,11 @@ func installWasmSwiftSDK() error {
 
 // findSwiftProduct determines the executable product name from Package.swift
 // using `swift package dump-package`. When productOverride is non-empty it is
-// returned immediately. When multiple candidates exist and interactive is true
-// a picker is shown; otherwise an error is returned.
+// validated against the package's executable candidates and returned if found.
+// When multiple candidates exist and interactive is true a picker is shown;
+// otherwise an error is returned.
 func findSwiftProduct(dir, productOverride string, interactive bool) (string, error) {
-	if productOverride != "" {
-		return productOverride, nil
-	}
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
+	cmd := execCommandContext(context.Background(), "swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -500,6 +497,18 @@ func findSwiftProduct(dir, productOverride string, interactive bool) (string, er
 		}
 	}
 
+	if productOverride != "" {
+		if len(candidates) == 0 {
+			return "", fmt.Errorf("Package.swift has no executable products or targets")
+		}
+		for _, c := range candidates {
+			if c == productOverride {
+				return productOverride, nil
+			}
+		}
+		return "", fmt.Errorf("product %q is not an executable product or target in Package.swift; available: %s", productOverride, strings.Join(candidates, ", "))
+	}
+
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("Package.swift has no executable products or targets")
 	}
@@ -513,7 +522,7 @@ func findSwiftProduct(dir, productOverride string, interactive bool) (string, er
 // error listing the options when running non-interactively.
 func pickSwiftProduct(names []string, interactive bool) (string, error) {
 	if !interactive {
-		return "", fmt.Errorf("Package.swift has multiple executable products (%s); use --product to select one", strings.Join(names, ", "))
+		return "", fmt.Errorf("Package.swift has multiple executable candidates (%s); use --product to select one", strings.Join(names, ", "))
 	}
 
 	picker := tui.NewPickerWithTitle("Select a Swift product")
@@ -534,7 +543,10 @@ func pickSwiftProduct(names []string, interactive bool) (string, error) {
 		return "", fmt.Errorf("product picker: %w", err)
 	}
 
-	pm := finalModel.(tui.PickerModel)
+	pm, ok := finalModel.(tui.PickerModel)
+	if !ok {
+		return "", fmt.Errorf("invalid picker model type")
+	}
 	if pm.Cancelled() {
 		return "", ErrUserCancelled
 	}
@@ -542,7 +554,11 @@ func pickSwiftProduct(names []string, interactive bool) (string, error) {
 	if sel == nil {
 		return "", fmt.Errorf("no product selected")
 	}
-	return sel.Value.(string), nil
+	name, ok := sel.Value.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid selection")
+	}
+	return name, nil
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
