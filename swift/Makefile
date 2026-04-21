@@ -20,7 +20,7 @@ lint: ## Lint Swift code using swift-format
 	bash ./Scripts/Lint.sh
 
 test: ## Run Swift package tests
-	cd WendyAgentCore && swift test
+	bash ./Scripts/Test.sh
 
 proto: ## Generate Swift gRPC code from Proto/
 	./Scripts/GenerateProto.sh
