@@ -221,7 +221,7 @@ jobs:
         shell: bash
         run: bash ./Scripts/SetupSigningCI.sh
 
-      - name: Release macOS app
+      - name: Build WendyAgentMac app
         id: release_mac_app
         working-directory: swift
         env:
