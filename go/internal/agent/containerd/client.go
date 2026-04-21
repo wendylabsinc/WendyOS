@@ -17,6 +17,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -397,21 +398,32 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}()
 	}
 
-	// Local-registry images are pushed directly into containerd's content store
-	// via the embedded registry, so they're already present — just look them up.
-	// For remote images, try the local store first, then pull from the registry.
+	// For local-registry images, always pull from the embedded HTTP registry
+	// so containerd properly resolves manifest lists and unpacks layers.
+	// For remote images, try the local store first, then pull.
 	var image containerd.Image
 	var err error
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	image, err = c.client.GetImage(ctx, imageName)
-	if err != nil && !shouldRefreshImageFromRegistry(imageName) {
-		c.logger.Info("Image not in local store, attempting pull from registry",
-			zap.String("image", imageName),
+	if shouldRefreshImageFromRegistry(imageName) {
+		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
+		image, err = c.client.Pull(ctx, imageName,
+			containerd.WithPullUnpack,
+			containerd.WithResolver(resolver),
 		)
-		image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
-	}
-	if err != nil {
-		return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+		if err != nil {
+			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+		}
+	} else {
+		image, err = c.client.GetImage(ctx, imageName)
+		if err != nil {
+			c.logger.Info("Image not in local store, attempting pull from registry",
+				zap.String("image", imageName),
+			)
+			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
+			if err != nil {
+				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
+			}
+		}
 	}
 
 	// Unpack the image into the snapshotter if not already done.

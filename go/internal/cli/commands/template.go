@@ -2,6 +2,7 @@ package commands
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -535,9 +537,9 @@ func validateVariable(v templateVariable, val interface{}) error {
 	return nil
 }
 
-// renderAndWriteTemplate takes the raw file map, replaces {{.VAR}} tokens
-// with collected values, and writes to destDir.
-// It renames directories named after the template to the app ID.
+// renderAndWriteTemplate takes the raw file map, evaluates each text file as a
+// Go text/template (so {{.VAR}}, {{if}}, {{range}}, etc. all work), and writes
+// to destDir. It renames directories named after the template to the app ID.
 func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}) error {
 	for relPath, content := range files {
 		// Rename template-named directories to app ID.
@@ -549,16 +551,14 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			return fmt.Errorf("creating directory for %s: %w", relPath, err)
 		}
 
-		// Only apply token replacement to text files. Binary files
-		// (images, fonts, wasm) are written as-is.
+		// Only render text files. Binary files (images, fonts, wasm) are written as-is.
 		output := content
 		if isTextFile(relPath) {
-			rendered := string(content)
-			for key, val := range vals {
-				token := fmt.Sprintf("{{.%s}}", key)
-				rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+			rendered, err := renderTemplateContent(relPath, content, vals)
+			if err != nil {
+				return err
 			}
-			output = []byte(rendered)
+			output = rendered
 		}
 
 		if err := os.WriteFile(destPath, output, 0o644); err != nil {
@@ -567,6 +567,24 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 	}
 
 	return nil
+}
+
+// renderTemplateContent evaluates content as a Go text/template against vals.
+// Parse errors are surfaced (scoped to path) so template-authoring mistakes
+// like a broken {{if}} don't silently produce files with unrendered actions.
+// missingkey=error causes references to undeclared variables to fail rather
+// than render as "<no value>".
+func renderTemplateContent(path string, content []byte, vals map[string]interface{}) ([]byte, error) {
+	tmpl, err := template.New(path).Option("missingkey=error").Parse(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, vals); err != nil {
+		return nil, fmt.Errorf("rendering %s: %w", path, err)
+	}
+	return buf.Bytes(), nil
 }
 
 // renameTemplatePath replaces occurrences of the template name in path
@@ -582,12 +600,15 @@ func renameTemplatePath(relPath, templateName, appID string) string {
 }
 
 // isTextFile returns true if a file path looks like a text file that should
-// have template tokens replaced. Binary files are left as-is.
+// have template tokens replaced. Binary files are left as-is. JSX/TSX files
+// are excluded because they routinely contain `{{ … }}` object expressions
+// (e.g. `icons={{ success: ... }}`) that collide with Go template syntax;
+// they don't need variable interpolation in practice.
 func isTextFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".html", ".css",
-		".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".swift", ".go",
+		".js", ".ts", ".py", ".rs", ".swift", ".go",
 		".cpp", ".c", ".h", ".hpp", ".cmake", ".sh", ".bash", ".zsh",
 		".dockerfile", ".gitignore", ".env", ".cfg", ".ini", ".xml",
 		".svg", ".lock":
