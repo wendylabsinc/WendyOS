@@ -2,8 +2,8 @@ name: Build products and release
 
 on:
   push:
-    branches: [main]
-    paths: ['go/**']
+    branches: [main, kb.wendy-agent-macos-release]
+    # paths: ['go/**', 'swift/**']
   workflow_dispatch:
     inputs:
       publish:
