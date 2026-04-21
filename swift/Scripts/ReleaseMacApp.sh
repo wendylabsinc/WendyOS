@@ -70,6 +70,14 @@ sign_path() {
   "${command[@]}"
 }
 
+xcbeautify_or_cat() {
+  if command -v xcbeautify >/dev/null 2>&1; then
+    xcbeautify
+  else
+    cat
+  fi
+}
+
 mkdir -p "$OUTPUT_DIR" "$PACKAGE_CACHE_DIR" "$SOURCE_PACKAGES_DIR" "$DERIVED_DATA_PATH"
 rm -rf "$ARCHIVE_PATH" "$DERIVED_DATA_PATH" "$APP_PATH" "$NOTARY_ZIP"
 mkdir -p "$DERIVED_DATA_PATH"
@@ -88,7 +96,8 @@ xcodebuild archive \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
-  -skipMacroValidation
+  -skipMacroValidation \
+  | xcbeautify_or_cat
 
 ditto "$ARCHIVE_PATH/Products/Applications/$APP_NAME" "$APP_PATH"
 
