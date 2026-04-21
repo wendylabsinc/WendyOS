@@ -156,6 +156,14 @@ message GetAgentVersionResponse {
     repeated string featureset = 6;
     // Hardware platform identifier read from /etc/wendyos/device-type (only present on WendyOS)
     optional string device_type = 7;
+    // Whether the device has a GPU.
+    optional bool has_gpu = 8;
+    // GPU vendor identifier (e.g. "nvidia"). Only present when has_gpu is true.
+    optional string gpu_vendor = 9;
+    // JetPack version (e.g. "6.2"). Only present on NVIDIA Jetson devices.
+    optional string jetpack_version = 10;
+    // CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
+    optional string cuda_version = 11;
 }
 
 // Request message for listing WiFi networks

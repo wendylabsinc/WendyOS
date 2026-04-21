@@ -74,7 +74,134 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 		resp.DeviceType = &v
 	}
 
+	// Detect GPU presence and details.
+	gpuInfo := detectGPUInfo()
+	resp.HasGpu = &gpuInfo.hasGPU
+	if gpuInfo.vendor != "" {
+		resp.GpuVendor = &gpuInfo.vendor
+	}
+	if gpuInfo.jetpackVersion != "" {
+		resp.JetpackVersion = &gpuInfo.jetpackVersion
+	}
+	if gpuInfo.cudaVersion != "" {
+		resp.CudaVersion = &gpuInfo.cudaVersion
+	}
+
 	return resp, nil
+}
+
+type gpuInfo struct {
+	hasGPU         bool
+	vendor         string
+	jetpackVersion string
+	cudaVersion    string
+}
+
+// detectGPUInfo probes the system for GPU presence and NVIDIA-specific details.
+func detectGPUInfo() gpuInfo {
+	info := gpuInfo{}
+
+	// /etc/nv_tegra_release is the definitive indicator of an NVIDIA Tegra/Jetson
+	// device. Check it first because /dev/nvidia0 is absent on many Jetson configs
+	// where the GPU is an integrated Tegra (e.g. JetPack 5/6 on Orin).
+	if _, err := os.Stat("/etc/nv_tegra_release"); err == nil {
+		info.hasGPU = true
+		info.vendor = "nvidia"
+	} else if _, err := os.Stat("/dev/nvidia0"); err == nil {
+		// Discrete NVIDIA GPU (no Tegra release file).
+		info.hasGPU = true
+		info.vendor = "nvidia"
+	} else if entries, _ := os.ReadDir("/dev/dri"); len(entries) > 0 {
+		// Generic GPU via DRM — vendor unknown.
+		info.hasGPU = true
+	}
+
+	if info.vendor == "nvidia" {
+		info.jetpackVersion = detectJetPackVersion()
+		info.cudaVersion = detectCUDAVersion()
+	}
+
+	return info
+}
+
+var tegraReleaseRe = regexp.MustCompile(`R(\d+)\s+\([^)]+\),\s+REVISION:\s+([\d.]+)`)
+
+// detectJetPackVersion returns the JetPack version (e.g. "6.1") by parsing
+// /etc/nv_tegra_release and mapping the L4T version via a known table.
+// Falls back to "L4T {version}" when no mapping is found.
+func detectJetPackVersion() string {
+	data, err := os.ReadFile("/etc/nv_tegra_release")
+	if err != nil {
+		return ""
+	}
+	m := tegraReleaseRe.FindSubmatch(data)
+	if len(m) < 3 {
+		return ""
+	}
+	major := string(m[1])
+	revision := string(m[2]) // e.g. "4.4"
+
+	// Use major.minor for the table key (e.g. "36.4").
+	minor := strings.SplitN(revision, ".", 2)[0]
+	key := major + "." + minor
+
+	// L4T → JetPack version table.
+	// https://developer.nvidia.com/embedded/jetpack-archive
+	jetpack := map[string]string{
+		"36.4": "6.1",
+		"36.3": "6.0",
+		"36.2": "6.0",
+		"35.5": "5.1.3",
+		"35.4": "5.1.2",
+		"35.3": "5.1.1",
+		"35.2": "5.1",
+		"35.1": "5.0.2",
+		"34.1": "5.0.1",
+		"32.7": "4.6",
+		"32.6": "4.6",
+		"32.5": "4.5",
+		"32.4": "4.4",
+		"32.3": "4.3",
+		"32.2": "4.2",
+		"32.1": "4.1",
+	}
+	if jp, ok := jetpack[key]; ok {
+		return jp
+	}
+	return "L4T " + major + "." + revision
+}
+
+var cudaVersionFileRe = regexp.MustCompile(`(?i)CUDA[^0-9]*([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+
+// detectCUDAVersion reads the CUDA version from well-known paths or nvcc.
+func detectCUDAVersion() string {
+	// Try /usr/local/cuda/version.txt: "CUDA Version 12.2.0"
+	if data, err := os.ReadFile("/usr/local/cuda/version.txt"); err == nil {
+		if m := cudaVersionFileRe.FindSubmatch(data); len(m) > 1 {
+			return string(m[1])
+		}
+	}
+
+	// Try /usr/local/cuda/version.json: {"cuda": {"version": "12.2.0"}}
+	if data, err := os.ReadFile("/usr/local/cuda/version.json"); err == nil {
+		if m := cudaVersionFileRe.FindSubmatch(data); len(m) > 1 {
+			return string(m[1])
+		}
+	}
+
+	// Fall back to nvcc --version with a timeout so detection cannot block an RPC handler.
+	if nvcc, err := exec.LookPath("nvcc"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, nvcc, "--version").Output()
+		if err == nil {
+			if m := cudaVersionFileRe.FindSubmatch(out); len(m) > 1 {
+				return string(m[1])
+			}
+		}
+	}
+
+	return ""
 }
 
 // detectFeatureset probes the system for available hardware capabilities.

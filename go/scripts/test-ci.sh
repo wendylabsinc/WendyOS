@@ -149,6 +149,19 @@ fi
 echo -e "${BOLD}==> Target device: ${HOSTNAME}${RESET}"
 echo ""
 
+# ── Device capability detection ──────────────────────────────────────
+
+DEVICE_HAS_GPU=false
+VERSION_JSON=$("$WENDY" device version --json --device "$HOSTNAME" 2>/dev/null || true)
+if [[ -n "$VERSION_JSON" ]]; then
+    GPU_VAL=$(echo "$VERSION_JSON" | jq -r '.hasGpu // false' 2>/dev/null || true)
+    if [[ "$GPU_VAL" == "true" ]]; then
+        DEVICE_HAS_GPU=true
+    fi
+fi
+echo -e "${BOLD}==> GPU: ${DEVICE_HAS_GPU}${RESET}"
+echo ""
+
 # ── Validate tests directory ─────────────────────────────────────────
 
 if [[ ! -d "$TESTS_DIR" ]]; then
@@ -200,6 +213,12 @@ echo ""
 
 for test_name in "${TESTS[@]}"; do
     test_dir="$TESTS_DIR/$test_name"
+
+    # Skip GPU tests on devices that don't have a GPU.
+    if [[ "$test_name" == *"-gpu"* ]] && [[ "$DEVICE_HAS_GPU" != "true" ]]; then
+        skip_test "$test_name" "no GPU"
+        continue
+    fi
 
     # Verify directory exists
     if [[ ! -d "$test_dir" ]]; then

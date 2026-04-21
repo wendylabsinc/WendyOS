@@ -97,6 +97,16 @@ func newDeviceVersionCmd() *cobra.Command {
 					"cpuArchitecture": resp.GetCpuArchitecture(),
 					"deviceType":      resp.GetDeviceType(),
 					"cliVersion":      version.Version,
+					"hasGpu":          resp.GetHasGpu(),
+				}
+				if v := resp.GetGpuVendor(); v != "" {
+					out["gpuVendor"] = v
+				}
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					out["jetpackVersion"] = jv
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					out["cudaVersion"] = cv
 				}
 				if checkUpdates {
 					out["latestVersion"] = latestVersion
@@ -115,6 +125,19 @@ func newDeviceVersionCmd() *cobra.Command {
 			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
 			if dt := resp.GetDeviceType(); dt != "" {
 				fmt.Printf("Device Type: %s\n", dt)
+			}
+			if resp.GetHasGpu() {
+				vendor := resp.GetGpuVendor()
+				if vendor == "" {
+					vendor = "unknown"
+				}
+				fmt.Printf("GPU: %s\n", vendor)
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					fmt.Printf("JetPack: %s\n", jv)
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					fmt.Printf("CUDA: %s\n", cv)
+				}
 			}
 			fmt.Printf("CLI Version: %s\n", version.Version)
 
