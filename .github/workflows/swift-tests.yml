@@ -104,8 +104,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            swift/.ci/PackageCache
-            swift/.ci/SourcePackages
+            swift/Build/CI/PackageCache
+            swift/Build/CI/SourcePackages
           key: xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
           restore-keys: |
             xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
@@ -114,8 +114,8 @@ jobs:
       - name: Resolve Swift package dependencies
         working-directory: swift
         env:
-          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
-          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/Build/CI/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/Build/CI/SourcePackages
         shell: bash
         run: |
           set -euo pipefail
@@ -131,9 +131,9 @@ jobs:
       - name: Build Release universal app
         working-directory: swift
         env:
-          DERIVED_DATA_PATH: ${{ runner.temp }}/DerivedData
-          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/.ci/PackageCache
-          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/.ci/SourcePackages
+          DERIVED_DATA_PATH: ${{ github.workspace }}/swift/Build/Xcode
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/Build/CI/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/Build/CI/SourcePackages
         shell: bash
         run: |
           set -euo pipefail

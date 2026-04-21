@@ -29,5 +29,3 @@ go/wendy
 # Local settings
 *.local.*
 
-.ci/
-dist/

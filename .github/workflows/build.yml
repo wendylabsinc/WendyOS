@@ -227,6 +227,10 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
           OUTPUT_DIR: ${{ github.workspace }}/swift/Build
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/Build/CI/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/Build/CI/SourcePackages
+          DERIVED_DATA_PATH: ${{ github.workspace }}/swift/Build/Xcode
+          ARCHIVE_PATH: ${{ github.workspace }}/swift/Build/WendyAgentMac.xcarchive
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
