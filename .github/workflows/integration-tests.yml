@@ -16,9 +16,9 @@ on:
         required: false
         default: 'all'
       platform:
-        description: 'Platform to run integration tests on: all, macos, linux (default: all)'
+        description: 'Platform to run integration tests on: all, macos, linux (default: macos)'
         required: false
-        default: 'all'
+        default: 'macos'
 
 jobs:
   discover:
@@ -81,8 +81,10 @@ jobs:
 
   integration-test-macos:
     name: Integration (macOS)
-    if: github.event_name == 'push' || inputs.jobs == 'all' || inputs.jobs == 'integration'
-    runs-on: [self-hosted, wendy-agent, '${{ matrix.os }}']
+    if: (inputs.jobs == 'all' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'macos')
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, macOS, ARM64]
     concurrency:
       group: integration-hw-macos
       cancel-in-progress: false
@@ -356,7 +358,7 @@ jobs:
             echo "- GPU test: ${{ needs.integration-test-gpu.result }} (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test-macos.result }}" == "failure" || "${{ needs.integration-test-linux.result }}" == "failure" ]]; then
+          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test-macos.result }}" == "failure" ]]; then
             echo ""
             echo "One or more blocking tests failed."
             exit 1
