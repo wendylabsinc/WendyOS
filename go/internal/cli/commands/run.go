@@ -325,6 +325,7 @@ type runOptions struct {
 	restartOnFailure     bool
 	noRestart            bool
 	prefix               string
+	product              string
 	userArgs             []string
 }
 
@@ -349,6 +350,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
 	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to run from instead of the current working directory")
+	cmd.Flags().StringVar(&opts.product, "product", "", "Swift Package Manager product to build and run")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 
 	return cmd
@@ -481,7 +483,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	product, err := findSwiftProduct(cwd)
+	product, err := findSwiftProduct(cwd, opts.product, !opts.yes && isInteractiveTerminal())
 	if err != nil {
 		return err
 	}
@@ -571,14 +573,14 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		if err := ensureSwiftVersion(ctx); err != nil {
 			return err
 		}
-		swiftProduct, err := findSwiftProduct(projectPath)
+		swiftProduct, err := findSwiftProduct(projectPath, opts.product, !opts.yes && isInteractiveTerminal())
 		if err != nil {
 			return fmt.Errorf("could not determine Swift product: %w", err)
 		}
 		product = swiftProduct
 	} else if p.CanBuild(projectPath) {
 		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
-		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
+		if swiftProduct, err := findSwiftProduct(projectPath, opts.product, false); err == nil {
 			product = swiftProduct
 		}
 	}
