@@ -72,7 +72,11 @@ sign_path() {
 
 xcbeautify_or_cat() {
   if command -v xcbeautify >/dev/null 2>&1; then
-    xcbeautify
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+      xcbeautify --renderer github-actions
+    else
+      xcbeautify
+    fi
   else
     cat
   fi
