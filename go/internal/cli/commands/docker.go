@@ -917,26 +917,29 @@ func registryHost(host string, port int) string {
 }
 
 // resolveRegistry determines how to reach the device registry from Docker buildx.
-// For routable addresses it returns the direct registry address. For link-local
-// addresses (common with USB-connected devices) it starts a TCP proxy on the
-// host and returns host.docker.internal:<port> so the Docker Desktop VM can push
-// through it — link-local addresses cannot be routed from inside the VM.
+// Buildkitd runs inside the Docker VM (Colima/Docker Desktop) and cannot reach
+// LAN devices directly — only the macOS host can. We always proxy through
+// host.docker.internal so buildkitd can push via the host regardless of whether
+// the address is link-local or a routable LAN IP.
 //
 // The returned cleanup function MUST be called when the build is complete to
 // stop the proxy and release the port.
 func resolveRegistry(ctx context.Context, host string, port int) (registryAddr string, cleanup func(), err error) {
 	resolved := resolveRegistryIP(host)
-	if !isLinkLocalIP(resolved) {
-		return registryHost(host, port), func() {}, nil
+
+	// For link-local addresses (USB devices), dial via the original hostname so
+	// the host's resolver supplies the zone ID needed for link-local routing.
+	// For routable LAN addresses, dial the resolved IP directly.
+	var target string
+	if isLinkLocalIP(resolved) {
+		target = net.JoinHostPort(host, strconv.Itoa(port))
+	} else {
+		target = net.JoinHostPort(resolved, strconv.Itoa(port))
 	}
 
-	// Link-local address — Docker's VM cannot reach it directly.
-	// Dial via the original hostname so the host's resolver provides the
-	// zone ID (interface scope) needed for link-local routing.
-	target := net.JoinHostPort(host, strconv.Itoa(port))
 	proxy, err := startRegistryProxy(ctx, target)
 	if err != nil {
-		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
+		return "", nil, fmt.Errorf("starting registry proxy: %w", err)
 	}
 
 	registryAddr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
