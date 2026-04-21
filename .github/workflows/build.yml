@@ -233,10 +233,7 @@ jobs:
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
         shell: bash
-        run: |
-          BUILD_NUMBER=$(( GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT ))
-          export BUILD_NUMBER
-          bash ./Scripts/Build.sh
+        run: bash ./Scripts/Build.sh
 
       - name: Upload notarized app bundle
         uses: actions/upload-artifact@v4

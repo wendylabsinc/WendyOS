@@ -6,12 +6,12 @@ SWIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SWIFT_DIR"
 
 : "${VERSION:?VERSION is required}"
-: "${BUILD_NUMBER:?BUILD_NUMBER is required}"
 
-if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+if [[ "$VERSION" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]{2})(-([0-9]{6}))?([-.].*)?$ ]]; then
   APPLE_MARKETING_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+  BUILD_NUMBER="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[5]:-000000}"
 else
-  echo "VERSION must start with year.month.day, got: $VERSION" >&2
+  echo "VERSION must start with YYYY.MM.DD and may include -HHMMSS and a suffix, got: $VERSION" >&2
   exit 1
 fi
 
@@ -137,6 +137,7 @@ ditto -c -k --sequesterRsrc --keepParent \
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "apple_marketing_version=$APPLE_MARKETING_VERSION"
+    echo "build_number=$BUILD_NUMBER"
     echo "app_name=$APP_NAME"
     echo "app_path=$APP_PATH"
     echo "artifact_name=$ARTIFACT_NAME"

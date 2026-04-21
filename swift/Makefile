@@ -29,7 +29,7 @@ clean: ## Remove Build/
 	rm -rf Build/
 
 build: ## Build, sign, notarize, and package the macOS app
-	VERSION='$(VERSION)' BUILD_NUMBER='$(BUILD_NUMBER)' OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh
+	VERSION='$(VERSION)' OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh
 
 reset-mac-app-settings: ## Reset WendyAgentMac preferences/defaults
 	./Scripts/ResetMacAppSettings.sh
