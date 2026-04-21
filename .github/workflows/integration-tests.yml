@@ -16,9 +16,9 @@ on:
         required: false
         default: 'all'
       platform:
-        description: 'Platform to run integration tests on: all, macos, linux (default: macos)'
+        description: 'Platform to run integration tests on: all, macos, linux (default: all)'
         required: false
-        default: 'macos'
+        default: 'all'
 
 jobs:
   discover:
@@ -202,8 +202,7 @@ jobs:
 
   integration-test-linux:
     name: Integration (Linux)
-    if: always() && (inputs.jobs == 'all' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'linux')
-    needs: integration-test-macos
+    if: (inputs.jobs == 'all' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'linux')
     runs-on:
       group: wendy-developer
       labels: [self-hosted, Linux]
@@ -275,17 +274,34 @@ jobs:
             echo "==> Found ${#DEVICES[@]} device(s): ${DEVICES[*]}"
           fi
 
+          declare -a PIDS
           OVERALL_FAIL=0
-          for device in "${DEVICES[@]}"; do
-            echo ""
-            echo "==> Testing device: $device"
-            echo "==> Network diagnostics for $device:"
-            ip route get "$device" 2>/dev/null || true
-            arp -n "$device" 2>/dev/null || true
-            nc -zw 5 "$device" 50051 2>&1 && echo "nc port 50051: OK" || echo "nc port 50051: FAILED"
-            nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
-            scripts/test-ci.sh $TEST_ARGS -h "$device" || OVERALL_FAIL=1
-            docker buildx ls 2>/dev/null | awk '/^wendy/{print $1}' | xargs -r docker buildx rm --force 2>/dev/null || true
+          for i in "${!DEVICES[@]}"; do
+            device="${DEVICES[$i]}"
+            BUILDER="wendy-$i"
+            echo "==> Starting tests on $device (builder: $BUILDER)"
+            (
+              echo "==> Network diagnostics for $device:"
+              ip route get "$device" 2>/dev/null || true
+              arp -n "$device" 2>/dev/null || true
+              nc -zw 5 "$device" 50051 2>&1 && echo "nc port 50051: OK" || echo "nc port 50051: FAILED"
+              nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
+              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
+              rc=$?
+              docker buildx rm "$BUILDER" --force 2>/dev/null || true
+              exit $rc
+            ) &
+            PIDS[$i]=$!
+          done
+
+          for i in "${!PIDS[@]}"; do
+            device="${DEVICES[$i]}"
+            if wait "${PIDS[$i]}"; then
+              echo "==> $device: PASSED"
+            else
+              echo "==> $device: FAILED"
+              OVERALL_FAIL=1
+            fi
           done
           exit $OVERALL_FAIL
 
@@ -406,7 +422,7 @@ jobs:
             echo "- GPU test: ${{ needs.integration-test-gpu.result }} (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test-macos.result }}" == "failure" ]]; then
+          if [[ "${{ needs.discover.result }}" == "failure" || "${{ needs.integration-test-macos.result }}" == "failure" || "${{ needs.integration-test-linux.result }}" == "failure" ]]; then
             echo ""
             echo "One or more blocking tests failed."
             exit 1
