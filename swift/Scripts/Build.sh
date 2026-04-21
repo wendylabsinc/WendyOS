@@ -9,7 +9,7 @@ cd "$SWIFT_DIR"
 
 if [[ "$VERSION" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]{2})(-([0-9]{6}))?([-.].*)?$ ]]; then
   APPLE_MARKETING_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-  BUILD_NUMBER="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[5]:-000000}"
+  APPLE_CURRENT_PROJECT_VERSION="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[5]:-000000}"
 else
   echo "VERSION must start with YYYY.MM.DD and may include -HHMMSS and a suffix, got: $VERSION" >&2
   exit 1
@@ -101,7 +101,7 @@ xcodebuild archive \
   -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   MARKETING_VERSION="$APPLE_MARKETING_VERSION" \
-  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  CURRENT_PROJECT_VERSION="$APPLE_CURRENT_PROJECT_VERSION" \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
@@ -137,7 +137,7 @@ ditto -c -k --sequesterRsrc --keepParent \
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "apple_marketing_version=$APPLE_MARKETING_VERSION"
-    echo "build_number=$BUILD_NUMBER"
+    echo "apple_current_project_version=$APPLE_CURRENT_PROJECT_VERSION"
     echo "app_name=$APP_NAME"
     echo "app_path=$APP_PATH"
     echo "artifact_name=$ARTIFACT_NAME"
