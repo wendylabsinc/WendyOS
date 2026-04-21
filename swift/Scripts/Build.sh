@@ -9,8 +9,6 @@ cd "$SWIFT_DIR"
 
 APP_NAME="WendyAgentMac.app"
 OUTPUT_DIR="${OUTPUT_DIR:-$SWIFT_DIR/Build}"
-PACKAGE_CACHE_DIR="${PACKAGE_CACHE_DIR:-$SWIFT_DIR/Build/CI/PackageCache}"
-SOURCE_PACKAGES_DIR="${SOURCE_PACKAGES_DIR:-$SWIFT_DIR/Build/CI/SourcePackages}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$SWIFT_DIR/Build/Xcode}"
 TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$SWIFT_DIR/Build/WendyAgentMac.xcarchive}"
@@ -82,7 +80,7 @@ xcbeautify_or_cat() {
   fi
 }
 
-mkdir -p "$OUTPUT_DIR" "$PACKAGE_CACHE_DIR" "$SOURCE_PACKAGES_DIR" "$DERIVED_DATA_PATH"
+mkdir -p "$OUTPUT_DIR" "$DERIVED_DATA_PATH"
 rm -rf "$ARCHIVE_PATH" "$DERIVED_DATA_PATH" "$APP_PATH" "$NOTARY_ZIP"
 mkdir -p "$DERIVED_DATA_PATH"
 rm -f "$ARTIFACT_PATH"
@@ -94,8 +92,6 @@ xcodebuild archive \
   -destination 'generic/platform=macOS' \
   -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
-  -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
-  -packageCachePath "$PACKAGE_CACHE_DIR" \
   ARCHS="arm64 x86_64" \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO \
