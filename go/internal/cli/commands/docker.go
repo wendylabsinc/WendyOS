@@ -1,10 +1,7 @@
 package commands
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,9 +18,8 @@ import (
 
 	"strconv"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
-	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -176,81 +172,16 @@ func generatePythonDockerfile(dir string) (string, error) {
 	return dockerfilePath, nil
 }
 
-const (
-	// defaultSwiftVersion is the Swift toolchain version used for container base images.
-	defaultSwiftVersion = "6.2.3"
-	// wendySDKRelease is the GitHub release tag for WendyOS Swift SDKs.
-	wendySDKRelease = "0.4.0"
-)
-
-// wendySDKChecksums maps architecture to the checksum for the WendyOS Swift SDK bundle.
-var wendySDKChecksums = map[string]string{
-	"x86_64":  "b5a4d08ad4d4841043727f6671c6aa004da3a2b7f12dc28101d6770c1dc57eb1",
-	"aarch64": "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e",
-}
-
-// execCommandContext is the function used to create exec commands.
-// It can be overridden in tests.
-var execCommandContext = exec.CommandContext
-
-// ensureSwiftVersion makes sure the required Swift toolchain is installed via swiftly.
-// If the version is already present this is a no-op.
-func ensureSwiftVersion(ctx context.Context) error {
-	// Avoid starting any subprocesses if the context is already canceled.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	// First, check whether the requested Swift toolchain is already installed.
-	checkCmd := execCommandContext(ctx, "swiftly", "which", defaultSwiftVersion)
-	// Discard output for the existence check; this is only used as a probe.
-	checkCmd.Stdout = io.Discard
-	checkCmd.Stderr = io.Discard
-	if err := checkCmd.Run(); err == nil {
-		// Toolchain is already installed; nothing to do.
-		return nil
-	} else {
-		// If swiftly itself is missing, surface a helpful error.
-		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
-		}
-		// If the context was canceled or expired during the check, propagate that rather than starting an install.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		// For other errors (e.g., version not installed), fall through and attempt installation.
-	}
-
-	// Re-check the context before starting installation.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	out := &dimWriter{}
-	cmd := execCommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
-	cmd.Stdout = out
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	out.Flush()
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
-		}
-		return fmt.Errorf("installing Swift %s via swiftly: %w", defaultSwiftVersion, err)
-	}
-	return nil
-}
-
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
 // "host.docker.internal:12345" when proxying).
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
 
-	sdk, err := findSwiftSDK(architecture)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, architecture, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return err
 	}
@@ -260,7 +191,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--swift-sdk=" + sdk,
 		"--allow-network-connections=all",
 		"build-container-image",
-		"--from=swift:" + defaultSwiftVersion + "-slim",
+		"--from=swift:" + swifttoolchain.DefaultVersion + "-slim",
 		"--product=" + product,
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
@@ -272,7 +203,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
 	}
 
-	cmd := exec.CommandContext(ctx, "swiftly", append([]string{"run", "+" + defaultSwiftVersion, "swift"}, swiftArgs...)...)
+	cmd := swifttoolchain.SwiftCommandContext(ctx, swiftArgs...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -289,7 +220,7 @@ const containerPluginMinVersion = "1.3.0"
 // package plugin in the given project directory. If not, it automatically adds
 // the dependency using `swift package add-dependency`.
 func ensureContainerPlugin(dir string) error {
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "plugin", "--list")
+	cmd := swifttoolchain.SwiftCommand("package", "plugin", "--list")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -301,7 +232,7 @@ func ensureContainerPlugin(dir string) error {
 	}
 
 	fmt.Println("Adding swift-container-plugin dependency...")
-	add := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "add-dependency",
+	add := swifttoolchain.SwiftCommand("package", "add-dependency",
 		"https://github.com/apple/swift-container-plugin", "--from", containerPluginMinVersion)
 	add.Dir = dir
 	add.Stdout = os.Stdout
@@ -311,245 +242,6 @@ func ensureContainerPlugin(dir string) error {
 	}
 
 	return nil
-}
-
-// findSwiftSDK looks for an installed Swift SDK for the given architecture.
-// It prefers WendyOS-specific SDKs, installing one automatically if not present.
-// For WASM targets (Wendy Lite), it installs the official Swift WASM SDK.
-func findSwiftSDK(architecture string) (string, error) {
-	// Normalize: swift-container-plugin uses "arm64"/"amd64" but SDKs use "aarch64"/"x86_64".
-	sdkArch := architecture
-	switch sdkArch {
-	case "arm64":
-		sdkArch = "aarch64"
-	case "amd64":
-		sdkArch = "x86_64"
-	}
-
-	isWasm := sdkArch == "wasm" || sdkArch == "wasm32"
-
-	sdk, err := lookupSwiftSDK(sdkArch, isWasm)
-	if err != nil {
-		return "", err
-	}
-	if sdk != "" {
-		return sdk, nil
-	}
-
-	// No suitable SDK found — install the appropriate one.
-	if isWasm {
-		if err := installWasmSwiftSDK(); err != nil {
-			return "", err
-		}
-	} else {
-		if err := installWendySwiftSDK(sdkArch); err != nil {
-			return "", err
-		}
-	}
-
-	// Look up again after install.
-	sdk, err = lookupSwiftSDK(sdkArch, isWasm)
-	if err != nil {
-		return "", err
-	}
-	if sdk == "" {
-		return "", fmt.Errorf("Swift SDK installed but not found; run 'swift sdk list' to verify")
-	}
-	return sdk, nil
-}
-
-// lookupSwiftSDK checks installed Swift SDKs for one matching the target architecture.
-func lookupSwiftSDK(sdkArch string, isWasm bool) (string, error) {
-	out, err := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "list").Output()
-	if err != nil {
-		return "", fmt.Errorf("running 'swift sdk list': %w (is swiftly installed?)", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-
-	if isWasm {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.Contains(line, "wasm") {
-				return line, nil
-			}
-		}
-		return "", nil
-	}
-
-	// Prefer a wendyos SDK matching the current Swift version.
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "wendyos") && strings.Contains(line, sdkArch) && strings.Contains(line, defaultSwiftVersion) {
-			return line, nil
-		}
-	}
-
-	// Fall back to any matching linux SDK for the current Swift version.
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, sdkArch) && strings.Contains(line, "linux") && strings.Contains(line, defaultSwiftVersion) {
-			return line, nil
-		}
-	}
-
-	return "", nil
-}
-
-// installWendySwiftSDK downloads and installs the WendyOS Swift SDK for the given architecture.
-func installWendySwiftSDK(sdkArch string) error {
-	sdkName := fmt.Sprintf("%s-RELEASE_wendyos_%s", defaultSwiftVersion, sdkArch)
-	url := fmt.Sprintf(
-		"https://github.com/wendylabsinc/wendy-swift-tools/releases/download/%s/%s.artifactbundle.zip",
-		wendySDKRelease, sdkName,
-	)
-
-	fmt.Printf("Installing WendyOS Swift SDK (%s)...\n", sdkName)
-
-	checksum, ok := wendySDKChecksums[sdkArch]
-	if !ok {
-		return fmt.Errorf("no checksum available for architecture %s", sdkArch)
-	}
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", checksum)
-	cmd.Stdout = os.Stdout
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
-
-	if err := cmd.Run(); err != nil {
-		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
-			return fmt.Errorf("installing Swift SDK from %s: %w\n%s", url, err, out)
-		}
-		return fmt.Errorf("installing Swift SDK from %s: %w", url, err)
-	}
-
-	fmt.Println("Swift SDK installed.")
-	return nil
-}
-
-// installWasmSwiftSDK downloads and installs the official Swift WASM SDK for Wendy Lite targets.
-func installWasmSwiftSDK() error {
-	sdkName := fmt.Sprintf("swift-%s-RELEASE", defaultSwiftVersion)
-	url := fmt.Sprintf(
-		"https://download.swift.org/swift-%s-release/wasm-sdk/%s/%s_wasm.artifactbundle.tar.gz",
-		defaultSwiftVersion, sdkName, sdkName,
-	)
-
-	fmt.Printf("Installing Swift WASM SDK (%s)...\n", sdkName)
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", "394040ecd5260e68bb02f6c20aeede733b9b90702c2204e178f3e42413edad2a")
-	cmd.Stdout = os.Stdout
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
-
-	if err := cmd.Run(); err != nil {
-		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
-			return fmt.Errorf("installing Swift WASM SDK from %s: %w\n%s", url, err, out)
-		}
-		return fmt.Errorf("installing Swift WASM SDK from %s: %w", url, err)
-	}
-
-	fmt.Println("Swift WASM SDK installed.")
-	return nil
-}
-
-// findSwiftProduct determines the executable product name from Package.swift
-// using `swift package dump-package`. When productOverride is non-empty it is
-// returned immediately. When multiple candidates exist and interactive is true
-// a picker is shown; otherwise an error is returned.
-func findSwiftProduct(dir, productOverride string, interactive bool) (string, error) {
-	var stderr bytes.Buffer
-	if productOverride != "" {
-		return productOverride, nil
-	}
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
-	cmd.Dir = dir
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg == "" {
-			errMsg = strings.TrimSpace(string(out))
-		}
-		return "", fmt.Errorf("swift package dump-package failed: %s: %w", errMsg, err)
-	}
-
-	// dump-package product type is a JSON object whose key names the kind:
-	// {"executable": null}, {"library": {"type": "automatic"}}, {"plugin": null}, etc.
-	var manifest struct {
-		Products []struct {
-			Name string                     `json:"name"`
-			Type map[string]json.RawMessage `json:"type"`
-		} `json:"products"`
-		Targets []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"targets"`
-	}
-	if err := json.Unmarshal(out, &manifest); err != nil {
-		return "", fmt.Errorf("could not parse Package.swift manifest: %w", err)
-	}
-
-	var candidates []string
-	for _, p := range manifest.Products {
-		if _, ok := p.Type["executable"]; ok {
-			candidates = append(candidates, p.Name)
-		}
-	}
-
-	// No executable products — fall back to executable targets.
-	if len(candidates) == 0 {
-		for _, t := range manifest.Targets {
-			if t.Type == "executable" {
-				candidates = append(candidates, t.Name)
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("Package.swift has no executable products or targets")
-	}
-	if len(candidates) == 1 {
-		return candidates[0], nil
-	}
-	return pickSwiftProduct(candidates, interactive)
-}
-
-// pickSwiftProduct presents a selection menu when interactive, or returns an
-// error listing the options when running non-interactively.
-func pickSwiftProduct(names []string, interactive bool) (string, error) {
-	if !interactive {
-		return "", fmt.Errorf("Package.swift has multiple executable products (%s); use --product to select one", strings.Join(names, ", "))
-	}
-
-	picker := tui.NewPickerWithTitle("Select a Swift product")
-	p := tea.NewProgram(picker)
-
-	go func() {
-		var items []tui.PickerItem
-		for _, name := range names {
-			n := name
-			items = append(items, tui.PickerItem{Name: n, Value: n})
-		}
-		p.Send(tui.PickerAddMsg{Items: items})
-		p.Send(tui.PickerDoneMsg{})
-	}()
-
-	finalModel, err := p.Run()
-	if err != nil {
-		return "", fmt.Errorf("product picker: %w", err)
-	}
-
-	pm := finalModel.(tui.PickerModel)
-	if pm.Cancelled() {
-		return "", ErrUserCancelled
-	}
-	sel := pm.Selected()
-	if sel == nil {
-		return "", fmt.Errorf("no product selected")
-	}
-	return sel.Value.(string), nil
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
@@ -1446,15 +1138,15 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 // This is used by the Docker Desktop provider for Swift projects that do not
 // have a Dockerfile, as an alternative to swift-container-plugin (which only
 // supports pushing to registries).
-func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, error) {
+func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
 	arch := runtime.GOARCH
-	sdk, err := findSwiftSDK(arch)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, arch, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return "", fmt.Errorf("finding Swift SDK: %w", err)
 	}
 
 	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
-	buildCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+	buildCmd := swifttoolchain.SwiftCommandContext(ctx,
 		"build", "-c", "release", "--swift-sdk="+sdk, "--product", product)
 	buildCmd.Dir = dir
 	buildCmd.Stdout = os.Stdout
@@ -1464,7 +1156,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, er
 	}
 
 	// Determine the binary output path.
-	showBinCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+	showBinCmd := swifttoolchain.SwiftCommandContext(ctx,
 		"build", "-c", "release", "--swift-sdk="+sdk, "--show-bin-path")
 	showBinCmd.Dir = dir
 	out, err := showBinCmd.CombinedOutput()
@@ -1490,7 +1182,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, er
 
 	// Write a minimal Dockerfile using the fixed binary name.
 	dockerfile := fmt.Sprintf("FROM swift:%s-slim\nCOPY app /usr/local/bin/app\nCMD [\"app\"]\n",
-		defaultSwiftVersion)
+		swifttoolchain.DefaultVersion)
 	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
 		return "", fmt.Errorf("writing Dockerfile: %w", err)
 	}

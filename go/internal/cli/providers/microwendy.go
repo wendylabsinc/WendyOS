@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
@@ -87,14 +88,15 @@ func (p *MicroWendyProvider) CanBuild(projectPath string) bool {
 }
 
 func (p *MicroWendyProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
-	args := []string{
-		"run", "+6.2.3", "swift", "build",
-		"--triple", "wasm32-unknown-none-wasm",
+	if err := swifttoolchain.EnsureSwiftVersion(ctx, os.Stdout, os.Stderr); err != nil {
+		return nil, err
 	}
+
+	args := []string{"build", "--triple", swifttoolchain.WasmTargetTriple}
 	if !debug {
 		args = append(args, "-c", "release")
 	}
-	cmd := exec.CommandContext(ctx, "swiftly", args...)
+	cmd := swifttoolchain.SwiftCommandContext(ctx, args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -106,7 +108,7 @@ func (p *MicroWendyProvider) Build(ctx context.Context, device models.ExternalDe
 	if !debug {
 		config = "release"
 	}
-	wasmPath := filepath.Join(projectPath, ".build", "wasm32-unknown-none-wasm", config, product+".wasm")
+	wasmPath := filepath.Join(projectPath, ".build", swifttoolchain.WasmTargetTriple, config, product+".wasm")
 
 	// Collect IPs of all known devices for unicast delivery.
 	var targetIPs []string

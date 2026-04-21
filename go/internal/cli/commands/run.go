@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -30,6 +32,7 @@ import (
 
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+var execCommandContext = exec.CommandContext
 
 // dimWriter writes each line rendered through cliStyle (dim/background).
 // Incomplete lines are buffered until a newline or Flush is called.
@@ -479,12 +482,15 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		architecture = "arm64"
 	}
 
-	if err := ensureSwiftVersion(ctx); err != nil {
+	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return err
 	}
 
-	product, err := findSwiftProduct(cwd, opts.product, !opts.yes && isInteractiveTerminal())
+	product, err := swifttoolchain.FindSwiftProductWithOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
 	if err != nil {
+		if errors.Is(err, swifttoolchain.ErrUserCancelled) {
+			return ErrUserCancelled
+		}
 		return err
 	}
 
@@ -495,7 +501,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, false); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -570,17 +576,20 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 
 	// Resolve Swift product name from Package.swift.
 	if projectType == "swift" {
-		if err := ensureSwiftVersion(ctx); err != nil {
+		if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 			return err
 		}
-		swiftProduct, err := findSwiftProduct(projectPath, opts.product, !opts.yes && isInteractiveTerminal())
+		swiftProduct, err := swifttoolchain.FindSwiftProductWithOptions(projectPath, opts.product, !opts.yes && isInteractiveTerminal())
 		if err != nil {
+			if errors.Is(err, swifttoolchain.ErrUserCancelled) {
+				return ErrUserCancelled
+			}
 			return fmt.Errorf("could not determine Swift product: %w", err)
 		}
 		product = swiftProduct
 	} else if p.CanBuild(projectPath) {
 		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
-		if swiftProduct, err := findSwiftProduct(projectPath, opts.product, false); err == nil {
+		if swiftProduct, err := swifttoolchain.FindSwiftProductWithOptions(projectPath, opts.product, false); err == nil {
 			product = swiftProduct
 		}
 	}
@@ -592,7 +601,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if projectType == "swift" {
 		if ib, ok := p.(providers.ImageBuilder); ok {
 			cliLogln("Building Swift project for %s...", p.DisplayName())
-			imageName, err := buildSwiftDockerImage(ctx, projectPath, product)
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product, &dimWriter{}, os.Stderr)
 			if err != nil {
 				return fmt.Errorf("building Swift Docker image: %w", err)
 			}
