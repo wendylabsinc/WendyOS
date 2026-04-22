@@ -40,7 +40,10 @@ struct BonjourAdvertiser {
 final class BonjourRegistration: @unchecked Sendable {
     private let port: Int
     private let txtData: Data
-    private let queue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
+
+    /// DNS-SD delivers registration callbacks via Dispatch even though the
+    /// registration state itself is managed separately.
+    private static let callbackQueue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
 
     private var serviceRef: DNSServiceRef?
     private var readyContinuation: CheckedContinuation<Void, Error>?
@@ -56,7 +59,7 @@ final class BonjourRegistration: @unchecked Sendable {
 
     func start() async throws {
         try await withCheckedThrowingContinuation { continuation in
-            self.queue.async {
+            Self.callbackQueue.async {
                 self.startOnQueue(continuation: continuation)
             }
         }
@@ -64,7 +67,7 @@ final class BonjourRegistration: @unchecked Sendable {
 
     func waitForShutdown() async throws {
         try await withCheckedThrowingContinuation { continuation in
-            self.queue.async {
+            Self.callbackQueue.async {
                 if self.isFinished {
                     self.resume(continuation: continuation, with: self.completionError)
                 } else {
@@ -77,7 +80,7 @@ final class BonjourRegistration: @unchecked Sendable {
 
     func shutdown() async {
         await withCheckedContinuation { continuation in
-            self.queue.async {
+            Self.callbackQueue.async {
                 self.finishOnQueue(error: nil)
                 continuation.resume()
             }
@@ -112,7 +115,7 @@ final class BonjourRegistration: @unchecked Sendable {
             return
         }
 
-        let queueError = DNSServiceSetDispatchQueue(serviceRef, self.queue)
+        let queueError = DNSServiceSetDispatchQueue(serviceRef, Self.callbackQueue)
         guard queueError == kDNSServiceErr_NoError else {
             DNSServiceRefDeallocate(serviceRef)
             self.readyContinuation = nil
