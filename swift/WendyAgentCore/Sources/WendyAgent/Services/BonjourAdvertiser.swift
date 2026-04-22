@@ -84,6 +84,9 @@ actor BonjourRegistration {
 
         let port = self.port
         let txtData = self.txtData
+        // BonjourAdvertiser.Runtime keeps this actor alive until shutdown has
+        // finished, so the DNS-SD callback context can borrow rather than
+        // retain it.
         let context = Unmanaged.passUnretained(self).toOpaque()
 
         var serviceRef: DNSServiceRef?
