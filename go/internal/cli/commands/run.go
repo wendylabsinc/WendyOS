@@ -329,6 +329,7 @@ type runOptions struct {
 	noRestart            bool
 	prefix               string
 	product              string
+	deviceType           string
 	userArgs             []string
 }
 
@@ -355,6 +356,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to run from instead of the current working directory")
 	cmd.Flags().StringVar(&opts.product, "product", "", "Swift Package Manager product to build and run")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
+	cmd.Flags().StringVar(&opts.deviceType, "device-type", "", "Override hardware device type (e.g. raspberry-pi-5, jetson-agx-orin)")
 
 	return cmd
 }
@@ -719,6 +721,17 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	platform := "linux/" + architecture
 	deviceType := versionResp.GetDeviceType()
+	if deviceType == "" {
+		if opts.deviceType != "" {
+			deviceType = opts.deviceType
+		} else if isInteractiveTerminalFn() {
+			var pickErr error
+			deviceType, pickErr = pickDeviceType()
+			if pickErr != nil {
+				return pickErr
+			}
+		}
+	}
 	buildArgs := map[string]string{
 		"WENDY_PLATFORM": wendyPlatform(deviceType),
 		"WENDY_DEBUG":    fmt.Sprintf("%t", opts.debug),
@@ -994,6 +1007,34 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	}
 	cliLogln("Hook postStart: %s", expanded)
 	return cmd
+}
+
+// knownDeviceTypes is the ordered list of hardware shown in the interactive
+// picker when the connected agent does not report its own device type.
+var knownDeviceTypes = []struct{ key, display, description string }{
+	{"raspberry-pi-5", "Raspberry Pi 5", ""},
+	{"jetson-agx-orin", "Jetson AGX Orin", "NVIDIA Jetson (GPU)"},
+	{"jetson-orin-nano", "Jetson Orin Nano", "NVIDIA Jetson (GPU)"},
+}
+
+// pickDeviceType shows an interactive picker so the user can identify the
+// connected hardware when the agent does not report a device type. Returns
+// the device-type key, or "" if the user selects the generic fallback.
+func pickDeviceType() (string, error) {
+	items := make([]tui.PickerItem, 0, len(knownDeviceTypes)+1)
+	for _, dt := range knownDeviceTypes {
+		items = append(items, tui.PickerItem{
+			Name:        dt.display,
+			Description: dt.description,
+			Value:       dt.key,
+		})
+	}
+	items = append(items, tui.PickerItem{
+		Name:        "Other / Unknown",
+		Description: "Generic CPU-only build",
+		Value:       "",
+	})
+	return pickFromItems("Select your device hardware", items)
 }
 
 // wendyPlatform maps a WendyOS device type to a platform tier used for
