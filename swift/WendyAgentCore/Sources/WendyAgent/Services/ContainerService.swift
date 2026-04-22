@@ -20,8 +20,14 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private var isStopping = false
     private let sandboxProfilePath: String?
 
-    /// Docker backend for Linux containers. Nil when Docker is not available.
-    private let dockerBackend: DockerContainerBackend?
+    /// Docker CLI for Linux containers. Nil when Docker is not available.
+    ///
+    /// Linux container support on macOS used to live in a separate
+    /// `DockerContainerBackend` type, but that type was a thin shim over
+    /// `DockerCLI` that only added app-name/container-name and entitlement
+    /// mapping. Those concerns are app-lifecycle concerns, so they now live
+    /// on `ContainerService` directly and this service talks to `DockerCLI`.
+    private let docker: DockerCLI?
 
     init(
         broadcaster: TelemetryBroadcaster,
@@ -36,7 +42,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.onAppsChanged = onAppsChanged
         self.executablePath = executablePath
         self.sandboxProfilePath = sandboxProfilePath
-        self.dockerBackend = dockerAvailable ? DockerContainerBackend() : nil
+        self.docker = dockerAvailable ? DockerCLI() : nil
 
         let defaultStateDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/wendy-agent")
@@ -300,8 +306,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         let exitTask = Self.makeProcessExitTask(process)
 
-        if app.info.kind == .container, app.container != nil, let dockerBackend {
-            try await dockerBackend.stop(appName: id)
+        if app.info.kind == .container, app.container != nil, let docker {
+            _ = try? await docker.stop(container: Self.containerName(forAppID: id), timeout: 10)
             let didExit = await Self.waitForProcessExit(exitTask, timeout: self.nativeStopTimeout)
             if !didExit {
                 self.logger.warning(
@@ -378,6 +384,63 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         _ = Darwin.kill(process.processIdentifier, SIGKILL)
     }
 
+    // MARK: - Docker helpers
+
+    /// Derive the Docker container name for a given Wendy app id.
+    nonisolated private static func containerName(forAppID appID: String) -> String {
+        "wendy-\(appID)"
+    }
+
+    /// Translate Wendy entitlements into `docker run` options.
+    ///
+    /// Entitlements that cannot be honored for Linux containers on macOS (GPU,
+    /// bluetooth, audio, video, camera, USB, I2C, GPIO) are logged and skipped
+    /// rather than failing the launch.
+    nonisolated private static func dockerOptions(
+        from entitlements: [WendyEntitlement],
+        appName: String,
+        logger: Logger
+    ) -> [DockerCLI.RunOption] {
+        var options: [DockerCLI.RunOption] = []
+
+        for entitlement in entitlements {
+            switch entitlement.type {
+            case "network":
+                if entitlement.mode == "none" {
+                    options.append(.network("none"))
+                } else if let ports = entitlement.ports {
+                    // --network=host doesn't work on Docker Desktop for Mac, so
+                    // map explicit ports from the entitlement's ports array.
+                    for port in ports {
+                        options.append(
+                            .publish(hostPort: port.host, containerPort: port.container)
+                        )
+                    }
+                }
+
+            case "persist":
+                if let name = entitlement.name, let path = entitlement.path {
+                    let volumeName = "wendy-\(appName)-\(name)"
+                    options.append(.volume(hostOrName: volumeName, containerPath: path))
+                }
+
+            case "gpu", "bluetooth", "audio", "video", "camera", "usb", "i2c", "gpio":
+                logger.warning(
+                    "Entitlement '\(entitlement.type)' is not available for Linux containers on macOS (VM isolation)",
+                    metadata: ["app_name": "\(appName)"]
+                )
+
+            default:
+                logger.warning(
+                    "Unknown entitlement type '\(entitlement.type)'",
+                    metadata: ["app_name": "\(appName)"]
+                )
+            }
+        }
+
+        return options
+    }
+
     // MARK: - Implemented
 
     func createContainer(
@@ -404,8 +467,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let isLinux = appConfig?.platform?.hasPrefix("linux") == true
 
         if isLinux {
-            // Docker backend path for Linux containers.
-            guard let dockerBackend else {
+            // Docker path for Linux containers.
+            guard let docker else {
                 throw RPCError(
                     code: .failedPrecondition,
                     message:
@@ -414,7 +477,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             }
 
             // Pull the image from the local registry into Docker.
-            try await dockerBackend.pullImage(imageName)
+            logger.info("Pulling image", metadata: ["image": "\(imageName)"])
+            try await docker.pull(image: imageName)
             logger.info(
                 "Linux container image pulled via Docker",
                 metadata: ["app_name": "\(appName)"]
@@ -550,22 +614,47 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             )
         }
 
-        // Docker backend path for Linux containers.
-        if let containerMetadata = app.container, let dockerBackend {
+        // Docker path for Linux containers.
+        if let containerMetadata = app.container, let docker {
             let appConfig = containerMetadata.appConfig
             let deviceImage = containerMetadata.imageName
+            let containerName = Self.containerName(forAppID: appName)
+
+            // Remove any stale container with the same name before launching.
+            _ = try? await docker.rm(options: [.force], container: containerName)
+
+            var runOptions: [DockerCLI.RunOption] = [
+                .rm,
+                .name(containerName),
+                .label(key: "wendy.managed", value: "true"),
+                .label(key: "wendy.app-name", value: appName),
+            ]
+            if let entitlements = appConfig?.entitlements {
+                runOptions += Self.dockerOptions(
+                    from: entitlements,
+                    appName: appName,
+                    logger: self.logger
+                )
+            }
 
             let launchToken = UUID()
             self.prepareAppForLaunch(id: appName, launchToken: launchToken)
+
+            logger.info(
+                "Starting Docker container",
+                metadata: [
+                    "container": "\(containerName)",
+                    "image": "\(deviceImage)",
+                ]
+            )
 
             let process: Foundation.Process
             let stdoutPipe: Pipe
             let stderrPipe: Pipe
             do {
-                (process, stdoutPipe, stderrPipe) = try await dockerBackend.createAndStart(
-                    appName: appName,
-                    imageName: deviceImage,
-                    appConfig: appConfig,
+                (process, stdoutPipe, stderrPipe) = try docker.runAttached(
+                    options: runOptions,
+                    image: deviceImage,
                     terminationHandler: self.makeTerminationHandler(
                         forAppID: appName,
                         launchToken: launchToken
@@ -782,8 +871,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         try await self.stopTrackedAppIfRunning(id: appName)
 
-        if self.appsByID[appName]?.container != nil, let dockerBackend {
-            try await dockerBackend.remove(appName: appName)
+        if self.appsByID[appName]?.container != nil, let docker {
+            _ = try? await docker.rm(
+                options: [.force],
+                container: Self.containerName(forAppID: appName)
+            )
             await self.removeApp(id: appName)
             logger.info("Docker container removed", metadata: ["app_name": "\(appName)"])
         } else {
