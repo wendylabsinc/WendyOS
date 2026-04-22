@@ -1,6 +1,5 @@
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIconBeta
 CODE_SIGN_ENTITLEMENTS = Support/WendyAgentMac.entitlements
-CURRENT_PROJECT_VERSION = 1
 GENERATE_INFOPLIST_FILE = YES
 INFOPLIST_KEY_CFBundleDisplayName = $(PRODUCT_NAME)
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.utilities
@@ -10,11 +9,8 @@ INFOPLIST_KEY_NSCameraUsageDescription = Wendy Agent needs camera access so apps
 INFOPLIST_KEY_NSMicrophoneUsageDescription = Wendy Agent needs microphone access so apps deployed through Wendy can use the microphone without separate permission prompts, including headless apps running in the background.
 INFOPLIST_KEY_NSPrincipalClass = NSApplication
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
-MARKETING_VERSION = 1.0
 ARCHS[sdk=macosx*] = arm64
 PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac
 PRODUCT_MODULE_NAME = WendyAgentMac
 PRODUCT_NAME = WendyAgentMac
 SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
-SWIFT_EMIT_LOC_STRINGS = YES
-SWIFT_VERSION = 6.0
