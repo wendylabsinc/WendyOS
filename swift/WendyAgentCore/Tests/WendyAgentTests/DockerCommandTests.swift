@@ -1,11 +1,17 @@
 import Foundation
+import GRPCCore
 import Testing
 
 @testable import WendyAgentCore
 
-struct DockerCLITests {
-    @Test("checkAvailable returns false when the docker probe times out")
-    func checkAvailableReturnsFalseWhenProbeTimesOut() async throws {
+/// Exercises the private docker invocation pipeline inside `ContainerService`
+/// through its `runDockerForTesting` shim. These used to live in a separate
+/// `DockerCLITests` file targeting the now-deleted `DockerCLI` type; the
+/// behaviors we care about (timeout, non-zero exit surfacing stderr, streamed
+/// output without deadlock) are the same, just exercised at the new layer.
+struct DockerCommandTests {
+    @Test("docker invocation surfaces a timeout when the command sleeps past the deadline")
+    func invocationTimesOut() async throws {
         let scriptURL = try Self.makeExecutableScript(
             name: "fake-docker-timeout.sh",
             contents: """
@@ -16,18 +22,22 @@ struct DockerCLITests {
         )
         defer { try? FileManager.default.removeItem(at: scriptURL.deletingLastPathComponent()) }
 
-        let docker = DockerCLI(
-            executable: scriptURL.path,
-            startupCommandTimeout: .milliseconds(100)
-        )
+        let service = Self.makeService(dockerExecutable: scriptURL.path)
 
-        let available = await docker.checkAvailable()
-
-        #expect(available == false)
+        do {
+            _ = try await service.runDockerForTesting(
+                ["version"],
+                timeout: .milliseconds(100)
+            )
+            Issue.record("expected timeout to throw")
+        } catch let error as RPCError {
+            #expect(error.code == .deadlineExceeded)
+            #expect(error.message.contains("timed out"))
+        }
     }
 
-    @Test("checkAvailable returns true when the docker probe completes")
-    func checkAvailableReturnsTrueWhenProbeCompletes() async throws {
+    @Test("docker invocation returns stdout when the command completes successfully")
+    func invocationSucceeds() async throws {
         let scriptURL = try Self.makeExecutableScript(
             name: "fake-docker-ok.sh",
             contents: """
@@ -38,17 +48,16 @@ struct DockerCLITests {
         )
         defer { try? FileManager.default.removeItem(at: scriptURL.deletingLastPathComponent()) }
 
-        let docker = DockerCLI(
-            executable: scriptURL.path,
-            startupCommandTimeout: .seconds(2)
+        let service = Self.makeService(dockerExecutable: scriptURL.path)
+
+        let output = try await service.runDockerForTesting(
+            ["version"],
+            timeout: .seconds(2)
         )
-
-        let available = await docker.checkAvailable()
-
-        #expect(available == true)
+        #expect(output == "27.0.1")
     }
 
-    @Test("a non-zero exit surfaces the exit status and stderr in DockerError")
+    @Test("a non-zero exit surfaces the exit status and stderr in the thrown error")
     func nonZeroExitSurfacesStderr() async throws {
         let scriptURL = try Self.makeExecutableScript(
             name: "fake-docker-fail.sh",
@@ -61,18 +70,15 @@ struct DockerCLITests {
         )
         defer { try? FileManager.default.removeItem(at: scriptURL.deletingLastPathComponent()) }
 
-        let docker = DockerCLI(executable: scriptURL.path)
+        let service = Self.makeService(dockerExecutable: scriptURL.path)
 
         do {
-            _ = try await docker.pull(image: "example/image:tag")
-            Issue.record("expected pull to throw")
-        } catch let error as DockerError {
-            guard case .commandFailed(_, _, let status, let stderr) = error else {
-                Issue.record("expected commandFailed, got \(error)")
-                return
-            }
-            #expect(status == 7)
-            #expect(stderr == "boom")
+            _ = try await service.runDockerForTesting(["pull", "example/image:tag"])
+            Issue.record("expected runDockerForTesting to throw")
+        } catch let error as RPCError {
+            #expect(error.code == .internalError)
+            #expect(error.message.contains("status 7"))
+            #expect(error.message.contains("boom"))
         }
     }
 
@@ -97,13 +103,27 @@ struct DockerCLITests {
         )
         defer { try? FileManager.default.removeItem(at: scriptURL.deletingLastPathComponent()) }
 
-        let docker = DockerCLI(executable: scriptURL.path)
+        let service = Self.makeService(dockerExecutable: scriptURL.path)
 
-        let output = try await docker.pull(image: "example/image:tag")
+        let output = try await service.runDockerForTesting(["pull", "example/image:tag"])
 
         // 1024 bytes per line (1023 'a' plus a newline), times chunkCount,
-        // minus the trailing newline that trimmingCharacters removes.
+        // minus the trailing newline that trimming removes.
         #expect(output.count == chunkCount * 1024 - 1)
+    }
+
+    // MARK: - Helpers
+
+    private static func makeService(dockerExecutable: String) -> ContainerService {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wendy-docker-command-\(UUID().uuidString)", isDirectory: true)
+        return ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            stateDirectory: tempDirectory,
+            appsBase: tempDirectory.appendingPathComponent("apps"),
+            dockerExecutable: dockerExecutable
+        )
     }
 
     private static func makeExecutableScript(name: String, contents: String) throws -> URL {
