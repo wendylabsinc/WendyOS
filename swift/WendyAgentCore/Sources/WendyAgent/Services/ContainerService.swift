@@ -5,6 +5,11 @@ import Logging
 import OpenTelemetryGRPC
 import Subprocess
 import WendyAgentGRPC
+#if canImport(System)
+import System
+#else
+import SystemPackage
+#endif
 
 actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
     private let appsBase: URL
@@ -1377,26 +1382,26 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
     private func extractTarGz(blobDigest: String, to destinationDirectory: String) async throws {
         let blobPath = "\(blobsDirectory)/\(blobDigest.replacingOccurrences(of: ":", with: "/"))"
-        let tarProcess = Foundation.Process()
-        tarProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tarProcess.arguments = ["-xzf", blobPath, "-C", destinationDirectory]
 
-        let status = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Int32, Error>) in
-            tarProcess.terminationHandler = { p in
-                continuation.resume(returning: p.terminationStatus)
-            }
-            do {
-                try tarProcess.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-
-        guard status == 0 else {
+        let record: ExecutionRecord<DiscardedOutput, DiscardedOutput>
+        do {
+            record = try await Subprocess.run(
+                .path(FilePath("/usr/bin/tar")),
+                arguments: Arguments(["-xzf", blobPath, "-C", destinationDirectory]),
+                output: .discarded,
+                error: .discarded
+            )
+        } catch let error as SubprocessError {
             throw RPCError(
                 code: .internalError,
-                message: "tar extraction failed with status \(status)"
+                message: "Failed to launch tar extraction: \(error)"
+            )
+        }
+
+        guard case .exited(0) = record.terminationStatus else {
+            throw RPCError(
+                code: .internalError,
+                message: "tar extraction failed with status \(record.terminationStatus)"
             )
         }
     }
