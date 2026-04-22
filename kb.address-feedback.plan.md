@@ -9,9 +9,11 @@ Feedback item 4 (`BonjourAdvertiser` concurrency cleanup) was moved to its own w
 1. `DockerCLI.run(...)` should not buffer all stdout until process exit.
 2. Docker process management should move off `Foundation.Process` and onto `swift-subprocess`.
 
-## Stage 1 — Migrate Docker command execution to `swift-subprocess`
+## Stage 1 — Migrate Docker command execution to `swift-subprocess` (done)
 
 Goal: address the broader process-management feedback first, and solve the stdout buffering issue as part of the new subprocess design instead of building a better `Foundation.Process` implementation that we would immediately replace.
+
+Status: landed on this branch. Attached Docker runs still use `Foundation.Process` and are addressed in Stage 2.
 
 ### Changes
 - Update `swift/WendyAgentCore/Package.swift` to add `swift-subprocess`.
@@ -41,45 +43,66 @@ Goal: address the broader process-management feedback first, and solve the stdou
   - non-zero exit with stderr captured
 - Manual smoke tests for representative docker commands.
 
-## Stage 2 — Migrate/clean up attached Docker container execution
+## Stage 2 — Fold `DockerCLI` into `ContainerService`
 
-Goal: finish the Docker-side refactor by moving attached container launching onto the same subprocess model and confirming output is streamable without retaining unbounded logs in memory.
+Goal: replace `DockerCLI` with domain-shaped methods that live directly on `ContainerService` (repository pattern), and migrate attached Docker runs onto `swift-subprocess` in the same move. The attached-run buffering fix from the earlier Stage 2 plan falls out for free: the attached call site becomes a `Subprocess.run` closure inside `ContainerService.startContainer` with no wrapper types.
+
+### Motivation
+- `DockerCLI` today is a generic CLI abstraction (`RunOption`, `RmOption`, `run(arguments:)`, `ps(label:)`) that every caller composes into business behavior.
+- Every Docker operation we actually perform is already a named business operation on `ContainerService` (`createContainer`, `startContainer`, `stopContainer`, `deleteContainer`). The generic layer has exactly one consumer and adds indirection without isolating anything domain-worthy.
+- The repository/SQL pattern fits better: each `ContainerService` method is the "query", parameters are in our own domain, and the method owns the concrete `docker` invocation it needs.
+- `DockerContainerBackend` was already folded into `ContainerService` earlier on this branch; this stage completes the same direction of travel by folding `DockerCLI` itself.
 
 ### Changes
-- Refactor:
-  - `swift/WendyAgentCore/Sources/WendyAgent/Docker/DockerCLI.swift`
-  - `swift/WendyAgentCore/Sources/WendyAgent/Docker/DockerContainerBackend.swift`
-- Replace `runAttached(...)`'s `Foundation.Process` implementation with a subprocess-backed approach.
-- Preserve the higher-level behavior expected by `ContainerService` and related callers.
+- Delete `DockerCLI`, `DockerCLI.RunOption`, `DockerCLI.RmOption`, and the generic `DockerError` shape.
+- Inline Docker invocations into the relevant `ContainerService` methods:
+  - `createContainer` (Linux path) — `docker pull`.
+  - `startContainer` (Linux path) — `docker rm -f` + `docker run` attached via `Subprocess.run` streaming closure.
+  - `stopTrackedAppIfRunning` (Linux path) — `docker stop`.
+  - `deleteContainer` (Linux path) — `docker rm -f`.
+- Keep the entitlement → `docker run` flag translation inside `ContainerService` (already moved there in the `DockerContainerBackend` fold); simplify it further as needed once the call site is local.
+- Add a private `runDocker(_:timeout:)` helper on `ContainerService` for bounded `Subprocess` invocation and exit-status → `RPCError` translation. Never exposed.
+- Move the Docker-availability probe and registry-ensure dance onto a single `ContainerService.ensureReady()` method called once at startup; drop the `dockerAvailable: Bool` init parameter.
+- Inject `dockerExecutablePath: String = "docker"` on `ContainerService.init` so existing fake-shell-script tests keep working verbatim.
 
 ### Design targets
-- Prefer one internal subprocess abstraction so timeout, cancellation, logging, output collection, and attached streaming behavior are implemented consistently.
-- Keep attached container stdout/stderr streamable to callers.
-- Avoid separate ad-hoc subprocess lifecycle logic for one-shot commands vs attached runs.
+- Every Docker invocation has exactly one call site, in the method that owns that business operation.
+- Attached runs consume `Subprocess.run`'s stdout/stderr streams directly inside a closure — no wrapper types, no bridge actor, no returned handle.
+- `ContainerService` methods read as "what the agent does when asked to X", not as "assemble Docker flags and invoke a CLI".
+- Do not over-translate parameters into domain types; Docker-shaped primitives (e.g. `timeout: Duration` on stop) are fine where they are already the right abstraction.
 
 ### Acceptance criteria
-- Attached Docker runs still work end-to-end.
-- Output for indefinite or long-lived runs is streamable and does not rely on retaining all bytes in memory.
-- Container termination and cleanup behavior remain correct.
+- Resolves PR #478 feedback item 2 (`swift-subprocess` for all process management) in full.
+- Attached Docker runs stream stdout/stderr without unbounded buffering.
+- Docker availability probe and registry setup still happen exactly once at agent startup.
+- No regressions in the native darwin path.
 
 ### Validation
-- Existing Docker flows still work:
-  - registry startup
-  - `pull`
-  - `runAttached`
-  - `stop` / `rm` / `ps`
-- Confirm attached-run cancellation and teardown still behave correctly after the migration.
+- Existing `ContainerService` tests continue to pass.
+- `DockerCLITests` folds into tests that target `ContainerService` directly via the injected `dockerExecutablePath:` (fake shell scripts).
+- Manual smoke tests:
+  - agent startup with docker present → registry container is running.
+  - agent startup without docker → Linux-container RPCs fail cleanly with `failedPrecondition`.
+  - Linux container create/start/stop/delete cycle end-to-end.
+  - native darwin app launch unaffected.
+
+### Suggested commit split
+1. Fold `DockerCLI` into `ContainerService` for the one-shot operations (`pull`, `stop`, `rm`, `ensureReady`); attached path still uses `Foundation.Process` at this point.
+2. Migrate the attached Docker run onto a `Subprocess.run` streaming closure inside `ContainerService.startContainer`; delete any remaining `Foundation.Process` use on the Docker path.
+
+Each commit is independently reviewable.
 
 ## Suggested order of implementation
 
-1. Stage 1 as the main Docker subprocess migration for one-shot commands.
-2. Stage 2 to finish the Docker refactor for attached runs and streaming behavior.
+1. Stage 1 — Docker one-shot commands on `swift-subprocess`. (done)
+2. Stage 2 — fold `DockerCLI` into `ContainerService` and migrate attached runs.
 
 ## Deliverables
 
 - One plan file (this file).
-- Prefer 2 focused commits / PR commits:
-  1. `swift-subprocess` migration for Docker command execution, including bounded/streamed output handling
-  2. attached Docker execution cleanup on the same subprocess model
+- Roughly 3 focused commits across the two stages:
+  1. (Stage 1, done) `swift-subprocess` migration for one-shot Docker command execution.
+  2. (Stage 2) fold `DockerCLI` into `ContainerService` for one-shot operations.
+  3. (Stage 2) migrate attached Docker runs onto `Subprocess.run` inside `ContainerService.startContainer`.
 
 The Bonjour concurrency cleanup lives in the `kb.no-dispatch-queues` worktree as its own plan.
