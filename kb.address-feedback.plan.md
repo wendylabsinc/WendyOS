@@ -1,12 +1,13 @@
 # kb.address-feedback plan
 
-Address PR #478 feedback items 2, 3, and 4 in small stages so we reduce risk and keep each change easy to review.
+Address PR #478 feedback items 2 and 3 in small stages so we reduce risk and keep each change easy to review.
+
+Feedback item 4 (`BonjourAdvertiser` concurrency cleanup) was moved to its own worktree/branch `kb.no-dispatch-queues` because it is orthogonal to the Docker subprocess work and should ship as a separate PR.
 
 ## Scope
 
 1. `DockerCLI.run(...)` should not buffer all stdout until process exit.
 2. Docker process management should move off `Foundation.Process` and onto `swift-subprocess`.
-3. `BonjourAdvertiser` should stop relying on an ad-hoc `DispatchQueue` and align better with Swift Concurrency.
 
 ## Stage 1 — Migrate Docker command execution to `swift-subprocess`
 
@@ -69,42 +70,16 @@ Goal: finish the Docker-side refactor by moving attached container launching ont
   - `stop` / `rm` / `ps`
 - Confirm attached-run cancellation and teardown still behave correctly after the migration.
 
-## Stage 3 — Refactor Bonjour registration for Swift Concurrency
-
-Goal: remove the explicit queue-centric design and make isolation obvious and enforceable.
-
-### Changes
-- Refactor `swift/WendyAgentCore/Sources/WendyAgent/Services/BonjourAdvertiser.swift`.
-- Replace the manually managed `DispatchQueue` state machine with a concurrency-native isolated type.
-- Evaluate the best fit:
-  - an `actor` owning registration state, or
-  - a dedicated `@globalActor` if the DNS-SD callback path truly requires execution on one serial executor
-- Keep the external API of `BonjourAdvertiser` as stable as possible.
-
-### Design targets
-- One place owns `serviceRef`, continuations, and finish state.
-- Callback entry points hop into the isolated domain instead of mutating shared state directly.
-- Remove the need for `@unchecked Sendable` if practical; if not, document exactly why it remains necessary.
-- Preserve clean shutdown and registration-loss handling.
-
-### Validation
-- Verify:
-  - successful start
-  - callback-driven ready transition
-  - graceful shutdown
-  - registration loss / error propagation
-- Run strict concurrency checks and resolve any new warnings rather than suppressing them.
-
 ## Suggested order of implementation
 
 1. Stage 1 as the main Docker subprocess migration for one-shot commands.
 2. Stage 2 to finish the Docker refactor for attached runs and streaming behavior.
-3. Stage 3 separately, since Bonjour is orthogonal and should not be mixed into the Docker changes.
 
 ## Deliverables
 
 - One plan file (this file).
-- Prefer 2-3 focused commits / PR commits:
+- Prefer 2 focused commits / PR commits:
   1. `swift-subprocess` migration for Docker command execution, including bounded/streamed output handling
   2. attached Docker execution cleanup on the same subprocess model
-  3. Bonjour concurrency cleanup
+
+The Bonjour concurrency cleanup lives in the `kb.no-dispatch-queues` worktree as its own plan.
