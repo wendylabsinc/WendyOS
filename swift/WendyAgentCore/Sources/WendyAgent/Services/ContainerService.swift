@@ -393,14 +393,13 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
     /// Translate Wendy entitlements into `docker run` options.
     ///
-    /// Entitlements that cannot be honored for Linux containers on macOS (GPU,
-    /// bluetooth, audio, video, camera, USB, I2C, GPIO) are logged and skipped
-    /// rather than failing the launch.
+    /// Throws an `RPCError` if any entitlement cannot be honored, so callers
+    /// fail fast rather than launching a container that silently lacks the
+    /// capabilities the app was promised.
     nonisolated private static func dockerOptions(
         from entitlements: [WendyEntitlement],
-        appName: String,
-        logger: Logger
-    ) -> [DockerCLI.RunOption] {
+        appName: String
+    ) throws -> [DockerCLI.RunOption] {
         var options: [DockerCLI.RunOption] = []
 
         for entitlement in entitlements {
@@ -425,15 +424,17 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 }
 
             case "gpu", "bluetooth", "audio", "video", "camera", "usb", "i2c", "gpio":
-                logger.warning(
-                    "Entitlement '\(entitlement.type)' is not available for Linux containers on macOS (VM isolation)",
-                    metadata: ["app_name": "\(appName)"]
+                throw RPCError(
+                    code: .failedPrecondition,
+                    message:
+                        "Entitlement '\(entitlement.type)' is not available for Linux containers on macOS (VM isolation). Refusing to launch '\(appName)'."
                 )
 
             default:
-                logger.warning(
-                    "Unknown entitlement type '\(entitlement.type)'",
-                    metadata: ["app_name": "\(appName)"]
+                throw RPCError(
+                    code: .invalidArgument,
+                    message:
+                        "Unknown entitlement type '\(entitlement.type)' requested by '\(appName)'."
                 )
             }
         }
@@ -630,10 +631,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 .label(key: "wendy.app-name", value: appName),
             ]
             if let entitlements = appConfig?.entitlements {
-                runOptions += Self.dockerOptions(
+                runOptions += try Self.dockerOptions(
                     from: entitlements,
-                    appName: appName,
-                    logger: self.logger
+                    appName: appName
                 )
             }
 
