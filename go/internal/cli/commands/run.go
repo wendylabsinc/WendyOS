@@ -653,6 +653,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 			cliLogln("Application %s started.", product)
 			if opts.detach {
 				cliLogln("Application %s running in detached mode.", product)
+				return nil
 			}
 		case providers.RunOutputStdout:
 			os.Stdout.Write(out.Data)
