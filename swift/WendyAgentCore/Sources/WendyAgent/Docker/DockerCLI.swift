@@ -1,11 +1,14 @@
 import Foundation
 import Logging
+import Subprocess
 
 /// A thin wrapper around the `docker` CLI for managing containers and images.
 ///
-/// Adapted from the legacy Swift agent's DockerCLI. Uses Foundation.Process
-/// instead of the Subprocess package since the Mac prototype doesn't depend on
-/// swift-subprocess.
+/// One-shot commands run via `swift-subprocess`, which drains stdout and stderr
+/// concurrently while the child process is running rather than buffering the
+/// full output at termination. Attached container runs still use
+/// `Foundation.Process` today (see ``runAttached(options:image:command:terminationHandler:)``)
+/// and will be migrated in a follow-up.
 struct DockerCLI: Sendable {
     private let logger = Logger(label: "sh.wendy.agent.docker-cli")
     private let executable: String
@@ -202,81 +205,104 @@ struct DockerCLI: Sendable {
 
     // MARK: - Private
 
+    /// Upper bound on collected stdout/stderr bytes for a single one-shot command.
+    ///
+    /// `swift-subprocess` drains output concurrently while the child runs, so
+    /// this cap only exists to keep us from accumulating unbounded output in
+    /// memory if a docker command misbehaves. The limit is intentionally high
+    /// because outputs like `docker pull` progress or `docker ps` listings are
+    /// still expected to fit comfortably. If we ever need to stream truly
+    /// unbounded output we should use the streaming body variant directly
+    /// instead of raising this further.
+    private static let maxCollectedOutputBytes = 16 * 1024 * 1024
+
     /// Run a docker command and return its stdout as a trimmed string.
+    ///
+    /// Implementation notes:
+    /// - Uses `swift-subprocess`, which reads stdout/stderr concurrently while
+    ///   the child runs instead of blocking on `readDataToEndOfFile()` at
+    ///   termination. This avoids both the stdout-deadlock class of bugs and
+    ///   the "buffer everything until exit" pattern.
+    /// - Output is bounded by ``maxCollectedOutputBytes``; exceeding the cap
+    ///   is surfaced as a `commandFailed` so callers see it the same way as
+    ///   any other docker failure.
+    /// - When `timeout` fires we cancel the subprocess task, which triggers
+    ///   `swift-subprocess`'s teardown sequence (graceful signal followed by
+    ///   kill) rather than a single bare terminate.
     @discardableResult
     private func run(arguments: [String], timeout: Duration? = nil) async throws -> String {
-        let process = Foundation.Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [self.executable] + arguments
+        let executable = self.executable
+        let runCommand: @Sendable () async throws -> String = {
+            let record: ExecutionRecord<StringOutput<UTF8>, StringOutput<UTF8>>
+            do {
+                record = try await Subprocess.run(
+                    .name(executable),
+                    arguments: Arguments(arguments),
+                    output: .string(limit: Self.maxCollectedOutputBytes),
+                    error: .string(limit: Self.maxCollectedOutputBytes)
+                )
+            } catch let error as SubprocessError {
+                throw DockerError.commandFailed(
+                    executable: executable,
+                    args: arguments,
+                    status: -1,
+                    stderr: String(describing: error)
+                )
+            }
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+            let stdout = (record.standardOutput ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let resultTask = Task<String, Error> {
-            try await withCheckedThrowingContinuation { continuation in
-                process.terminationHandler = { p in
-                    let stdout =
-                        String(
-                            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-                            encoding: .utf8
-                        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                    if p.terminationStatus == 0 {
-                        continuation.resume(returning: stdout)
-                    } else {
-                        let stderr =
-                            String(
-                                data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                                encoding: .utf8
-                            )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                        continuation.resume(
-                            throwing: DockerError.commandFailed(
-                                executable: self.executable,
-                                args: arguments,
-                                status: p.terminationStatus,
-                                stderr: stderr
-                            )
-                        )
-                    }
-                }
-
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+            switch record.terminationStatus {
+            case .exited(0):
+                return stdout
+            case .exited(let code):
+                let stderr = (record.standardError ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                throw DockerError.commandFailed(
+                    executable: executable,
+                    args: arguments,
+                    status: Int32(code),
+                    stderr: stderr
+                )
+            case .signaled(let signal):
+                let stderr = (record.standardError ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                throw DockerError.commandFailed(
+                    executable: executable,
+                    args: arguments,
+                    status: -Int32(signal),
+                    stderr: stderr
+                )
             }
         }
 
-        do {
-            guard let timeout else {
-                return try await resultTask.value
-            }
+        guard let timeout else {
+            return try await runCommand()
+        }
 
+        do {
             return try await withThrowingTaskGroup(of: String.self) { group in
-                group.addTask {
-                    try await resultTask.value
-                }
+                group.addTask { try await runCommand() }
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw DockerError.commandTimedOut(
-                        executable: self.executable,
+                        executable: executable,
                         args: arguments,
                         timeout: timeout
                     )
                 }
 
+                defer { group.cancelAll() }
+
                 guard let result = try await group.next() else {
                     throw DockerError.commandFailed(
-                        executable: self.executable,
+                        executable: executable,
                         args: arguments,
                         status: -1,
                         stderr: "docker command did not produce a result"
                     )
                 }
-                group.cancelAll()
                 return result
             }
         } catch {
@@ -284,17 +310,11 @@ struct DockerCLI: Sendable {
                 self.logger.warning(
                     "Docker command timed out",
                     metadata: [
-                        "command": "\(([self.executable] + arguments).joined(separator: " "))",
-                        "timeout": "\(timeout.map { String(describing: $0) } ?? "none")",
+                        "command": "\(([executable] + arguments).joined(separator: " "))",
+                        "timeout": "\(timeout)",
                     ]
                 )
             }
-
-            if process.isRunning {
-                process.terminate()
-            }
-            resultTask.cancel()
-            _ = try? await resultTask.value
             throw error
         }
     }
