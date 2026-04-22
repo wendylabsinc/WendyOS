@@ -43,9 +43,11 @@ Status: landed on this branch. Attached Docker runs still use `Foundation.Proces
   - non-zero exit with stderr captured
 - Manual smoke tests for representative docker commands.
 
-## Stage 2 — Fold `DockerCLI` into `ContainerService`
+## Stage 2 — Fold `DockerCLI` into `ContainerService` (done)
 
 Goal: replace `DockerCLI` with domain-shaped methods that live directly on `ContainerService` (repository pattern), and migrate attached Docker runs onto `swift-subprocess` in the same move. The attached-run buffering fix from the earlier Stage 2 plan falls out for free: the attached call site becomes a `Subprocess.run` closure inside `ContainerService.startContainer` with no wrapper types.
+
+Status: landed on this branch across two commits (one-shot operations first, then attached run). `DockerCLI` is gone; Docker path is fully on `swift-subprocess`.
 
 ### Motivation
 - `DockerCLI` today is a generic CLI abstraction (`RunOption`, `RmOption`, `run(arguments:)`, `ps(label:)`) that every caller composes into business behavior.
@@ -95,7 +97,7 @@ Each commit is independently reviewable.
 ## Suggested order of implementation
 
 1. Stage 1 — Docker one-shot commands on `swift-subprocess`. (done)
-2. Stage 2 — fold `DockerCLI` into `ContainerService` and migrate attached runs.
+2. Stage 2 — fold `DockerCLI` into `ContainerService` and migrate attached runs. (done)
 
 ## Deliverables
 
