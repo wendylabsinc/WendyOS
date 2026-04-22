@@ -39,6 +39,12 @@ then
     chmod 755 "${DATA_ETC}/wendyos"
 fi
 
+# Seed static device-type from rootfs into /data before bind-mounting.
+# The bind-mount would otherwise shadow the file installed by wendyos-identity.
+if [ -f "/etc/wendyos/device-type" ]; then
+    cp "/etc/wendyos/device-type" "${DATA_ETC}/wendyos/device-type"
+fi
+
 # Bind-mount entire /etc/wendyos/ directory
 # This persists device-uuid, device-name, and any other identity files
 if ! mountpoint -q /etc/wendyos
