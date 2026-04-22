@@ -13,7 +13,7 @@ jobs:
       id-token: write
     runs-on:
       - runs-on
-      - family=c7i.48xlarge
+      - family=c7i.24xlarge
       - spot=false
       - volume=400gb:gp3
       - run-id=${{ github.run_id }}
