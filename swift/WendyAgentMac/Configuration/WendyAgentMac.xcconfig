@@ -1,6 +1,5 @@
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIconBeta
 CODE_SIGN_ENTITLEMENTS = Support/WendyAgentMac.entitlements
-CURRENT_PROJECT_VERSION = 00000000000000
 GENERATE_INFOPLIST_FILE = YES
 INFOPLIST_KEY_CFBundleDisplayName = $(PRODUCT_NAME)
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.utilities
@@ -11,12 +10,10 @@ INFOPLIST_KEY_NSMicrophoneUsageDescription = Wendy Agent needs microphone access
 INFOPLIST_KEY_NSPrincipalClass = NSApplication
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
 MARKETING_VERSION = 0000.00.00
-SDKROOT = macosx
-ARCHS = arm64
+ARCHS[sdk=macosx*] = arm64
 PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac
 PRODUCT_MODULE_NAME = WendyAgentMac
 PRODUCT_NAME = WendyAgentMac
-SWIFT_EMIT_LOC_STRINGS = YES
-SWIFT_VERSION = 6.0
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
 INFOPLIST_FILE = Support/WendyAgentMac-Info.plist
 WENDY_AGENT_VERSION=0000.00.00-000000-dev
