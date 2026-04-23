@@ -1,11 +1,6 @@
-# POKY_BBLAYERS_CONF_VERSION is increased each time build/conf/bblayers.conf
-# changes incompatibly
-POKY_BBLAYERS_CONF_VERSION = "2"
+# OpenEmbedded and poky layers shared by every board.
 
-BBPATH = "${TOPDIR}"
-BBFILES ?= ""
-
-BBLAYERS ?= " \
+BBLAYERS += " \
     ${TOPDIR}/../repos/meta-openembedded/meta-filesystems \
     ${TOPDIR}/../repos/meta-openembedded/meta-multimedia \
     ${TOPDIR}/../repos/meta-openembedded/meta-networking \
@@ -14,8 +9,4 @@ BBLAYERS ?= " \
     ${TOPDIR}/../repos/meta-virtualization \
     ${TOPDIR}/../repos/poky/meta \
     ${TOPDIR}/../repos/poky/meta-poky \
-    ${TOPDIR}/../repos/poky/meta-yocto-bsp \
-    ${TOPDIR}/../repos/meta-raspberrypi \
-    ${TOPDIR}/../%META-REPO% \
-    ${TOPDIR}/../%META-REPO%/meta-rpi-extensions \
     "

@@ -82,16 +82,17 @@ help:
 	@printf "  make volumes-remove - Remove Docker volumes (deletes all build data)\n"
 	@printf "\n"
 	@printf "$(GREEN)Configuration:$(NC)\n"
-	@printf "  MACHINE=$(MACHINE)\n"
+	@printf "  BOARD=$(BOARD)       (board-id for 'make setup', e.g. rpi5-sd, jetson-agx-orin)\n"
+	@printf "  MACHINE=$(MACHINE)   (yocto machine name for 'make build', e.g. raspberrypi5-wendyos)\n"
 	@printf "  IMAGE_TARGET=$(IMAGE_TARGET)\n"
 	@printf "  FLASH_IMAGE_SIZE=$(FLASH_IMAGE_SIZE)  (must match WENDYOS_FLASH_IMAGE_SIZE)\n"
 	@printf "  FLASH_DEVICE=        (e.g., /dev/disk4)\n"
 	@printf "  FLASH_CONFIRM=       (set to 'yes' for non-interactive mode)\n"
 	@printf "\n"
 	@printf "$(YELLOW)Examples:$(NC)\n"
-	@printf "  make setup                                    # First time setup\n"
+	@printf "  make setup BOARD=rpi5-sd                      # First time setup (board-id)\n"
 	@printf "  make build                                    # Build default image\n"
-	@printf "  make build MACHINE=jetson-orin-nano-devkit-wendyos  # Build for SD card\n"
+	@printf "  make build MACHINE=jetson-orin-nano-devkit-wendyos  # Build for SD card (yocto name)\n"
 	@printf "  make build MACHINE=jetson-agx-orin-devkit-nvme-wendyos  # Build for AGX Orin 64GB\n"
 	@printf "  make build MACHINE=raspberrypi5-wendyos       # Build for RPi5\n"
 	@printf "  make shell                                    # Interactive development\n"
@@ -117,7 +118,7 @@ setup: bootstrap
 
 bootstrap:
 	@printf "$(CYAN)Running bootstrap...$(NC)\n"
-	@cd $(PROJECT_DIR) && $(MAKEFILE_DIR)/bootstrap.sh
+	@cd $(PROJECT_DIR) && BOARD="$(BOARD)" MACHINE="$(MACHINE)" $(MAKEFILE_DIR)/bootstrap.sh
 
 #
 # Docker Management

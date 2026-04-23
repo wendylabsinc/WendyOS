@@ -39,14 +39,18 @@ then
     chmod 755 "${DATA_ETC}/wendyos"
 fi
 
-# Seed static device-type from rootfs into /data before bind-mounting.
-# The bind-mount would otherwise shadow the file installed by wendyos-identity.
-if [ -f "/etc/wendyos/device-type" ]; then
-    cp "/etc/wendyos/device-type" "${DATA_ETC}/wendyos/device-type"
+# Seed device-type to /data on first boot only. Hardware identity is
+# immutable for the life of the unit, so this copy runs once and the
+# /data copy persists across every subsequent boot and OTA.
+if [ -f /etc/wendyos/device-type ] && [ ! -f "${DATA_ETC}/wendyos/device-type" ]
+then
+    log_info "Seeding device-type to ${DATA_ETC}/wendyos/"
+    cp -p /etc/wendyos/device-type "${DATA_ETC}/wendyos/device-type"
 fi
 
 # Bind-mount entire /etc/wendyos/ directory
-# This persists device-uuid, device-name, and any other identity files
+# This persists device-uuid, device-name, device-type, and any other
+# identity files
 if ! mountpoint -q /etc/wendyos
 then
     log_info "Bind-mounting ${DATA_ETC}/wendyos → /etc/wendyos"
@@ -61,6 +65,17 @@ then
     fi
 else
     log_info "/etc/wendyos already mounted, skipping"
+fi
+
+# Refresh version.txt from the authoritative rootfs copy on every boot.
+# The bind mount redirects /etc/wendyos/ to /data, so this cp writes
+# through to /data/etc/wendyos/version.txt and stays current across OTA.
+# Gated on the bind mount being active so we never dereference the
+# rootfs symlink and try to write to the read-only /usr/lib/ target.
+if mountpoint -q /etc/wendyos && [ -f /usr/lib/wendyos/version.txt ]
+then
+    log_info "Refreshing /etc/wendyos/version.txt from /usr/lib/wendyos/"
+    cp -p /usr/lib/wendyos/version.txt /etc/wendyos/version.txt
 fi
 
 # [Note]

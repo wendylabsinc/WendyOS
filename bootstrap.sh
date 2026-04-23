@@ -68,6 +68,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Default repo URLs and commit hashes. A per-board
+# conf/template/boards/<board-id>/repos.overrides file may replace any of
+# these (and append entries via REPOS_EXTRA) before repos[] is built below.
+URL_POKY="git://git.yoctoproject.org/poky.git"
+URL_OE="https://github.com/openembedded/meta-openembedded.git"
+URL_TEGRA="https://github.com/OE4T/meta-tegra.git"
+URL_TEGRA_COMM="https://github.com/OE4T/meta-tegra-community"
+URL_VIRT="git://git.yoctoproject.org/meta-virtualization.git"
+URL_MENDER="https://github.com/mendersoftware/meta-mender.git"
+URL_MENDER_COMM="https://github.com/mendersoftware/meta-mender-community.git"
+URL_RPI="https://github.com/agherzan/meta-raspberrypi.git"
+
 SRCREV_POKY="353491479086e8d3f209d5cce0019a29e143b064"
 SRCREV_OE="2759d8870ea387b76c902070bed8a6649ff47b56"
 SRCREV_TEGRA="447c21467f65be2389f68a189b6871f13729d222"
@@ -77,52 +89,32 @@ SRCREV_MENDER="76404a7b914676a57d76ccb5fe12149112c05c03"
 SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"
 SRCREV_RPI="3afc9728b1f4ba0f5be1af34883d6582966133a1"
 
-declare -Ar repos=(
-    [0]="1|git://git.yoctoproject.org/poky.git||${SRCREV_POKY}"
-    [1]="1|https://github.com/openembedded/meta-openembedded.git||${SRCREV_OE}"
-    [2]="1|https://github.com/OE4T/meta-tegra.git||${SRCREV_TEGRA}"
-    [3]="1|https://github.com/OE4T/meta-tegra-community||${SRCREV_TEGRA_COMM}"
-    [4]="1|git://git.yoctoproject.org/meta-virtualization.git||${SRCREV_VIRT}"
-    [5]="1|https://github.com/mendersoftware/meta-mender.git||${SRCREV_MENDER}"
-    [6]="1|https://github.com/mendersoftware/meta-mender-community.git||${SRCREV_MENDER_COMM}"
-    [7]="1|https://github.com/agherzan/meta-raspberrypi.git||${SRCREV_RPI}"
-)
-
 
 ##
 # display help
 usage() {
     cat <<EOF
 Usage:
-  MACHINE=<machine> $(basename "${0}") [options]
+  BOARD=<board-id> $(basename "${0}") [options]
 
 Example:
-  MACHINE=rpi5 $(basename "${0}")
-  MACHINE=jetson $(basename "${0}")
+  BOARD=jetson-agx-orin $(basename "${0}")
+  BOARD=rpi5-nvme $(basename "${0}")
 
 Environment variables:
-  MACHINE   (required) Target machine. Selects conf/template/bblayers.conf.<MACHINE>
-            and conf/template/local.conf.<MACHINE>.
-            Available machines: jetson, rpi5, qemu
-            Note: for RPi5 NVMe boot, use MACHINE=rpi5 then set
-            MACHINE = "raspberrypi5-nvme-wendyos" in build/conf/local.conf.
+  BOARD     (required) Target board id. Must match a directory
+            conf/template/boards/<board-id>/ containing local.conf and
+            bblayers.conf. Those files pull in shared fragments from
+            conf/template/include/{local,bblayers}/ via BitBake 'require'.
+            Run with an unknown BOARD to see the list of supported board ids.
+  MACHINE   Deprecated alias for BOARD. Prints a warning on use.
+            Separate from bitbake's MACHINE (the yocto machine name) --
+            rename scheduled to avoid confusion.
 
 Options:
   --help, -h   Show this help message.
 
 EOF
-}
-
-trim() {
-    local s="${1}"
-
-    # remove leading whitespace
-    s="${s#"${s%%[![:space:]]*}"}"
-
-    # remove trailing whitespace
-    s="${s%"${s##*[![:space:]]}"}"
-
-    printf '%s' "${s}"
 }
 
 ###
@@ -141,8 +133,18 @@ for arg in "$@"; do
     esac
 done
 
-if [[ -z "${MACHINE:-}" ]]; then
-    printf "ERROR: MACHINE environment variable is required.\n" >&2
+# Accept BOARD as the primary env var, with MACHINE as a deprecated alias.
+# MACHINE collides with bitbake's MACHINE (the yocto machine name), which is
+# a different concept; BOARD is the board-id used to look up the template.
+if [[ -z "${BOARD:-}" ]] && [[ -n "${MACHINE:-}" ]]
+then
+    printf "WARN: MACHINE= is deprecated as a bootstrap argument. Use BOARD= instead.\n" >&2
+    BOARD="${MACHINE}"
+fi
+
+if [[ -z "${BOARD:-}" ]]; then
+    printf "ERROR: BOARD environment variable is required.\n" >&2
+    printf "       Set it to a board id matching a directory in conf/template/boards/<board-id>/.\n" >&2
     usage
     exit 1
 fi
@@ -338,6 +340,51 @@ cd "${PROJECT_DIR}"
 mkdir -p "repos"
 cd "repos"
 
+# Resolve template files based on BOARD. Each board has its own directory
+# conf/template/boards/<board-id>/ containing a self-contained local.conf and
+# bblayers.conf, which pull in shared fragments from
+# conf/template/include/{local,bblayers}/ via BitBake 'require'.
+TEMPLATE_DIR="${META_LAYER_DIR}/conf/template"
+BOARD_DIR="${TEMPLATE_DIR}/boards/${BOARD}"
+
+if [[ ! -d "${BOARD_DIR}" ]]
+then
+    printf "ERROR: Unknown board '%s'. Available boards:\n" "${BOARD}" >&2
+    for d in "${TEMPLATE_DIR}"/boards/*/
+    do
+        [[ -d "${d}" ]] || continue
+        printf "    %s\n" "$(basename "${d}")" >&2
+    done
+    exit 1
+fi
+
+# Per-board repo overrides (optional): override URL_*/SRCREV_* defaults
+# and/or append to REPOS_EXTRA before repos[] is built.
+if [[ -f "${BOARD_DIR}/repos.overrides" ]]
+then
+    # shellcheck source=/dev/null
+    source "${BOARD_DIR}/repos.overrides"
+fi
+
+# Build the repos list with the (possibly overridden) URLs and SRCREVs.
+# Indexed (not associative) so iteration preserves the order below.
+declare -a repos=(
+    "1|${URL_POKY}||${SRCREV_POKY}"
+    "1|${URL_OE}||${SRCREV_OE}"
+    "1|${URL_TEGRA}||${SRCREV_TEGRA}"
+    "1|${URL_TEGRA_COMM}||${SRCREV_TEGRA_COMM}"
+    "1|${URL_VIRT}||${SRCREV_VIRT}"
+    "1|${URL_MENDER}||${SRCREV_MENDER}"
+    "1|${URL_MENDER_COMM}||${SRCREV_MENDER_COMM}"
+    "1|${URL_RPI}||${SRCREV_RPI}"
+)
+
+# Append any extras declared by the override file.
+if [[ -n "${REPOS_EXTRA+x}" ]]
+then
+    repos+=("${REPOS_EXTRA[@]}")
+fi
+
 printf "Clone repos...\n"
 clone_repos || {
     printf "Yocto setup failed!\n"
@@ -351,37 +398,36 @@ printf "\nPrepare the Yocto build environment...\n"
 cd "${PROJECT_DIR}"
 mkdir -p "${YOCTO_BUILD_DIR}/conf"
 
-# Resolve template file names based on MACHINE environment variable
-BBLAYERS_SRC="${META_LAYER_DIR}/conf/template/bblayers.conf.${MACHINE}"
-LOCAL_SRC="${META_LAYER_DIR}/conf/template/local.conf.${MACHINE}"
+for f in local.conf bblayers.conf
+do
+    src="${BOARD_DIR}/${f}"
+    if [[ ! -f "${src}" ]]
+    then
+        printf "ERROR: Missing %s in %s\n" "${f}" "${BOARD_DIR}" >&2
+        exit 1
+    fi
+done
 
-if [[ ! -f "${BBLAYERS_SRC}" ]] || [[ ! -f "${LOCAL_SRC}" ]]; then
-    printf "ERROR: No template files found for machine '%s'.\n" "${MACHINE}" >&2
-    printf "  Expected:\n" >&2
-    printf "    %s\n" "${BBLAYERS_SRC}" >&2
-    printf "    %s\n" "${LOCAL_SRC}" >&2
-    printf "  Available machines:\n" >&2
-    for f in "${META_LAYER_DIR}/conf/template/bblayers.conf."*; do
-        suffix="${f##*.conf.}"
-        if [[ -f "${META_LAYER_DIR}/conf/template/local.conf.${suffix}" ]]; then
-            printf "    %s\n" "${suffix}" >&2
+# Only overwrite if the build dir doesn't already have the file
+# (matches previous behavior — user edits to build/conf survive re-bootstrap).
+# WENDYOS_META_REPO is prepended only to bblayers.conf (parsed first by BitBake);
+# the value stays in scope when local.conf is parsed later.
+for f in local.conf bblayers.conf
+do
+    dst="./${YOCTO_BUILD_DIR}/conf/${f}"
+    if [[ ! -e "${dst}" ]]
+    then
+        if [[ "${f}" == "bblayers.conf" ]]
+        then
+            {
+                printf 'WENDYOS_META_REPO = "%s"\n\n' "${image_name}"
+                cat "${BOARD_DIR}/${f}"
+            } > "${dst}"
+        else
+            cp "${BOARD_DIR}/${f}" "${dst}"
         fi
-    done
-    exit 1
-fi
-
-# use the template only if the corresponding one in build/conf doesn't exist
-if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/bblayers.conf" ]]
-then
-    cp "${BBLAYERS_SRC}" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
-    sed -i.bak "s|%META-REPO%|${image_name}|g" "./${YOCTO_BUILD_DIR}/conf/bblayers.conf"
-    rm -f "./${YOCTO_BUILD_DIR}/conf/bblayers.conf.bak"
-fi
-
-if [[ ! -e "./${YOCTO_BUILD_DIR}/conf/local.conf" ]]
-then
-    cp "${LOCAL_SRC}" "./${YOCTO_BUILD_DIR}/conf/local.conf"
-fi
+    fi
+done
 
 printf "\nDirectory structure:\n"
 tree -d -L 2 -I 'build|downloads|sstate-cache' || true #--charset=ascii

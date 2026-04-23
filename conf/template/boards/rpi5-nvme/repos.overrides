@@ -1,0 +1,15 @@
+# Per-board repo version overrides for rpi5-nvme.
+#
+# Sourced by bootstrap.sh after the default URL_*/SRCREV_* values are set,
+# but before the repos[] array is built. Uncomment a line below to pin
+# this board to a different commit of an upstream layer.
+#
+# Also available (see bootstrap.sh):
+#   URL_<name>           override a source URL (e.g. to use a fork)
+#   REPOS_EXTRA=(...)    append extra clones that coexist with defaults,
+#                        each entry "enabled|url|folder|commit"
+
+#SRCREV_POKY="<commit-hash>"
+#SRCREV_OE="<commit-hash>"
+#SRCREV_VIRT="<commit-hash>"
+#SRCREV_RPI="<commit-hash>"
