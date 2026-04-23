@@ -9,7 +9,6 @@ INFOPLIST_KEY_NSCameraUsageDescription = Wendy Agent needs camera access so apps
 INFOPLIST_KEY_NSMicrophoneUsageDescription = Wendy Agent needs microphone access so apps deployed through Wendy can use the microphone without separate permission prompts, including headless apps running in the background.
 INFOPLIST_KEY_NSPrincipalClass = NSApplication
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
-MARKETING_VERSION = 0000.00.00
 ARCHS[sdk=macosx*] = arm64
 PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac
 PRODUCT_MODULE_NAME = WendyAgentMac
