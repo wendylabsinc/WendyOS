@@ -84,7 +84,10 @@ struct ContainerServiceTests {
             return info.status == .running && info.pid != nil
         }
 
-        try await waitUntil(description: "app exits and becomes stopped") {
+        try await waitUntil(
+            description: "app exits and becomes stopped",
+            timeout: .seconds(5)
+        ) {
             await service.appInfo(forAppID: appID)
                 == WendyAppInfo(id: appID, kind: .native, status: .stopped, pid: nil)
         }
@@ -356,6 +359,59 @@ struct ContainerServiceTests {
         )
     }
 
+    @Test("docker attach disconnect does not stop the detached container")
+    func dockerAttachDisconnectDoesNotStopTheDetachedContainer() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerAttachDisconnect"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+        try await startApp(service: service, appID: appID)
+
+        let response = try await attachAppResponse(service: service, appID: appID)
+        let contents = try response.accepted.get()
+
+        do {
+            _ = try await contents.producer(
+                RPCWriter(wrapping: DisconnectAfterFirstOutputWriter())
+            )
+            Issue.record("Expected the simulated client disconnect to abort the attach stream")
+        } catch is SimulatedClientDisconnect {
+            // Expected.
+        }
+
+        try await waitUntil(description: "docker attach session starts") {
+            fakeDocker.attachSessionStarted(appID: appID)
+        }
+        try await waitUntil(description: "docker attach session ends") {
+            !fakeDocker.attachSessionIsActive(appID: appID)
+        }
+
+        #expect(fakeDocker.containerIsRunning(appID: appID))
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .running, pid: nil)
+        )
+
+        try await stopApp(service: service, appID: appID)
+        #expect(!fakeDocker.containerExists(appID: appID))
+    }
+
     @Test("docker-backed delete removes the detached container without a stored runtime handle")
     func dockerDeleteRemovesDetachedContainerWithoutAStoredRuntimeHandle() async throws {
         let appsBase = try makeTempDir()
@@ -427,6 +483,45 @@ struct ContainerServiceTests {
             await service.appInfo(forAppID: appID)
                 == WendyAppInfo(id: appID, kind: .container, status: .stopped, pid: nil)
         )
+    }
+
+    @Test("docker monitor updates app state after an external container exit")
+    func dockerMonitorUpdatesAppStateAfterExternalContainerExit() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerMonitorExit"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+        try await startApp(service: service, appID: appID)
+        await service.startDockerMonitorForTesting()
+
+        try await waitUntil(description: "docker monitor starts") {
+            fakeDocker.monitorStarted()
+        }
+
+        fakeDocker.simulateContainerExit(appID: appID, event: "die")
+
+        try await waitUntil(description: "monitor marks docker app stopped") {
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .stopped, pid: nil)
+        }
+
+        await service.stopDockerMonitorForTesting()
     }
 
     @Test("persistence stores runtime state and restores apps as stopped")
@@ -720,6 +815,25 @@ private final class DisconnectAfterStartedWriter: RPCWriterProtocol, @unchecked 
     }
 }
 
+private final class DisconnectAfterFirstOutputWriter: RPCWriterProtocol, @unchecked Sendable {
+    func write(_ element: Wendy_Agent_Services_V1_RunContainerLayersResponse) async throws {
+        switch element.responseType {
+        case .stdoutOutput?, .stderrOutput?:
+            throw SimulatedClientDisconnect()
+        default:
+            return
+        }
+    }
+
+    func write(
+        contentsOf elements: some Sequence<Wendy_Agent_Services_V1_RunContainerLayersResponse>
+    ) async throws {
+        for element in elements {
+            try await self.write(element)
+        }
+    }
+}
+
 private struct FakeDockerEnvironment {
     let directoryURL: URL
     let scriptURL: URL
@@ -734,6 +848,10 @@ private struct FakeDockerEnvironment {
 
         let stateDirectory = self.directoryURL.appendingPathComponent("state", isDirectory: true)
         try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        let eventsPipePath = stateDirectory.appendingPathComponent("events.pipe").path
+        guard mkfifo(eventsPipePath, 0o644) == 0 else {
+            throw TestError(description: "Failed to create fake docker events pipe at \(eventsPipePath)")
+        }
 
         self.scriptURL = self.directoryURL.appendingPathComponent("docker")
         try Self.writeExecutableScript(
@@ -757,8 +875,40 @@ private struct FakeDockerEnvironment {
         )
     }
 
+    func monitorStarted() -> Bool {
+        FileManager.default.fileExists(
+            atPath: self.directoryURL.appendingPathComponent("state/events-monitor-started").path
+        )
+    }
+
+    func attachSessionStarted(appID: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: self.directoryURL.appendingPathComponent(
+                "state/attach-session-started/\(self.containerName(appID: appID))"
+            ).path
+        )
+    }
+
+    func attachSessionIsActive(appID: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: self.directoryURL.appendingPathComponent(
+                "state/attach-sessions/\(self.containerName(appID: appID))"
+            ).path
+        )
+    }
+
     func removeContainer(appID: String) {
         try? FileManager.default.removeItem(at: self.containerDirectory(appID: appID))
+    }
+
+    func simulateContainerExit(appID: String, event: String) {
+        self.removeContainer(appID: appID)
+        let eventLine = "\(event)\t\(appID)\n"
+        let eventsPipeURL = self.directoryURL.appendingPathComponent("state/events.pipe")
+        if let handle = try? FileHandle(forWritingTo: eventsPipeURL) {
+            defer { try? handle.close() }
+            try? handle.write(contentsOf: Data(eventLine.utf8))
+        }
     }
 
     private func containerDirectory(appID: String) -> URL {
@@ -776,7 +926,7 @@ private struct FakeDockerEnvironment {
         let script = """
             #!/bin/sh
             STATE_DIR="\(stateDirectory)"
-            mkdir -p "$STATE_DIR/containers" "$STATE_DIR/log-sessions" "$STATE_DIR/log-session-started"
+            mkdir -p "$STATE_DIR/containers" "$STATE_DIR/log-sessions" "$STATE_DIR/log-session-started" "$STATE_DIR/attach-sessions" "$STATE_DIR/attach-session-started"
 
             container_dir() {
               echo "$STATE_DIR/containers/$1"
@@ -899,6 +1049,42 @@ private struct FakeDockerEnvironment {
                 done
                 exit 0
                 ;;
+              events)
+                touch "$STATE_DIR/events-monitor-started"
+                exec cat "$STATE_DIR/events.pipe"
+                ;;
+              attach)
+                name=""
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    --no-stdin|--sig-proxy=false)
+                      ;;
+                    *)
+                      name="$1"
+                      ;;
+                  esac
+                  shift
+                done
+                dir="$(container_dir "$name")"
+                if [ ! -d "$dir" ]; then
+                  echo "No such container: $name" 1>&2
+                  exit 1
+                fi
+                touch "$STATE_DIR/attach-session-started/$name"
+                touch "$STATE_DIR/attach-sessions/$name"
+                cleanup() {
+                  rm -f "$STATE_DIR/attach-sessions/$name"
+                }
+                terminate() {
+                  cleanup
+                  exit 0
+                }
+                trap cleanup EXIT
+                trap terminate INT TERM
+                cat "$dir/log.txt"
+                cat >/dev/null
+                exit 0
+                ;;
               stop)
                 if [ "$1" = "--time" ]; then
                   shift
@@ -980,6 +1166,25 @@ private func startAppResponse(
     return try await service.startContainer(
         request: ServerRequest(metadata: [:], message: request),
         context: makeServerContext(method: "StartContainer")
+    )
+}
+
+private func attachAppResponse(
+    service: ContainerService,
+    appID: String
+) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
+    var firstMessage = Wendy_Agent_Services_V1_AttachContainerRequest()
+    firstMessage.requestType = .appName(appID)
+
+    return try await service.attachContainer(
+        request: StreamingServerRequest(
+            metadata: [:],
+            messages: RPCAsyncSequence(wrapping: AsyncThrowingStream { continuation in
+                continuation.yield(firstMessage)
+                continuation.finish()
+            })
+        ),
+        context: makeServerContext(method: "AttachContainer")
     )
 }
 

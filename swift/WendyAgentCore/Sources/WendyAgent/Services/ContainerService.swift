@@ -38,6 +38,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// by the Linux-container RPC paths.
     private var dockerPresent: Bool = false
     private var dockerReadyProbed: Bool = false
+    private var dockerContainerMonitor: DockerContainerMonitor?
 
     init(
         broadcaster: TelemetryBroadcaster,
@@ -154,8 +155,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.appsByID[id]?.launchToken
     }
 
-    func beginStopping() {
+    func beginStopping() async {
         self.isStopping = true
+        await self.stopDockerMonitor()
     }
 
     func stopApp(id: String) async {
@@ -307,6 +309,70 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     func handleAppTermination(id: String, launchToken: UUID) async {
         guard let app = self.appsByID[id], app.launchToken == launchToken else { return }
         await self.markAppStopped(id: id)
+    }
+
+    private func handleDockerContainerEvent(_ event: DockerContainerEvent) async {
+        switch event.kind {
+        case .started:
+            await self.handleDockerContainerStarted(appName: event.appName)
+        case .stopped:
+            await self.handleDockerContainerStopped(appName: event.appName)
+        case .removed:
+            await self.handleDockerContainerRemoved(appName: event.appName)
+        }
+    }
+
+    private func handleDockerContainerStarted(appName: String) async {
+        do {
+            try await self.markDockerAppRunning(id: appName)
+        } catch {
+            self.logger.warning(
+                "Failed to mark Docker app running from monitor event",
+                metadata: [
+                    "app_name": "\(appName)",
+                    "error": "\(String(describing: error))",
+                ]
+            )
+        }
+    }
+
+    private func handleDockerContainerStopped(appName: String) async {
+        await self.markAppStopped(id: appName)
+    }
+
+    private func handleDockerContainerRemoved(appName: String) async {
+        await self.markAppStopped(id: appName)
+    }
+
+    private func handleDockerMonitorInterruption() async {
+        await self.reconcileAllDockerApps()
+    }
+
+    private func startDockerMonitorIfNeeded() async {
+        guard self.dockerPresent else { return }
+
+        if self.dockerContainerMonitor == nil {
+            let logger = self.logger
+            let service = self
+            self.dockerContainerMonitor = DockerContainerMonitor(
+                dockerExecutable: self.dockerExecutable,
+                logger: logger,
+                onEvent: { event in
+                    await service.handleDockerContainerEvent(event)
+                },
+                onStreamInterrupted: {
+                    await service.handleDockerMonitorInterruption()
+                }
+            )
+        }
+
+        await self.dockerContainerMonitor?.start()
+    }
+
+    private func stopDockerMonitor() async {
+        guard let dockerContainerMonitor = self.dockerContainerMonitor else { return }
+        self.dockerContainerMonitor = nil
+        await dockerContainerMonitor.stop()
     }
 
     private func makeTerminationHandler(
@@ -539,6 +605,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             try await self.ensureRegistryRunning()
             self.dockerPresent = true
             await self.reconcileAllDockerApps()
+            await self.startDockerMonitorIfNeeded()
         } catch {
             self.logger.warning(
                 "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
@@ -683,6 +750,14 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.dockerReadyProbed = true
     }
 
+    internal func startDockerMonitorForTesting() async {
+        await self.startDockerMonitorIfNeeded()
+    }
+
+    internal func stopDockerMonitorForTesting() async {
+        await self.stopDockerMonitor()
+    }
+
     private func dockerContainerExists(appID: String) async throws -> Bool {
         let containerName = Self.containerName(forAppID: appID)
         let output = try await self.runDocker(
@@ -732,6 +807,41 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         for appID in dockerAppIDs {
             await self.refreshDockerAppStateIfNeeded(id: appID)
         }
+    }
+
+    private func prepareDockerAttach(appName: String) async throws -> String {
+        guard self.dockerPresent else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message:
+                    "Docker is required for Linux containers but was not found. Install Docker Desktop, Colima, or OrbStack."
+            )
+        }
+
+        await self.refreshDockerAppStateIfNeeded(id: appName)
+
+        guard let app = self.appsByID[appName] else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "No registered app found for \(appName). Call CreateContainer first."
+            )
+        }
+
+        guard app.container != nil else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "AttachContainer is only supported for Docker-backed apps."
+            )
+        }
+
+        guard app.info.status == .running else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "Container \(appName) is not running."
+            )
+        }
+
+        return Self.containerName(forAppID: appName)
     }
 
     // MARK: - Implemented
@@ -1270,13 +1380,156 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         return ServerResponse(message: response)
     }
 
-    // MARK: - Unimplemented
+    // MARK: - Remaining RPCs
 
     func attachContainer(
         request: StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
-        throw RPCError(code: .unimplemented, message: "AttachContainer is not implemented")
+        let service = self
+        let broadcaster = self.broadcaster
+        let dockerExecutable = self.dockerExecutable
+
+        return StreamingServerResponse { writer in
+            var messages = request.messages.makeAsyncIterator()
+            guard let firstMessage = try await messages.next() else {
+                throw RPCError(
+                    code: .invalidArgument,
+                    message: "AttachContainer requires an initial app_name message."
+                )
+            }
+            guard case .appName(let appName)? = firstMessage.requestType, !appName.isEmpty else {
+                throw RPCError(
+                    code: .invalidArgument,
+                    message: "The first AttachContainer message must set app_name."
+                )
+            }
+
+            let containerName = try await service.prepareDockerAttach(appName: appName)
+            let messageStream = AttachRequestMessageStream(messages)
+
+            do {
+                let outcome = try await Subprocess.run(
+                    .name(dockerExecutable),
+                    arguments: Arguments([
+                        "attach",
+                        "--no-stdin",
+                        "--sig-proxy=false",
+                        containerName,
+                    ])
+                ) { execution, inputWriter, stdoutSequence, stderrSequence in
+                    do {
+                        var started = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                        started.responseType = .started(
+                            Wendy_Agent_Services_V1_RunContainerLayersResponse.Started()
+                        )
+                        try await writer.write(started)
+
+                        try await withThrowingTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                do {
+                                    while let message = try await messageStream.next() {
+                                        switch message.requestType {
+                                        case .stdinData(let data)?:
+                                            if !data.isEmpty {
+                                                _ = try await inputWriter.write([UInt8](data))
+                                            }
+                                        case .appName?:
+                                            throw RPCError(
+                                                code: .invalidArgument,
+                                                message:
+                                                    "AttachContainer app_name may only appear in the first message."
+                                            )
+                                        case nil:
+                                            continue
+                                        }
+                                    }
+
+                                    try await inputWriter.finish()
+                                } catch {
+                                    try? await inputWriter.finish()
+                                    throw error
+                                }
+                            }
+                            group.addTask {
+                                for try await buffer in stdoutSequence {
+                                    let data = buffer.withUnsafeBytes { Data($0) }
+                                    var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                                    response.responseType = .stdoutOutput(.with { $0.data = data })
+                                    try await writer.write(response)
+
+                                    await Self.broadcastLog(
+                                        broadcaster: broadcaster,
+                                        appName: appName,
+                                        text: String(decoding: data, as: UTF8.self),
+                                        stream: "stdout",
+                                        severity: .info
+                                    )
+                                }
+                            }
+                            group.addTask {
+                                for try await buffer in stderrSequence {
+                                    let data = buffer.withUnsafeBytes { Data($0) }
+                                    var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                                    response.responseType = .stderrOutput(.with { $0.data = data })
+                                    try await writer.write(response)
+
+                                    await Self.broadcastLog(
+                                        broadcaster: broadcaster,
+                                        appName: appName,
+                                        text: String(decoding: data, as: UTF8.self),
+                                        stream: "stderr",
+                                        severity: .warn
+                                    )
+                                }
+                            }
+
+                            do {
+                                while let _ = try await group.next() {}
+                            } catch {
+                                group.cancelAll()
+                                await execution.teardown(
+                                    using: [.gracefulShutDown(allowedDurationToNextStep: .seconds(1))]
+                                )
+                                while let _ = try? await group.next() {}
+                                throw error
+                            }
+                        }
+                    } catch {
+                        await execution.teardown(
+                            using: [.gracefulShutDown(allowedDurationToNextStep: .seconds(1))]
+                        )
+                        throw error
+                    }
+                }
+
+                switch outcome.terminationStatus {
+                case .exited(0):
+                    break
+                case .signaled(_) where Task.isCancelled:
+                    break
+                case .exited(let code):
+                    throw RPCError(
+                        code: .internalError,
+                        message: "docker attach \(containerName) exited with status \(code)"
+                    )
+                case .signaled(let signal):
+                    throw RPCError(
+                        code: .internalError,
+                        message: "docker attach \(containerName) terminated by signal \(signal)"
+                    )
+                }
+            } catch is CancellationError {
+                return Metadata()
+            } catch let error as SubprocessError {
+                throw RPCError(
+                    code: .internalError,
+                    message: "docker attach \(containerName) failed to launch: \(error)"
+                )
+            }
+
+            return Metadata()
+        }
     }
 
     func listVolumes(
@@ -1502,6 +1755,25 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 }
 
 // MARK: - FileHandle async bytes helper
+
+private actor AttachRequestMessageStream {
+    private var iterator: RPCAsyncSequence<Wendy_Agent_Services_V1_AttachContainerRequest, any Error>.AsyncIterator
+
+    init(
+        _ iterator: RPCAsyncSequence<Wendy_Agent_Services_V1_AttachContainerRequest, any Error>.AsyncIterator
+    ) {
+        self.iterator = iterator
+    }
+
+    func next() async throws -> Wendy_Agent_Services_V1_AttachContainerRequest? {
+        // Safe because this actor is the only owner of the iterator and only
+        // exposes serialized access through this method.
+        nonisolated(unsafe) var iterator = self.iterator
+        let next = try await iterator.next()
+        self.iterator = iterator
+        return next
+    }
+}
 
 extension FileHandle {
     /// Read available data from the file handle as an async sequence of chunks.
