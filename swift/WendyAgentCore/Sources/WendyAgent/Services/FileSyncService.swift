@@ -61,7 +61,8 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
     static func runSession<S: AsyncSequence & Sendable>(
         messages: S,
-        writeResponse: @escaping @Sendable (Wendy_Agent_Services_V1_FileSyncResponse) async throws -> Void,
+        writeResponse:
+            @escaping @Sendable (Wendy_Agent_Services_V1_FileSyncResponse) async throws -> Void,
         appsBase: URL,
         logger: Logger
     ) async throws where S.Element == Wendy_Agent_Services_V1_FileSyncRequest {

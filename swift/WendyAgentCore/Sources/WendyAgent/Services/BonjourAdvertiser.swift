@@ -113,7 +113,10 @@ actor BonjourRegistration {
             return
         }
 
-        let queueError = DNSServiceSetDispatchQueue(serviceRef, BonjourRegistrationActor.dispatchQueue)
+        let queueError = DNSServiceSetDispatchQueue(
+            serviceRef,
+            BonjourRegistrationActor.dispatchQueue
+        )
         guard queueError == kDNSServiceErr_NoError else {
             DNSServiceRefDeallocate(serviceRef)
             self.readyContinuation = nil
