@@ -16,6 +16,8 @@ struct WendyApp: Codable {
     var info: WendyAppInfo
     var native: NativeMetadata?
     var container: ContainerMetadata?
+
+    /// Native runtime handle; set while a darwin-native app is running.
     var process: Foundation.Process?
     var launchToken: UUID?
 

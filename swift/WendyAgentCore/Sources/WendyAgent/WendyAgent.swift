@@ -38,12 +38,7 @@ public final class WendyAgent {
         let broadcaster = TelemetryBroadcaster()
 
         do {
-            let dockerAvailable = await self.prepareDockerIfNeeded()
-
-            try await self.startMainServer(
-                dockerAvailable: dockerAvailable,
-                broadcaster: broadcaster
-            )
+            try await self.startMainServer(broadcaster: broadcaster)
             try await self.startOTelServer(broadcaster: broadcaster)
             try await self.startBonjour()
 
@@ -157,26 +152,7 @@ public final class WendyAgent {
     private var appsObservationTasks:
         [WendyObservationRegistry<[WendyAppInfo]>.ObservationID: Task<Void, Never>] = [:]
 
-    private func prepareDockerIfNeeded() async -> Bool {
-        let docker = DockerCLI()
-        let dockerAvailable = await docker.checkAvailable()
-        if dockerAvailable {
-            do {
-                try await docker.ensureRegistry()
-            } catch {
-                self.logger.warning(
-                    "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
-                )
-            }
-        } else {
-            self.logger.info("Docker not available, Linux container support disabled")
-        }
-
-        return dockerAvailable
-    }
-
     private func startMainServer(
-        dockerAvailable: Bool,
         broadcaster: TelemetryBroadcaster
     ) async throws {
         let stateDirectory = FileManager.default.homeDirectoryForCurrentUser
@@ -191,11 +167,11 @@ public final class WendyAgent {
                 : self.configuration.sandboxProfile,
             stateDirectory: stateDirectory,
             appsBase: appsBase,
-            dockerAvailable: dockerAvailable,
             onAppsChanged: { [weak self] apps in
                 await self?.updateApps(apps)
             }
         )
+        await containerService.ensureReady()
         self.containerService = containerService
         await containerService.publishCurrentApps()
 

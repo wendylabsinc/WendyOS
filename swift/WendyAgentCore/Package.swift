@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-extras.git", from: "2.1.1"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
+        .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
     ],
     targets: [
         .testTarget(
@@ -36,6 +37,7 @@ let package = Package(
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCServiceLifecycle", package: "grpc-swift-extras"),
+                .product(name: "Subprocess", package: "swift-subprocess"),
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
             ],
