@@ -61,50 +61,72 @@ func runWifiInteractive(cmd *cobra.Command) error {
 		return err
 	}
 
+	model := wifitable.NewModel(networksToView(networks)).WithHandler(&wifiTUIHandler{ctx: ctx, client: client})
+	p := tea.NewProgram(model)
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("wifi TUI: %w", err)
+	}
+	return nil
+}
+
+func networksToView(networks []*agentpb.ListWiFiNetworksResponse_WiFiNetwork) []wifitable.Network {
 	view := make([]wifitable.Network, 0, len(networks))
 	for _, n := range networks {
 		view = append(view, wifitable.FromProto(n))
 	}
+	return view
+}
 
-	model := wifitable.NewModel(view)
-	p := tea.NewProgram(model)
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("wifi TUI: %w", err)
-	}
-	res := finalModel.(wifitable.Model).Result()
+// wifiTUIHandler adapts *wifiClient to the wifitable.Handler interface so the
+// TUI can execute operations inline and stay open between edits.
+type wifiTUIHandler struct {
+	ctx    context.Context
+	client *wifiClient
+}
 
-	switch res.Action {
-	case wifitable.ActionQuit, wifitable.ActionNone:
-		return nil
-	case wifitable.ActionConnect:
-		return client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
-			Ssid:     res.SSID,
-			Password: res.Password,
-		})
-	case wifitable.ActionConnectUnlisted:
-		sec := res.Security
-		hidden := res.Hidden
-		return client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
-			Ssid:     res.SSID,
-			Password: res.Password,
-			Security: &sec,
-			Hidden:   &hidden,
-		})
-	case wifitable.ActionReorder:
-		if err := client.Reorder(ctx, res.Order); err != nil {
-			return err
+func (h *wifiTUIHandler) Connect(ssid, password string, sec agentpb.WiFiSecurityType, hidden bool) tea.Cmd {
+	return func() tea.Msg {
+		req := &agentpb.ConnectToWiFiRequest{Ssid: ssid, Password: password}
+		if sec != agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED {
+			s := sec
+			req.Security = &s
 		}
-		fmt.Printf("Updated priority for %d known networks.\n", len(res.Order))
-		return nil
-	case wifitable.ActionForget:
-		if err := client.Forget(ctx, res.SSID); err != nil {
-			return err
+		if hidden {
+			hid := true
+			req.Hidden = &hid
 		}
-		fmt.Printf("Forgot %s.\n", res.SSID)
-		return nil
+		err := h.client.Connect(h.ctx, req)
+		action := wifitable.ActionConnect
+		if hidden {
+			action = wifitable.ActionConnectUnlisted
+		}
+		return wifitable.OpResultMsg{Action: action, SSID: ssid, Err: err}
 	}
-	return nil
+}
+
+func (h *wifiTUIHandler) Forget(ssid string) tea.Cmd {
+	return func() tea.Msg {
+		err := h.client.Forget(h.ctx, ssid)
+		return wifitable.OpResultMsg{Action: wifitable.ActionForget, SSID: ssid, Err: err}
+	}
+}
+
+func (h *wifiTUIHandler) Reorder(order []string) tea.Cmd {
+	return func() tea.Msg {
+		err := h.client.Reorder(h.ctx, order)
+		return wifitable.OpResultMsg{Action: wifitable.ActionReorder, Count: len(order), Err: err}
+	}
+}
+
+func (h *wifiTUIHandler) Refresh() tea.Cmd {
+	return func() tea.Msg {
+		nets, err := h.client.List(h.ctx)
+		if err != nil {
+			// Surface the error without clobbering the list.
+			return wifitable.OpResultMsg{Action: wifitable.ActionNone, Err: err}
+		}
+		return wifitable.RefreshMsg{Networks: networksToView(nets)}
+	}
 }
 
 // ── wifiClient: small abstraction over the three transports ────────
@@ -179,7 +201,6 @@ func (c *wifiClient) Connect(ctx context.Context, req *agentpb.ConnectToWiFiRequ
 		if !resp.GetSuccess() {
 			return fmt.Errorf("failed to connect: %s", resp.GetErrorMessage())
 		}
-		fmt.Printf("Connected to %s\n", req.GetSsid())
 		return nil
 	}
 	sec := agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED
@@ -190,11 +211,7 @@ func (c *wifiClient) Connect(ctx context.Context, req *agentpb.ConnectToWiFiRequ
 	if req.Hidden != nil {
 		hidden = *req.Hidden
 	}
-	if err := c.ble.WifiConnectWith(req.GetSsid(), req.GetPassword(), sec, hidden); err != nil {
-		return err
-	}
-	fmt.Printf("Connected to %s\n", req.GetSsid())
-	return nil
+	return c.ble.WifiConnectWith(req.GetSsid(), req.GetPassword(), sec, hidden)
 }
 
 func (c *wifiClient) Reorder(ctx context.Context, order []string) error {
@@ -398,10 +415,14 @@ func newWifiConnectCmd() *cobra.Command {
 			}
 			defer client.Close()
 
-			return client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
+			if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
 				Ssid:     ssid,
 				Password: password,
-			})
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("Connected to %s\n", ssid)
+			return nil
 		},
 	}
 

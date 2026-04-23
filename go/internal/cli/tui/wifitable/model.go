@@ -3,6 +3,7 @@ package wifitable
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	bubbleTable "github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -23,9 +24,9 @@ const (
 	modePassword
 )
 
-// Action is the intent the user picked when the TUI exited. The caller is
-// responsible for actually talking to the agent; keeping the TUI pure makes it
-// testable.
+// Action is the intent the user picked. When a Handler is attached the model
+// dispatches Actions as async tea.Cmds and stays open; with no Handler set it
+// falls back to recording the Action on Result and quitting (used by tests).
 type Action int
 
 const (
@@ -37,7 +38,8 @@ const (
 	ActionConnectUnlisted
 )
 
-// Result is what the caller reads after the TUI exits.
+// Result is what the caller reads after the TUI exits. Only populated for the
+// no-Handler code path.
 type Result struct {
 	Action         Action
 	SSID           string
@@ -48,17 +50,44 @@ type Result struct {
 	PromptPassword bool     // the caller should prompt out-of-band
 }
 
+// Handler performs WiFi operations on behalf of the Model so the TUI can stay
+// open between actions (mirroring the `wendy discover` screen). Each method
+// returns a tea.Cmd that must eventually emit an OpResultMsg.
+type Handler interface {
+	Connect(ssid, password string, security agentpb.WiFiSecurityType, hidden bool) tea.Cmd
+	Forget(ssid string) tea.Cmd
+	Reorder(order []string) tea.Cmd
+	Refresh() tea.Cmd
+}
+
 // RefreshMsg replaces the visible networks. The caller fires one of these on a
-// timer to keep the list fresh while the user browses.
+// timer — or as the result of a Handler.Refresh() call — to keep the list
+// fresh while the user browses.
 type RefreshMsg struct {
 	Networks []Network
 }
+
+// OpResultMsg is sent by Handler commands to report the outcome of an async
+// operation. The Model uses it to render a flash message and refresh the list.
+type OpResultMsg struct {
+	Action Action
+	SSID   string
+	Count  int // e.g. number of networks reordered
+	Err    error
+}
+
+// flashClearMsg clears the current flash message after a delay.
+type flashClearMsg struct{}
+
+const flashDuration = 4 * time.Second
 
 // Model is the Bubble Tea model for the interactive WiFi table.
 type Model struct {
 	networks []Network
 	table    bubbleTable.Model
 	mode     mode
+
+	handler Handler
 
 	// ranking state
 	origOrder []string
@@ -72,11 +101,19 @@ type Model struct {
 	// per-row password prompt
 	pwFor string
 
-	message string
-	result  Result
-	done    bool
-	width   int
-	height  int
+	flashMessage string
+	flashIsError bool
+	busy         bool // true while an op is in-flight
+	// stickyConnectedSSID is the SSID of the most recent successful connect.
+	// It survives RefreshMsgs that haven't yet reflected the new state
+	// (nmcli rescan can lag behind association by a few seconds). Cleared
+	// once a RefreshMsg confirms the SSID as known+connected, or on a
+	// subsequent Forget/Connect.
+	stickyConnectedSSID string
+	result              Result
+	done                bool
+	width               int
+	height              int
 }
 
 var securityOptions = []agentpb.WiFiSecurityType{
@@ -113,6 +150,13 @@ func NewModel(networks []Network) Model {
 		secIndex:      3, // WPA2-PSK default
 	}
 	m.refreshRows()
+	return m
+}
+
+// WithHandler attaches a Handler, enabling inline async execution of actions
+// so the TUI stays open between edits.
+func (m Model) WithHandler(h Handler) Model {
+	m.handler = h
 	return m
 }
 
@@ -169,10 +213,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshMsg:
 		if m.mode == modeBrowsing {
-			m.networks = msg.Networks
+			m.networks = m.reconcileRefresh(msg.Networks)
 			Sort(m.networks)
 			m.refreshRows()
 		}
+		return m, nil
+
+	case OpResultMsg:
+		m.busy = false
+		m.flashMessage, m.flashIsError = flashFor(msg)
+		if msg.Err != nil {
+			return m, clearFlashAfter(flashDuration)
+		}
+		// Apply an optimistic update so the table reflects the change
+		// immediately — the async Refresh that follows will reconcile with
+		// the authoritative state from the device.
+		m.applyOptimisticUpdate(msg)
+		m.refreshRows()
+		if m.handler != nil {
+			return m, tea.Batch(m.handler.Refresh(), clearFlashAfter(flashDuration))
+		}
+		return m, clearFlashAfter(flashDuration)
+
+	case flashClearMsg:
+		m.flashMessage = ""
+		m.flashIsError = false
 		return m, nil
 	}
 
@@ -202,34 +267,49 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		return m, tea.Quit
 	case "enter":
+		if m.busy {
+			return m, nil
+		}
 		idx := m.table.Cursor()
 		if idx < 0 || idx >= len(m.networks) {
 			return m, nil
 		}
 		n := m.networks[idx]
-		m.result.SSID = n.SSID
-		m.result.Security = n.Security
-		if n.Known || !IsSecured(n.Security) {
-			m.result.Action = ActionConnect
-			m.done = true
-			return m, tea.Quit
+		if n.Known {
+			// nmcli will reuse the saved profile (and its stored password).
+			return m.dispatchConnect(n.SSID, "", n.Security, false)
 		}
-		// Unknown + secured → prompt for password inline.
+		if n.Security == agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN {
+			return m.dispatchConnect(n.SSID, "", n.Security, false)
+		}
+		// Unknown with a secured or ambiguous (UNSPECIFIED) security type →
+		// prompt for a password. Treating UNSPECIFIED as open is unsafe,
+		// since many drivers omit the security field in scan output. The
+		// password input accepts an empty value for networks that turn out
+		// to be open.
 		m.pwFor = n.SSID
 		m.passwordInput.SetValue("")
 		m.passwordInput.Focus()
 		m.mode = modePassword
 		return m, textinput.Blink
 	case "r":
-		if !m.hasKnown() {
-			m.message = "No known networks to rank."
+		if m.busy {
 			return m, nil
+		}
+		if !m.hasKnown() {
+			m.flashMessage = "No known networks to rank."
+			m.flashIsError = true
+			return m, clearFlashAfter(flashDuration)
 		}
 		m.origOrder = snapshotSSIDs(m.networks)
 		m.mode = modeRanking
-		m.message = ""
+		m.flashMessage = ""
+		m.flashIsError = false
 		return m, nil
 	case "n":
+		if m.busy {
+			return m, nil
+		}
 		m.mode = modeUnlisted
 		m.modalFocus = 0
 		m.ssidInput.SetValue("")
@@ -238,18 +318,19 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.passwordInput.Blur()
 		return m, textinput.Blink
 	case "f":
+		if m.busy {
+			return m, nil
+		}
 		idx := m.table.Cursor()
 		if idx < 0 || idx >= len(m.networks) {
 			return m, nil
 		}
 		if !m.networks[idx].Known {
-			m.message = "Only known networks can be forgotten."
-			return m, nil
+			m.flashMessage = "Only known networks can be forgotten."
+			m.flashIsError = true
+			return m, clearFlashAfter(flashDuration)
 		}
-		m.result.Action = ActionForget
-		m.result.SSID = m.networks[idx].SSID
-		m.done = true
-		return m, tea.Quit
+		return m.dispatchForget(m.networks[idx].SSID)
 	}
 
 	var cmd tea.Cmd
@@ -267,14 +348,13 @@ func (m Model) updateRanking(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Restore order.
 		m.networks = restoreOrder(m.networks, m.origOrder)
 		m.mode = modeBrowsing
-		m.message = "Cancelled rank edit."
+		m.flashMessage = "Cancelled rank edit."
+		m.flashIsError = false
 		m.refreshRows()
-		return m, nil
+		return m, clearFlashAfter(flashDuration)
 	case "enter":
-		m.result.Action = ActionReorder
-		m.result.Order = KnownSSIDsInOrder(m.networks)
-		m.done = true
-		return m, tea.Quit
+		order := KnownSSIDsInOrder(m.networks)
+		return m.dispatchReorder(order)
 	case "up", "k":
 		idx := m.table.Cursor()
 		newIdx := MoveUp(m.networks, idx)
@@ -321,16 +401,11 @@ func (m Model) updateUnlisted(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		ssid := strings.TrimSpace(m.ssidInput.Value())
 		if ssid == "" {
-			m.message = "Network name is required."
-			return m, nil
+			m.flashMessage = "Network name is required."
+			m.flashIsError = true
+			return m, clearFlashAfter(flashDuration)
 		}
-		m.result.Action = ActionConnectUnlisted
-		m.result.SSID = ssid
-		m.result.Password = m.passwordInput.Value()
-		m.result.Security = securityOptions[m.secIndex]
-		m.result.Hidden = true
-		m.done = true
-		return m, tea.Quit
+		return m.dispatchConnectUnlisted(ssid, m.passwordInput.Value(), securityOptions[m.secIndex])
 	}
 
 	var cmd tea.Cmd
@@ -368,15 +443,201 @@ func (m Model) updatePassword(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowsing
 		return m, nil
 	case "enter":
-		m.result.Action = ActionConnect
-		m.result.SSID = m.pwFor
-		m.result.Password = m.passwordInput.Value()
-		m.done = true
-		return m, tea.Quit
+		ssid := m.pwFor
+		password := m.passwordInput.Value()
+		return m.dispatchConnect(ssid, password, agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED, false)
 	}
 	var cmd tea.Cmd
 	m.passwordInput, cmd = m.passwordInput.Update(msg)
 	return m, cmd
+}
+
+// dispatchConnect either fires the Handler (staying open) or records the
+// action on Result and quits (legacy test path).
+func (m Model) dispatchConnect(ssid, password string, sec agentpb.WiFiSecurityType, hidden bool) (tea.Model, tea.Cmd) {
+	if m.handler == nil {
+		m.result.Action = ActionConnect
+		m.result.SSID = ssid
+		m.result.Password = password
+		m.result.Security = sec
+		m.result.Hidden = hidden
+		m.done = true
+		return m, tea.Quit
+	}
+	m.mode = modeBrowsing
+	m.busy = true
+	m.flashMessage = "Connecting to " + ssid + "..."
+	m.flashIsError = false
+	return m, m.handler.Connect(ssid, password, sec, hidden)
+}
+
+func (m Model) dispatchConnectUnlisted(ssid, password string, sec agentpb.WiFiSecurityType) (tea.Model, tea.Cmd) {
+	if m.handler == nil {
+		m.result.Action = ActionConnectUnlisted
+		m.result.SSID = ssid
+		m.result.Password = password
+		m.result.Security = sec
+		m.result.Hidden = true
+		m.done = true
+		return m, tea.Quit
+	}
+	m.mode = modeBrowsing
+	m.busy = true
+	m.flashMessage = "Connecting to " + ssid + "..."
+	m.flashIsError = false
+	return m, m.handler.Connect(ssid, password, sec, true)
+}
+
+func (m Model) dispatchForget(ssid string) (tea.Model, tea.Cmd) {
+	if m.handler == nil {
+		m.result.Action = ActionForget
+		m.result.SSID = ssid
+		m.done = true
+		return m, tea.Quit
+	}
+	m.busy = true
+	m.flashMessage = "Forgetting " + ssid + "..."
+	m.flashIsError = false
+	return m, m.handler.Forget(ssid)
+}
+
+func (m Model) dispatchReorder(order []string) (tea.Model, tea.Cmd) {
+	if m.handler == nil {
+		m.result.Action = ActionReorder
+		m.result.Order = order
+		m.done = true
+		return m, tea.Quit
+	}
+	m.mode = modeBrowsing
+	m.busy = true
+	m.flashMessage = "Updating ranking..."
+	m.flashIsError = false
+	return m, m.handler.Reorder(order)
+}
+
+// applyOptimisticUpdate mutates the local network list to reflect a completed
+// operation, so the table updates immediately without waiting for the async
+// refresh (which rescans WiFi on the device and can take several seconds).
+func (m *Model) applyOptimisticUpdate(msg OpResultMsg) {
+	switch msg.Action {
+	case ActionConnect, ActionConnectUnlisted:
+		m.stickyConnectedSSID = msg.SSID
+		found := false
+		for i := range m.networks {
+			if m.networks[i].SSID == msg.SSID {
+				m.networks[i].Known = true
+				m.networks[i].Connected = true
+				found = true
+			} else {
+				m.networks[i].Connected = false
+			}
+		}
+		if !found {
+			// Unlisted/hidden network — add a row so it shows up until the
+			// refresh fills in the scan details.
+			m.networks = append(m.networks, Network{
+				SSID:      msg.SSID,
+				Known:     true,
+				Connected: true,
+			})
+		}
+		Sort(m.networks)
+
+	case ActionForget:
+		if m.stickyConnectedSSID == msg.SSID {
+			m.stickyConnectedSSID = ""
+		}
+		out := make([]Network, 0, len(m.networks))
+		for _, n := range m.networks {
+			if n.SSID == msg.SSID {
+				// If not currently visible in the scan, drop the row; it was
+				// only shown because it was a saved profile.
+				if n.Signal == 0 {
+					continue
+				}
+				n.Known = false
+				n.Priority = 0
+				n.Connected = false
+			}
+			out = append(out, n)
+		}
+		m.networks = out
+		Sort(m.networks)
+	}
+}
+
+// reconcileRefresh merges an authoritative RefreshMsg with the Model's sticky
+// state. nmcli can briefly return a scan that's missing IsConnected/IsKnown
+// for the network we just connected to (rescan lags activation). When that
+// happens we keep the optimistic flags so the user doesn't see the row flap
+// back to unknown/disconnected. The sticky SSID is cleared once the refresh
+// confirms it as known+connected.
+func (m *Model) reconcileRefresh(incoming []Network) []Network {
+	if m.stickyConnectedSSID == "" {
+		return incoming
+	}
+	confirmed := false
+	foundRow := false
+	for i := range incoming {
+		if incoming[i].SSID == m.stickyConnectedSSID {
+			foundRow = true
+			if incoming[i].Known && incoming[i].Connected {
+				confirmed = true
+			} else {
+				incoming[i].Known = true
+				incoming[i].Connected = true
+			}
+		} else if incoming[i].Connected {
+			// Only one network is connected at a time; the refresh may
+			// legitimately disagree, but trust our recent successful connect
+			// over the scan.
+			incoming[i].Connected = false
+		}
+	}
+	if !foundRow {
+		// Sticky SSID dropped out of the scan — keep a placeholder row.
+		incoming = append(incoming, Network{
+			SSID:      m.stickyConnectedSSID,
+			Known:     true,
+			Connected: true,
+		})
+	}
+	if confirmed {
+		m.stickyConnectedSSID = ""
+	}
+	return incoming
+}
+
+// flashFor renders a user-facing message for a completed operation.
+func flashFor(msg OpResultMsg) (string, bool) {
+	if msg.Err != nil {
+		switch msg.Action {
+		case ActionConnect, ActionConnectUnlisted:
+			return fmt.Sprintf("Connect to %s failed: %v", msg.SSID, msg.Err), true
+		case ActionForget:
+			return fmt.Sprintf("Forget %s failed: %v", msg.SSID, msg.Err), true
+		case ActionReorder:
+			return fmt.Sprintf("Reorder failed: %v", msg.Err), true
+		default:
+			return msg.Err.Error(), true
+		}
+	}
+	switch msg.Action {
+	case ActionConnect, ActionConnectUnlisted:
+		return "Connected to " + msg.SSID + ".", false
+	case ActionForget:
+		return "Forgot " + msg.SSID + ".", false
+	case ActionReorder:
+		return fmt.Sprintf("Updated priority for %d known networks.", msg.Count), false
+	}
+	return "", false
+}
+
+func clearFlashAfter(d time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(d)
+		return flashClearMsg{}
+	}
 }
 
 func (m Model) hasKnown() bool {
@@ -422,11 +683,12 @@ func restoreOrder(networks []Network, origOrder []string) []Network {
 }
 
 var (
-	footerStyle   = lipgloss.NewStyle().Foreground(tui.ColorDim)
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
-	modalBorder   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(tui.ColorBorder).Padding(0, 1)
-	modalSelected = lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
-	messageStyle  = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+	footerStyle     = lipgloss.NewStyle().Foreground(tui.ColorDim)
+	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
+	modalBorder     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(tui.ColorBorder).Padding(0, 1)
+	modalSelected   = lipgloss.NewStyle().Bold(true).Foreground(tui.ColorPrimary)
+	flashStyle      = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+	flashErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
 func (m Model) View() string {
@@ -438,8 +700,12 @@ func (m Model) View() string {
 	sb.WriteString(m.table.View())
 	sb.WriteString("\n")
 
-	if m.message != "" {
-		sb.WriteString(messageStyle.Render(m.message) + "\n")
+	if m.flashMessage != "" {
+		style := flashStyle
+		if m.flashIsError {
+			style = flashErrorStyle
+		}
+		sb.WriteString(style.Render(m.flashMessage) + "\n")
 	}
 
 	switch m.mode {
@@ -486,5 +752,7 @@ func (m Model) renderUnlistedModal() string {
 		footerStyle.Render("tab switch fields · ←/→ change security · enter submit · esc cancel")
 }
 
-// Result returns the user's decision after Run returns.
+// Result returns the user's decision after Run returns. Only meaningful when
+// the Model was driven without a Handler (e.g. tests); in interactive mode the
+// TUI stays open and actions are dispatched via the Handler.
 func (m Model) Result() Result { return m.result }
