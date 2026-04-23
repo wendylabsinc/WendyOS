@@ -37,10 +37,13 @@ struct BonjourAdvertiser {
     }
 }
 
-final class BonjourRegistration: @unchecked Sendable {
+actor BonjourRegistration {
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        BonjourRegistrationActor.shared.unownedExecutor
+    }
+
     private let port: Int
     private let txtData: Data
-    private let queue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
 
     private var serviceRef: DNSServiceRef?
     private var readyContinuation: CheckedContinuation<Void, Error>?
@@ -56,40 +59,38 @@ final class BonjourRegistration: @unchecked Sendable {
 
     func start() async throws {
         try await withCheckedThrowingContinuation { continuation in
-            self.queue.async {
-                self.startOnQueue(continuation: continuation)
-            }
+            self.beginStart(continuation: continuation)
         }
     }
 
     func waitForShutdown() async throws {
         try await withCheckedThrowingContinuation { continuation in
-            self.queue.async {
-                if self.isFinished {
-                    self.resume(continuation: continuation, with: self.completionError)
-                } else {
-                    precondition(self.shutdownContinuation == nil)
-                    self.shutdownContinuation = continuation
-                }
+            if self.isFinished {
+                self.resume(continuation: continuation, with: self.completionError)
+            } else {
+                precondition(self.shutdownContinuation == nil)
+                self.shutdownContinuation = continuation
             }
         }
     }
 
     func shutdown() async {
-        await withCheckedContinuation { continuation in
-            self.queue.async {
-                self.finishOnQueue(error: nil)
-                continuation.resume()
-            }
-        }
+        self.finish(error: nil)
     }
 
-    private func startOnQueue(continuation: CheckedContinuation<Void, Error>) {
+    private func beginStart(continuation: CheckedContinuation<Void, Error>) {
         precondition(self.readyContinuation == nil)
         self.readyContinuation = continuation
 
+        let port = self.port
+        let txtData = self.txtData
+        // BonjourAdvertiser.Runtime keeps this actor alive until shutdown has
+        // finished, so the DNS-SD callback context can borrow rather than
+        // retain it.
+        let context = Unmanaged.passUnretained(self).toOpaque()
+
         var serviceRef: DNSServiceRef?
-        let error = self.txtData.withUnsafeBytes { buffer in
+        let error = txtData.withUnsafeBytes { buffer in
             DNSServiceRegister(
                 &serviceRef,
                 0,
@@ -98,11 +99,11 @@ final class BonjourRegistration: @unchecked Sendable {
                 "_wendyos._udp.",
                 nil,
                 nil,
-                UInt16(self.port).bigEndian,
+                UInt16(port).bigEndian,
                 UInt16(buffer.count),
                 buffer.baseAddress,
                 Self.handleRegistrationCallback,
-                Unmanaged.passUnretained(self).toOpaque()
+                context
             )
         }
 
@@ -112,7 +113,10 @@ final class BonjourRegistration: @unchecked Sendable {
             return
         }
 
-        let queueError = DNSServiceSetDispatchQueue(serviceRef, self.queue)
+        let queueError = DNSServiceSetDispatchQueue(
+            serviceRef,
+            BonjourRegistrationActor.dispatchQueue
+        )
         guard queueError == kDNSServiceErr_NoError else {
             DNSServiceRefDeallocate(serviceRef)
             self.readyContinuation = nil
@@ -128,13 +132,13 @@ final class BonjourRegistration: @unchecked Sendable {
         errorCode: DNSServiceErrorType
     ) {
         if errorCode != kDNSServiceErr_NoError {
-            self.finishOnQueue(error: BonjourError.registrationFailed(errorCode))
+            self.finish(error: BonjourError.registrationFailed(errorCode))
             return
         }
 
         let hasAddFlag = (flags & DNSServiceFlags(kDNSServiceFlagsAdd)) != 0
         guard hasAddFlag else {
-            self.finishOnQueue(error: BonjourError.registrationLost)
+            self.finish(error: BonjourError.registrationLost)
             return
         }
 
@@ -146,7 +150,7 @@ final class BonjourRegistration: @unchecked Sendable {
         continuation?.resume(returning: ())
     }
 
-    private func finishOnQueue(error: (any Error)?) {
+    private func finish(error: (any Error)?) {
         guard !self.isFinished else { return }
 
         self.isFinished = true
@@ -192,7 +196,10 @@ final class BonjourRegistration: @unchecked Sendable {
         let registration = Unmanaged<BonjourRegistration>
             .fromOpaque(context)
             .takeUnretainedValue()
-        registration.handleRegistrationCallback(flags: flags, errorCode: errorCode)
+
+        Task { @BonjourRegistrationActor in
+            await registration.handleRegistrationCallback(flags: flags, errorCode: errorCode)
+        }
     }
 }
 

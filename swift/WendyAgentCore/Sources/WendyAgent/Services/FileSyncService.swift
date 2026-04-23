@@ -61,7 +61,8 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
     static func runSession<S: AsyncSequence & Sendable>(
         messages: S,
-        writeResponse: (Wendy_Agent_Services_V1_FileSyncResponse) async throws -> Void,
+        writeResponse:
+            @escaping @Sendable (Wendy_Agent_Services_V1_FileSyncResponse) async throws -> Void,
         appsBase: URL,
         logger: Logger
     ) async throws where S.Element == Wendy_Agent_Services_V1_FileSyncRequest {
@@ -118,7 +119,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             return entry
         }
 
-        func sendAck(for path: String) async throws {
+        let sendAck: @Sendable (String) async throws -> Void = { path in
             var ackResponse = Wendy_Agent_Services_V1_FileSyncResponse()
             var ack = Wendy_Agent_Services_V1_FileSyncAck()
             ack.path = path
@@ -330,7 +331,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
                     activeTransfer = nil
                     finalizedPaths.insert(commit.path)
-                    try await sendAck(for: commit.path)
+                    try await sendAck(commit.path)
 
                     logger.info(
                         "File committed",
@@ -390,7 +391,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                         ofItemAtPath: destinationURL.path
                     )
                     finalizedPaths.insert(chmod.path)
-                    try await sendAck(for: chmod.path)
+                    try await sendAck(chmod.path)
 
                     logger.info(
                         "File mode updated",
