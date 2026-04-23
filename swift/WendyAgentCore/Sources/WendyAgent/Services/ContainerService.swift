@@ -219,7 +219,6 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             pid: nil
         )
         app.process = nil
-        app.dockerRunTask = nil
         app.launchToken = launchToken
         self.appsByID[id] = app
     }
@@ -227,16 +226,14 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private func cancelAppLaunch(id: String, launchToken: UUID) {
         guard var app = self.appsByID[id], app.launchToken == launchToken else { return }
         app.process = nil
-        app.dockerRunTask = nil
         app.launchToken = nil
         self.appsByID[id] = app
     }
 
-    private func markAppRunning(
+    private func markNativeAppRunning(
         id: String,
         pid: Int32,
-        nativeProcess: Foundation.Process? = nil,
-        dockerRunTask: Task<Void, Never>? = nil,
+        nativeProcess: Foundation.Process,
         launchToken: UUID
     ) async throws {
         guard var app = self.appsByID[id], app.launchToken == launchToken else { return }
@@ -247,8 +244,28 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             pid: pid
         )
         app.process = nativeProcess
-        app.dockerRunTask = dockerRunTask
         app.launchToken = launchToken
+        self.appsByID[id] = app
+        try self.saveApps()
+        await self.publishApps()
+    }
+
+    private func markDockerAppRunning(id: String) async throws {
+        guard var app = self.appsByID[id], app.container != nil else { return }
+
+        let runningInfo = WendyAppInfo(
+            id: app.info.id,
+            kind: app.info.kind,
+            status: .running,
+            pid: nil
+        )
+        guard app.info != runningInfo || app.process != nil || app.launchToken != nil else {
+            return
+        }
+
+        app.info = runningInfo
+        app.process = nil
+        app.launchToken = nil
         self.appsByID[id] = app
         try self.saveApps()
         await self.publishApps()
@@ -263,18 +280,12 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             status: .stopped,
             pid: nil
         )
-        guard
-            app.info != stoppedInfo
-                || app.process != nil
-                || app.dockerRunTask != nil
-                || app.launchToken != nil
-        else {
+        guard app.info != stoppedInfo || app.process != nil || app.launchToken != nil else {
             return
         }
 
         app.info = stoppedInfo
         app.process = nil
-        app.dockerRunTask = nil
         app.launchToken = nil
         self.appsByID[id] = app
 
@@ -312,14 +323,16 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
     @discardableResult
     private func stopTrackedAppIfRunning(id: String) async throws -> Bool {
-        guard let app = self.appsByID[id],
-            let launchToken = app.launchToken,
-            app.info.status == .running
-        else {
+        guard let app = self.appsByID[id] else {
             return false
         }
 
         if let process = app.process {
+            guard let launchToken = app.launchToken else {
+                await self.markAppStopped(id: id)
+                return true
+            }
+
             // Native darwin path.
             if !process.isRunning {
                 await self.handleAppTermination(id: id, launchToken: launchToken)
@@ -341,28 +354,49 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             return true
         }
 
-        if let runTask = app.dockerRunTask, self.dockerPresent {
-            // Attached docker path.
-            let containerName = Self.containerName(forAppID: id)
-            _ = try? await self.runDocker(
-                ["stop", "--time", "10", containerName]
-            )
-            let didExit = await Self.waitForTaskExit(runTask, timeout: self.nativeStopTimeout)
-            if !didExit {
-                self.logger.warning(
-                    "Docker stop timed out, force-killing container and cancelling attached run",
-                    metadata: ["app_name": "\(id)", "container": "\(containerName)"]
-                )
-                _ = try? await self.runDocker(["kill", containerName])
-                runTask.cancel()
-                await runTask.value
+        if app.container != nil, self.dockerPresent {
+            let containerExists = try await self.dockerContainerExists(appID: id)
+            guard containerExists else {
+                if app.info.status == .running {
+                    await self.markAppStopped(id: id)
+                    return true
+                }
+                return false
             }
-            await self.handleAppTermination(id: id, launchToken: launchToken)
+
+            let containerName = Self.containerName(forAppID: id)
+            do {
+                _ = try await self.runDocker(
+                    ["stop", "--time", "10", containerName],
+                    timeout: .seconds(10)
+                )
+            } catch {
+                if try await self.dockerContainerExists(appID: id) {
+                    self.logger.warning(
+                        "Docker stop failed, force-killing container",
+                        metadata: [
+                            "app_name": "\(id)",
+                            "container": "\(containerName)",
+                            "error": "\(String(describing: error))",
+                        ]
+                    )
+                    _ = try? await self.runDocker(["kill", containerName], timeout: .seconds(5))
+                }
+            }
+
+            await self.refreshDockerAppStateIfNeeded(id: id)
             return true
         }
 
-        // No runtime handle to stop. Just mark stopped.
-        await self.handleAppTermination(id: id, launchToken: launchToken)
+        guard app.info.status == .running else {
+            return false
+        }
+
+        if let launchToken = app.launchToken {
+            await self.handleAppTermination(id: id, launchToken: launchToken)
+        } else {
+            await self.markAppStopped(id: id)
+        }
         return true
     }
 
@@ -504,6 +538,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         do {
             try await self.ensureRegistryRunning()
             self.dockerPresent = true
+            await self.reconcileAllDockerApps()
         } catch {
             self.logger.warning(
                 "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
@@ -643,91 +678,60 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         try await self.runDocker(args, timeout: timeout)
     }
 
-    /// The handle for an in-flight attached `docker run`.
-    private struct AttachedDockerRun {
-        let pid: Int32
-        let runTask: Task<Void, Never>
-        let stdout: AsyncThrowingStream<Data, any Error>
-        let stderr: AsyncThrowingStream<Data, any Error>
+    internal func setDockerPresentForTesting(_ present: Bool) {
+        self.dockerPresent = present
+        self.dockerReadyProbed = true
     }
 
-    /// Launch `docker run` attached via `swift-subprocess` and return the PID,
-    /// the task that owns the subprocess lifetime, and the stdout/stderr
-    /// streams the gRPC layer forwards to the client.
-    ///
-    /// This function only returns after the subprocess has entered the
-    /// streaming closure (so the PID is real) or after spawn has failed (in
-    /// which case it throws). That handshake lets callers mark the app as
-    /// running with a valid PID before returning to gRPC.
-    private func launchAttachedDockerRun(
-        args: [String],
-        appName: String,
-        launchToken: UUID
-    ) async throws -> AttachedDockerRun {
-        let (stdoutStream, stdoutCont) =
-            AsyncThrowingStream<Data, any Error>.makeStream()
-        let (stderrStream, stderrCont) =
-            AsyncThrowingStream<Data, any Error>.makeStream()
-        let (spawnStream, spawnCont) =
-            AsyncThrowingStream<Int32, any Error>.makeStream()
+    private func dockerContainerExists(appID: String) async throws -> Bool {
+        let containerName = Self.containerName(forAppID: appID)
+        let output = try await self.runDocker(
+            ["ps", "-a", "--filter", "name=^/\(containerName)$", "--format", "{{.Names}}"],
+            timeout: .seconds(5)
+        )
+        return output.split(whereSeparator: \Character.isNewline).contains { $0 == containerName }
+    }
 
-        let dockerExecutable = self.dockerExecutable
+    private func dockerContainerIsRunning(appID: String) async throws -> Bool {
+        let containerName = Self.containerName(forAppID: appID)
+        let output = try await self.runDocker(
+            ["ps", "--filter", "name=^/\(containerName)$", "--format", "{{.Names}}"],
+            timeout: .seconds(5)
+        )
+        return output.split(whereSeparator: \Character.isNewline).contains { $0 == containerName }
+    }
 
-        let runTask: Task<Void, Never> = Task.detached { [weak self] in
-            do {
-                _ = try await Subprocess.run(
-                    .name(dockerExecutable),
-                    arguments: Arguments(args)
-                ) { execution, _, stdoutSeq, stderrSeq in
-                    spawnCont.yield(execution.processIdentifier.value)
-                    spawnCont.finish()
-
-                    try await withThrowingTaskGroup(of: Void.self) { group in
-                        group.addTask {
-                            for try await buffer in stdoutSeq {
-                                let data = buffer.withUnsafeBytes { Data($0) }
-                                stdoutCont.yield(data)
-                            }
-                        }
-                        group.addTask {
-                            for try await buffer in stderrSeq {
-                                let data = buffer.withUnsafeBytes { Data($0) }
-                                stderrCont.yield(data)
-                            }
-                        }
-                        try await group.waitForAll()
-                    }
-                }
-                stdoutCont.finish()
-                stderrCont.finish()
-            } catch {
-                // If spawn failed we haven't yielded yet; propagate the error
-                // through the spawn handshake. If we have yielded, finish() is
-                // a no-op and the error propagates through the output streams
-                // so the gRPC body sees it.
-                spawnCont.finish(throwing: error)
-                stdoutCont.finish(throwing: error)
-                stderrCont.finish(throwing: error)
-            }
-
-            await self?.handleAppTermination(id: appName, launchToken: launchToken)
+    private func refreshDockerAppStateIfNeeded(id: String) async {
+        guard self.dockerPresent, let app = self.appsByID[id], app.container != nil else {
+            return
         }
 
-        for try await pid in spawnStream {
-            return AttachedDockerRun(
-                pid: pid,
-                runTask: runTask,
-                stdout: stdoutStream,
-                stderr: stderrStream
+        do {
+            if try await self.dockerContainerIsRunning(appID: id) {
+                try await self.markDockerAppRunning(id: id)
+            } else {
+                await self.markAppStopped(id: id)
+            }
+        } catch {
+            self.logger.warning(
+                "Failed to reconcile Docker app state",
+                metadata: [
+                    "app_name": "\(id)",
+                    "error": "\(String(describing: error))",
+                ]
             )
         }
+    }
 
-        // Subprocess.run exited without ever entering the body closure and
-        // without throwing. This shouldn't happen in practice.
-        throw RPCError(
-            code: .internalError,
-            message: "docker attach never confirmed start"
-        )
+    private func reconcileAllDockerApps() async {
+        let dockerAppIDs = self.appsByID.values
+            .filter { $0.container != nil }
+            .map(\.info.id)
+            .sorted()
+
+        for appID in dockerAppIDs {
+            await self.refreshDockerAppStateIfNeeded(id: appID)
+        }
     }
 
     // MARK: - Implemented
@@ -903,8 +907,16 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             )
         }
 
+        if app.container != nil, !self.dockerPresent {
+            throw RPCError(
+                code: .failedPrecondition,
+                message:
+                    "Docker is required for Linux containers but was not found. Install Docker Desktop, Colima, or OrbStack."
+            )
+        }
+
         // Docker path for Linux containers.
-        if let containerMetadata = app.container, self.dockerPresent {
+        if let containerMetadata = app.container {
             let appConfig = containerMetadata.appConfig
             let deviceImage = containerMetadata.imageName
             let containerName = Self.containerName(forAppID: appName)
@@ -914,6 +926,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
             var dockerArgs: [String] = [
                 "run",
+                "-d",
                 "--rm",
                 "--name", containerName,
                 "--label", "wendy.managed=true",
@@ -931,24 +944,16 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             self.prepareAppForLaunch(id: appName, launchToken: launchToken)
 
             logger.info(
-                "Starting Docker container",
+                "Starting Docker container detached",
                 metadata: [
                     "container": "\(containerName)",
                     "image": "\(deviceImage)",
                 ]
             )
 
-            // Launch `docker run` attached via swift-subprocess. The spawn
-            // handshake below ensures the app is marked `running` with the
-            // real PID before `startContainer` returns, so downstream callers
-            // (stop/delete/createContainer) can observe the running state.
-            let spawn: AttachedDockerRun
+            let containerID: String
             do {
-                spawn = try await self.launchAttachedDockerRun(
-                    args: dockerArgs,
-                    appName: appName,
-                    launchToken: launchToken
-                )
+                containerID = try await self.runDocker(dockerArgs)
             } catch {
                 self.cancelAppLaunch(id: appName, launchToken: launchToken)
                 throw RPCError(
@@ -957,21 +962,18 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 )
             }
 
-            try await self.markAppRunning(
-                id: appName,
-                pid: spawn.pid,
-                dockerRunTask: spawn.runTask,
-                launchToken: launchToken
-            )
+            try await self.markDockerAppRunning(id: appName)
             logger.info(
-                "Docker container started",
-                metadata: ["app_name": "\(appName)", "pid": "\(spawn.pid)"]
+                "Docker container started detached",
+                metadata: [
+                    "app_name": "\(appName)",
+                    "container": "\(containerName)",
+                    "container_id": "\(containerID)",
+                ]
             )
 
             let broadcaster = self.broadcaster
-            let stdoutStream = spawn.stdout
-            let stderrStream = spawn.stderr
-            let runTask = spawn.runTask
+            let dockerExecutable = self.dockerExecutable
             return StreamingServerResponse { writer in
                 var started = Wendy_Agent_Services_V1_RunContainerLayersResponse()
                 started.responseType = .started(
@@ -979,40 +981,83 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 )
                 try await writer.write(started)
 
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        for try await data in stdoutStream {
-                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            response.responseType = .stdoutOutput(.with { $0.data = data })
-                            try await writer.write(response)
+                do {
+                    let outcome = try await Subprocess.run(
+                        .name(dockerExecutable),
+                        arguments: Arguments(["logs", "-f", containerName])
+                    ) { execution, _, stdoutSequence, stderrSequence in
+                        try await withThrowingTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                for try await buffer in stdoutSequence {
+                                    let data = buffer.withUnsafeBytes { Data($0) }
+                                    var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                                    response.responseType = .stdoutOutput(.with { $0.data = data })
+                                    try await writer.write(response)
 
-                            await Self.broadcastLog(
-                                broadcaster: broadcaster,
-                                appName: appName,
-                                text: String(decoding: data, as: UTF8.self),
-                                stream: "stdout",
-                                severity: .info
-                            )
+                                    await Self.broadcastLog(
+                                        broadcaster: broadcaster,
+                                        appName: appName,
+                                        text: String(decoding: data, as: UTF8.self),
+                                        stream: "stdout",
+                                        severity: .info
+                                    )
+                                }
+                            }
+                            group.addTask {
+                                for try await buffer in stderrSequence {
+                                    let data = buffer.withUnsafeBytes { Data($0) }
+                                    var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
+                                    response.responseType = .stderrOutput(.with { $0.data = data })
+                                    try await writer.write(response)
+
+                                    await Self.broadcastLog(
+                                        broadcaster: broadcaster,
+                                        appName: appName,
+                                        text: String(decoding: data, as: UTF8.self),
+                                        stream: "stderr",
+                                        severity: .warn
+                                    )
+                                }
+                            }
+
+                            do {
+                                while let _ = try await group.next() {}
+                            } catch {
+                                group.cancelAll()
+                                await execution.teardown(
+                                    using: [.gracefulShutDown(allowedDurationToNextStep: .seconds(1))]
+                                )
+                                while let _ = try? await group.next() {}
+                                throw error
+                            }
                         }
                     }
-                    group.addTask {
-                        for try await data in stderrStream {
-                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            response.responseType = .stderrOutput(.with { $0.data = data })
-                            try await writer.write(response)
 
-                            await Self.broadcastLog(
-                                broadcaster: broadcaster,
-                                appName: appName,
-                                text: String(decoding: data, as: UTF8.self),
-                                stream: "stderr",
-                                severity: .warn
-                            )
-                        }
+                    switch outcome.terminationStatus {
+                    case .exited(0):
+                        break
+                    case .signaled(_) where Task.isCancelled:
+                        break
+                    case .exited(let code):
+                        throw RPCError(
+                            code: .internalError,
+                            message: "docker logs -f \(containerName) exited with status \(code)"
+                        )
+                    case .signaled(let signal):
+                        throw RPCError(
+                            code: .internalError,
+                            message: "docker logs -f \(containerName) terminated by signal \(signal)"
+                        )
                     }
-                    group.addTask { await runTask.value }
-                    try await group.waitForAll()
+                } catch is CancellationError {
+                    return Metadata()
+                } catch let error as SubprocessError {
+                    throw RPCError(
+                        code: .internalError,
+                        message: "docker logs -f \(containerName) failed to launch: \(error)"
+                    )
                 }
+
                 return Metadata()
             }
         }
@@ -1073,7 +1118,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 message: "Failed to launch process at \(binaryPath): \(error)"
             )
         }
-        try await self.markAppRunning(
+        try await self.markNativeAppRunning(
             id: appName,
             pid: process.processIdentifier,
             nativeProcess: process,
@@ -1176,7 +1221,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         if self.appsByID[appName]?.container != nil, self.dockerPresent {
             _ = try? await self.runDocker(
-                ["rm", "-f", Self.containerName(forAppID: appName)]
+                ["rm", "-f", Self.containerName(forAppID: appName)],
+                timeout: .seconds(5)
             )
             await self.removeApp(id: appName)
             logger.info("Docker container removed", metadata: ["app_name": "\(appName)"])
@@ -1191,6 +1237,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         request: ServerRequest<Wendy_Agent_Services_V1_ListContainersRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_ListContainersResponse> {
+        await self.reconcileAllDockerApps()
         let apps = self.currentAppInfos()
         return StreamingServerResponse { writer in
             for app in apps {

@@ -271,6 +271,164 @@ struct ContainerServiceTests {
         await service.stopAllApps()
     }
 
+    @Test("docker-backed start marks the app running with a nil pid")
+    func dockerStartMarksAppRunningWithNilPID() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerStartNilPID"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+        try await startApp(service: service, appID: appID)
+
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .running, pid: nil)
+        )
+        #expect(fakeDocker.containerIsRunning(appID: appID))
+
+        let persistedApps = try readPersistedApps(at: await service.infoFileURLForTesting())
+        let persistedApp = try #require(persistedApps.first { $0.info.id == appID })
+        #expect(persistedApp.info.status == .running)
+        #expect(persistedApp.info.pid == nil)
+    }
+
+    @Test("docker-backed start stream disconnect does not stop the detached container")
+    func dockerStartStreamDisconnectDoesNotStopTheDetachedContainer() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerDisconnect"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+
+        let response = try await startAppResponse(service: service, appID: appID)
+        let contents = try response.accepted.get()
+
+        do {
+            _ = try await contents.producer(
+                RPCWriter(wrapping: DisconnectAfterStartedWriter())
+            )
+            Issue.record("Expected the simulated client disconnect to abort the stream")
+        } catch is SimulatedClientDisconnect {
+            // Expected.
+        }
+
+        #expect(fakeDocker.containerIsRunning(appID: appID))
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .running, pid: nil)
+        )
+
+        try await stopApp(service: service, appID: appID)
+        #expect(!fakeDocker.containerExists(appID: appID))
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .stopped, pid: nil)
+        )
+    }
+
+    @Test("docker-backed delete removes the detached container without a stored runtime handle")
+    func dockerDeleteRemovesDetachedContainerWithoutAStoredRuntimeHandle() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerDelete"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+        try await startApp(service: service, appID: appID)
+
+        #expect(fakeDocker.containerIsRunning(appID: appID))
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .running, pid: nil)
+        )
+
+        try await deleteApp(service: service, appID: appID)
+
+        #expect(!fakeDocker.containerExists(appID: appID))
+        #expect(await service.appInfo(forAppID: appID) == nil)
+    }
+
+    @Test("listContainers reconciles disappeared docker apps as stopped")
+    func listContainersReconcilesDisappearedDockerAppsAsStopped() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.DockerReconcile"
+        let fakeDocker = try FakeDockerEnvironment()
+        defer { fakeDocker.cleanup() }
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            dockerExecutable: fakeDocker.scriptURL.path
+        )
+
+        await service.setDockerPresentForTesting(true)
+        try await registerLinuxContainerApp(
+            service: service,
+            appID: appID,
+            imageName: "localhost:5555/\(appID):latest"
+        )
+        try await startApp(service: service, appID: appID)
+
+        #expect(fakeDocker.containerIsRunning(appID: appID))
+        fakeDocker.removeContainer(appID: appID)
+
+        let containers = try await listContainers(service: service)
+        let container = try #require(containers.first { $0.appName == appID })
+
+        #expect(container.runningState == .stopped)
+        #expect(
+            await service.appInfo(forAppID: appID)
+                == WendyAppInfo(id: appID, kind: .container, status: .stopped, pid: nil)
+        )
+    }
+
     @Test("persistence stores runtime state and restores apps as stopped")
     func persistenceStoresRuntimeStateAndRestoresAppsAsStopped() async throws {
         let appsBase = try makeTempDir()
@@ -544,6 +702,240 @@ private struct TestError: Error, CustomStringConvertible {
     let description: String
 }
 
+private struct SimulatedClientDisconnect: Error {}
+
+private final class DisconnectAfterStartedWriter: RPCWriterProtocol, @unchecked Sendable {
+    func write(_ element: Wendy_Agent_Services_V1_RunContainerLayersResponse) async throws {
+        if case .started? = element.responseType {
+            throw SimulatedClientDisconnect()
+        }
+    }
+
+    func write(
+        contentsOf elements: some Sequence<Wendy_Agent_Services_V1_RunContainerLayersResponse>
+    ) async throws {
+        for element in elements {
+            try await self.write(element)
+        }
+    }
+}
+
+private struct FakeDockerEnvironment {
+    let directoryURL: URL
+    let scriptURL: URL
+
+    init() throws {
+        self.directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wendy-fake-docker-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: self.directoryURL,
+            withIntermediateDirectories: true
+        )
+
+        let stateDirectory = self.directoryURL.appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+
+        self.scriptURL = self.directoryURL.appendingPathComponent("docker")
+        try Self.writeExecutableScript(
+            to: self.scriptURL,
+            stateDirectory: stateDirectory.path
+        )
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: self.directoryURL)
+    }
+
+    func containerExists(appID: String) -> Bool {
+        FileManager.default.fileExists(atPath: self.containerDirectory(appID: appID).path)
+    }
+
+    func containerIsRunning(appID: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: self.containerDirectory(appID: appID)
+                .appendingPathComponent("running").path
+        )
+    }
+
+    func removeContainer(appID: String) {
+        try? FileManager.default.removeItem(at: self.containerDirectory(appID: appID))
+    }
+
+    private func containerDirectory(appID: String) -> URL {
+        self.directoryURL.appendingPathComponent(
+            "state/containers/\(self.containerName(appID: appID))",
+            isDirectory: true
+        )
+    }
+
+    private func containerName(appID: String) -> String {
+        "wendy-\(appID)"
+    }
+
+    private static func writeExecutableScript(to url: URL, stateDirectory: String) throws {
+        let script = """
+            #!/bin/sh
+            STATE_DIR="\(stateDirectory)"
+            mkdir -p "$STATE_DIR/containers" "$STATE_DIR/log-sessions" "$STATE_DIR/log-session-started"
+
+            container_dir() {
+              echo "$STATE_DIR/containers/$1"
+            }
+
+            cmd="$1"
+            shift
+
+            case "$cmd" in
+              version)
+                echo "27.0.1"
+                exit 0
+                ;;
+              pull)
+                exit 0
+                ;;
+              ps)
+                include_all=0
+                filter_name=""
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    -a)
+                      include_all=1
+                      ;;
+                    --filter)
+                      shift
+                      filter_name="$1"
+                      ;;
+                    --format)
+                      shift
+                      ;;
+                  esac
+                  shift
+                done
+
+                if [ "$filter_name" = "name=wendy-registry" ]; then
+                  if [ -f "$STATE_DIR/registry-running" ]; then
+                    echo "Up 1 second"
+                  fi
+                  exit 0
+                fi
+
+                name="${filter_name#name=^/}"
+                name="${name%?}"
+                name="${name#name=}"
+                dir="$(container_dir "$name")"
+                if [ "$include_all" -eq 1 ]; then
+                  [ -d "$dir" ] && echo "$name"
+                else
+                  [ -f "$dir/running" ] && echo "$name"
+                fi
+                exit 0
+                ;;
+              rm)
+                if [ "$1" = "-f" ]; then
+                  shift
+                fi
+                name="$1"
+                if [ "$name" = "wendy-registry" ]; then
+                  rm -f "$STATE_DIR/registry-running"
+                  exit 0
+                fi
+                rm -rf "$(container_dir "$name")"
+                rm -f "$STATE_DIR/log-sessions/$name"
+                exit 0
+                ;;
+              run)
+                name=""
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    --name)
+                      shift
+                      name="$1"
+                      ;;
+                    -p|--label|--network|-v|--restart)
+                      shift
+                      ;;
+                  esac
+                  shift
+                done
+
+                if [ "$name" = "wendy-registry" ]; then
+                  touch "$STATE_DIR/registry-running"
+                  echo "registry-id"
+                  exit 0
+                fi
+
+                dir="$(container_dir "$name")"
+                rm -rf "$dir"
+                mkdir -p "$dir"
+                touch "$dir/running"
+                printf 'hello from %s\n' "$name" > "$dir/log.txt"
+                echo "cid-$name"
+                exit 0
+                ;;
+              logs)
+                if [ "$1" = "-f" ]; then
+                  shift
+                fi
+                name="$1"
+                dir="$(container_dir "$name")"
+                if [ ! -d "$dir" ]; then
+                  echo "No such container: $name" 1>&2
+                  exit 1
+                fi
+                touch "$STATE_DIR/log-session-started/$name"
+                touch "$STATE_DIR/log-sessions/$name"
+                cleanup() {
+                  rm -f "$STATE_DIR/log-sessions/$name"
+                }
+                terminate() {
+                  cleanup
+                  exit 0
+                }
+                trap cleanup EXIT
+                trap terminate INT TERM
+                cat "$dir/log.txt"
+                while [ -f "$dir/running" ]; do
+                  sleep 0.1
+                done
+                exit 0
+                ;;
+              stop)
+                if [ "$1" = "--time" ]; then
+                  shift
+                  shift
+                fi
+                name="$1"
+                dir="$(container_dir "$name")"
+                if [ ! -d "$dir" ]; then
+                  echo "No such container: $name" 1>&2
+                  exit 1
+                fi
+                rm -rf "$dir"
+                echo "$name"
+                exit 0
+                ;;
+              kill)
+                name="$1"
+                dir="$(container_dir "$name")"
+                if [ ! -d "$dir" ]; then
+                  echo "No such container: $name" 1>&2
+                  exit 1
+                fi
+                rm -rf "$dir"
+                echo "$name"
+                exit 0
+                ;;
+            esac
+
+            echo "unsupported fake docker command: $cmd" 1>&2
+            exit 1
+            """
+
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+}
+
 private func registerFileSyncApp(
     service: ContainerService,
     appID: String,
@@ -560,17 +952,42 @@ private func registerFileSyncApp(
     )
 }
 
+private func registerLinuxContainerApp(
+    service: ContainerService,
+    appID: String,
+    imageName: String
+) async throws {
+    var request = Wendy_Agent_Services_V1_CreateContainerRequest()
+    request.appName = appID
+    request.imageName = imageName
+    request.appConfig = try JSONEncoder().encode(
+        WendyAppConfig(appId: appID, platform: "linux/arm64", entitlements: nil)
+    )
+
+    _ = try await service.createContainer(
+        request: ServerRequest(metadata: [:], message: request),
+        context: makeServerContext(method: "CreateContainer")
+    )
+}
+
+private func startAppResponse(
+    service: ContainerService,
+    appID: String
+) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
+    var request = Wendy_Agent_Services_V1_StartContainerRequest()
+    request.appName = appID
+
+    return try await service.startContainer(
+        request: ServerRequest(metadata: [:], message: request),
+        context: makeServerContext(method: "StartContainer")
+    )
+}
+
 private func startApp(
     service: ContainerService,
     appID: String
 ) async throws {
-    var request = Wendy_Agent_Services_V1_StartContainerRequest()
-    request.appName = appID
-
-    _ = try await service.startContainer(
-        request: ServerRequest(metadata: [:], message: request),
-        context: makeServerContext(method: "StartContainer")
-    )
+    _ = try await startAppResponse(service: service, appID: appID)
 }
 
 private func stopApp(

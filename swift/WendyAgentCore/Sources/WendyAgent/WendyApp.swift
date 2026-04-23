@@ -19,9 +19,6 @@ struct WendyApp: Codable {
 
     /// Native runtime handle; set while a darwin-native app is running.
     var process: Foundation.Process?
-    /// Attached docker-run runtime handle; set while a Linux container app
-    /// is running and streams are being forwarded to gRPC.
-    var dockerRunTask: Task<Void, Never>?
     var launchToken: UUID?
 
     enum CodingKeys: String, CodingKey {
