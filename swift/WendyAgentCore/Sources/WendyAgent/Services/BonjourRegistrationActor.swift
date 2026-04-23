@@ -1,20 +1,20 @@
 import Dispatch
 
-private enum BonjourDNSExecutionContext {
+private enum BonjourRegistrationExecutionContext {
     static let queue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
     static let executor = DispatchQueueSerialExecutor(queue: queue)
 }
 
 @globalActor
-actor BonjourDNSActor {
-    static let shared = BonjourDNSActor()
+actor BonjourRegistrationActor {
+    static let shared = BonjourRegistrationActor()
 
     nonisolated static var dispatchQueue: DispatchQueue {
-        BonjourDNSExecutionContext.queue
+        BonjourRegistrationExecutionContext.queue
     }
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        BonjourDNSExecutionContext.executor.asUnownedSerialExecutor()
+        BonjourRegistrationExecutionContext.executor.asUnownedSerialExecutor()
     }
 
     private init() {}

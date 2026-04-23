@@ -39,7 +39,7 @@ struct BonjourAdvertiser {
 
 actor BonjourRegistration {
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        BonjourDNSActor.shared.unownedExecutor
+        BonjourRegistrationActor.shared.unownedExecutor
     }
 
     private let port: Int
@@ -113,7 +113,7 @@ actor BonjourRegistration {
             return
         }
 
-        let queueError = DNSServiceSetDispatchQueue(serviceRef, BonjourDNSActor.dispatchQueue)
+        let queueError = DNSServiceSetDispatchQueue(serviceRef, BonjourRegistrationActor.dispatchQueue)
         guard queueError == kDNSServiceErr_NoError else {
             DNSServiceRefDeallocate(serviceRef)
             self.readyContinuation = nil
@@ -194,7 +194,7 @@ actor BonjourRegistration {
             .fromOpaque(context)
             .takeUnretainedValue()
 
-        Task { @BonjourDNSActor in
+        Task { @BonjourRegistrationActor in
             await registration.handleRegistrationCallback(flags: flags, errorCode: errorCode)
         }
     }
