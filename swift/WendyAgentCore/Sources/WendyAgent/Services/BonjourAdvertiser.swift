@@ -38,12 +38,12 @@ struct BonjourAdvertiser {
 }
 
 actor BonjourRegistration {
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        BonjourDNSActor.shared.unownedExecutor
+    }
+
     private let port: Int
     private let txtData: Data
-
-    /// DNS-SD delivers registration callbacks via Dispatch even though the
-    /// registration state itself is actor-isolated.
-    private static let callbackQueue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
 
     private var serviceRef: DNSServiceRef?
     private var readyContinuation: CheckedContinuation<Void, Error>?
@@ -113,7 +113,7 @@ actor BonjourRegistration {
             return
         }
 
-        let queueError = DNSServiceSetDispatchQueue(serviceRef, Self.callbackQueue)
+        let queueError = DNSServiceSetDispatchQueue(serviceRef, BonjourDNSActor.dispatchQueue)
         guard queueError == kDNSServiceErr_NoError else {
             DNSServiceRefDeallocate(serviceRef)
             self.readyContinuation = nil
@@ -194,7 +194,7 @@ actor BonjourRegistration {
             .fromOpaque(context)
             .takeUnretainedValue()
 
-        Task {
+        Task { @BonjourDNSActor in
             await registration.handleRegistrationCallback(flags: flags, errorCode: errorCode)
         }
     }
