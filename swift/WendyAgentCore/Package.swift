@@ -1,11 +1,6 @@
 // swift-tools-version: 6.2.0
 import PackageDescription
 
-let strictConcurrencySettings: [SwiftSetting] = [
-    .enableUpcomingFeature("InferIsolatedConformances"),
-    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
-]
-
 let package = Package(
     name: "WendyAgentCore",
     platforms: [
@@ -31,8 +26,7 @@ let package = Package(
                 .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
             ],
-            path: "Tests/WendyAgentTests",
-            swiftSettings: strictConcurrencySettings
+            path: "Tests/WendyAgentTests"
         ),
         .target(
             name: "WendyAgentCore",
@@ -45,8 +39,7 @@ let package = Package(
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
             ],
-            path: "Sources/WendyAgent",
-            swiftSettings: strictConcurrencySettings
+            path: "Sources/WendyAgent"
         ),
         .target(
             name: "WendyAgentGRPC",
@@ -54,25 +47,21 @@ let package = Package(
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
                 .target(name: "OpenTelemetryGRPC"),
-            ],
-            swiftSettings: strictConcurrencySettings
+            ]
         ),
         .target(
             name: "WendyCloudGRPC",
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
-            ],
-            swiftSettings: strictConcurrencySettings
+            ]
         ),
         .target(
             name: "OpenTelemetryGRPC",
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
-            ],
-            swiftSettings: strictConcurrencySettings
+            ]
         ),
-    ],
-    swiftLanguageModes: [.v6]
+    ]
 )
