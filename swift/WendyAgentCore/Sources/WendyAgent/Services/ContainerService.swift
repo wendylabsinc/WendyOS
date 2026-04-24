@@ -20,9 +20,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private var isStopping = false
     private let sandboxProfilePath: String?
 
-    /// Docker backend for Linux containers. Nil when Docker is not available.
+    /// Docker backend for Linux containers. Nil while Linux containers remain unsupported.
     private let dockerBackend: DockerContainerBackend?
     private let dockerUnavailableMessage: String?
+    private let linuxContainersUnsupportedMessage =
+        "Linux containers aren't supported on Macs yet. Support is planned for a future release."
 
     init(
         broadcaster: TelemetryBroadcaster,
@@ -406,30 +408,10 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let isLinux = appConfig?.platform?.hasPrefix("linux") == true
 
         if isLinux {
-            // Docker backend path for Linux containers.
-            guard let dockerBackend else {
-                throw RPCError(
-                    code: .failedPrecondition,
-                    message: self.dockerUnavailableMessage
-                        ?? "Docker is required for Linux containers but was not found. Install Docker Desktop, Colima, or OrbStack."
-                )
-            }
-
-            // Pull the image from the local registry into Docker.
-            try await dockerBackend.pullImage(imageName)
-            logger.info(
-                "Linux container image pulled via Docker",
-                metadata: ["app_name": "\(appName)"]
+            throw RPCError(
+                code: .failedPrecondition,
+                message: self.dockerUnavailableMessage ?? self.linuxContainersUnsupportedMessage
             )
-            try await self.registerApp(
-                id: appName,
-                kind: .container,
-                container: WendyApp.ContainerMetadata(
-                    imageName: imageName,
-                    appConfig: appConfig
-                )
-            )
-            return ServerResponse(message: Wendy_Agent_Services_V1_CreateContainerResponse())
         }
 
         // Native darwin path (existing behavior).
@@ -552,84 +534,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             )
         }
 
-        // Docker backend path for Linux containers.
-        if let containerMetadata = app.container, let dockerBackend {
-            let appConfig = containerMetadata.appConfig
-            let deviceImage = containerMetadata.imageName
-
-            let launchToken = UUID()
-            self.prepareAppForLaunch(id: appName, launchToken: launchToken)
-
-            let process: Foundation.Process
-            let stdoutPipe: Pipe
-            let stderrPipe: Pipe
-            do {
-                (process, stdoutPipe, stderrPipe) = try await dockerBackend.createAndStart(
-                    appName: appName,
-                    imageName: deviceImage,
-                    appConfig: appConfig,
-                    terminationHandler: self.makeTerminationHandler(
-                        forAppID: appName,
-                        launchToken: launchToken
-                    )
-                )
-            } catch {
-                self.cancelAppLaunch(id: appName, launchToken: launchToken)
-                throw error
-            }
-
-            try await self.markAppRunning(id: appName, process: process, launchToken: launchToken)
-            logger.info(
-                "Docker container started",
-                metadata: ["app_name": "\(appName)", "pid": "\(process.processIdentifier)"]
+        if app.container != nil {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: self.dockerUnavailableMessage ?? self.linuxContainersUnsupportedMessage
             )
-
-            let broadcaster = self.broadcaster
-            return StreamingServerResponse { writer in
-                var started = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                started.responseType = .started(
-                    Wendy_Agent_Services_V1_RunContainerLayersResponse.Started()
-                )
-                try await writer.write(started)
-
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        let handle = stdoutPipe.fileHandleForReading
-                        for try await data in handle.bytes(for: appName) {
-                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            response.responseType = .stdoutOutput(.with { $0.data = data })
-                            try await writer.write(response)
-
-                            await Self.broadcastLog(
-                                broadcaster: broadcaster,
-                                appName: appName,
-                                text: String(decoding: data, as: UTF8.self),
-                                stream: "stdout",
-                                severity: .info
-                            )
-                        }
-                    }
-                    group.addTask {
-                        let handle = stderrPipe.fileHandleForReading
-                        for try await data in handle.bytes(for: appName) {
-                            var response = Wendy_Agent_Services_V1_RunContainerLayersResponse()
-                            response.responseType = .stderrOutput(.with { $0.data = data })
-                            try await writer.write(response)
-
-                            await Self.broadcastLog(
-                                broadcaster: broadcaster,
-                                appName: appName,
-                                text: String(decoding: data, as: UTF8.self),
-                                stream: "stderr",
-                                severity: .warn
-                            )
-                        }
-                    }
-                    group.addTask { process.waitUntilExit() }
-                    try await group.waitForAll()
-                }
-                return Metadata()
-            }
         }
 
         // Native darwin path.

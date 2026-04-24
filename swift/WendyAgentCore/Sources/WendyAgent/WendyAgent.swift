@@ -156,28 +156,18 @@ public final class WendyAgent {
     )
     private var appsObservationTasks:
         [WendyObservationRegistry<[WendyAppInfo]>.ObservationID: Task<Void, Never>] = [:]
+    private static let linuxContainersUnsupportedMessage =
+        "Linux containers aren't supported on Macs yet. Support is planned for a future release."
 
     private func prepareDockerIfNeeded() async -> DockerCLI.AvailabilityCheckResult {
-        let docker = DockerCLI()
-        let availability = await docker.checkAvailability()
-        if availability.isAvailable {
-            do {
-                try await docker.ensureRegistry()
-            } catch {
-                self.logger.warning(
-                    "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
-                )
-            }
-        } else if let failureMessage = availability.failureMessage {
-            self.logger.warning(
-                "Docker not available, Linux container support disabled",
-                metadata: ["reason": "\(failureMessage)"]
-            )
-        } else {
-            self.logger.info("Docker not available, Linux container support disabled")
-        }
-
-        return availability
+        self.logger.info(
+            "Linux container support disabled on macOS",
+            metadata: ["reason": "\(Self.linuxContainersUnsupportedMessage)"]
+        )
+        return DockerCLI.AvailabilityCheckResult(
+            isAvailable: false,
+            failureMessage: Self.linuxContainersUnsupportedMessage
+        )
     }
 
     private func startMainServer(
