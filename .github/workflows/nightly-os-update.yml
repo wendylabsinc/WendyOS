@@ -5,6 +5,13 @@ on:
     - cron: '0 2 * * *'  # 02:00 UTC daily
   workflow_dispatch: {}
 
+# All wendy CLI invocations in this workflow run via "ssh localhost" rather than
+# directly. The self-hosted runner runs as a macOS LaunchAgent which does not
+# hold the Local Network TCC permission that macOS requires for mDNS (.local)
+# resolution and link-local connections. SSHing to localhost spawns a shell
+# under the logged-in user session, which does have that permission.
+# See integration-tests.yml for the same pattern with more context.
+
 jobs:
   discover:
     name: Discover devices
@@ -29,12 +36,15 @@ jobs:
         run: make build-cli
 
       - name: Clear OS image cache
-        run: ./bin/wendy os cache clear
+        run: |
+          ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy os cache clear"
 
       - name: Scan for WendyOS devices
         id: scan
         run: |
-          RESULT=$(./bin/wendy discover --json --type lan --timeout 10s)
+          RESULT=$(ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy discover --json --type lan --timeout 10s")
           echo "$RESULT" | jq '[.lanDevices[] | select(.isWendyDevice) | {name: .displayName, address: (.hostname // .ipAddress)}]'
 
           MATRIX=$(echo "$RESULT" | jq -c \
@@ -63,6 +73,8 @@ jobs:
     defaults:
       run:
         working-directory: go
+    env:
+      DEVICE_HOSTNAME: ${{ matrix.hostname }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,18 +89,24 @@ jobs:
 
       - name: Current version
         run: |
-          ./bin/wendy device version --json --device ${{ matrix.hostname }} \
+          ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
             | jq '{osVersion, agentVersion: .version, deviceType}' || true
 
       - name: Flash OS update
-        run: ./bin/wendy os update --device ${{ matrix.hostname }}
         # wendy os update blocks until the device reboots and comes back online,
         # with a 5-minute internal timeout. The step fails if it doesn't recover.
+        run: |
+          ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy os update --device '$DEVICE_HOSTNAME'"
 
       - name: Confirm device online
         run: |
-          ./bin/wendy device version --json --device ${{ matrix.hostname }} \
+          ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
             | jq '{osVersion, agentVersion: .version}'
 
       - name: Template tests
-        run: scripts/test-templates.sh -w ./bin/wendy -h ${{ matrix.hostname }}
+        run: |
+          ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && scripts/test-templates.sh -w ./bin/wendy -h '$DEVICE_HOSTNAME'"

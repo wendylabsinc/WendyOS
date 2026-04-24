@@ -125,9 +125,12 @@ jobs:
 
       - name: Run integration tests
         run: |
-          # Run tests via SSH to localhost to bypass macOS Local Network
-          # privacy restrictions that block Go binaries launched by the
-          # LaunchAgent-based GitHub Actions runner.
+          # All wendy CLI calls below run via SSH to localhost rather than
+          # directly. The self-hosted runner runs as a macOS LaunchAgent which
+          # does not hold the Local Network TCC permission that macOS requires
+          # for mDNS (.local) resolution and link-local connections. An SSH
+          # session to localhost runs under the logged-in user, which has that
+          # permission. See nightly-os-update.yml for the same pattern.
           WORKDIR="$(pwd)"
           SSH_ENV="export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}'"
           SSH="ssh -o StrictHostKeyChecking=no localhost"
