@@ -159,7 +159,7 @@ func TestRunMacOSSwiftPMWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	if err := os.WriteFile(swiftlyPath, []byte("#!/bin/sh\necho '{\"products\":[{\"name\":\"MySwiftApp\",\"type\":{\"executable\":null}}]}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile swiftly: %v", err)
 	}
-	if err := os.WriteFile(swiftPath, []byte("#!/bin/sh\nif [ \"$1\" = \"build\" ]; then\n  mkdir -p \"$PWD/.build/debug\"\n  printf '#!/bin/sh\\n' > \"$PWD/.build/debug/MySwiftApp\"\n  chmod +x \"$PWD/.build/debug/MySwiftApp\"\n  exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(swiftPath, []byte("#!/bin/sh\nif [ \"$1\" = \"build\" ] && [ \"$2\" = \"--show-bin-path\" ]; then\n  echo \"$PWD/.build/debug\"\n  exit 0\nfi\nif [ \"$1\" = \"build\" ]; then\n  mkdir -p \"$PWD/.build/debug/MySwiftApp.bundle\" \"$PWD/.build/debug/MySwiftApp.resources\"\n  printf '#!/bin/sh\\n' > \"$PWD/.build/debug/MySwiftApp\"\n  printf '<plist/>' > \"$PWD/.build/debug/MySwiftApp.bundle/Info.plist\"\n  printf '{}' > \"$PWD/.build/debug/MySwiftApp.resources/config.json\"\n  chmod +x \"$PWD/.build/debug/MySwiftApp\"\n  exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile swift: %v", err)
 	}
 
@@ -200,6 +200,60 @@ func TestRunMacOSSwiftPMWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	}
 	if len(got.UserArgs) != 2 || got.UserArgs[0] != "--port" || got.UserArgs[1] != "8080" {
 		t.Fatalf("UserArgs = %v, want %v", got.UserArgs, appCfg.Run.Args)
+	}
+
+	acked := make(map[string]bool)
+	for _, path := range state.ackedPaths {
+		acked[path] = true
+	}
+	if !acked["MySwiftApp"] {
+		t.Fatalf("missing ack for MySwiftApp; got %v", state.ackedPaths)
+	}
+	if !acked["MySwiftApp.bundle/Info.plist"] {
+		t.Fatalf("missing ack for MySwiftApp.bundle/Info.plist; got %v", state.ackedPaths)
+	}
+	if !acked["MySwiftApp.resources/config.json"] {
+		t.Fatalf("missing ack for MySwiftApp.resources/config.json; got %v", state.ackedPaths)
+	}
+}
+
+func TestAssembleSwiftPMSyncEntries_IncludesSiblingResourceDirectories(t *testing.T) {
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "MySwiftApp")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile binary: %v", err)
+	}
+
+	bundleDir := filepath.Join(binDir, "MySwiftApp.bundle")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll bundle: %v", err)
+	}
+
+	resourcesDir := filepath.Join(binDir, "MySwiftApp.resources")
+	if err := os.MkdirAll(resourcesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll resources: %v", err)
+	}
+
+	cwd := t.TempDir()
+	cfg := &appconfig.AppConfig{AppID: "sh.wendy.MySwiftApp"}
+
+	entries, err := assembleSwiftPMSyncEntries(binaryPath, cwd, cfg)
+	if err != nil {
+		t.Fatalf("assembleSwiftPMSyncEntries: %v", err)
+	}
+
+	remotes := make(map[string]bool)
+	for _, entry := range entries {
+		remotes[entry.remotePath] = true
+	}
+	if !remotes["MySwiftApp"] {
+		t.Fatalf("expected binary entry with remotePath MySwiftApp")
+	}
+	if !remotes["MySwiftApp.bundle"] {
+		t.Fatalf("expected bundle entry with remotePath MySwiftApp.bundle")
+	}
+	if !remotes["MySwiftApp.resources"] {
+		t.Fatalf("expected resources entry with remotePath MySwiftApp.resources")
 	}
 }
 
