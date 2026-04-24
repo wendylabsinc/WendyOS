@@ -2,7 +2,10 @@ name: Swift Tests
 
 on:
   pull_request:
-    branches: [main]
+    paths:
+      - 'swift/**'
+      - 'Proto/**'
+      - '.github/workflows/**'
 
 concurrency:
   group: swift-tests-${{ github.event.pull_request.number }}
@@ -16,35 +19,9 @@ env:
   XCODE_VERSION: '26.3'
 
 jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    outputs:
-      swift: ${{ steps.filter.outputs.swift }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect Swift/Proto/workflow changes
-        id: filter
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CHANGED_FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
-
-          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(swift/|Proto/|\.github/workflows/)'; then
-            echo "swift=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "swift=false" >> "$GITHUB_OUTPUT"
-          fi
-
   test:
     name: Run WendyAgentCore Tests
     runs-on: macos-15
-    needs: [changes]
-    if: needs.changes.outputs.swift == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -81,8 +58,6 @@ jobs:
   build:
     name: Build WendyAgentMac app
     runs-on: macos-15
-    needs: [changes]
-    if: needs.changes.outputs.swift == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -154,8 +129,6 @@ jobs:
     name: Lint Swift Sources
     runs-on: ubuntu-latest
     container: swift:6.2.3
-    needs: [changes]
-    if: needs.changes.outputs.swift == 'true'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
