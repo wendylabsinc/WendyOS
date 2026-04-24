@@ -16,7 +16,7 @@ jobs:
       - family=c7i-flex.8xlarge
       - spot=false
       - volume=400gb:gp3
-      - run-id=${{ github.run_id }}
+      - run-id=${{ github.run_id }}-${{ matrix.device }}
     strategy:
       fail-fast: false
       matrix:
