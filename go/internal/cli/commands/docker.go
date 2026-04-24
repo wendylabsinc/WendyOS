@@ -195,6 +195,34 @@ func generatePythonDockerfile(dir string) (string, error) {
 	return dockerfilePath, nil
 }
 
+func buildSwiftExecutable(ctx context.Context, dir, product, sdk, configuration string) (string, error) {
+	buildArgs := []string{"build"}
+	showBinArgs := []string{"build"}
+	if configuration != "" {
+		buildArgs = append(buildArgs, "-c", configuration)
+		showBinArgs = append(showBinArgs, "-c", configuration)
+	}
+	buildArgs = append(buildArgs, "--swift-sdk="+sdk, "--product", product)
+	showBinArgs = append(showBinArgs, "--swift-sdk="+sdk, "--show-bin-path")
+
+	buildCmd := swifttoolchain.SwiftCommandContext(ctx, buildArgs...)
+	buildCmd.Dir = dir
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return "", fmt.Errorf("swift build: %w", err)
+	}
+
+	showBinCmd := swifttoolchain.SwiftCommandContext(ctx, showBinArgs...)
+	showBinCmd.Dir = dir
+	out, err := showBinCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("swift build --show-bin-path: %w\n%s", err, string(out))
+	}
+
+	return filepath.Join(strings.TrimSpace(string(out)), product), nil
+}
+
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
@@ -209,6 +237,15 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
+	cliLogln("Cross-compiling %s for linux/%s...", product, architecture)
+	binaryPath, err := buildSwiftExecutable(ctx, dir, product, sdk, "")
+	if err != nil {
+		return err
+	}
+	if err := validateELFFileArchitecture(binaryPath, architecture); err != nil {
+		return fmt.Errorf("validating Swift build output: %w", err)
+	}
+
 	swiftArgs := []string{
 		"package",
 		"--swift-sdk=" + sdk,
@@ -217,8 +254,11 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--from=swift:" + swifttoolchain.DefaultVersion + "-slim",
 		"--product=" + product,
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
-		"--architecture=" + architecture,
 	}
+
+	// Do not force --architecture here. The container plugin can detect the
+	// executable's actual ELF architecture, which avoids publishing an image
+	// whose metadata disagrees with the binary on disk.
 
 	// Use insecure HTTP when the connection is not mTLS; the registry only
 	// speaks TLS when the device is provisioned and the CLI connected via mTLS.
@@ -1169,25 +1209,13 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainSt
 	}
 
 	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
-	buildCmd := swifttoolchain.SwiftCommandContext(ctx,
-		"build", "-c", "release", "--swift-sdk="+sdk, "--product", product)
-	buildCmd.Dir = dir
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		return "", fmt.Errorf("swift build: %w", err)
-	}
-
-	// Determine the binary output path.
-	showBinCmd := swifttoolchain.SwiftCommandContext(ctx,
-		"build", "-c", "release", "--swift-sdk="+sdk, "--show-bin-path")
-	showBinCmd.Dir = dir
-	out, err := showBinCmd.CombinedOutput()
+	srcBin, err := buildSwiftExecutable(ctx, dir, product, sdk, "release")
 	if err != nil {
-		return "", fmt.Errorf("swift build --show-bin-path: %w\n%s", err, string(out))
+		return "", err
 	}
-	binDir := strings.TrimSpace(string(out))
-	srcBin := filepath.Join(binDir, product)
+	if err := validateELFFileArchitecture(srcBin, arch); err != nil {
+		return "", fmt.Errorf("validating Swift build output: %w", err)
+	}
 
 	// Create a temp directory with the binary and a minimal Dockerfile.
 	tmpDir, err := os.MkdirTemp("", "wendy-swift-docker-*")

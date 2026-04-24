@@ -582,7 +582,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
 // pushes the image directly to the device's registry. Then it creates and
 // starts the container on the agent.
-func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, targetArchitecture string, opts runOptions) error {
 	// Verify auth certs are available if the device's registry requires mTLS.
 	if err := requireRegistryAuth(ctx, conn); err != nil {
 		return err
@@ -594,9 +594,11 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	agentOS := versionResp.GetOs()
-	architecture := versionResp.GetCpuArchitecture()
-	if architecture == "" {
-		architecture = "arm64"
+	if targetArchitecture == "" {
+		targetArchitecture = versionResp.GetCpuArchitecture()
+		if targetArchitecture == "" {
+			targetArchitecture = "arm64"
+		}
 	}
 
 	regPort := registryPort(agentOS)
@@ -619,8 +621,8 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	}
 	defer proxyCleanup()
 
-	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
+	cliLogln("Building Swift container image for %s (%s)...", product, targetArchitecture)
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, targetArchitecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -894,6 +896,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	targetArchitecture := strings.TrimPrefix(platform, platformOS(platform)+"/")
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {
@@ -911,13 +914,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			if platformOS(platform) == "darwin" {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
-			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, targetArchitecture, opts)
 		}
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			if platformOS(platform) == "darwin" {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
-			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, targetArchitecture, opts)
 		}
 	}
 

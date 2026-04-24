@@ -262,3 +262,45 @@ func TestCheckELFArchitecture(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectELFArchitecture(t *testing.T) {
+	arch, isELF := detectELFArchitecture(makeELFHeader(62))
+	if !isELF {
+		t.Fatal("expected ELF to be detected")
+	}
+	if arch != "amd64" {
+		t.Fatalf("arch = %q, want amd64", arch)
+	}
+
+	arch, isELF = detectELFArchitecture([]byte("#!/bin/sh\n"))
+	if isELF {
+		t.Fatal("expected script not to be detected as ELF")
+	}
+	if arch != "" {
+		t.Fatalf("arch = %q, want empty", arch)
+	}
+}
+
+func TestValidateELFFileArchitecture(t *testing.T) {
+	dir := t.TempDir()
+	amd64Path := filepath.Join(dir, "amd64-bin")
+	if err := os.WriteFile(amd64Path, makeELFHeader(62), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := validateELFFileArchitecture(amd64Path, "amd64"); err != nil {
+		t.Fatalf("validateELFFileArchitecture() unexpected error: %v", err)
+	}
+
+	if err := validateELFFileArchitecture(amd64Path, "arm64"); err == nil {
+		t.Fatal("expected architecture mismatch error, got nil")
+	}
+
+	scriptPath := filepath.Join(dir, "script")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := validateELFFileArchitecture(scriptPath, "amd64"); err == nil {
+		t.Fatal("expected non-ELF validation error, got nil")
+	}
+}

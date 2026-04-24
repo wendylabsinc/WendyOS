@@ -1295,43 +1295,10 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 		return fmt.Errorf("device reports unsupported architecture %q; only amd64 and arm64 are supported", deviceArch)
 	}
 
-	// ELF magic + header fields up to e_machine occupy 20 bytes.
-	if len(data) < 20 {
-		return nil
+	binaryArch, isELF := detectELFArchitecture(data)
+	if !isELF || binaryArch == "" {
+		return nil // not an ELF binary or not one we recognise — skip check
 	}
-	if data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' {
-		return nil // not an ELF binary — skip check
-	}
-
-	// Respect EI_DATA (byte 5) when reading the 2-byte e_machine field at offset 18.
-	const (
-		elfDataLittle = 1 // ELFDATA2LSB
-		elfDataBig    = 2 // ELFDATA2MSB
-
-		emX86_64  = 62  // EM_X86_64  → amd64
-		emAArch64 = 183 // EM_AARCH64 → arm64
-	)
-
-	var machine uint16
-	switch data[5] {
-	case elfDataLittle:
-		machine = uint16(data[18]) | uint16(data[19])<<8
-	case elfDataBig:
-		machine = uint16(data[18])<<8 | uint16(data[19])
-	default:
-		return nil // unknown ELF endianness — skip check
-	}
-
-	var binaryArch string
-	switch machine {
-	case emX86_64:
-		binaryArch = "amd64"
-	case emAArch64:
-		binaryArch = "arm64"
-	default:
-		return nil // unrecognised ELF machine type — let the device decide
-	}
-
 	if binaryArch != deviceArch {
 		return fmt.Errorf("binary is %s but device is %s; provide the correct binary with --binary", binaryArch, deviceArch)
 	}

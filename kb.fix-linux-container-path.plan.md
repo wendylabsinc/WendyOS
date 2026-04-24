@@ -190,6 +190,13 @@ agent is talking to.
    - `docker pull ...`
    - `docker run ...`
 4. Added Swift unit tests covering the rewrite behavior.
+5. Added CLI-side ELF architecture validation for Swift Linux builds before
+   packaging/publishing them.
+6. Stopped forcing `--architecture` into `swift package build-container-image`;
+   the container plugin now gets to derive image architecture from the actual
+   built executable after CLI validation passes.
+7. Made the Swift container path use the resolved target platform architecture
+   instead of always re-deriving architecture directly from `GetAgentVersion`.
 
 ### Remaining verification needed on the real mac-agent host
 
@@ -214,6 +221,44 @@ Follow-up fix:
 - when `DockerCLI` launches subprocesses, augment `PATH` with the resolved
   Docker executable directory (and fallback Docker binary directories) so
   helper binaries like `docker-credential-desktop` are discoverable too
+
+### Latest finding: the Swift container path was masking ELF/image architecture mismatches
+
+The current runtime failure strongly suggests the CLI/container packaging path
+was creating an image whose declared/base architecture did not necessarily match
+the executable that Swift actually built.
+
+The key reason this could happen in our code:
+
+- the CLI always passed `--architecture=<target>` to
+  `swift package build-container-image`
+- but `swift-container-plugin` already knows how to inspect the built ELF and
+  derive the right container architecture from the executable itself
+- by forcing `--architecture`, the CLI could override that ELF-based detection
+  and publish an `arm64` image even when the built executable on disk was
+  actually `x86_64`
+
+That exactly fits the observed symptom cluster:
+
+- `.build/x86_64-unknown-linux-gnu/.../HelloWorld` exists
+- the agent/runtime sees `qemu-x86_64`
+- the container then fails looking for the x86_64 dynamic loader inside what
+  appears to be an arm64-oriented image/base selection
+
+Current fix direction now implemented in the CLI:
+
+1. explicitly build the Swift Linux executable first
+2. inspect the produced ELF header before packaging/publishing
+3. fail early if the built binary architecture does not match the requested
+   target architecture
+4. stop forcing the plugin's `--architecture` flag so the published image
+   cannot silently disagree with the executable's actual ELF architecture
+
+This should turn the confusing runtime failure into either:
+
+- a correct image when Swift really builds the requested target
+- or a precise build-time error when Swift/SDK selection still yields the wrong
+  ELF
 
 ## First fixes to make in this branch
 
