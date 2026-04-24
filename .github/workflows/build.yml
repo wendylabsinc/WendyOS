@@ -53,7 +53,7 @@ jobs:
       #     volume_size: 50
 
       - name: Fix workspace permissions
-        run: sudo chown "$(id -u):$(id -g)" "${{ github.workspace }}"
+        run: sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,19 +62,23 @@ jobs:
 
       - name: Bootstrap build environment
         working-directory: ${{ github.workspace }}
-        run: BOARD=${{ matrix.board }} ./wendyos/bootstrap.sh
+        env:
+          BOARD: ${{ matrix.board }}
+        run: BOARD=$BOARD ./wendyos/bootstrap.sh
 
       - name: Fix workspace permissions for Docker
-        run: chmod -R a+rwX ${{ github.workspace }} 2>/dev/null || true
+        run: chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
 
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
-        run: make build MACHINE=${{ matrix.machine }}
+        env:
+          MACHINE: ${{ matrix.machine }}
+        run: make build MACHINE=$MACHINE
 
       - name: Fix deploy directory permissions
-        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/build/tmp/deploy" 2>/dev/null || true
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
 
-      # --- Publish nightly (main branch and manual dispatch only) ---
+      # --- Upload image and update device manifest (master manifest is handled by the publish job) ---
 
       - name: Authenticate to Google Cloud
         if: github.event_name != 'pull_request'
@@ -117,7 +121,7 @@ jobs:
           cd "$FLASH_WORKDIR"
           sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img"
 
-      - name: Publish nightly to GCS
+      - name: Upload image and update device manifest
         if: github.event_name != 'pull_request'
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
@@ -139,6 +143,7 @@ jobs:
             --version "${VERSION}-nightly"
             --file "$IMAGE_FILE"
             --nightly
+            --skip-master-manifest
             --access-token "$TOKEN"
           )
 
@@ -155,3 +160,58 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
           go run upload_and_manifest.go "${ARGS[@]}"
+
+  publish:
+    name: Update master manifest
+    needs: build
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    permissions:
+      contents: read
+      id-token: write
+    runs-on:
+      - runs-on
+      - family=c7i-flex.8xlarge
+      - spot=false
+      - run-id=${{ github.run_id }}-publish
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: wendyos
+
+      - name: Checkout publisher
+        uses: actions/checkout@v4
+        with:
+          repository: wendylabsinc/wendy-os-publisher
+          path: wendy-os-publisher
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: wendy-os-publisher/go.mod
+
+      - name: Update master manifest
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
+        run: |
+          VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TOKEN=$(gcloud auth print-access-token)
+
+          cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
+          for DEVICE in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano; do
+            go run upload_and_manifest.go \
+              --device "$DEVICE" \
+              --version "${VERSION}-nightly" \
+              --nightly \
+              --master-manifest-only \
+              --access-token "$TOKEN"
+          done
