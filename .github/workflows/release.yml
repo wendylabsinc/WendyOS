@@ -21,10 +21,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - device: rpi3
+            board: rpi3-sd
+            machine: raspberrypi3-64-wendyos
+            publisher_device: raspberry-pi-3
+          - device: rpi4
+            board: rpi4-sd
+            machine: raspberrypi4-64-wendyos
+            publisher_device: raspberry-pi-4
           - device: rpi5
+            board: rpi5-sd
             machine: raspberrypi5-wendyos
             publisher_device: raspberry-pi-5
           - device: jetson
+            board: jetson-orin-nano-nvme
             machine: jetson-orin-nano-devkit-nvme-wendyos
             publisher_device: jetson-orin-nano
 
@@ -46,7 +56,7 @@ jobs:
 
       - name: Bootstrap build environment
         working-directory: ${{ github.workspace }}
-        run: MACHINE=${{ matrix.device }} ./wendyos/bootstrap.sh
+        run: BOARD=${{ matrix.board }} ./wendyos/bootstrap.sh
 
       - name: Fix workspace permissions for Docker
         run: chmod -R a+rwX ${{ github.workspace }} 2>/dev/null || true
