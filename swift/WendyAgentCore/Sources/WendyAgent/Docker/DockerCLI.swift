@@ -169,7 +169,7 @@ struct DockerCLI: Sendable {
         let process = Foundation.Process()
         process.executableURL = URL(fileURLWithPath: resolvedExecutable)
         process.arguments = allArgs
-        process.environment = self.environment
+        process.environment = self.makeProcessEnvironment(resolvedExecutable: resolvedExecutable)
         process.terminationHandler = terminationHandler
 
         let stdoutPipe = Pipe()
@@ -236,7 +236,7 @@ struct DockerCLI: Sendable {
         let process = Foundation.Process()
         process.executableURL = URL(fileURLWithPath: resolvedExecutable)
         process.arguments = arguments
-        process.environment = self.environment
+        process.environment = self.makeProcessEnvironment(resolvedExecutable: resolvedExecutable)
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -344,6 +344,10 @@ struct DockerCLI: Sendable {
         return (resolution.resolvedPath, resolution.searchedPaths)
     }
 
+    func processEnvironmentForTesting(resolvedExecutable: String) -> [String: String] {
+        self.makeProcessEnvironment(resolvedExecutable: resolvedExecutable)
+    }
+
     private func resolveExecutable() -> ExecutableResolution {
         if self.executable.contains("/") {
             let resolvedPath = FileManager.default.isExecutableFile(atPath: self.executable)
@@ -379,6 +383,33 @@ struct DockerCLI: Sendable {
             uniqueCandidates.append(candidate)
         }
         return uniqueCandidates
+    }
+
+    private func makeProcessEnvironment(resolvedExecutable: String) -> [String: String] {
+        var environment = self.environment
+
+        let existingPathEntries = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        let helperDirectories = [
+            URL(fileURLWithPath: resolvedExecutable).deletingLastPathComponent().path
+        ] + Self.fallbackExecutablePaths(for: self.executable).map {
+            URL(fileURLWithPath: $0).deletingLastPathComponent().path
+        }
+
+        var seen = Set<String>()
+        var mergedPathEntries: [String] = []
+        for pathEntry in helperDirectories + existingPathEntries where seen.insert(pathEntry).inserted {
+            mergedPathEntries.append(pathEntry)
+        }
+
+        if !mergedPathEntries.isEmpty {
+            environment["PATH"] = mergedPathEntries.joined(separator: ":")
+        }
+
+        return environment
     }
 
     private static func fallbackExecutablePaths(for executable: String) -> [String] {

@@ -197,6 +197,24 @@ This harness still cannot talk to the local Docker daemon (`/var/run/docker.sock
 missing here), so the final end-to-end confirmation still needs to be done in
 WendyAgentMac itself with the normal repro command.
 
+### New finding from live repro
+
+The first post-fix repro exposed the next real blocker cleanly:
+
+```text
+error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH
+```
+
+That means the mac app is successfully finding `docker` itself, but the
+subprocess environment still does not provide a `PATH` that lets the Docker CLI
+find its companion credential helper binaries inside Docker.app.
+
+Follow-up fix:
+
+- when `DockerCLI` launches subprocesses, augment `PATH` with the resolved
+  Docker executable directory (and fallback Docker binary directories) so
+  helper binaries like `docker-credential-desktop` are discoverable too
+
 ## First fixes to make in this branch
 
 ### 1. Surface the real Docker pull failure

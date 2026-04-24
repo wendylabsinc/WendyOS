@@ -75,6 +75,23 @@ struct DockerCLITests {
         )
     }
 
+    @Test("docker commands inherit a PATH that includes Docker helper binaries")
+    func dockerCommandsInheritAPathThatIncludesDockerHelperBinaries() {
+        let docker = DockerCLI(
+            executable: "/Applications/Docker.app/Contents/Resources/bin/docker",
+            environment: ["PATH": "/usr/bin:/bin"]
+        )
+
+        let environment = docker.processEnvironmentForTesting(
+            resolvedExecutable: "/Applications/Docker.app/Contents/Resources/bin/docker"
+        )
+        let path = environment["PATH"] ?? ""
+
+        #expect(path.contains("/Applications/Docker.app/Contents/Resources/bin"))
+        #expect(path.contains("/usr/bin"))
+        #expect(path.contains("/bin"))
+    }
+
     @Test("DockerContainerBackend rewrites loopback registry hosts to 127.0.0.1")
     func dockerBackendRewritesLoopbackRegistryHosts() {
         #expect(
