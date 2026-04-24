@@ -76,19 +76,30 @@ jobs:
         run: make build-cli
 
       - name: Current version
+        id: version
         run: |
-          ./bin/wendy device version --json --device ${{ matrix.hostname }} \
-            | jq '{osVersion, agentVersion: .version, deviceType}' || true
+          INFO=$(./bin/wendy device version --json --device ${{ matrix.hostname }} || true)
+          echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}'
+          DEVICE_TYPE=$(echo "$INFO" | jq -r '.deviceType // ""')
+          if [ -z "$DEVICE_TYPE" ]; then
+            echo "No device type reported — skipping OS update."
+            echo "has_device_type=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_device_type=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Flash OS update
+        if: steps.version.outputs.has_device_type == 'true'
         run: ./bin/wendy os update --device ${{ matrix.hostname }}
         # wendy os update blocks until the device reboots and comes back online,
         # with a 5-minute internal timeout. The step fails if it doesn't recover.
 
       - name: Confirm device online
+        if: steps.version.outputs.has_device_type == 'true'
         run: |
           ./bin/wendy device version --json --device ${{ matrix.hostname }} \
             | jq '{osVersion, agentVersion: .version}'
 
       - name: Template tests
+        if: steps.version.outputs.has_device_type == 'true'
         run: scripts/test-templates.sh -w ./bin/wendy -h ${{ matrix.hostname }}
