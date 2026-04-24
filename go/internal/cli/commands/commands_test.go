@@ -263,6 +263,36 @@ func TestCheckELFArchitecture(t *testing.T) {
 	}
 }
 
+func TestLinuxTargetTriple(t *testing.T) {
+	cases := []struct {
+		arch       string
+		wantTriple string
+		wantErr    bool
+	}{
+		{arch: "arm64", wantTriple: "aarch64-unknown-linux-gnu"},
+		{arch: "amd64", wantTriple: "x86_64-unknown-linux-gnu"},
+		{arch: "riscv64", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.arch, func(t *testing.T) {
+			got, err := linuxTargetTriple(tc.arch)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("linuxTargetTriple() unexpected error: %v", err)
+			}
+			if got != tc.wantTriple {
+				t.Fatalf("linuxTargetTriple() = %q, want %q", got, tc.wantTriple)
+			}
+		})
+	}
+}
+
 func TestDetectELFArchitecture(t *testing.T) {
 	arch, isELF := detectELFArchitecture(makeELFHeader(62))
 	if !isELF {

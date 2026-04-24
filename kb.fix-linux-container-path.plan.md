@@ -253,6 +253,11 @@ Current fix direction now implemented in the CLI:
    target architecture
 4. stop forcing the plugin's `--architecture` flag so the published image
    cannot silently disagree with the executable's actual ELF architecture
+5. pass an explicit Linux target triple into Swift builds/plugin invocations so
+   SwiftPM does not silently fall back to host-default x86_64 Linux output when
+   targeting an arm64 agent
+6. validate installed Wendy Swift SDK bundle variants before selecting them, so
+   a misnamed or mispackaged SDK fails with a precise target-triple error
 
 This should turn the confusing runtime failure into either:
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,9 +117,25 @@ func TestFindSwiftSDK_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
 
-	installedSDK := fmt.Sprintf("%s-RELEASE_wendyos_aarch64", DefaultVersion)
-	var calls [][]string
+	home := t.TempDir()
+	originalHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("Setenv HOME: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("HOME", originalHome) })
 
+	installedSDK := fmt.Sprintf("%s-RELEASE_wendyos_aarch64", DefaultVersion)
+	infoPath := filepath.Join(home, "Library", "org.swift.swiftpm", "swift-sdks", installedSDK+".artifactbundle", "info.json")
+	if err := os.MkdirAll(filepath.Dir(infoPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	info := fmt.Sprintf(`{"artifacts":{"%s":{"type":"swiftSDK","variants":[{"path":"%s/aarch64-unknown-linux-gnu"}],"version":"0.0.1"}},"schemaVersion":"1.0"}`,
+		installedSDK, installedSDK)
+	if err := os.WriteFile(infoPath, []byte(info), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var calls [][]string
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		calls = append(calls, append([]string{name}, args...))
 		return exec.CommandContext(ctx, "echo", installedSDK)
@@ -135,5 +153,40 @@ func TestFindSwiftSDK_AlreadyInstalled(t *testing.T) {
 	}
 	if calls[0][0] != "swiftly" || calls[0][1] != "run" || calls[0][2] != "+"+DefaultVersion || calls[0][3] != "swift" || calls[0][4] != "sdk" || calls[0][5] != "list" {
 		t.Fatalf("unexpected command: %v", calls[0])
+	}
+}
+
+func TestFindSwiftSDK_RejectsWendySDKWithWrongVariant(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	home := t.TempDir()
+	originalHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("Setenv HOME: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("HOME", originalHome) })
+
+	installedSDK := fmt.Sprintf("%s-RELEASE_wendyos_aarch64", DefaultVersion)
+	infoPath := filepath.Join(home, "Library", "org.swift.swiftpm", "swift-sdks", installedSDK+".artifactbundle", "info.json")
+	if err := os.MkdirAll(filepath.Dir(infoPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	info := fmt.Sprintf(`{"artifacts":{"%s":{"type":"swiftSDK","variants":[{"path":"%s/x86_64-unknown-linux-gnu"}],"version":"0.0.1"}},"schemaVersion":"1.0"}`,
+		installedSDK, installedSDK)
+	if err := os.WriteFile(infoPath, []byte(info), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", installedSDK)
+	}
+
+	_, err := FindSwiftSDK(context.Background(), "arm64", io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("FindSwiftSDK() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "provides x86_64-unknown-linux-gnu, not aarch64-unknown-linux-gnu") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

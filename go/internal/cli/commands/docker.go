@@ -195,15 +195,26 @@ func generatePythonDockerfile(dir string) (string, error) {
 	return dockerfilePath, nil
 }
 
-func buildSwiftExecutable(ctx context.Context, dir, product, sdk, configuration string) (string, error) {
+func linuxTargetTriple(architecture string) (string, error) {
+	switch architecture {
+	case "arm64":
+		return "aarch64-unknown-linux-gnu", nil
+	case "amd64":
+		return "x86_64-unknown-linux-gnu", nil
+	default:
+		return "", fmt.Errorf("unsupported linux target architecture %q", architecture)
+	}
+}
+
+func buildSwiftExecutable(ctx context.Context, dir, product, sdk, targetTriple, configuration string) (string, error) {
 	buildArgs := []string{"build"}
 	showBinArgs := []string{"build"}
 	if configuration != "" {
 		buildArgs = append(buildArgs, "-c", configuration)
 		showBinArgs = append(showBinArgs, "-c", configuration)
 	}
-	buildArgs = append(buildArgs, "--swift-sdk="+sdk, "--product", product)
-	showBinArgs = append(showBinArgs, "--swift-sdk="+sdk, "--show-bin-path")
+	buildArgs = append(buildArgs, "--swift-sdk="+sdk, "--triple="+targetTriple, "--product", product)
+	showBinArgs = append(showBinArgs, "--swift-sdk="+sdk, "--triple="+targetTriple, "--show-bin-path")
 
 	buildCmd := swifttoolchain.SwiftCommandContext(ctx, buildArgs...)
 	buildCmd.Dir = dir
@@ -237,8 +248,13 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
-	cliLogln("Cross-compiling %s for linux/%s...", product, architecture)
-	binaryPath, err := buildSwiftExecutable(ctx, dir, product, sdk, "")
+	targetTriple, err := linuxTargetTriple(architecture)
+	if err != nil {
+		return err
+	}
+
+	cliLogln("Cross-compiling %s for linux/%s (%s)...", product, architecture, targetTriple)
+	binaryPath, err := buildSwiftExecutable(ctx, dir, product, sdk, targetTriple, "")
 	if err != nil {
 		return err
 	}
@@ -249,6 +265,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 	swiftArgs := []string{
 		"package",
 		"--swift-sdk=" + sdk,
+		"--triple=" + targetTriple,
 		"--allow-network-connections=all",
 		"build-container-image",
 		"--from=swift:" + swifttoolchain.DefaultVersion + "-slim",
@@ -1208,8 +1225,13 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainSt
 		return "", fmt.Errorf("finding Swift SDK: %w", err)
 	}
 
-	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
-	srcBin, err := buildSwiftExecutable(ctx, dir, product, sdk, "release")
+	targetTriple, err := linuxTargetTriple(arch)
+	if err != nil {
+		return "", err
+	}
+
+	cliLogln("Cross-compiling %s for linux/%s (%s)...", product, arch, targetTriple)
+	srcBin, err := buildSwiftExecutable(ctx, dir, product, sdk, targetTriple, "release")
 	if err != nil {
 		return "", err
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -149,9 +150,19 @@ func lookupSwiftSDK(ctx context.Context, sdkArch string, isWasm bool) (string, e
 		return "", nil
 	}
 
+	expectedTriple, err := expectedLinuxSDKTriple(sdkArch)
+	if err != nil {
+		return "", err
+	}
+
+	var validationErr error
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.Contains(line, "wendyos") && strings.Contains(line, sdkArch) && strings.Contains(line, DefaultVersion) {
+			if err := validateInstalledSwiftSDKVariant(line, expectedTriple); err != nil {
+				validationErr = err
+				continue
+			}
 			return line, nil
 		}
 	}
@@ -163,6 +174,9 @@ func lookupSwiftSDK(ctx context.Context, sdkArch string, isWasm bool) (string, e
 		}
 	}
 
+	if validationErr != nil {
+		return "", validationErr
+	}
 	return "", nil
 }
 
@@ -182,6 +196,82 @@ func unzipOverwriteEnv() (env []string, cleanup func(), err error) {
 	}
 	env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
 	return env, func() { os.RemoveAll(dir) }, nil
+}
+
+func expectedLinuxSDKTriple(sdkArch string) (string, error) {
+	switch sdkArch {
+	case "aarch64":
+		return "aarch64-unknown-linux-gnu", nil
+	case "x86_64":
+		return "x86_64-unknown-linux-gnu", nil
+	default:
+		return "", fmt.Errorf("unsupported linux SDK architecture %q", sdkArch)
+	}
+}
+
+type swiftSDKBundleInfo struct {
+	Artifacts map[string]struct {
+		Type     string `json:"type"`
+		Variants []struct {
+			Path string `json:"path"`
+		} `json:"variants"`
+	} `json:"artifacts"`
+}
+
+func validateInstalledSwiftSDKVariant(sdkName, expectedTriple string) error {
+	if !strings.Contains(sdkName, "wendyos") {
+		return nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	roots := []string{
+		filepath.Join(home, "Library", "org.swift.swiftpm", "swift-sdks"),
+		filepath.Join(home, ".swiftpm", "swift-sdks"),
+	}
+
+	var infoPath string
+	for _, root := range roots {
+		candidate := filepath.Join(root, sdkName+".artifactbundle", "info.json")
+		if _, err := os.Stat(candidate); err == nil {
+			infoPath = candidate
+			break
+		}
+	}
+	if infoPath == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		return fmt.Errorf("reading Swift SDK metadata for %s: %w", sdkName, err)
+	}
+
+	var info swiftSDKBundleInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return fmt.Errorf("parsing Swift SDK metadata for %s: %w", sdkName, err)
+	}
+
+	artifact, ok := info.Artifacts[sdkName]
+	if !ok {
+		return nil
+	}
+
+	variants := make([]string, 0, len(artifact.Variants))
+	for _, variant := range artifact.Variants {
+		variants = append(variants, filepath.Base(variant.Path))
+		if filepath.Base(variant.Path) == expectedTriple {
+			return nil
+		}
+	}
+	if len(variants) == 0 {
+		return fmt.Errorf("Swift SDK %q does not declare any target variants in %s", sdkName, infoPath)
+	}
+	sort.Strings(variants)
+	return fmt.Errorf("Swift SDK %q provides %s, not %s; reinstall or fix the SDK artifact", sdkName, strings.Join(variants, ", "), expectedTriple)
 }
 
 func installWendySwiftSDK(ctx context.Context, sdkArch string, stdout, stderr io.Writer) error {
