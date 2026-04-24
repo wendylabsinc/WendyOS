@@ -184,8 +184,7 @@ public final class WendyAgent {
         dockerAvailability: DockerCLI.AvailabilityCheckResult,
         broadcaster: TelemetryBroadcaster
     ) async throws {
-        let stateDirectory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/wendy-agent")
+        let stateDirectory = WendyAgentPaths.stateDirectory
         let appsBase = stateDirectory.appendingPathComponent("apps")
 
         let containerService = ContainerService(

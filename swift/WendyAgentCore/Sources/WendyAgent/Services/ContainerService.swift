@@ -41,8 +41,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.dockerBackend = dockerAvailable ? DockerContainerBackend() : nil
         self.dockerUnavailableMessage = dockerUnavailableMessage
 
-        let defaultStateDirectory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/wendy-agent")
+        let defaultStateDirectory = WendyAgentPaths.stateDirectory
         let resolvedStateDirectory = stateDirectory ?? appsBase ?? defaultStateDirectory
 
         self.appsBase = appsBase ?? resolvedStateDirectory.appendingPathComponent("apps")
