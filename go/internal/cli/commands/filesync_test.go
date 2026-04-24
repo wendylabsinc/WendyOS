@@ -264,12 +264,22 @@ func startFakeServer(t *testing.T, srv *fakeSyncServer) (*grpcclient.AgentConnec
 		t.Fatalf("net.Listen: %v", err)
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(16*1024*1024),
+		grpc.MaxSendMsgSize(16*1024*1024),
+	)
 	agentpb.RegisterWendyFileSyncServiceServer(s, srv)
 	go func() { _ = s.Serve(ln) }()
 
 	addr := ln.Addr().String()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(16*1024*1024),
+			grpc.MaxCallSendMsgSize(16*1024*1024),
+		),
+	)
 	if err != nil {
 		s.Stop()
 		ln.Close()
@@ -290,7 +300,7 @@ func startFakeServer(t *testing.T, srv *fakeSyncServer) (*grpcclient.AgentConnec
 
 func TestSyncFiles_ContentChunksCarryCumulativeState(t *testing.T) {
 	dir := t.TempDir()
-	content := bytes.Repeat([]byte("abc12345"), 80*1024) // ~640 KiB => multiple chunks
+	content := bytes.Repeat([]byte("abc12345"), fileSyncChunkSize/8+1) // slightly over one chunk => multiple chunks
 	if err := os.WriteFile(filepath.Join(dir, "MyApp"), content, 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

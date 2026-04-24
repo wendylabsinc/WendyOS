@@ -7,16 +7,30 @@ import Logging
 /// instead of the Subprocess package since the Mac prototype doesn't depend on
 /// swift-subprocess.
 struct DockerCLI: Sendable {
+    struct AvailabilityCheckResult: Sendable {
+        let isAvailable: Bool
+        let failureMessage: String?
+    }
+
+    private struct ExecutableResolution: Sendable {
+        let requested: String
+        let resolvedPath: String?
+        let searchedPaths: [String]
+    }
+
     private let logger = Logger(label: "sh.wendy.agent.docker-cli")
     private let executable: String
     private let startupCommandTimeout: Duration
+    private let environment: [String: String]
 
     init(
         executable: String = "docker",
-        startupCommandTimeout: Duration = Self.defaultStartupCommandTimeout
+        startupCommandTimeout: Duration = Self.defaultStartupCommandTimeout,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.executable = executable
         self.startupCommandTimeout = startupCommandTimeout
+        self.environment = environment
     }
 
     // MARK: - Run options
@@ -68,17 +82,26 @@ struct DockerCLI: Sendable {
 
     // MARK: - Availability
 
-    /// Returns `true` if the `docker` CLI is functional.
-    func checkAvailable() async -> Bool {
+    /// Probes whether the `docker` CLI is functional and returns a diagnostic
+    /// message on failure.
+    func checkAvailability() async -> AvailabilityCheckResult {
         do {
             _ = try await run(
                 arguments: ["version", "--format", "{{.Server.Version}}"],
                 timeout: self.startupCommandTimeout
             )
-            return true
+            return AvailabilityCheckResult(isAvailable: true, failureMessage: nil)
         } catch {
-            return false
+            return AvailabilityCheckResult(
+                isAvailable: false,
+                failureMessage: String(describing: error)
+            )
         }
+    }
+
+    /// Returns `true` if the `docker` CLI is functional.
+    func checkAvailable() async -> Bool {
+        await self.checkAvailability().isAvailable
     }
 
     // MARK: - Registry
@@ -141,9 +164,12 @@ struct DockerCLI: Sendable {
     ) throws -> (process: Foundation.Process, stdout: Pipe, stderr: Pipe) {
         let allArgs = ["run"] + options.flatMap(\.arguments) + [image] + command
 
+        let resolvedExecutable = try self.resolveExecutablePath()
+
         let process = Foundation.Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [self.executable] + allArgs
+        process.executableURL = URL(fileURLWithPath: resolvedExecutable)
+        process.arguments = allArgs
+        process.environment = self.environment
         process.terminationHandler = terminationHandler
 
         let stdoutPipe = Pipe()
@@ -205,9 +231,12 @@ struct DockerCLI: Sendable {
     /// Run a docker command and return its stdout as a trimmed string.
     @discardableResult
     private func run(arguments: [String], timeout: Duration? = nil) async throws -> String {
+        let resolvedExecutable = try self.resolveExecutablePath()
+
         let process = Foundation.Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [self.executable] + arguments
+        process.executableURL = URL(fileURLWithPath: resolvedExecutable)
+        process.arguments = arguments
+        process.environment = self.environment
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -233,7 +262,7 @@ struct DockerCLI: Sendable {
                             )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         continuation.resume(
                             throwing: DockerError.commandFailed(
-                                executable: self.executable,
+                                executable: resolvedExecutable,
                                 args: arguments,
                                 status: p.terminationStatus,
                                 stderr: stderr
@@ -262,7 +291,7 @@ struct DockerCLI: Sendable {
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw DockerError.commandTimedOut(
-                        executable: self.executable,
+                        executable: resolvedExecutable,
                         args: arguments,
                         timeout: timeout
                     )
@@ -270,7 +299,7 @@ struct DockerCLI: Sendable {
 
                 guard let result = try await group.next() else {
                     throw DockerError.commandFailed(
-                        executable: self.executable,
+                        executable: resolvedExecutable,
                         args: arguments,
                         status: -1,
                         stderr: "docker command did not produce a result"
@@ -284,7 +313,7 @@ struct DockerCLI: Sendable {
                 self.logger.warning(
                     "Docker command timed out",
                     metadata: [
-                        "command": "\(([self.executable] + arguments).joined(separator: " "))",
+                        "command": "\(([resolvedExecutable] + arguments).joined(separator: " "))",
                         "timeout": "\(timeout.map { String(describing: $0) } ?? "none")",
                     ]
                 )
@@ -298,14 +327,83 @@ struct DockerCLI: Sendable {
             throw error
         }
     }
+
+    private func resolveExecutablePath() throws -> String {
+        let resolution = self.resolveExecutable()
+        if let resolvedPath = resolution.resolvedPath {
+            return resolvedPath
+        }
+        throw DockerError.executableNotFound(
+            executable: resolution.requested,
+            searchedPaths: resolution.searchedPaths
+        )
+    }
+
+    func resolveExecutableForTesting() -> (resolvedPath: String?, searchedPaths: [String]) {
+        let resolution = self.resolveExecutable()
+        return (resolution.resolvedPath, resolution.searchedPaths)
+    }
+
+    private func resolveExecutable() -> ExecutableResolution {
+        if self.executable.contains("/") {
+            let resolvedPath =
+                FileManager.default.isExecutableFile(atPath: self.executable)
+                ? self.executable : nil
+            return ExecutableResolution(
+                requested: self.executable,
+                resolvedPath: resolvedPath,
+                searchedPaths: [self.executable]
+            )
+        }
+
+        let searchPaths = self.buildSearchPaths()
+        let resolvedPath = searchPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+        return ExecutableResolution(
+            requested: self.executable,
+            resolvedPath: resolvedPath,
+            searchedPaths: searchPaths
+        )
+    }
+
+    private func buildSearchPaths() -> [String] {
+        let pathEntries = (self.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        let candidates =
+            pathEntries.map {
+                URL(fileURLWithPath: $0).appendingPathComponent(self.executable).path
+            }
+            + Self.fallbackExecutablePaths(for: self.executable)
+
+        var seen = Set<String>()
+        var uniqueCandidates: [String] = []
+        for candidate in candidates where seen.insert(candidate).inserted {
+            uniqueCandidates.append(candidate)
+        }
+        return uniqueCandidates
+    }
+
+    private static func fallbackExecutablePaths(for executable: String) -> [String] {
+        [
+            "/usr/local/bin/\(executable)",
+            "/opt/homebrew/bin/\(executable)",
+            "/Applications/Docker.app/Contents/Resources/bin/\(executable)",
+        ]
+    }
 }
 
 enum DockerError: Error, CustomStringConvertible {
+    case executableNotFound(executable: String, searchedPaths: [String])
     case commandFailed(executable: String, args: [String], status: Int32, stderr: String)
     case commandTimedOut(executable: String, args: [String], timeout: Duration)
 
     var description: String {
         switch self {
+        case .executableNotFound(let executable, let searchedPaths):
+            return
+                "Could not find \(executable) executable. Looked in: \(searchedPaths.joined(separator: ", "))"
         case .commandFailed(let executable, let args, let status, let stderr):
             let cmd = ([executable] + args).joined(separator: " ")
             if stderr.isEmpty {

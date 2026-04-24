@@ -5,6 +5,12 @@ struct WelcomeAndPermissionsView: View {
     @Bindable var welcomeAndPermissions: WelcomeAndPermissions
     let onPermissionRequestCompleted: () -> Void
 
+    private let betaRibbonYellow = Color(
+        red: 251.0 / 255.0,
+        green: 191.0 / 255.0,
+        blue: 36.0 / 255.0
+    )
+
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             self.header
@@ -14,6 +20,8 @@ struct WelcomeAndPermissionsView: View {
             )
             .font(.body)
             .fixedSize(horizontal: false, vertical: true)
+
+            self.betaNotice
 
             self.permissionsSection
 
@@ -47,6 +55,36 @@ struct WelcomeAndPermissionsView: View {
                     .fontWeight(.semibold)
             }
         }
+    }
+
+    private var betaNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(self.betaRibbonYellow)
+                .font(.title3)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Beta Software")
+                    .fontWeight(.semibold)
+
+                Text(
+                    "Wendy Agent is prerelease software and may change or be incomplete. It is not intended for production use."
+                )
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(self.betaRibbonYellow.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(self.betaRibbonYellow.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var permissionsSection: some View {

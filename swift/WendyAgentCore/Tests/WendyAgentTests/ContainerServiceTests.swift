@@ -418,6 +418,77 @@ struct ContainerServiceTests {
         }
     }
 
+    @Test("Linux container create requests return a planned future message")
+    func createContainerRejectsLinuxContainers() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.LinuxContainerCreate"
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        var request = Wendy_Agent_Services_V1_CreateContainerRequest()
+        request.appName = appID
+        request.imageName = "localhost:5000/sh.wendy.tests.linuxcontainercreate:latest"
+        request.appConfig = try JSONEncoder().encode(
+            WendyAppConfig(appId: appID, platform: "linux/arm64", entitlements: nil)
+        )
+
+        do {
+            _ = try await service.createContainer(
+                request: ServerRequest(metadata: [:], message: request),
+                context: makeServerContext(method: "CreateContainer")
+            )
+            Issue.record("Expected createContainer to reject Linux containers on Macs")
+        } catch let error as RPCError {
+            #expect(error.code == .failedPrecondition)
+            #expect("\(error)".contains("Linux containers aren't supported on Macs yet"))
+        }
+    }
+
+    @Test("persisted Linux container apps fail gracefully on start")
+    func startContainerRejectsPersistedLinuxContainers() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+
+        let appID = "sh.wendy.tests.LinuxContainerStart"
+        let persistedApps = [
+            WendyApp(
+                info: WendyAppInfo(id: appID, kind: .container, status: .stopped, pid: nil),
+                native: nil,
+                container: WendyApp.ContainerMetadata(
+                    imageName: "localhost:5000/sh.wendy.tests.linuxcontainerstart:latest",
+                    appConfig: WendyAppConfig(
+                        appId: appID,
+                        platform: "linux/arm64",
+                        entitlements: nil
+                    )
+                ),
+                process: nil,
+                launchToken: nil
+            )
+        ]
+        let infoFileURL = URL(fileURLWithPath: appsBase).appendingPathComponent("info.json")
+        try JSONEncoder().encode(persistedApps).write(to: infoFileURL)
+
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+
+        do {
+            try await startApp(service: service, appID: appID)
+            Issue.record("Expected startContainer to reject persisted Linux containers on Macs")
+        } catch let error as RPCError {
+            #expect(error.code == .failedPrecondition)
+            #expect("\(error)".contains("Linux containers aren't supported on Macs yet"))
+        }
+    }
+
     @Test("file-sync native launch uses synced app directory as current working directory")
     func fileSyncLaunchUsesSyncedAppDirectoryAsCurrentWorkingDirectory() async throws {
         let appsBase = try makeTempDir()

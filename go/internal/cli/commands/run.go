@@ -34,6 +34,8 @@ var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
 var execCommandContext = exec.CommandContext
 
+const linuxContainersOnMacsUnsupportedMessage = "Linux containers aren't supported on Macs yet. Support is planned for a future release. For now, deploy a native macOS app (platform: darwin) or target a Linux/WendyOS device."
+
 // dimWriter writes each line rendered through cliStyle (dim/background).
 // Incomplete lines are buffered until a newline or Flush is called.
 type dimWriter struct {
@@ -201,13 +203,34 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 	return nil
 }
 
+func isUnimplementedRPCError(err error) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if status.Code(current) == codes.Unimplemented {
+			return true
+		}
+	}
+	return false
+}
+
+func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	if _, err := svc.CreateContainer(ctx, req); err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	return nil
+}
+
+func fallbackCreateContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	cliLogln("Info: progress reporting is currently not available on this agent; continuing without progress")
+	return createContainerWithoutProgress(ctx, svc, req)
+}
+
 func progressModelUserCancelled(model tea.Model) bool {
 	pm, ok := model.(tui.ProgressModel)
 	return ok && pm.Err() == context.Canceled
 }
 
 func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
-	prog := tea.NewProgram(tui.NewProgress("Pulling image on device..."))
+	prog := tea.NewProgram(tui.NewProgress("Pulling image on device...").WithoutErrorView())
 
 	var (
 		createErr error
@@ -298,13 +321,22 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 
 // createContainerWithProgress calls CreateContainerWithProgress and prints
 // phase updates so the user sees feedback during long image pulls/unpacks.
+// Older agents may not implement the streaming RPC yet, so fall back to the
+// legacy unary CreateContainer call when the server reports Unimplemented.
 func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
 	if !isInteractiveTerminal() {
 		stream, err := svc.CreateContainerWithProgress(ctx, req)
 		if err != nil {
+			if isUnimplementedRPCError(err) {
+				return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+			}
 			return fmt.Errorf("creating container: %w", err)
 		}
-		return createContainerWithProgressPlain(stream)
+		err = createContainerWithProgressPlain(stream)
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
 	}
 
 	progressCtx, cancel := context.WithCancel(ctx)
@@ -312,9 +344,18 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 
 	stream, err := svc.CreateContainerWithProgress(progressCtx, req)
 	if err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
 		return fmt.Errorf("creating container: %w", err)
 	}
-	return createContainerWithProgressTUI(cancel, stream)
+	if err := createContainerWithProgressTUI(cancel, stream); err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
+	}
+	return nil
 }
 
 // runOptions holds the parsed flags for the run command.
@@ -855,6 +896,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	if agentOS == "darwin" && platformOS(platform) == "linux" {
+		return errors.New(linuxContainersOnMacsUnsupportedMessage)
+	}
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {

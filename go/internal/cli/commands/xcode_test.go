@@ -421,6 +421,24 @@ func TestFindXcodeScheme_SingleScheme(t *testing.T) {
 	}
 }
 
+func TestFindXcodeScheme_IgnoresStderrWarnings(t *testing.T) {
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		script := `echo 'warning: using the first of multiple matching destinations:' >&2; echo '{"project":{"schemes":["HelloXcode"]}}'`
+		return exec.CommandContext(ctx, "sh", "-c", script)
+	}
+
+	scheme, err := findXcodeScheme(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("findXcodeScheme error: %v", err)
+	}
+	if scheme != "HelloXcode" {
+		t.Errorf("findXcodeScheme = %q; want %q", scheme, "HelloXcode")
+	}
+}
+
 func TestFindXcodeScheme_MultipleSchemes_Error(t *testing.T) {
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
