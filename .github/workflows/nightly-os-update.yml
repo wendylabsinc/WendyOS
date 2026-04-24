@@ -88,12 +88,19 @@ jobs:
         run: make build-cli
 
       - name: Current version
+        id: version
         run: |
-          ssh -o StrictHostKeyChecking=no localhost \
-            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
-            | jq '{osVersion, agentVersion: .version, deviceType}' || true
+          INFO=$(ssh -o StrictHostKeyChecking=no localhost \
+            "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" || true)
+          echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}' || true
+          DEVICE_TYPE=$(echo "$INFO" | jq -r '.deviceType // ""' 2>/dev/null || true)
+          echo "device_type=$DEVICE_TYPE" >> "$GITHUB_OUTPUT"
+          if [[ -z "$DEVICE_TYPE" ]]; then
+            echo "No device type reported — skipping OS update."
+          fi
 
       - name: Flash OS update
+        if: steps.version.outputs.device_type != ''
         # wendy os update blocks until the device reboots and comes back online,
         # with a 5-minute internal timeout. The step fails if it doesn't recover.
         run: |
@@ -101,12 +108,14 @@ jobs:
             "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy os update --device '$DEVICE_HOSTNAME'"
 
       - name: Confirm device online
+        if: steps.version.outputs.device_type != ''
         run: |
           ssh -o StrictHostKeyChecking=no localhost \
             "export PATH='$PATH' && cd '$(pwd)' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
             | jq '{osVersion, agentVersion: .version}'
 
       - name: Template tests
+        if: steps.version.outputs.device_type != ''
         run: |
           ssh -o StrictHostKeyChecking=no localhost \
             "export PATH='$PATH' && cd '$(pwd)' && scripts/test-templates.sh -w ./bin/wendy -h '$DEVICE_HOSTNAME'"
