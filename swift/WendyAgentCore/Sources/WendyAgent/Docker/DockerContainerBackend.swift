@@ -1,4 +1,5 @@
 import Foundation
+import GRPCCore
 import Logging
 
 /// Manages the lifecycle of Linux containers running via Docker on a Mac agent.
@@ -6,14 +7,47 @@ import Logging
 /// When the agent receives a container request with `platform: "linux/..."`, it
 /// delegates to this backend. The image is already in the local Docker registry
 /// at `localhost:<registryPort>` (pushed by the CLI via the standard buildx pipeline).
+///
+/// On Docker Desktop, `docker pull localhost:...` may be treated as an HTTPS
+/// registry lookup, while `127.0.0.1:...` is part of Docker's default insecure
+/// loopback range. We therefore rewrite loopback registry references to
+/// `127.0.0.1` before pulling/running so the daemon can talk to the local
+/// plaintext registry without requiring manual daemon reconfiguration.
 actor DockerContainerBackend {
     private let docker = DockerCLI()
     private let logger = Logger(label: "sh.wendy.agent.docker-backend")
 
     /// Pull an image from the local registry into Docker.
     func pullImage(_ imageName: String) async throws {
-        logger.info("Pulling image", metadata: ["image": "\(imageName)"])
-        try await docker.pull(image: imageName)
+        let dockerImageName = Self.rewriteLoopbackRegistryHost(in: imageName)
+        self.logImageRewriteIfNeeded(original: imageName, effective: dockerImageName)
+
+        logger.info(
+            "Pulling image",
+            metadata: [
+                "image": "\(dockerImageName)",
+                "requested_image": "\(imageName)",
+            ]
+        )
+
+        do {
+            try await docker.pull(image: dockerImageName)
+        } catch {
+            logger.error(
+                "Docker image pull failed",
+                metadata: [
+                    "image": "\(dockerImageName)",
+                    "requested_image": "\(imageName)",
+                    "error": "\(String(describing: error))",
+                ]
+            )
+            throw Self.makeRPCError(
+                action: "pull Docker image",
+                requestedImageName: imageName,
+                effectiveImageName: dockerImageName,
+                error: error
+            )
+        }
     }
 
     /// Remove any stale container, then create and start a Docker container in
@@ -25,6 +59,8 @@ actor DockerContainerBackend {
         terminationHandler: (@Sendable (Foundation.Process) -> Void)? = nil
     ) async throws -> (process: Foundation.Process, stdout: Pipe, stderr: Pipe) {
         let containerName = "wendy-\(appName)"
+        let dockerImageName = Self.rewriteLoopbackRegistryHost(in: imageName)
+        self.logImageRewriteIfNeeded(original: imageName, effective: dockerImageName)
 
         // Remove any stale container with the same name.
         _ = try? await docker.rm(options: [.force], container: containerName)
@@ -45,15 +81,34 @@ actor DockerContainerBackend {
             "Starting Docker container",
             metadata: [
                 "container": "\(containerName)",
-                "image": "\(imageName)",
+                "image": "\(dockerImageName)",
+                "requested_image": "\(imageName)",
             ]
         )
 
-        return try docker.runAttached(
-            options: options,
-            image: imageName,
-            terminationHandler: terminationHandler
-        )
+        do {
+            return try docker.runAttached(
+                options: options,
+                image: dockerImageName,
+                terminationHandler: terminationHandler
+            )
+        } catch {
+            logger.error(
+                "Docker container start failed",
+                metadata: [
+                    "container": "\(containerName)",
+                    "image": "\(dockerImageName)",
+                    "requested_image": "\(imageName)",
+                    "error": "\(String(describing: error))",
+                ]
+            )
+            throw Self.makeRPCError(
+                action: "start Docker container from image",
+                requestedImageName: imageName,
+                effectiveImageName: dockerImageName,
+                error: error
+            )
+        }
     }
 
     /// Stop a running Docker container.
@@ -73,6 +128,57 @@ actor DockerContainerBackend {
     /// List Wendy-managed Docker containers.
     func listContainers() async throws -> [DockerCLI.ContainerInfo] {
         try await docker.ps(label: "wendy.managed=true")
+    }
+
+    static func rewriteLoopbackRegistryHostForTesting(_ imageName: String) -> String {
+        Self.rewriteLoopbackRegistryHost(in: imageName)
+    }
+
+    private func logImageRewriteIfNeeded(original: String, effective: String) {
+        guard original != effective else { return }
+
+        logger.info(
+            "Rewriting loopback registry host for Docker Desktop",
+            metadata: [
+                "requested_image": "\(original)",
+                "effective_image": "\(effective)",
+                "reason": "Docker treats 127.0.0.1 as a default insecure loopback registry, but localhost may be forced through HTTPS",
+            ]
+        )
+    }
+
+    private static func rewriteLoopbackRegistryHost(in imageName: String) -> String {
+        guard let separator = imageName.firstIndex(of: "/") else { return imageName }
+
+        let registry = String(imageName[..<separator])
+        let remainder = String(imageName[separator...])
+
+        switch registry.lowercased() {
+        case "localhost":
+            return "127.0.0.1\(remainder)"
+        case let registry where registry.hasPrefix("localhost:"):
+            return "127.0.0.1\(registry.dropFirst("localhost".count))\(remainder)"
+        case "[::1]":
+            return "127.0.0.1\(remainder)"
+        case let registry where registry.hasPrefix("[::1]:"):
+            return "127.0.0.1\(registry.dropFirst("[::1]".count))\(remainder)"
+        default:
+            return imageName
+        }
+    }
+
+    private static func makeRPCError(
+        action: String,
+        requestedImageName: String,
+        effectiveImageName: String,
+        error: Error
+    ) -> RPCError {
+        var message = "Failed to \(action) \(requestedImageName)"
+        if effectiveImageName != requestedImageName {
+            message += " (using \(effectiveImageName) inside Docker)"
+        }
+        message += ": \(String(describing: error))"
+        return RPCError(code: .internalError, message: message)
     }
 
     // MARK: - Entitlement mapping

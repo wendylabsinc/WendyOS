@@ -75,6 +75,39 @@ struct DockerCLITests {
         )
     }
 
+    @Test("DockerContainerBackend rewrites loopback registry hosts to 127.0.0.1")
+    func dockerBackendRewritesLoopbackRegistryHosts() {
+        #expect(
+            DockerContainerBackend.rewriteLoopbackRegistryHostForTesting(
+                "localhost:5555/helloworld:latest"
+            ) == "127.0.0.1:5555/helloworld:latest"
+        )
+        #expect(
+            DockerContainerBackend.rewriteLoopbackRegistryHostForTesting(
+                "[::1]:5555/helloworld:latest"
+            ) == "127.0.0.1:5555/helloworld:latest"
+        )
+        #expect(
+            DockerContainerBackend.rewriteLoopbackRegistryHostForTesting(
+                "localhost/library/alpine:latest"
+            ) == "127.0.0.1/library/alpine:latest"
+        )
+    }
+
+    @Test("DockerContainerBackend leaves non-loopback registry hosts unchanged")
+    func dockerBackendLeavesNonLoopbackRegistryHostsUnchanged() {
+        #expect(
+            DockerContainerBackend.rewriteLoopbackRegistryHostForTesting(
+                "host.docker.internal:5555/helloworld:latest"
+            ) == "host.docker.internal:5555/helloworld:latest"
+        )
+        #expect(
+            DockerContainerBackend.rewriteLoopbackRegistryHostForTesting(
+                "ghcr.io/wendylabsinc/helloworld:latest"
+            ) == "ghcr.io/wendylabsinc/helloworld:latest"
+        )
+    }
+
     private static func makeExecutableScript(name: String, contents: String) throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

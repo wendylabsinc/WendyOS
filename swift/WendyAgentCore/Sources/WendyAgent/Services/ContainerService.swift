@@ -417,7 +417,25 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             }
 
             // Pull the image from the local registry into Docker.
-            try await dockerBackend.pullImage(imageName)
+            do {
+                try await dockerBackend.pullImage(imageName)
+            } catch {
+                self.logger.error(
+                    "Linux container image pull failed",
+                    metadata: [
+                        "app_name": "\(appName)",
+                        "image_name": "\(imageName)",
+                        "error": "\(String(describing: error))",
+                    ]
+                )
+                if let rpcError = error as? RPCError {
+                    throw rpcError
+                }
+                throw RPCError(
+                    code: .internalError,
+                    message: "Failed to pull Docker image \(imageName): \(String(describing: error))"
+                )
+            }
             logger.info(
                 "Linux container image pulled via Docker",
                 metadata: ["app_name": "\(appName)"]
@@ -576,7 +594,21 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 )
             } catch {
                 self.cancelAppLaunch(id: appName, launchToken: launchToken)
-                throw error
+                self.logger.error(
+                    "Linux container start failed",
+                    metadata: [
+                        "app_name": "\(appName)",
+                        "image_name": "\(deviceImage)",
+                        "error": "\(String(describing: error))",
+                    ]
+                )
+                if let rpcError = error as? RPCError {
+                    throw rpcError
+                }
+                throw RPCError(
+                    code: .internalError,
+                    message: "Failed to start Docker container from image \(deviceImage): \(String(describing: error))"
+                )
             }
 
             try await self.markAppRunning(id: appName, process: process, launchToken: launchToken)
