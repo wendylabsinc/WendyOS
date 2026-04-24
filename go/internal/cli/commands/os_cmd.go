@@ -217,7 +217,14 @@ so the device can download it directly.`,
 				if err != nil {
 					return fmt.Errorf("TUI error: %w", err)
 				}
-				if _, spinErr := finalModel.(tui.SpinnerModel).Result(); spinErr != nil {
+				spinModel, ok := finalModel.(tui.SpinnerModel)
+				if !ok {
+					return fmt.Errorf("TUI error: unexpected model type %T", finalModel)
+				}
+				if !spinModel.Done() {
+					return ErrUserCancelled
+				}
+				if _, spinErr := spinModel.Result(); spinErr != nil {
 					return spinErr
 				}
 			} else {
@@ -360,7 +367,11 @@ func pickOTAArtifactURL() (string, error) {
 // GetAgentVersion or the context deadline is reached.
 func pollDeviceOnline(ctx context.Context, addr string) error {
 	// Give the device a few seconds to begin rebooting before polling.
-	time.Sleep(5 * time.Second)
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timed out waiting for device to come back online")
+	case <-time.After(5 * time.Second):
+	}
 	for {
 		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
 		conn, err := connectWithAutoTLS(probeCtx, addr)
