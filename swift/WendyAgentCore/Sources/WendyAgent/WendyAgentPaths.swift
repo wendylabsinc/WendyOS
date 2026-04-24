@@ -11,7 +11,7 @@ enum WendyAgentPaths {
     private static var applicationSupportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
     }
 
     private static var bundleIdentifierComponent: String {
