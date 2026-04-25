@@ -37,6 +37,7 @@ func newAuthCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newAuthLoginCmd(),
+		newAuthLoginLocalCmd(),
 		newAuthLogoutCmd(),
 		newAuthRefreshCertsCmd(),
 		newAuthStatusCmd(),
@@ -336,7 +337,6 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 	if err != nil {
 		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
 	}
-	// Reconstruct the device_id that pki-core stored in the token.
 	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 
 	privateKeyPEM, err := certs.GenerateKeyPair()
@@ -380,9 +380,7 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		Certificates: []config.CertificateInfo{certInfo},
 	}
 
-	// Prepend so local cert is tried first by connectWithAutoTLS.
 	cfg.Auth = append([]config.AuthConfig{authEntry}, cfg.Auth...)
-	// Deduplicate: remove older entry for the same cloudGRPC if any.
 	seen := make(map[string]bool)
 	filtered := cfg.Auth[:0]
 	for _, a := range cfg.Auth {
@@ -398,9 +396,35 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (org=%d, device=%s). Certificates saved.",
-		issueResp.GetOrganizationId(), deviceID)))
+	cliSuccess("Local authentication successful (org=%d, device=%s). Certificates saved.",
+		issueResp.GetOrganizationId(), deviceID)
 	return nil
+}
+
+// newAuthLoginLocalCmd issues a CLI certificate from a local pki-core instance
+// using a Bearer API key. This enables mTLS connectivity to devices provisioned
+// by the same local pki-core.
+func newAuthLoginLocalCmd() *cobra.Command {
+	var cloudGRPC string
+	var apiKey string
+	var orgID int32
+
+	cmd := &cobra.Command{
+		Use:   "login-local",
+		Short: "Log in to a local pki-core instance",
+		Long:  "Issues a CLI certificate from a self-hosted pki-core instance using a Bearer API key. Use this to enable mTLS connections to devices provisioned by the same pki-core.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return performLocalLogin(cmd.Context(), cloudGRPC, apiKey, orgID)
+		},
+	}
+
+	cmd.Flags().StringVar(&cloudGRPC, "cloud", "", "Local pki-core gRPC address (host:port)")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for the local pki-core")
+	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID")
+	_ = cmd.MarkFlagRequired("cloud")
+	_ = cmd.MarkFlagRequired("api-key")
+
+	return cmd
 }
 
 func newAuthLogoutCmd() *cobra.Command {
