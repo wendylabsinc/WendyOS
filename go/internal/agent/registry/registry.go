@@ -7,6 +7,7 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,13 +36,22 @@ import (
 // Server is the embedded OCI registry HTTP server.
 type Server struct {
 	httpServer *http.Server
+	client     *containerd.Client
 	logger     *zap.Logger
 }
 
+// Shutdown gracefully stops the registry server and releases the containerd client.
+func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
+	s.client.Close()
+	return err
+}
+
 // Start creates a new OCI registry HTTP server backed by the given containerd
-// client and starts listening on listenAddr. The server shuts down gracefully
-// when ctx is cancelled.
-func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger) (*Server, error) {
+// client and starts listening on listenAddr. When tlsConfig is non-nil the
+// server is served over HTTPS. The server shuts down gracefully when ctx is
+// cancelled.
+func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config) (*Server, error) {
 	client, err := containerd.New(containerdAddr, containerd.WithDefaultNamespace("default"))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
@@ -79,10 +89,15 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 
 	handler := loggingMiddleware(logger)(securityHeadersMiddleware(mux))
 
-	lis, err := net.Listen("tcp", listenAddr)
+	tcpLis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("listening on %s for registry: %w", listenAddr, err)
+	}
+
+	var serveListener net.Listener = tcpLis
+	if tlsConfig != nil {
+		serveListener = tls.NewListener(tcpLis, tlsConfig)
 	}
 
 	srv := &http.Server{
@@ -93,11 +108,15 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	s := &Server{httpServer: srv, logger: logger}
+	s := &Server{httpServer: srv, client: client, logger: logger}
 
+	scheme := "HTTP"
+	if tlsConfig != nil {
+		scheme = "HTTPS"
+	}
 	go func() {
-		logger.Info("Dev registry listening", zap.String("address", listenAddr))
-		if err := srv.Serve(lis); err != nil && err != http.ErrServerClosed {
+		logger.Info("Dev registry listening", zap.String("address", listenAddr), zap.String("scheme", scheme))
+		if err := srv.Serve(serveListener); err != nil && err != http.ErrServerClosed {
 			logger.Error("Dev registry server error", zap.Error(err))
 		}
 	}()
@@ -106,10 +125,7 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("Dev registry shutdown error", zap.Error(err))
-		}
-		client.Close()
+		_ = s.Shutdown(shutdownCtx)
 	}()
 
 	return s, nil
