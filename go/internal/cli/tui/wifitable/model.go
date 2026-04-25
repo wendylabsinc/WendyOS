@@ -301,6 +301,12 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flashIsError = true
 			return m, clearFlashAfter(flashDuration)
 		}
+		idx := m.table.Cursor()
+		if idx < 0 || idx >= len(m.networks) || !m.networks[idx].Known {
+			m.flashMessage = "Move the cursor to a known (★) network to start ranking."
+			m.flashIsError = true
+			return m, clearFlashAfter(flashDuration)
+		}
 		m.origOrder = snapshotSSIDs(m.networks)
 		m.mode = modeRanking
 		m.flashMessage = ""
@@ -358,16 +364,30 @@ func (m Model) updateRanking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		idx := m.table.Cursor()
 		newIdx := MoveUp(m.networks, idx)
+		if newIdx == idx {
+			m.flashMessage = "Already at the top of the ranking."
+			m.flashIsError = false
+			return m, clearFlashAfter(flashDuration)
+		}
 		m.table.SetCursor(newIdx)
 		m.refreshRows()
 		m.table.SetCursor(newIdx)
+		m.flashMessage = ""
+		m.flashIsError = false
 		return m, nil
 	case "down", "j":
 		idx := m.table.Cursor()
 		newIdx := MoveDown(m.networks, idx)
+		if newIdx == idx {
+			m.flashMessage = "Already at the bottom of the ranking."
+			m.flashIsError = false
+			return m, clearFlashAfter(flashDuration)
+		}
 		m.table.SetCursor(newIdx)
 		m.refreshRows()
 		m.table.SetCursor(newIdx)
+		m.flashMessage = ""
+		m.flashIsError = false
 		return m, nil
 	}
 	return m, nil

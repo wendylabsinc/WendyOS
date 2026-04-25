@@ -474,6 +474,19 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 	hidden := req.GetHidden()
 	secHint := securityHintFromProto(req.GetSecurity())
 
+	// Snapshot whether a saved profile exists *before* we touch nmcli so we
+	// can roll back any profile we (or `nmcli device wifi connect`) created
+	// when activation later fails. Without this, a failed authentication
+	// leaves the SSID with a saved profile, and ListWiFiNetworks then reports
+	// the network as IsKnown — making the UI show ★ for a connection that
+	// never actually succeeded. We deliberately do NOT touch a pre-existing
+	// profile, since that one holds credentials from a previously-working
+	// connection that a single mistyped retry shouldn't destroy.
+	preExistingUUID, err := existingProfileUUID(ctx, n.nmcliPath, ssid)
+	if err != nil {
+		return fmt.Errorf("checking for existing WiFi profile: %w", err)
+	}
+
 	if hidden || secHint != "" {
 		cred := SavedCredential{
 			SSID:     ssid,
@@ -485,6 +498,7 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 			return fmt.Errorf("preparing WiFi profile: %w", err)
 		}
 		if err := activateProfile(ctx, n.nmcliPath, ssid); err != nil {
+			n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
 			return err
 		}
 		n.logger.Info("Connected to WiFi via profile",
@@ -495,10 +509,34 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 	}
 
 	if err := runNMCLIConnect(ctx, n.nmcliPath, ssid, req.GetPassword(), hidden); err != nil {
+		n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
 		return err
 	}
 	n.logger.Info("Connected to WiFi", zap.String("ssid", ssid))
 	return nil
+}
+
+// cleanupTransientProfile removes a saved nmcli profile for ssid if and only
+// if it didn't already exist before the connect attempt. preExistingUUID is
+// what existingProfileUUID returned before activation: an empty value means
+// the profile we now see was created during the failed attempt itself, so
+// it's safe to delete. Cleanup is best-effort — if it fails we just log,
+// since the original connect error is what the caller actually needs.
+func (n *NMCLINetworkManager) cleanupTransientProfile(ctx context.Context, ssid, preExistingUUID string) {
+	if preExistingUUID != "" {
+		return
+	}
+	uuid, err := existingProfileUUID(ctx, n.nmcliPath, ssid)
+	if err != nil || uuid == "" {
+		return
+	}
+	cmd := exec.CommandContext(ctx, n.nmcliPath, "connection", "delete", uuid)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		n.logger.Warn("failed to clean up profile after failed connect",
+			zap.String("ssid", ssid),
+			zap.String("output", strings.TrimSpace(string(out))),
+			zap.Error(err))
+	}
 }
 
 // securityHintFromProto maps the proto enum to the free-form string consumed

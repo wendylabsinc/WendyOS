@@ -480,6 +480,65 @@ func TestForgetOptimisticUpdateClearsKnown(t *testing.T) {
 	}
 }
 
+func TestRankModeRefusesWhenCursorOnUnknown(t *testing.T) {
+	// Sort puts the connected/known network at the top, so seed a cursor
+	// that lands on the unknown row and try to enter rank mode.
+	networks := []Network{
+		{SSID: "Saved", Known: true, Priority: 5},
+		{SSID: "Stranger", Signal: 70},
+	}
+	m := NewModel(networks)
+	for i, n := range m.networks {
+		if !n.Known {
+			m.table.SetCursor(i)
+			break
+		}
+	}
+	m = sendKey(m, "r")
+	if m.mode != modeBrowsing {
+		t.Fatalf("rank mode should not have been entered with cursor on an unknown row; mode=%v", m.mode)
+	}
+	if !m.flashIsError || m.flashMessage == "" {
+		t.Errorf("expected an error flash explaining the guard; flash=%q isError=%v", m.flashMessage, m.flashIsError)
+	}
+}
+
+func TestRankModeFlashesAtTopBoundary(t *testing.T) {
+	networks := []Network{
+		{SSID: "Alpha", Known: true, Priority: 10},
+		{SSID: "Bravo", Known: true, Priority: 5},
+	}
+	m := NewModel(networks)
+	m = sendKey(m, "r")
+	// Cursor is at row 0 (top of known block); pressing up must flash and
+	// leave the order untouched.
+	m = sendKey(m, "up")
+	if m.networks[0].SSID != "Alpha" || m.networks[1].SSID != "Bravo" {
+		t.Errorf("order changed at top boundary: %v", ssids(m.networks))
+	}
+	if m.flashMessage == "" {
+		t.Errorf("expected a flash message at top boundary")
+	}
+}
+
+func TestRankModeFlashesAtBottomBoundary(t *testing.T) {
+	networks := []Network{
+		{SSID: "Alpha", Known: true, Priority: 10},
+		{SSID: "Bravo", Known: true, Priority: 5},
+		{SSID: "Open", Signal: 60},
+	}
+	m := NewModel(networks)
+	m = sendKey(m, "r")
+	m.table.SetCursor(1) // last known row
+	m = sendKey(m, "down")
+	if m.networks[0].SSID != "Alpha" || m.networks[1].SSID != "Bravo" {
+		t.Errorf("order changed at bottom boundary: %v", ssids(m.networks))
+	}
+	if m.flashMessage == "" {
+		t.Errorf("expected a flash message at bottom boundary")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
