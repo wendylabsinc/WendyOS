@@ -25,7 +25,6 @@ RDEPENDS:${PN} = " \
     avahi-wendyos-hostname \
     avahi-utils \
     jq \
-    k3s-agent \
     wendyos-identity \
     wendyos-agent \
     wendyos-user \
@@ -37,11 +36,6 @@ RDEPENDS:${PN} = " \
     containerd-config \
     xdg-dbus-proxy \
     "
-
-# k3s-agent is excluded on RPi3/RPi4: those targets run containers via
-# containerd directly (e.g. nerdctl), without Kubernetes orchestration.
-RDEPENDS:${PN}:remove:raspberrypi3 = "k3s-agent"
-RDEPENDS:${PN}:remove:raspberrypi4 = "k3s-agent"
 
 RDEPENDS:${PN}:append = " \
     ${@oe.utils.ifelse( \

@@ -11,11 +11,6 @@ IMAGE_INSTALL:append = " \
     packagegroup-wendyos-rpi \
     "
 
-# Container runtime
-IMAGE_INSTALL:append = " \
-    ${@oe.utils.ifelse(d.getVar('WENDYOS_CONTAINER_RUNTIME') == '1', ' packagegroup-wendyos-container', '')} \
-    "
-
 # wendyos-image.bb appends ext4 unconditionally; RPi5 only needs wic
 IMAGE_FSTYPES:remove = "ext4"
 

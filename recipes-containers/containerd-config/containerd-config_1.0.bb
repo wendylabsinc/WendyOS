@@ -27,4 +27,4 @@ FILES:${PN} += "\
 "
 
 # Note: No RDEPENDS needed - this just provides config files
-# containerd-opencontainers will be pulled in by other packages (k3s-agent, etc.)
+# containerd-opencontainers is pulled in by packagegroup-wendyos-container.

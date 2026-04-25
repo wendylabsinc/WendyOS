@@ -78,6 +78,12 @@ IMAGE_INSTALL:append = " \
         )} \
     "
 
+# Container runtime (containerd + nerdctl + CNI). Default in wendyos.conf;
+# any machine can opt out with WENDYOS_CONTAINER_RUNTIME = "0".
+IMAGE_INSTALL:append = " \
+    ${@oe.utils.ifelse(d.getVar('WENDYOS_CONTAINER_RUNTIME') == '1', ' packagegroup-wendyos-container', '')} \
+    "
+
 # Note: gadget-network-config (standalone dnsmasq) removed.
 # USB gadget IPv4 mode is controlled by WENDYOS_USB_NET_MODE (see wendyos.conf).
 
