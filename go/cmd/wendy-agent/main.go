@@ -296,6 +296,16 @@ func main() {
 		}
 	}()
 
+	// Cloud log forwarding: if WENDY_CLOUD_GRPC is set, forward logs upstream.
+	if cloudGRPC := os.Getenv("WENDY_CLOUD_GRPC"); cloudGRPC != "" {
+		forwarder := services.NewCloudForwarder(logger, broadcaster, cloudGRPC)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			forwarder.Run(ctx)
+		}()
+	}
+
 	// Graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
