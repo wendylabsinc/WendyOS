@@ -18,7 +18,7 @@ on:
       deploy:
         description: 'Deploy generated projects to hardware device'
         type: boolean
-        default: false
+        default: true
       hostname:
         description: 'Device hostname for deploy phase (empty = auto-discover)'
         required: false
@@ -37,7 +37,7 @@ on:
         default: ''
       deploy:
         type: boolean
-        default: false
+        default: true
       hostname:
         type: string
         default: ''
