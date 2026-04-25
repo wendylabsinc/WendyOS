@@ -592,12 +592,13 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 		return conn, nil
 	}
 
+	warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	if !isInteractiveTerminal() {
-		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
+		fmt.Fprintf(os.Stderr, warn.Render("Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.")+"\n", agentVer, version.Version)
 		return conn, nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] ", agentVer, version.Version)
+	fmt.Fprintf(os.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] "), agentVer, version.Version)
 	reader := bufio.NewReader(os.Stdin)
 	answer, _ := reader.ReadString('\n')
 	answer = strings.TrimSpace(strings.ToLower(answer))
