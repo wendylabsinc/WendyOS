@@ -215,10 +215,11 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 			cliLogln("CLI Version: %s", version.Version)
 
+			warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
 			cliNotice("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
-				cliNotice("\nNote: CLI is behind the agent. Consider updating the CLI.")
+				fmt.Println(warn.Render("\nCLI is behind the agent — consider updating the CLI."))
 			}
 
 			if checkUpdates {
