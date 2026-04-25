@@ -33,7 +33,7 @@ type mockNetworkManager struct {
 func (m *mockNetworkManager) ListWiFiNetworks(_ context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
 	return m.networks, m.listErr
 }
-func (m *mockNetworkManager) ConnectToWiFi(_ context.Context, _, _ string) error {
+func (m *mockNetworkManager) ConnectToWiFi(_ context.Context, _ *agentpb.ConnectToWiFiRequest) error {
 	return m.connectErr
 }
 func (m *mockNetworkManager) GetWiFiStatus(_ context.Context) (bool, string, error) {
@@ -41,6 +41,18 @@ func (m *mockNetworkManager) GetWiFiStatus(_ context.Context) (bool, string, err
 }
 func (m *mockNetworkManager) DisconnectWiFi(_ context.Context) error {
 	return m.disconnErr
+}
+func (m *mockNetworkManager) ListKnownWiFiNetworks(_ context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error) {
+	return nil, nil
+}
+func (m *mockNetworkManager) SetWiFiNetworkPriority(_ context.Context, _ string, _ int32) error {
+	return nil
+}
+func (m *mockNetworkManager) ReorderKnownWiFiNetworks(_ context.Context, _ []string) error {
+	return nil
+}
+func (m *mockNetworkManager) ForgetWiFiNetwork(_ context.Context, _ string) error {
+	return nil
 }
 
 type mockHardwareDiscoverer struct {

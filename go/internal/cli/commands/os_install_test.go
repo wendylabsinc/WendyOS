@@ -15,7 +15,7 @@ func TestNewOSInstallCmd_Flags(t *testing.T) {
 		t.Errorf("Use = %q; want %q", cmd.Use, "install [image] [drive]")
 	}
 
-	expectedFlags := []string{"nightly", "force", "device-type", "version", "drive", "wifi-ssid", "wifi-password"}
+	expectedFlags := []string{"nightly", "force", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
@@ -53,7 +53,7 @@ func TestNewOSInstallCmd_PositionalArgsIncompatibleWithFlags(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error when positional args are combined with manifest flags")
 			}
-			expected := "positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, or --device-name"
+			expected := "positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name"
 			if got := err.Error(); got != expected {
 				t.Errorf("unexpected error: %q; want %q", got, expected)
 			}
@@ -140,5 +140,89 @@ func TestOsCachedImagePath_Sanitization(t *testing.T) {
 	_, err = osCachedImagePath("../evil", "0.10.4")
 	if err == nil {
 		t.Fatal("expected error for path traversal in device key")
+	}
+}
+
+func TestParseWiFiEntry(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		wantSSID string
+		wantPW   string
+		wantPri  int32
+		wantHid  bool
+		wantSec  string
+		wantErr  bool
+	}{
+		{"ssid only", "ssid=Home", "Home", "", 0, false, "", false},
+		{"all fields", "ssid=Home,password=p,priority=10,hidden=true,security=wpa3", "Home", "p", 10, true, "wpa3", false},
+		{"escaped comma", `ssid=My\,Net,password=x`, "My,Net", "x", 0, false, "", false},
+		{"missing ssid", "password=p", "", "", 0, false, "", true},
+		{"bad priority", "ssid=A,priority=nope", "", "", 0, false, "", true},
+		{"unknown key", "ssid=A,foo=bar", "", "", 0, false, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := parseWiFiEntry(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %+v", c)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.SSID != tc.wantSSID || c.Password != tc.wantPW || c.Priority != tc.wantPri || c.Hidden != tc.wantHid || c.Security != tc.wantSec {
+				t.Errorf("got %+v; want ssid=%q pw=%q pri=%d hidden=%v sec=%q",
+					c, tc.wantSSID, tc.wantPW, tc.wantPri, tc.wantHid, tc.wantSec)
+			}
+		})
+	}
+}
+
+func TestResolveWiFiCredentialsListFlags(t *testing.T) {
+	// --wifi-ssid + --wifi-password shortcut (non-TTY path: isInteractiveTerminal returns false in tests).
+	creds, err := resolveWiFiCredentialsList(wifiCLIOptions{SSID: "Home", Password: "pw"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(creds) != 1 || creds[0].SSID != "Home" || creds[0].Password != "pw" {
+		t.Errorf("shortcut produced %+v", creds)
+	}
+
+	// Repeatable --wifi: order preserved, priorities honoured.
+	creds, err = resolveWiFiCredentialsList(wifiCLIOptions{Entries: []string{
+		"ssid=First,password=a,priority=100",
+		"ssid=Second,priority=50",
+		"ssid=Hidden,hidden=true",
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(creds) != 3 {
+		t.Fatalf("got %d creds; want 3", len(creds))
+	}
+	if creds[0].SSID != "First" || creds[0].Priority != 100 {
+		t.Errorf("creds[0] = %+v", creds[0])
+	}
+	if creds[2].SSID != "Hidden" || !creds[2].Hidden {
+		t.Errorf("creds[2] = %+v", creds[2])
+	}
+
+	// --no-wifi short-circuits even when other flags are empty.
+	creds, err = resolveWiFiCredentialsList(wifiCLIOptions{NoWifi: true})
+	if err != nil || creds != nil {
+		t.Errorf("no-wifi: got %v, %+v", err, creds)
+	}
+
+	// --no-wifi combined with --wifi-ssid should error.
+	if _, err := resolveWiFiCredentialsList(wifiCLIOptions{NoWifi: true, SSID: "Home"}); err == nil {
+		t.Error("expected error when --no-wifi is combined with --wifi-ssid")
+	}
+
+	// --wifi-password without --wifi-ssid should error.
+	if _, err := resolveWiFiCredentialsList(wifiCLIOptions{Password: "pw"}); err == nil {
+		t.Error("expected error when --wifi-password is passed alone")
 	}
 }
