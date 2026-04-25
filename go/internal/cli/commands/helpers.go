@@ -143,10 +143,17 @@ func resolveHostPreferIPv4(host string) string {
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
 // Prefer the discovered IP address so commands still work when .local
 // hostname resolution is unavailable on the host machine.
+//
+// For provisioned (mTLS) devices the Avahi advertisement carries the mTLS
+// port. connectWithAutoTLS derives the mTLS port as plaintext+1, so we
+// subtract 1 here to keep that convention working correctly.
 func lanAgentAddresses(dev models.LANDevice) []string {
 	port := dev.Port
 	if port == 0 {
 		port = defaultAgentPort
+	}
+	if dev.IsMTLS && port > 1 {
+		port-- // advertised port is mTLS; connectWithAutoTLS will add 1 back
 	}
 
 	var addresses []string
@@ -517,16 +524,20 @@ func connectFromSelectedDevice(target *SelectedDevice, cfg resolveConfig) (*grpc
 }
 
 // connectWithAutoTLS tries to connect using mTLS if the CLI has auth certs,
-// falling back to plaintext if no certs are available or mTLS connection fails.
+// falling back to plaintext if no certs are available or all mTLS attempts fail.
+// It tries each stored certificate in order so that both production and local
+// pki-core certs are attempted.
 func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.AgentConnection, error) {
-	certInfo := loadCLICert()
-	if certInfo != nil {
-		// Derive the mTLS port (plaintext port + 1).
+	allCerts := loadAllCLICerts()
+	if len(allCerts) > 0 {
 		host, portStr, _ := net.SplitHostPort(plaintextAddr)
 		if port, err := strconv.Atoi(portStr); err == nil {
 			mtlsAddr := hostPort(host, port+1)
-			conn, tlsErr := grpcclient.ConnectWithTLS(ctx, mtlsAddr, certInfo)
-			if tlsErr == nil {
+			for i := range allCerts {
+				conn, tlsErr := grpcclient.ConnectWithTLS(ctx, mtlsAddr, &allCerts[i])
+				if tlsErr != nil {
+					continue
+				}
 				// grpc.NewClient is lazy — verify the connection actually
 				// works with a fast probe before committing to mTLS.
 				// 8s allows time for mDNS (.local) resolution + TCP + TLS handshake.
@@ -538,7 +549,6 @@ func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.
 				}
 				conn.Close()
 			}
-			// mTLS failed — fall back to plaintext.
 		}
 	}
 	return grpcclient.Connect(ctx, plaintextAddr)
@@ -690,6 +700,22 @@ func loadCLICert() *config.CertificateInfo {
 	}
 	cert := auth.Certificates[0]
 	return &cert
+}
+
+// loadAllCLICerts returns the first certificate from each auth entry that has
+// one. Used by connectWithAutoTLS to try all available certs in order.
+func loadAllCLICerts() []config.CertificateInfo {
+	cfg, err := config.Load()
+	if err != nil || len(cfg.Auth) == 0 {
+		return nil
+	}
+	var out []config.CertificateInfo
+	for _, auth := range cfg.Auth {
+		if len(auth.Certificates) > 0 {
+			out = append(out, auth.Certificates[0])
+		}
+	}
+	return out
 }
 
 // loadCLIAuth returns the first auth entry that has certificates, or nil.

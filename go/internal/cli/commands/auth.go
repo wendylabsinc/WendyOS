@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
@@ -30,6 +31,7 @@ func newAuthCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newAuthLoginCmd(),
+		newAuthLoginLocalCmd(),
 		newAuthLogoutCmd(),
 		newAuthRefreshCertsCmd(),
 	)
@@ -241,6 +243,120 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	}
 
 	return nil
+}
+
+// newAuthLoginLocalCmd issues a CLI certificate from a local pki-core instance
+// using a Bearer API key. This enables mTLS connectivity to devices provisioned
+// by the same local pki-core.
+func newAuthLoginLocalCmd() *cobra.Command {
+	var cloudGRPC string
+	var apiKey string
+	var orgID int32
+
+	cmd := &cobra.Command{
+		Use:   "login-local",
+		Short: "Log in to a local pki-core instance",
+		Long:  "Issues a CLI certificate from a self-hosted pki-core instance using a Bearer API key. Use this to enable mTLS connections to devices provisioned by the same pki-core.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				return fmt.Errorf("connecting to cloud: %w", err)
+			}
+			defer cloudConn.Close()
+
+			authCtx := metadata.NewOutgoingContext(ctx,
+				metadata.Pairs("authorization", "Bearer "+apiKey))
+
+			certClient := cloudpb.NewCertificateServiceClient(cloudConn)
+
+			// Create an enrollment token to get a device_id for the CLI cert.
+			tokenResp, err := certClient.CreateAssetEnrollmentToken(authCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
+				OrganizationId: orgID,
+				Name:           "cli-user",
+				TtlSeconds:     120,
+			})
+			if err != nil {
+				return fmt.Errorf("creating enrollment token: %w", err)
+			}
+			// Reconstruct the device_id that pki-core stored in the token.
+			deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
+
+			// Generate a key pair and CSR with the device_id as CN.
+			privateKeyPEM, err := certs.GenerateKeyPair()
+			if err != nil {
+				return fmt.Errorf("generating key pair: %w", err)
+			}
+			csrPEM, err := certs.GenerateCSR(privateKeyPEM, deviceID)
+			if err != nil {
+				return fmt.Errorf("generating CSR: %w", err)
+			}
+
+			// Issue the CLI certificate.
+			issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
+				PemCsr:          csrPEM,
+				EnrollmentToken: tokenResp.GetEnrollmentToken(),
+			})
+			if err != nil {
+				return fmt.Errorf("issuing certificate: %w", err)
+			}
+			if issueResp.GetError() != nil {
+				return fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
+			}
+			cert := issueResp.GetCertificate()
+			if cert == nil {
+				return fmt.Errorf("no certificate returned from cloud")
+			}
+
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+
+			certInfo := config.CertificateInfo{
+				PemCertificate:      cert.GetPemCertificate(),
+				PemCertificateChain: cert.GetPemCertificateChain(),
+				PemPrivateKey:       privateKeyPEM,
+				OrganizationID:      int(issueResp.GetOrganizationId()),
+			}
+			authEntry := config.AuthConfig{
+				CloudDashboard: "",
+				CloudGRPC:      cloudGRPC,
+				Certificates:   []config.CertificateInfo{certInfo},
+			}
+
+			// Prepend so local cert is tried first by connectWithAutoTLS.
+			cfg.Auth = append([]config.AuthConfig{authEntry}, cfg.Auth...)
+			// Deduplicate: remove older entry for the same cloudGRPC if any.
+			seen := make(map[string]bool)
+			filtered := cfg.Auth[:0]
+			for _, a := range cfg.Auth {
+				if seen[a.CloudGRPC] {
+					continue
+				}
+				seen[a.CloudGRPC] = true
+				filtered = append(filtered, a)
+			}
+			cfg.Auth = filtered
+
+			if err := config.Save(cfg); err != nil {
+				return fmt.Errorf("saving config: %w", err)
+			}
+
+			fmt.Printf("Local authentication successful (org=%d, device=%s). Certificates saved.\n",
+				issueResp.GetOrganizationId(), deviceID)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&cloudGRPC, "cloud", "", "Local pki-core gRPC address (host:port)")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for the local pki-core")
+	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID")
+	_ = cmd.MarkFlagRequired("cloud")
+	_ = cmd.MarkFlagRequired("api-key")
+
+	return cmd
 }
 
 func newAuthLogoutCmd() *cobra.Command {

@@ -33,3 +33,4 @@ go/wendy
 
 # Git worktrees
 .worktrees/
+go/local-pki-test

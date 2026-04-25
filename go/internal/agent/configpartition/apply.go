@@ -348,6 +348,81 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 	}
 }
 
+// UpdateAvahiForProvisioning rewrites the _wendyos._udp service block in the
+// avahi service file to advertise the mTLS port and a tls=true TXT record,
+// then restarts avahi-daemon so the mDNS advertisement reflects that the
+// device is now provisioned.
+//
+// The WendyOS avahi file contains multiple <service> blocks (SSH, HTTP, etc.)
+// so we locate and modify only the _wendyos._udp block.
+func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int) {
+	const serviceFile = "/etc/avahi/services/wendyos-mdns.service"
+
+	data, err := os.ReadFile(serviceFile)
+	if err != nil {
+		logger.Warn("Could not read avahi service file for provisioning update",
+			zap.String("path", serviceFile), zap.Error(err))
+		return
+	}
+
+	content := updateWendyOSServicePort(string(data), mtlsPort)
+
+	if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+		logger.Warn("Could not write avahi service file",
+			zap.String("path", serviceFile), zap.Error(err))
+		return
+	}
+
+	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	if out, err := restart.CombinedOutput(); err != nil {
+		logger.Warn("systemctl restart avahi-daemon failed after provisioning",
+			zap.Error(err), zap.String("output", string(out)))
+	} else {
+		logger.Info("Updated avahi advertisement for mTLS", zap.Int("port", mtlsPort))
+	}
+}
+
+// updateWendyOSServicePort finds the _wendyos._udp service block and updates
+// its port to mtlsPort and adds/updates a tls=true TXT record. Other service
+// blocks (SSH, HTTP, etc.) are left untouched.
+func updateWendyOSServicePort(content string, mtlsPort int) string {
+	const typeTag = "<type>_wendyos._udp</type>"
+	portRe := regexp.MustCompile(`<port>\d+</port>`)
+
+	typeIdx := strings.Index(content, typeTag)
+	if typeIdx < 0 {
+		return content
+	}
+
+	// Walk back to find the opening <service tag for this block.
+	serviceStart := strings.LastIndex(content[:typeIdx], "<service")
+	if serviceStart < 0 {
+		serviceStart = typeIdx
+	}
+
+	// Walk forward to find the closing </service> tag for this block.
+	closeOffset := strings.Index(content[typeIdx:], "</service>")
+	if closeOffset < 0 {
+		return content
+	}
+	serviceEnd := typeIdx + closeOffset + len("</service>")
+
+	block := content[serviceStart:serviceEnd]
+
+	// Update port only within this block.
+	block = portRe.ReplaceAllString(block, fmt.Sprintf("<port>%d</port>", mtlsPort))
+
+	// Add or update the tls=true TXT record.
+	if strings.Contains(block, "<txt-record>tls=") {
+		block = replaceTXTRecord(block, "tls", "true")
+	} else {
+		block = strings.Replace(block, "</service>",
+			"    <txt-record>tls=true</txt-record>\n  </service>", 1)
+	}
+
+	return content[:serviceStart] + block + content[serviceEnd:]
+}
+
 // replaceTXTRecord replaces the value in a <txt-record>key=...</txt-record> line.
 func replaceTXTRecord(content, key, value string) string {
 	re := regexp.MustCompile(`(<txt-record>` + regexp.QuoteMeta(key) + `=)[^<]*(</txt-record>)`)

@@ -208,6 +208,7 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 		DisplayName:   displayName,
 		Hostname:      hostname,
 		Port:          port,
+		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
 	}, nil

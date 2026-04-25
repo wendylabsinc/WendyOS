@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 func newDeviceCmd() *cobra.Command {
@@ -60,6 +61,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceSetDefaultCmd(),
 		newDeviceUnsetDefaultCmd(),
 		newDeviceSetupCmd(),
+		newDeviceProvisionCmd(),
 		newDeviceUpdateCmd(),
 	)
 	addToGroup("monitor",
@@ -383,6 +385,80 @@ func newDeviceSetupCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newDeviceProvisionCmd() *cobra.Command {
+	var cloudAddr string
+	var apiKey string
+	var deviceName string
+	var orgID int32
+
+	cmd := &cobra.Command{
+		Use:   "provision",
+		Short: "Provision this device using a local Wendy cloud endpoint",
+		Long:  "Creates an enrollment token using a Bearer API key and provisions the connected agent. For use with local or self-hosted pki-core instances.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+
+			cloudConn, err := grpc.NewClient(cloudAddr,
+				grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				return fmt.Errorf("connecting to cloud: %w", err)
+			}
+			defer cloudConn.Close()
+
+			authCtx := metadata.NewOutgoingContext(ctx,
+				metadata.Pairs("authorization", "Bearer "+apiKey))
+
+			certClient := cloudpb.NewCertificateServiceClient(cloudConn)
+			tokenResp, err := certClient.CreateAssetEnrollmentToken(authCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
+				OrganizationId: orgID,
+				Name:           deviceName,
+				TtlSeconds:     600,
+			})
+			if err != nil {
+				return fmt.Errorf("creating enrollment token: %w", err)
+			}
+			fmt.Printf("Enrollment token created (asset=%d, expires=%s)\n",
+				tokenResp.GetAssetId(),
+				tokenResp.GetExpiresAt().AsTime().Format(time.RFC3339))
+
+			cloudHost, _, err := net.SplitHostPort(cloudAddr)
+			if err != nil {
+				cloudHost = cloudAddr
+			}
+
+			fmt.Println("Provisioning device...")
+			_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
+				OrganizationId:  tokenResp.GetOrganizationId(),
+				AssetId:         tokenResp.GetAssetId(),
+				EnrollmentToken: tokenResp.GetEnrollmentToken(),
+				CloudHost:       cloudHost,
+			})
+			if err != nil {
+				return fmt.Errorf("provisioning: %w", err)
+			}
+
+			fmt.Printf("Device provisioned (org=%d, asset=%d)\n",
+				tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&cloudAddr, "cloud", "", "pki-core wendy frontend address (host:port)")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for CreateAssetEnrollmentToken")
+	cmd.Flags().StringVar(&deviceName, "name", "", "Device name")
+	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID")
+	_ = cmd.MarkFlagRequired("cloud")
+	_ = cmd.MarkFlagRequired("api-key")
+
+	return cmd
 }
 
 // provisionDevice creates an asset enrollment token via the cloud and calls
@@ -1191,14 +1267,16 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 
 				// Validate the binary's ELF architecture against the device.
-				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-				if err != nil {
-					return fmt.Errorf("could not query device architecture to verify binary: %w", err)
-				}
-				deviceArch := versionResp.GetCpuArchitecture()
-				if deviceArch != "" {
-					if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
-						return err
+				// If the device is provisioned and only exposes ProvisioningService
+				// on plaintext, GetAgentVersion may be unavailable — skip arch
+				// validation in that case rather than blocking the upload.
+				versionResp, versionErr := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+				if versionErr == nil {
+					deviceArch := versionResp.GetCpuArchitecture()
+					if deviceArch != "" {
+						if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
+							return err
+						}
 					}
 				}
 			} else {

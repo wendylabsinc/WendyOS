@@ -255,10 +255,14 @@ func main() {
 		}()
 	}
 
-	// Set up the provisioning callback to start the mTLS server and tunnel broker.
+	// mtlsPortNum is agentPort+1; used for the mTLS server and Avahi advertisement.
+	agentPortNum, _ := strconv.Atoi(agentPort)
+	mtlsPortNum := agentPortNum + 1
+
+	// Set up the provisioning callback to start the mTLS server dynamically.
 	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
-		startTunnelBroker(certPEM, chainPEM, keyPEM)
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
 	}
 
 	// Check if already provisioned and start mTLS server and tunnel broker if certificates exist.
@@ -267,6 +271,7 @@ func main() {
 
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
 		startTunnelBroker(certPEM, chainPEM, keyPEM)
 	}
 
