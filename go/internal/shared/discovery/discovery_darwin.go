@@ -150,6 +150,14 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 	var port int
 	txtRecords := make(map[string]string)
 
+	parseTXT := func(line string) {
+		for _, field := range strings.Fields(line) {
+			if k, v, ok := strings.Cut(field, "="); ok {
+				txtRecords[k] = v
+			}
+		}
+	}
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -168,15 +176,14 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 				}
 			}
 
-			// Also grab TXT from this same line or subsequent content.
-			// Parse any key=value pairs on the line.
-			for _, field := range parts {
-				if k, v, ok := strings.Cut(field, "="); ok {
-					txtRecords[k] = v
-				}
+			// TXT records on the same line (some versions).
+			parseTXT(line)
+
+			// TXT records are typically on the next line indented with a space.
+			if scanner.Scan() {
+				parseTXT(scanner.Text())
 			}
 
-			// Got what we need, kill the process early.
 			_ = cmd.Process.Kill()
 			break
 		}
