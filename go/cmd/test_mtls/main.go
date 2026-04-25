@@ -21,6 +21,7 @@ func main() {
 		os.Exit(1)
 	}
 
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
@@ -42,6 +43,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close()
+
 
 	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
