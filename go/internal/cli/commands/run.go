@@ -407,6 +407,12 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
+	// Compose projects don't use wendy.json — each service carries its own config.
+	// Detect this early so we don't prompt to create an unneeded file.
+	if projectType, _ := resolveRunProjectType(cwd, opts.buildType); projectType == "compose" {
+		return runComposeCommand(ctx, cwd, opts)
+	}
+
 	cfgPath := filepath.Join(cwd, "wendy.json")
 	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
@@ -477,6 +483,37 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	// Agent-based run path (existing gRPC pipeline).
 	defer target.Agent.Close()
 	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
+}
+
+// runComposeCommand handles the full device-selection + execution flow for
+// docker-compose projects, bypassing the wendy.json requirement.
+func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
+	var resolveOpts []resolveOption
+	if opts.yes {
+		resolveOpts = append(resolveOpts, NonInteractive())
+	}
+	target, err := resolveTarget(ctx, resolveOpts...)
+	if err != nil {
+		return err
+	}
+
+	if target.External != nil && target.Provider != nil {
+		// Docker Desktop provider: use docker compose directly.
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), opts)
+	}
+
+	if target.Agent == nil {
+		if target.Bluetooth != nil {
+			if target.Bluetooth.IsWendyAgent() {
+				return fmt.Errorf("selected device is currently reachable only over Bluetooth. Connect it to WiFi and retry 'wendy run'")
+			}
+			return fmt.Errorf("selected device is a Wendy Lite device, which does not support 'wendy run'")
+		}
+		return fmt.Errorf("selected device does not have a reachable WendyOS agent and cannot run 'wendy run'")
+	}
+
+	defer target.Agent.Close()
+	return runComposeWithAgent(ctx, target.Agent, cwd, opts)
 }
 
 func resolveRunWorkingDir(opts runOptions) (string, error) {
@@ -734,11 +771,17 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	}
 
 	buildType := normalizeBuildType(requestedType)
-	if buildType != "docker" && buildType != "swift" && buildType != "python" {
-		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, or python", requestedType)
+	if buildType != "docker" && buildType != "swift" && buildType != "python" && buildType != "compose" {
+		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, python, or compose", requestedType)
 	}
 
 	switch buildType {
+	case "compose":
+		for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return "compose", nil
+			}
+		}
 	case "docker":
 		marker := filepath.Join(dir, "Dockerfile")
 		if _, err := os.Stat(marker); err == nil {
@@ -929,6 +972,8 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	switch projectType {
 	case "docker":
 		// Dockerfile already exists.
+	case "compose":
+		return runComposeWithAgent(ctx, conn, cwd, opts)
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			cliLogln("No Dockerfile found. Generating one for Python project...")

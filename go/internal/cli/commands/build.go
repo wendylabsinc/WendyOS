@@ -275,7 +275,7 @@ func buildOptionLabels(options []BuildOption) []string {
 
 func normalizeBuildType(buildType string) string {
 	switch strings.ToLower(strings.TrimSpace(buildType)) {
-	case "docker", "swift", "python":
+	case "docker", "swift", "python", "compose":
 		return strings.ToLower(strings.TrimSpace(buildType))
 	default:
 		return ""
@@ -315,6 +315,8 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	imageName := strings.ToLower(appID) + ":latest"
 
 	switch option.Type {
+	case "compose":
+		return buildComposeProject(dir)
 	case "docker":
 		return buildDockerProject(dir, imageName, platform, option.File)
 	case "python":
@@ -324,8 +326,21 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	case "xcode":
 		return buildXcodeProject(ctx, dir, option.File)
 	default:
-		return fmt.Errorf("unknown project type; add a Dockerfile, Package.swift, or requirements.txt")
+		return fmt.Errorf("unknown project type; add a Dockerfile, docker-compose.yml, Package.swift, or requirements.txt")
 	}
+}
+
+func buildComposeProject(dir string) error {
+	fmt.Println("Building Compose services...")
+	cmd := exec.Command("docker", "compose", "build")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker compose build: %w", err)
+	}
+	fmt.Println("Build completed successfully.")
+	return nil
 }
 
 func buildDockerProject(dir, imageName, platform, dockerfile string) error {

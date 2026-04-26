@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -16,6 +17,22 @@ type dockerBuildContext struct {
 	ImageName     string
 	ContainerName string
 	cmd           *exec.Cmd
+}
+
+// dockerComposeBuildContext is stored in BuiltApp.Context for Compose builds.
+type dockerComposeBuildContext struct {
+	ProjectDir  string
+	ComposeFile string
+}
+
+// composeFile returns the first docker-compose filename found in dir, or "".
+func composeFile(dir string) string {
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return name
+		}
+	}
+	return ""
 }
 
 // DockerProvider builds and runs applications in Docker Desktop containers.
@@ -59,18 +76,35 @@ func (p *DockerProvider) DiscoverDevices(ctx context.Context) ([]models.External
 }
 
 func (p *DockerProvider) SupportedBuildTypes() []string {
-	return []string{"docker"}
+	return []string{"docker", "compose"}
 }
 
 func (p *DockerProvider) CanBuild(projectPath string) bool {
-	_, err := os.Stat(projectPath + "/Dockerfile")
-	return err == nil
+	if _, err := os.Stat(filepath.Join(projectPath, "Dockerfile")); err == nil {
+		return true
+	}
+	return composeFile(projectPath) != ""
 }
 
 func (p *DockerProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
+	if cf := composeFile(projectPath); cf != "" {
+		cmd := exec.CommandContext(ctx, "docker", "compose", "build")
+		cmd.Dir = projectPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("docker compose build: %w", err)
+		}
+		return &BuiltApp{
+			ProviderKey: p.Key(),
+			Device:      device,
+			AppName:     product,
+			Context:     &dockerComposeBuildContext{ProjectDir: projectPath, ComposeFile: cf},
+		}, nil
+	}
+
 	imageName := strings.ToLower(product) + ":latest"
-	args := []string{"build", "-t", imageName, "."}
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", "build", "-t", imageName, ".")
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -103,8 +137,69 @@ func (p *DockerProvider) BuildFromImage(device models.ExternalDevice, product, i
 	}
 }
 
+func (p *DockerProvider) runCompose(ctx context.Context, cc *dockerComposeBuildContext, detach bool, output chan<- RunOutput) error {
+	args := []string{"compose", "up", "--remove-orphans"}
+	if detach {
+		args = append(args, "-d")
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = cc.ProjectDir
+
+	if detach {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("docker compose up: %w", err)
+		}
+		output <- RunOutput{Type: RunOutputStarted}
+		return nil
+	}
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("docker compose up: %w", err)
+	}
+
+	output <- RunOutput{Type: RunOutputStarted}
+
+	done := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		scanner.Buffer(make([]byte, 64*1024), 64*1024)
+		for scanner.Scan() {
+			output <- RunOutput{Type: RunOutputStdout, Data: append(scanner.Bytes(), '\n')}
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		scanner.Buffer(make([]byte, 64*1024), 64*1024)
+		for scanner.Scan() {
+			output <- RunOutput{Type: RunOutputStderr, Data: append(scanner.Bytes(), '\n')}
+		}
+		done <- struct{}{}
+	}()
+
+	<-done
+	<-done
+	return cmd.Wait()
+}
+
 func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, output chan<- RunOutput) error {
 	defer close(output)
+
+	if cc, ok := app.Context.(*dockerComposeBuildContext); ok {
+		return p.runCompose(ctx, cc, detach, output)
+	}
 
 	bc, ok := app.Context.(*dockerBuildContext)
 	if !ok {
@@ -193,6 +288,12 @@ func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, ou
 }
 
 func (p *DockerProvider) Stop(ctx context.Context, app *BuiltApp) error {
+	if cc, ok := app.Context.(*dockerComposeBuildContext); ok {
+		cmd := exec.CommandContext(ctx, "docker", "compose", "down")
+		cmd.Dir = cc.ProjectDir
+		return cmd.Run()
+	}
+
 	bc, ok := app.Context.(*dockerBuildContext)
 	if !ok {
 		return fmt.Errorf("docker provider: invalid build context")

@@ -23,6 +23,7 @@ Tests:
   python-bluetooth      Python with bluetooth entitlement
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
+  compose-hello         docker-compose multi-service deployment (two services)
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -182,6 +183,7 @@ ALL_TESTS=(
     python-bluetooth
     python-no-network
     python-no-bluetooth
+    compose-hello
 )
 
 # If specific tests were requested via -t, filter the list.
@@ -226,7 +228,43 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
-    # Verify wendy.json exists
+    # ── Compose tests (docker-compose.yml, no wendy.json) ──────────────
+    if [[ -f "$test_dir/docker-compose.yml" || -f "$test_dir/compose.yml" ]]; then
+        compose_file="$test_dir/docker-compose.yml"
+        [[ -f "$test_dir/compose.yml" ]] && compose_file="$test_dir/compose.yml"
+
+        # Derive project name from directory name (mirrors CLI logic).
+        project_name="$(basename "$test_dir")"
+
+        # Extract service names using Python (available on all supported platforms).
+        service_names=$(python3 - <<'PYEOF' "$compose_file"
+import sys, yaml
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f)
+print(' '.join((cfg.get('services') or {}).keys()))
+PYEOF
+        )
+
+        # Pre-cleanup: remove leftover service containers.
+        for svc in $service_names; do
+            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
+        done
+
+        # Deploy and run.
+        pushd "$test_dir" > /dev/null
+        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
+        popd > /dev/null
+
+        # Post-cleanup.
+        for svc in $service_names; do
+            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
+            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
+        done
+        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
+        continue
+    fi
+
+    # ── Standard single-container tests (wendy.json) ───────────────────
     if [[ ! -f "$test_dir/wendy.json" ]]; then
         skip_test "$test_name" "no wendy.json"
         continue
