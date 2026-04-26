@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -12,6 +13,14 @@ import (
 )
 
 func main() {
+	addr := flag.String("addr", "", "mTLS agent address (host:port)")
+	flag.Parse()
+
+	if *addr == "" {
+		fmt.Fprintln(os.Stderr, "usage: test_mtls -addr <host:port>")
+		os.Exit(1)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
@@ -23,17 +32,17 @@ func main() {
 	}
 	cert := cfg.Auth[0].Certificates[0]
 	fmt.Printf("Cert PEM len: %d, Chain len: %d\n", len(cert.PemCertificate), len(cert.PemCertificateChain))
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
-	conn, err := grpcclient.ConnectWithTLS(ctx, "wendyos-dynamic-cosmos.local:50052", &cert)
+
+	conn, err := grpcclient.ConnectWithTLS(ctx, *addr, &cert)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ConnectWithTLS: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
-	
+
 	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "GetAgentVersion: %v\n", err)

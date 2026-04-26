@@ -127,7 +127,7 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 		// Try standard Go verification first (handles RSA/ECDSA chains).
 		opts := x509.VerifyOptions{
 			Roots:     caPool,
-			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
 		if _, err := leaf.Verify(opts); err == nil {
 			return nil
@@ -150,6 +150,12 @@ func verifyMLDSAClientCert(leaf *x509.Certificate, trustedCAs []*x509.Certificat
 	for _, ca := range trustedCAs {
 		if !bytes.Equal(ca.RawSubject, leaf.RawIssuer) {
 			continue
+		}
+		if now.Before(ca.NotBefore) || now.After(ca.NotAfter) {
+			return fmt.Errorf("CA certificate %q not valid at current time", ca.Subject.CommonName)
+		}
+		if !ca.BasicConstraintsValid || !ca.IsCA {
+			return fmt.Errorf("certificate %q is not a CA", ca.Subject.CommonName)
 		}
 		if err := verifyMLDSASignature(ca, leaf); err != nil {
 			return fmt.Errorf("invalid signature from CA %q: %w", ca.Subject.CommonName, err)

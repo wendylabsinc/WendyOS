@@ -298,7 +298,10 @@ func main() {
 	}
 
 	// mtlsPortNum is agentPort+1; used for the mTLS server and Avahi advertisement.
-	agentPortNum, _ := strconv.Atoi(agentPort)
+	agentPortNum, err := strconv.Atoi(agentPort)
+	if err != nil {
+		logger.Fatal("Invalid agent port", zap.String("port", agentPort), zap.Error(err))
+	}
 	mtlsPortNum := agentPortNum + 1
 
 	// Set up the provisioning callback to start the mTLS server dynamically.

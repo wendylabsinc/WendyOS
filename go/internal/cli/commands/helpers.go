@@ -152,7 +152,7 @@ func lanAgentAddresses(dev models.LANDevice) []string {
 	if port == 0 {
 		port = defaultAgentPort
 	}
-	if dev.IsMTLS && port > 1 {
+	if dev.IsMTLS && dev.Port != 0 && port > 1 {
 		port-- // advertised port is mTLS; connectWithAutoTLS will add 1 back
 	}
 

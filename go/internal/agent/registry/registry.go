@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,15 +36,20 @@ import (
 
 // Server is the embedded OCI registry HTTP server.
 type Server struct {
-	httpServer *http.Server
-	client     *containerd.Client
-	logger     *zap.Logger
+	httpServer   *http.Server
+	client       *containerd.Client
+	logger       *zap.Logger
+	shutdownOnce sync.Once
 }
 
 // Shutdown gracefully stops the registry server and releases the containerd client.
+// Safe to call multiple times; subsequent calls are no-ops.
 func (s *Server) Shutdown(ctx context.Context) error {
-	err := s.httpServer.Shutdown(ctx)
-	s.client.Close()
+	var err error
+	s.shutdownOnce.Do(func() {
+		err = s.httpServer.Shutdown(ctx)
+		s.client.Close()
+	})
 	return err
 }
 
