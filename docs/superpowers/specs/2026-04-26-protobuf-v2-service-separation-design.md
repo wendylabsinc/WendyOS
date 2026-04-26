@@ -73,6 +73,16 @@ Layer upload RPCs are removed — layers are no longer transferred over gRPC. Th
 
 `wendy_agent_v1_bluetooth.proto` (the L2CAP BLE transport envelope) currently imports WiFi types from v1. Updating it to import from v2 is deferred to a follow-up PR.
 
+## Go Implementation
+
+New v2 service structs live alongside v1 in `go/internal/agent/services/`, one file per service (e.g. `wifi_service.go`, `bluetooth_service.go`, `device_info_service.go`, `agent_update_service.go`, `os_update_service.go`). The container, provisioning, telemetry, and file-sync services get new v2 structs as well.
+
+**Dependency sharing:** The concrete managers (`NMCLINetworkManager`, `HardwareDiscoverer`, `BluetoothManager`) are typed to v1 proto types throughout `interfaces.go` and their implementations. Rather than updating all of that in this PR, v2 service structs accept the same v1-typed interfaces and do a mechanical v1 → v2 proto mapping at the gRPC response boundary. Small mapper functions (e.g. `mapWiFiNetworkV1toV2`) live in the v2 service file they serve. v1 code is completely untouched.
+
+Interface cleanup (updating `interfaces.go` to use internal domain types shared by both versions) is deferred to the v1 removal PR.
+
+**Server registration:** `go/cmd/wendy-agent/main.go` registers all v2 services alongside their v1 counterparts on the same gRPC server. `WendyFileSyncService` v2 is registered on all platforms except Linux.
+
 ## Migration
 
 v1 remains registered on the server alongside v2. CLI and other clients migrate to v2 incrementally. v1 removal is a separate cleanup PR once all callers are on v2.
