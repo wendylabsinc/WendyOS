@@ -3,7 +3,9 @@ package oci
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -17,6 +19,10 @@ const (
 	audioGroupGID uint32 = 29
 	// videoGroupGID is the standard video group GID.
 	videoGroupGID uint32 = 44
+	// inputGroupGID is the standard input group GID (for /dev/input devices).
+	inputGroupGID uint32 = 105
+	// v4l2Major is the standard Video4Linux character device major.
+	v4l2Major int64 = 81
 )
 
 // ApplyOptions configures optional behavior for entitlement application.
@@ -44,8 +50,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec, cfg.AppID)
 			}
-		case appconfig.EntitlementVideo:
-			applyVideo(spec)
+		case appconfig.EntitlementVideo, appconfig.EntitlementCamera:
+			applyCamera(spec)
 			if !didSetDeviceCapabilities {
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec, cfg.AppID)
@@ -54,21 +60,26 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
 			applyBluetooth(spec, cfg.AppID, opts.DBusProxyAvailable)
-		case appconfig.EntitlementCamera:
-			applyCamera(spec)
 		case appconfig.EntitlementUSB:
 			applyUSB(spec)
 		case appconfig.EntitlementI2C:
 			applyI2C(spec, ent)
 		case appconfig.EntitlementGPIO:
 			applyGPIO(spec, ent)
+		case appconfig.EntitlementSPI:
+			applySPI(spec)
+		case appconfig.EntitlementInput:
+			applyInput(spec)
 		}
 	}
 	return nil
 }
 
-// SetDeviceCapabilities adds standard device capabilities, cgroup mount,
-// cgroup namespace, and a default device allowance to the spec.
+// SetDeviceCapabilities adds standard device capabilities plus the cgroup
+// mount/namespace wiring needed for device-aware workloads. Callers are still
+// responsible for adding explicit device cgroup allow rules for each
+// entitlement they enable; this helper intentionally does not add a generic
+// allow-all devices rule.
 func SetDeviceCapabilities(spec *Spec, appName string) {
 	caps := []string{
 		"CAP_CHOWN",
@@ -117,12 +128,6 @@ func SetDeviceCapabilities(spec *Spec, appName string) {
 
 	// Add cgroup namespace.
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, LinuxNamespace{Type: "cgroup"})
-
-	// Default allow-all device rule.
-	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
-		Allow:  true,
-		Access: "rwm",
-	})
 }
 
 // applyGPU adds NVIDIA GPU device access. This provides a minimal fallback
@@ -204,10 +209,13 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 		spec.Process.Capabilities.Effective = appendUnique(spec.Process.Capabilities.Effective, "CAP_NET_ADMIN")
 		spec.Process.Capabilities.Permitted = appendUnique(spec.Process.Capabilities.Permitted, "CAP_NET_ADMIN")
 
-		// Mount systemd-resolved's actual resolv.conf for DNS resolution.
-		// /etc/resolv.conf often points to 127.0.0.53 (systemd-resolved stub)
-		// which does not work in containers. The /run path contains real upstream DNS servers.
-		// Only mount if systemd-resolved is running (the file exists).
+		// Mount a resolv.conf from the host so DNS works inside the container.
+		// The container has its own mount namespace, so its rootfs resolv.conf
+		// may be empty. Prefer systemd-resolved's upstream file, since on
+		// systemd hosts /etc/resolv.conf often points to the 127.0.0.53 stub
+		// listener; using the upstream file avoids depending on that stub in
+		// environments where the container has its own network namespace. When
+		// systemd-resolved is not in use, fall back to the host's /etc/resolv.conf.
 		const resolvedConf = "/run/systemd/resolve/resolv.conf"
 		alreadyMounted := false
 		for _, m := range spec.Mounts {
@@ -217,11 +225,17 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 			}
 		}
 		if !alreadyMounted {
+			source := ""
 			if _, err := os.Stat(resolvedConf); err == nil {
+				source = resolvedConf
+			} else if _, err := os.Stat("/etc/resolv.conf"); err == nil {
+				source = "/etc/resolv.conf"
+			}
+			if source != "" {
 				spec.Mounts = append(spec.Mounts, Mount{
 					Destination: "/etc/resolv.conf",
 					Type:        "bind",
-					Source:      resolvedConf,
+					Source:      source,
 					Options:     []string{"rbind", "ro"},
 				})
 			}
@@ -265,25 +279,67 @@ func applyAudio(spec *Spec) {
 		Access: "rwm",
 	})
 
-	// Mount PipeWire socket if available.
-	spec.Mounts = append(spec.Mounts, Mount{
-		Destination: "/run/pipewire",
-		Source:      "/run/pipewire",
-		Type:        "bind",
-		Options:     []string{"rbind", "nosuid", "noexec"},
-	})
+	// isSocket reports whether path is a Unix domain socket. Uses Lstat
+	// so symlinks are not followed — runc can't resolve symlink targets
+	// through bind mounts.
+	isSocket := func(path string) bool {
+		fi, err := os.Lstat(path)
+		return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
+	}
 
-	spec.Process.Env = append(spec.Process.Env,
-		"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
-	)
+	// Find the PipeWire socket. Check the system path first, then probe
+	// for a user session socket (e.g. /run/user/1000/pipewire-0 on RPi OS
+	// where PipeWire runs as a user service).
+	var pipewireSocketSource string
+	if isSocket("/run/pipewire/pipewire-0") {
+		pipewireSocketSource = "/run/pipewire/pipewire-0"
+	} else {
+		userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
+		for _, s := range userSockets {
+			if isSocket(s) {
+				pipewireSocketSource = s
+				break
+			}
+		}
+	}
+
+	if pipewireSocketSource != "" {
+		// Mount the individual socket file into the container.
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/run/pipewire/pipewire-0",
+			Source:      pipewireSocketSource,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		})
+		spec.Process.Env = append(spec.Process.Env,
+			"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
+		)
+
+		// Check for PulseAudio compat socket in the same source directory.
+		// PipeWire provides a PulseAudio emulation socket that GStreamer's
+		// autoaudiosink needs (pulsesink has the highest rank).
+		sourceDir := filepath.Dir(pipewireSocketSource)
+		pulseNative := filepath.Join(sourceDir, "pulse", "native")
+		if isSocket(pulseNative) {
+			spec.Mounts = append(spec.Mounts, Mount{
+				Destination: "/run/pipewire/pulse-native",
+				Source:      pulseNative,
+				Type:        "bind",
+				Options:     []string{"rbind", "nosuid", "noexec"},
+			})
+			spec.Process.Env = append(spec.Process.Env,
+				"PULSE_SERVER=unix:/run/pipewire/pulse-native",
+			)
+		}
+	}
 }
 
-// applyVideo adds video device access.
-func applyVideo(spec *Spec) {
+// applyCamera adds camera/V4L2 device access.
+func applyCamera(spec *Spec) {
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, videoGroupGID)
 
 	// Allow video4linux devices (major 81).
-	major := int64(81)
+	major := v4l2Major
 	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
 		Allow:  true,
 		Type:   "c",
@@ -291,18 +347,22 @@ func applyVideo(spec *Spec) {
 		Access: "rwm",
 	})
 
-	// Mount /dev/video* devices that exist on the host.
-	for i := 0; i < 16; i++ {
-		devPath := fmt.Sprintf("/dev/video%d", i)
-		if _, err := os.Stat(devPath); err == nil {
-			spec.Mounts = append(spec.Mounts, Mount{
-				Destination: devPath,
-				Source:      devPath,
-				Type:        "bind",
-				Options:     []string{"rbind", "nosuid", "noexec"},
-			})
-		}
-	}
+	// Replace the isolated /dev tmpfs with a live bind mount of the host /dev
+	// tree. USB webcam hotplug can recreate /dev/videoN with a different node
+	// name after unplug/replug, and an OCI device snapshot cannot update inside
+	// a running container. Binding host /dev keeps /dev/video* and /dev/v4l
+	// current without requiring container restart.
+	replaceMount(spec, Mount{
+		Destination: "/dev",
+		Source:      "/dev",
+		Type:        "bind",
+		Options:     []string{"rbind", "rw", "nosuid", "noexec"},
+	})
+}
+
+// applyVideo is a deprecated alias for camera/V4L2 device access.
+func applyVideo(spec *Spec) {
+	applyCamera(spec)
 }
 
 // applyPersist adds a persistent volume bind mount, creating the host
@@ -353,12 +413,6 @@ func applyBluetooth(spec *Spec, appID string, proxyAvailable bool) {
 	spec.Process.Env = append(spec.Process.Env,
 		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
 	)
-}
-
-// applyCamera adds camera/V4L2 device access.
-func applyCamera(spec *Spec) {
-	// Camera uses the same V4L2 devices as video.
-	applyVideo(spec)
 }
 
 // applyUSB adds USB device access.
@@ -428,6 +482,63 @@ func applyGPIO(spec *Spec, ent appconfig.Entitlement) {
 	_ = ent.Pins // Pins are used for documentation/validation; access is chip-level.
 }
 
+// applySPI adds SPI device access.
+func applySPI(spec *Spec) {
+	// Mount SPI devices that exist on the host.
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			devPath := fmt.Sprintf("/dev/spidev%d.%d", i, j)
+			if _, err := os.Stat(devPath); err == nil {
+				spec.Mounts = append(spec.Mounts, Mount{
+					Destination: devPath,
+					Source:      devPath,
+					Type:        "bind",
+					Options:     []string{"rbind", "rw"},
+				})
+			}
+		}
+	}
+
+	// Add SPI group GID for device permissions (group name varies by distro).
+	if grp, err := user.LookupGroup("spi"); err == nil {
+		if gid, err := strconv.ParseUint(grp.Gid, 10, 32); err == nil {
+			spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, uint32(gid))
+		}
+	}
+
+	// Allow SPI devices (major 153).
+	spiMajor := int64(153)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &spiMajor,
+		Access: "rwm",
+	})
+}
+
+// applyInput adds HID input device access (barcode scanners, keyboards, etc.).
+func applyInput(spec *Spec) {
+	// Add input group for /dev/input device permissions.
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, inputGroupGID)
+
+	// Mount /dev/input for HID event devices.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/dev/input",
+		Source:      "/dev/input",
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
+
+	// Allow input devices (major 13).
+	major := int64(13)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  &major,
+		Access: "rwm",
+	})
+}
+
 // appendUnique appends a value to a slice only if it is not already present.
 func appendUnique[T comparable](slice []T, val T) []T {
 	for _, v := range slice {
@@ -436,4 +547,14 @@ func appendUnique[T comparable](slice []T, val T) []T {
 		}
 	}
 	return append(slice, val)
+}
+
+func replaceMount(spec *Spec, mount Mount) {
+	for i, existing := range spec.Mounts {
+		if existing.Destination == mount.Destination {
+			spec.Mounts[i] = mount
+			return
+		}
+	}
+	spec.Mounts = append(spec.Mounts, mount)
 }

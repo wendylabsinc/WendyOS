@@ -3,6 +3,8 @@ package commands
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"golang.org/x/term"
 )
@@ -31,14 +34,60 @@ const defaultAgentPort = 50051
 
 const lanAddressProbeTimeout = 1500 * time.Millisecond
 
-var getAgentVersionAtAddress = func(ctx context.Context, address string) (*agentpb.GetAgentVersionResponse, error) {
+var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
 	conn, err := connectWithAutoTLS(ctx, address)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 	defer conn.Close()
 
-	return conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	return conn.IsMTLS, resp, err
+}
+
+var isInteractiveTerminalFn = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner(label))
+
+	var (
+		conn   *grpcclient.AgentConnection
+		runErr error
+		doneCh = make(chan struct{})
+	)
+	go func() {
+		defer close(doneCh)
+		conn, runErr = fn(ctx)
+		// Keep spinner teardown quiet; callers handle the returned error.
+		prog.Send(tui.SpinnerDoneMsg{})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, ErrUserCancelled
+	}
+
+	<-doneCh
+	return conn, runErr
 }
 
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
@@ -57,6 +106,38 @@ func hostPort(host string, port int) string {
 		return fmt.Sprintf("[%s]:%d", host, port)
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// resolveHostPreferIPv4 resolves a hostname to a concrete IP address,
+// preferring IPv4 over global IPv6. If the input is already an IP address
+// or resolution fails, it returns the input unchanged.
+func resolveHostPreferIPv4(host string) string {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return host // already an IP
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return host
+	}
+
+	var globalIPv6 string
+	for _, a := range addrs {
+		addr, parseErr := netip.ParseAddr(a)
+		if parseErr != nil {
+			continue
+		}
+		if addr.Is4() {
+			return a
+		}
+		if !addr.IsLinkLocalUnicast() && globalIPv6 == "" {
+			globalIPv6 = addr.WithZone("").String()
+		}
+	}
+	if globalIPv6 != "" {
+		return globalIPv6
+	}
+	return host // only link-local IPv6 found — keep hostname for zone-aware dial
 }
 
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
@@ -92,15 +173,16 @@ func preferredLANAddress(dev models.LANDevice) string {
 }
 
 // resolveLANAgentVersion tries the discovered LAN addresses in order and
-// returns the first one that answers GetAgentVersion.
-func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, *agentpb.GetAgentVersionResponse, error) {
+// returns the first one that answers GetAgentVersion, along with whether that
+// connection used mTLS.
+func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, bool, *agentpb.GetAgentVersionResponse, error) {
 	var lastErr error
 	for _, address := range lanAgentAddresses(dev) {
 		attemptCtx, cancel := context.WithTimeout(ctx, lanAddressProbeTimeout)
-		resp, err := getAgentVersionAtAddress(attemptCtx, address)
+		isMTLS, resp, err := getAgentVersionAtAddress(attemptCtx, address)
 		cancel()
 		if err == nil {
-			return address, resp, nil
+			return address, isMTLS, resp, nil
 		}
 		lastErr = err
 	}
@@ -108,7 +190,7 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no LAN address available for %q", dev.DisplayName)
 	}
-	return "", nil, lastErr
+	return "", false, nil, lastErr
 }
 
 // resolveLANVersions queries each LAN device's gRPC endpoint concurrently to
@@ -124,7 +206,7 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 	for i := range devices {
 		go func(idx int) {
 			d := &devices[idx]
-			_, resp, err := resolveLANAgentVersion(ctx, *d)
+			_, _, resp, err := resolveLANAgentVersion(ctx, *d)
 			if err != nil {
 				ch <- &indexedResult{index: idx}
 				return
@@ -146,17 +228,17 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 }
 
 // resolveLANVersion queries a single LAN device's gRPC endpoint to populate
-// version metadata and returns the enriched device.
-func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDevice, error) {
-	_, resp, err := resolveLANAgentVersion(ctx, dev)
+// version metadata. It also returns whether that connection used mTLS.
+func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDevice, bool, error) {
+	_, isMTLS, resp, err := resolveLANAgentVersion(ctx, dev)
 	if err != nil {
-		return dev, err
+		return dev, false, err
 	}
 	dev.AgentVersion = resp.GetVersion()
 	dev.OS = resp.GetOs()
 	dev.OSVersion = resp.GetOsVersion()
 	dev.CPUArchitecture = resp.GetCpuArchitecture()
-	return dev, nil
+	return dev, isMTLS, nil
 }
 
 // SelectedDevice represents either a gRPC agent, BLE device, or an external provider device.
@@ -291,31 +373,61 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 // isInteractiveTerminal returns true when both stdin and stdout are TTYs,
 // meaning it is safe to show interactive Bubble Tea prompts.
 func isInteractiveTerminal() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return isInteractiveTerminalFn()
 }
 
 // handleDefaultDeviceRecovery runs the recovery flow after a default device
-// connection failure. It may return a new connection via the device picker,
-// clear the default, or propagate the original error.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, origErr error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
-	choice := promptDefaultDeviceRecovery(hostname)
-	switch choice {
-	case recoveryDiscover:
-		return pickDevice(ctx, excludeProviders, excludeBluetooth)
-	case recoveryUnsetDefault:
-		cfg, err := config.Load()
-		if err != nil {
-			return nil, fmt.Errorf("loading config: %w", err)
-		}
-		cfg.DefaultDevice = ""
-		if err := config.Save(cfg); err != nil {
-			return nil, fmt.Errorf("saving config: %w", err)
-		}
-		fmt.Println("Default device cleared.")
-		return nil, ErrDefaultCleared
-	default:
-		return nil, origErr
+// connection failure. Shows a warning and immediately opens the device picker
+// where the user can select a new device and optionally set/unset default
+// via 'd'/'x' shortcuts.
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable after %s.", hostname, formatElapsedSeconds(elapsed))))
+	fmt.Println()
+
+	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
+}
+
+func defaultDeviceSearchLabel(hostname string) string {
+	return fmt.Sprintf("Searching for default device %q...", hostname)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	roundedElapsed := elapsed.Round(10 * time.Millisecond)
+	seconds := roundedElapsed.Seconds()
+	unit := "seconds"
+	if roundedElapsed == time.Second {
+		unit = "second"
 	}
+	return fmt.Sprintf("%.2f %s", seconds, unit)
+}
+
+func connectAgentAtAddress(ctx context.Context, addr string, probePlaintext bool) (*grpcclient.AgentConnection, error) {
+	conn, err := connectWithAutoTLS(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if probePlaintext && !conn.IsMTLS {
+		// gRPC plaintext connections are lazy — probe to detect unreachable
+		// default devices early so recovery can be offered immediately.
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr != nil {
+			conn.Close()
+			return nil, probeErr
+		}
+	}
+	return conn, nil
+}
+
+func connectResolvedAgent(ctx context.Context, hostname, addr string, isDefault bool) (*grpcclient.AgentConnection, error) {
+	if isDefault && !jsonOutput && isInteractiveTerminal() {
+		return runAgentConnectionSpinner(ctx, defaultDeviceSearchLabel(hostname), func(spinCtx context.Context) (*grpcclient.AgentConnection, error) {
+			return connectAgentAtAddress(spinCtx, addr, true)
+		})
+	}
+	return connectAgentAtAddress(ctx, addr, isDefault)
 }
 
 // connectToAgent establishes a gRPC connection to the target device.
@@ -331,25 +443,20 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
-		conn, connErr := connectWithAutoTLS(ctx, addr)
-		if connErr == nil && isDefault && !conn.IsMTLS {
-			// gRPC plaintext connections are lazy — probe to detect
-			// unreachable default devices early so the recovery menu
-			// can be shown instead of a cryptic error later.
-			// mTLS connections are already probed inside connectWithAutoTLS.
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				connErr = probeErr
-			}
+		startedAt := time.Now()
+		hostname := addr
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			hostname = host
 		}
+		conn, connErr := connectResolvedAgent(ctx, hostname, addr, isDefault)
 		if connErr != nil {
+			if errors.Is(connErr, ErrUserCancelled) {
+				return nil, connErr
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
-				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 				if recErr != nil {
 					return nil, recErr
 				}
@@ -360,6 +467,13 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		if !cfg.suppressProvisioningHint {
 			suggestProvisioning(conn)
 		}
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+		}
 		return conn, nil
 	}
 
@@ -368,7 +482,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	target, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 	if pickErr != nil {
 		return nil, pickErr
 	}
@@ -438,6 +552,135 @@ func suggestProvisioning(conn *grpcclient.AgentConnection) {
 	fmt.Fprintf(os.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
 }
 
+// checkAndOfferUpdate probes the agent version and, when the agent is behind
+// the CLI, either warns (non-interactive) or prompts [Y/n] (interactive). If
+// the user accepts, it downloads the latest release, uploads it, and waits for
+// the agent to restart, returning a fresh connection. On decline, or if the
+// upload fails, the original conn is returned unchanged. If the upload succeeds
+// but the agent does not come back, conn is closed and an error is returned.
+func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
+	if jsonOutput {
+		return conn, nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+	cancel()
+	if err != nil {
+		return conn, nil
+	}
+
+	agentVer := resp.GetVersion()
+	// Dev CLI builds skip the update check entirely.
+	if version.Version == "dev" {
+		return conn, nil
+	}
+	// Unknown agent version — skip to avoid spurious update prompts.
+	if agentVer == "" {
+		return conn, nil
+	}
+	if version.CompareVersions(version.Version, agentVer) <= 0 {
+		return conn, nil
+	}
+
+	if !isInteractiveTerminal() {
+		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
+		return conn, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] ", agentVer, version.Version)
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "" && answer != "y" && answer != "yes" {
+		return conn, nil
+	}
+
+	arch := resp.GetCpuArchitecture()
+	addr := hostPort(conn.Host, defaultAgentPort)
+
+	if err := performAgentUpdate(ctx, conn, arch, false); err != nil {
+		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
+		return conn, nil
+	}
+
+	conn.Close()
+
+	fmt.Fprintf(os.Stderr, "Waiting for agent to restart...")
+	newConn, err := waitForAgentRestart(ctx, addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, " failed.\n")
+		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, " ready.\n")
+	return newConn, nil
+}
+
+// performAgentUpdate downloads the latest release for the given arch and uploads
+// it to conn. Pass nightly=true to fetch the latest prerelease instead of stable.
+// The agent will restart after this returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string, nightly bool) error {
+	if arch == "" {
+		return fmt.Errorf("device did not report CPU architecture")
+	}
+	fmt.Fprintf(os.Stderr, "Fetching latest release...\n")
+	release, err := fetchAgentRelease(nightly)
+	if err != nil {
+		return fmt.Errorf("fetching release: %w", err)
+	}
+
+	assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
+	var matchedAsset *githubReleaseAsset
+	for _, a := range release.Assets {
+		if strings.HasPrefix(a.Name, assetPrefix) && strings.HasSuffix(a.Name, ".tar.gz") {
+			matchedAsset = &a
+			break
+		}
+	}
+	if matchedAsset == nil {
+		return fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)
+	}
+
+	fmt.Fprintf(os.Stderr, "Downloading %s...\n", matchedAsset.Name)
+	binaryData, err := downloadAgentBinary(*matchedAsset)
+	if err != nil {
+		return fmt.Errorf("downloading binary: %w", err)
+	}
+
+	h := sha256.Sum256(binaryData)
+	sha256Hash := hex.EncodeToString(h[:])
+
+	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
+	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+}
+
+// waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers
+// GetAgentVersion or 60 s elapse. Returns a fresh connection on success.
+func waitForAgentRestart(ctx context.Context, addr string) (*grpcclient.AgentConnection, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	time.Sleep(time.Second) // give the agent a moment to begin shutdown
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		conn, err := connectWithAutoTLS(ctx, addr)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr == nil {
+			return conn, nil
+		}
+		conn.Close()
+		time.Sleep(time.Second)
+	}
+	return nil, fmt.Errorf("timed out waiting for agent to restart")
+}
+
 // loadCLICert returns the first available certificate from the CLI config, or nil.
 func loadCLICert() *config.CertificateInfo {
 	auth := loadCLIAuth()
@@ -469,7 +712,17 @@ type resolveConfig struct {
 	excludeProviderKeys      map[string]bool
 	excludeBluetooth         bool
 	suppressProvisioningHint bool
+	suppressUpdateCheck      bool
 	nonInteractive           bool
+}
+
+// SuppressUpdateCheck prevents connectToAgent from running the automatic
+// agent-version check. Use this for commands that manage updates explicitly
+// (e.g. "wendy device update") to avoid a double-prompt.
+func SuppressUpdateCheck() resolveOption {
+	return func(c *resolveConfig) {
+		c.suppressUpdateCheck = true
+	}
 }
 
 // SuppressProvisioningHint prevents connectToAgent from printing the
@@ -554,22 +807,24 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	// If a device hostname was given, connect via gRPC (with mTLS if authenticated).
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
-		conn, err := connectWithAutoTLS(ctx, addr)
-		if err == nil && isDefault && !conn.IsMTLS {
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				err = probeErr
-			}
-		}
+		startedAt := time.Now()
+		conn, err := connectResolvedAgent(ctx, device, addr, isDefault)
 		if err != nil {
+			if errors.Is(err, ErrUserCancelled) {
+				return nil, err
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
-				return handleDefaultDeviceRecovery(ctx, device, err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 			}
 			return nil, err
+		}
+		if !cfg.suppressUpdateCheck {
+			var updateErr error
+			conn, updateErr = checkAndOfferUpdate(ctx, conn)
+			if updateErr != nil {
+				return nil, updateErr
+			}
 		}
 		return &SelectedDevice{Agent: conn}, nil
 	}
@@ -579,7 +834,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 		return nil, fmt.Errorf("no device specified; use --device flag or set a default with 'wendy device set-default'")
 	}
 
-	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+	return pickDevice(ctx, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 }
 
 // findDeviceByID searches all available providers for a device whose ID
@@ -641,11 +896,13 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 
 	// Detect language from the project files on disk.
 	language := ""
-	projectType := detectProjectType(dir)
+	projectType, _ := detectProjectType(dir) // ignore multiple-xcodeproj error for config init
 	switch projectType {
 	case "python":
 		language = "python"
 	case "swift":
+		language = "swift"
+	case "xcode":
 		language = "swift"
 	}
 
@@ -669,6 +926,30 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 
 	fmt.Printf("Created wendy.json for %s\n", dirName)
 	return newCfg, nil
+}
+
+// pickerItemDeviceID extracts a hostname or provider key from a picker item,
+// suitable for storing as the default device (must be resolvable by resolveDeviceAddress).
+func pickerItemDeviceID(item tui.PickerItem) string {
+	entry, ok := item.Value.(*pickerEntry)
+	if !ok {
+		return ""
+	}
+	// For LAN devices, use the mDNS hostname (matches what pickDeviceForDefault returns).
+	if entry.mergedDevice != nil && entry.mergedDevice.LAN != nil {
+		addr := entry.mergedDevice.LAN.Hostname
+		if addr == "" {
+			addr = entry.mergedDevice.LAN.IPAddress
+		}
+		return addr
+	}
+	if entry.externalDevice != nil {
+		return entry.externalDevice.ProviderKey
+	}
+	if entry.mergedDevice != nil && entry.mergedDevice.External != nil {
+		return entry.mergedDevice.External.ProviderKey
+	}
+	return ""
 }
 
 // pickerEntry is the value stored in each PickerItem.
@@ -725,6 +1006,12 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	// Rebuild the type string from the merged transports.
 	existing.Type = md.ConnectionTypes()
+
+	// Propagate security status: LAN probes determine mTLS, BLE doesn't. Once
+	// we know a device is insecure (or secure), update the existing item.
+	if nd.LAN != nil {
+		existing.Insecure = incoming.Insecure
+	}
 }
 
 // pickDevice runs an interactive TUI that discovers devices across all
@@ -732,9 +1019,33 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 // LAN discovery runs continuously so devices that come online after the
 // initial scan still appear in the picker.
 // excludeProviders hides the named provider keys from the picker.
-func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	picker := tui.NewPicker()
 	picker.MergeItem = mergePickerItem
+
+	// Load current default device to show ★ indicator.
+	if loadedCfg, err := config.Load(); err == nil && loadedCfg.DefaultDevice != "" {
+		picker.DefaultKey = strings.ToLower(loadedCfg.DefaultDevice)
+	}
+
+	// Allow 'd' to set default and 'x' to unset default from the picker.
+	picker.OnSetDefault = func(item tui.PickerItem) {
+		deviceID := pickerItemDeviceID(item)
+		if deviceID == "" {
+			return
+		}
+		if cfg, err := config.Load(); err == nil {
+			cfg.DefaultDevice = deviceID
+			_ = config.Save(cfg)
+		}
+	}
+	picker.OnUnsetDefault = func() {
+		if cfg, err := config.Load(); err == nil {
+			cfg.DefaultDevice = ""
+			_ = config.Save(cfg)
+		}
+	}
+
 	p := tea.NewProgram(picker)
 
 	// Cancel continuous discovery when the picker exits.
@@ -743,28 +1054,50 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	// Continuous LAN discovery — devices appear as they're found.
 	lanCh := make(chan models.LANDevice, 16)
 	go discovery.DiscoverLANContinuous(discoverCtx, lanCh)
+	sendLANItem := func(dev models.LANDevice, insecure bool) {
+		name := dev.DisplayName
+		if dev.AgentVersion != "" {
+			name += " v" + dev.AgentVersion
+		}
+		devCopy := dev
+		p.Send(tui.PickerAddMsg{Items: []tui.PickerItem{{
+			Name:     name,
+			Type:     "LAN",
+			Address:  preferredLANAddress(dev),
+			DedupKey: dev.DisplayName,
+			Insecure: insecure,
+			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
+				DisplayName:     dev.DisplayName,
+				AgentVersion:    dev.AgentVersion,
+				OS:              dev.OS,
+				OSVersion:       dev.OSVersion,
+				CPUArchitecture: dev.CPUArchitecture,
+				LAN:             &devCopy,
+			}},
+		}}})
+	}
 	go func() {
-		for dev := range lanCh {
-			dev, _ = resolveLANVersion(discoverCtx, dev)
-			name := dev.DisplayName
-			if dev.AgentVersion != "" {
-				name += " v" + dev.AgentVersion
+		for rawDev := range lanCh {
+			resolved, isMTLS, err := resolveLANVersion(discoverCtx, rawDev)
+			sendLANItem(resolved, err == nil && !isMTLS)
+			if err != nil {
+				// Version probe failed on first attempt. Retry in background so
+				// the version appears once the device becomes responsive, without
+				// requiring it to be rediscovered via mDNS.
+				go func(d models.LANDevice) {
+					for attempt := 0; attempt < 5; attempt++ {
+						select {
+						case <-discoverCtx.Done():
+							return
+						case <-time.After(2 * time.Second):
+						}
+						if updated, isMTLS, retryErr := resolveLANVersion(discoverCtx, d); retryErr == nil {
+							sendLANItem(updated, !isMTLS)
+							return
+						}
+					}
+				}(rawDev)
 			}
-			lanDev := dev // copy for stable pointer
-			p.Send(tui.PickerAddMsg{Items: []tui.PickerItem{{
-				Name:     name,
-				Type:     "LAN",
-				Address:  preferredLANAddress(dev),
-				DedupKey: dev.DisplayName,
-				Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
-					DisplayName:     dev.DisplayName,
-					AgentVersion:    dev.AgentVersion,
-					OS:              dev.OS,
-					OSVersion:       dev.OSVersion,
-					CPUArchitecture: dev.CPUArchitecture,
-					LAN:             &lanDev,
-				}},
-			}}})
 		}
 	}()
 
@@ -878,7 +1211,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	if entry.mergedDevice != nil {
 		d := entry.mergedDevice
 		if d.LAN != nil {
-			addr, _, err := resolveLANAgentVersion(ctx, *d.LAN)
+			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)
 			if err != nil {
 				// LAN metadata lookups can fail on provisioned devices without CLI certs.
 				// In that case, still try the preferred address once before falling back.
@@ -895,6 +1228,13 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 			}
 			conn, err := connectWithAutoTLS(ctx, addr)
 			if err == nil {
+				if !suppressUpdateCheck {
+					var updateErr error
+					conn, updateErr = checkAndOfferUpdate(ctx, conn)
+					if updateErr != nil {
+						return nil, updateErr
+					}
+				}
 				return &SelectedDevice{Agent: conn}, nil
 			}
 			// LAN failed — fall back to BLE if available.
@@ -928,4 +1268,40 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	}
 
 	return nil, fmt.Errorf("selected device type is not yet supported")
+}
+
+// resolveAgentPlatform determines the target platform string from the user's
+// wendy.json platform field, the agent's OS, and the agent's CPU architecture.
+//
+// Rules:
+//   - If cfgPlatform is a full "os/arch" string, use it as-is.
+//   - If cfgPlatform is OS-only (e.g., "linux" or "darwin"), append the agent arch.
+//   - If cfgPlatform is empty, default to the agent's OS and architecture.
+func resolveAgentPlatform(cfgPlatform, agentOS, agentArch string) string {
+	if cfgPlatform == "" {
+		return agentOS + "/" + agentArch
+	}
+	if strings.Contains(cfgPlatform, "/") {
+		return cfgPlatform
+	}
+	// OS-only: append agent architecture.
+	return cfgPlatform + "/" + agentArch
+}
+
+// registryPort returns the OCI registry port for the given agent OS.
+// macOS uses 5555 to avoid conflicts with AirPlay Receiver which binds *:5000.
+// All other platforms use the standard 5000.
+func registryPort(agentOS string) int {
+	if agentOS == "darwin" {
+		return 5555
+	}
+	return 5000
+}
+
+// platformOS extracts the OS component from a platform string like "linux/arm64".
+func platformOS(platform string) string {
+	if i := strings.IndexByte(platform, '/'); i >= 0 {
+		return platform[:i]
+	}
+	return platform
 }

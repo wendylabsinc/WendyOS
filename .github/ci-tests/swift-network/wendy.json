@@ -1,0 +1,11 @@
+{
+    "appId": "sh.wendy.ci.swift-network",
+    "version": "1.0.0",
+    "language": "swift",
+    "entitlements": [
+        {
+            "type": "network",
+            "mode": "host"
+        }
+    ]
+}

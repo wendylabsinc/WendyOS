@@ -1,8 +1,9 @@
 package commands
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -21,6 +23,9 @@ const (
 
 	langSwift  = "swift"
 	langPython = "python"
+	langRust   = "rust"
+	langNode   = "node"
+	langCpp    = "cpp"
 
 	assistantClaude = "claude"
 	assistantCodex  = "codex"
@@ -57,7 +62,12 @@ type initOptions struct {
 	appID               string
 	target              string
 	language            string
+	template            string
+	branch              string
+	vars                []string
+	gitInit             string
 	entitlements        []string
+	allEntitlements     bool
 	noExtraEntitlements bool
 	gpioPins            string
 	i2cDevice           string
@@ -69,6 +79,8 @@ type initOptions struct {
 	appIDSet        bool
 	targetSet       bool
 	languageSet     bool
+	templateSet     bool
+	gitInitSet      bool
 	entitlementsSet bool
 	gpioPinsSet     bool
 	i2cDeviceSet    bool
@@ -83,9 +95,11 @@ var wendyOSEntitlementQuestions = []entitlementQuestion{
 	{"Does your app need Bluetooth peripheral access?", appconfig.EntitlementBluetooth, "Bluetooth Low Energy peripherals"},
 	{"Does your app need USB peripheral access?", appconfig.EntitlementUSB, "USB device access"},
 	{"Does your app need GPIO pin access?", appconfig.EntitlementGPIO, "General-purpose I/O pins"},
+	{"Does your app need SPI bus access (displays, sensors, flash)?", appconfig.EntitlementSPI, "SPI bus access (may require GPIO access)"},
 	{"Does your app need I2C bus access?", appconfig.EntitlementI2C, "I2C bus devices"},
 	{"Does your app need audio input/output?", appconfig.EntitlementAudio, "Microphone and speaker access"},
 	{"Does your app need camera access?", appconfig.EntitlementCamera, "Camera device access"},
+	{"Does your app need HID input device access (barcode scanners, keyboards)?", appconfig.EntitlementInput, "HID input devices"},
 	{"Does your app need persistent storage?", appconfig.EntitlementPersist, "Data persisted across restarts"},
 }
 
@@ -98,6 +112,15 @@ func newInitCmd() *cobra.Command {
 		Long:  "Interactively create a new Wendy project with scaffolding, entitlements, and optional AI assistant setup.",
 		Example: `  # Interactive wizard
   wendy init
+
+  # Scaffold from a template (interactive language picker)
+  wendy init --template simple-api
+
+  # Non-interactive template scaffold with variable overrides
+  wendy init --app-id my-api --template simple-api --language rust --var PORT=8080
+
+  # Use a template from a specific branch of the templates repo
+  wendy init --template simple-api --branch feature/new-template
 
   # Fully non-interactive WendyOS Python app with persist storage
   wendy init \
@@ -126,6 +149,18 @@ func newInitCmd() *cobra.Command {
     --no-extra-entitlements \
     --assistant skip
 
+  # Enable all entitlements at once
+  wendy init \
+    --app-id full-app \
+    --target wendyos \
+    --language python \
+    --all-entitlements \
+    --gpio-pins 17,27,22 \
+    --i2c-device /dev/i2c-1 \
+    --persist-name full-data \
+    --persist-path /data \
+    --assistant skip
+
   # Start Claude after init and install Wendy skills automatically
   wendy init \
     --app-id ai-app \
@@ -139,6 +174,8 @@ func newInitCmd() *cobra.Command {
 			opts.appIDSet = cmd.Flags().Changed("app-id")
 			opts.targetSet = cmd.Flags().Changed("target")
 			opts.languageSet = cmd.Flags().Changed("language")
+			opts.templateSet = cmd.Flags().Changed("template")
+			opts.gitInitSet = cmd.Flags().Changed("git-init")
 			opts.entitlementsSet = cmd.Flags().Changed("entitlement")
 			opts.gpioPinsSet = cmd.Flags().Changed("gpio-pins")
 			opts.i2cDeviceSet = cmd.Flags().Changed("i2c-device")
@@ -146,14 +183,23 @@ func newInitCmd() *cobra.Command {
 			opts.persistPathSet = cmd.Flags().Changed("persist-path")
 			opts.assistantSet = cmd.Flags().Changed("assistant")
 
-			return runInitWizard(args, opts)
+			err := runInitWizard(args, opts)
+			if errors.Is(err, tui.ErrCancelled) {
+				return ErrUserCancelled
+			}
+			return err
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.appID, "app-id", "", "Application ID to write into wendy.json")
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
-	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: swift or python")
+	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
+	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
+	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
+	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&opts.allEntitlements, "all-entitlements", false, "Enable all entitlements (requires field flags for gpio, i2c, persist)")
 	cmd.Flags().BoolVar(&opts.noExtraEntitlements, "no-extra-entitlements", false, "Skip entitlement prompts and use only the default network entitlement")
 	cmd.Flags().StringVar(&opts.gpioPins, "gpio-pins", "", "GPIO pins for the gpio entitlement (comma-separated, e.g. 17,27,22)")
 	cmd.Flags().StringVar(&opts.i2cDevice, "i2c-device", "", "I2C device path for the i2c entitlement (e.g. /dev/i2c-1)")
@@ -162,7 +208,31 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.assistant, "assistant", "", "AI assistant to launch after init: claude, codex, or skip")
 	cmd.Flags().BoolVar(&opts.installClaudeSkills, "install-claude-skills", false, "Install Wendy Claude skills before launching Claude")
 
+	// Allow bare `--template` (no value) by rewriting os.Args before cobra
+	// parses flags. When --template appears as the last arg or is followed by
+	// another flag (--*), inject a sentinel value so cobra doesn't error with
+	// "flag needs an argument".
+	rewriteBareTemplateFlag()
+
 	return cmd
+}
+
+// rewriteBareTemplateFlag patches os.Args in-place so that a bare --template
+// (with no value) becomes --template=_pick. This lets cobra parse it as a
+// normal string flag while the init wizard treats "_pick" as "show picker".
+func rewriteBareTemplateFlag() {
+	for i, arg := range os.Args {
+		if arg == "--template" {
+			next := ""
+			if i+1 < len(os.Args) {
+				next = os.Args[i+1]
+			}
+			// If --template is last arg or next arg is another flag, inject sentinel.
+			if next == "" || strings.HasPrefix(next, "-") {
+				os.Args[i] = "--template=_pick"
+			}
+		}
+	}
 }
 
 func runInitWizard(args []string, opts initOptions) error {
@@ -171,7 +241,31 @@ func runInitWizard(args []string, opts initOptions) error {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
 
-	// Determine app ID.
+	if err := validateInitAssistantOptions(opts); err != nil {
+		return err
+	}
+
+	// Step 1: Pick target device first so template filtering works.
+	target, err := resolveInitTarget(opts)
+	if err != nil {
+		return err
+	}
+
+	// Template flow: offer templates filtered by target, or use --template flag.
+	tmpl, meta, err := resolveInitTemplateForTarget(target, opts)
+	if err != nil {
+		return err
+	}
+
+	if tmpl != "" {
+		destDir, appID, err := resolveInitDestAndID(cwd, args, opts)
+		if err != nil {
+			return err
+		}
+		return runTemplateFlow(cwd, destDir, appID, tmpl, target, meta, opts)
+	}
+
+	// Standard wizard flow (no template) — check wendy.json doesn't already exist.
 	appID, err := resolveInitAppID(cwd, args, opts)
 	if err != nil {
 		return err
@@ -182,26 +276,14 @@ func runInitWizard(args []string, opts initOptions) error {
 		return fmt.Errorf("wendy.json already exists in %s", cwd)
 	}
 
-	if err := validateInitAssistantOptions(opts); err != nil {
-		return err
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-
-	// Step 1: Pick target device.
-	target, err := resolveInitTarget(opts)
-	if err != nil {
-		return err
-	}
-
-	// Step 2: Pick language (constrained by target).
+	// Step 2: Pick language (constrained by already-resolved target).
 	language, err := resolveInitLanguage(target, opts)
 	if err != nil {
 		return err
 	}
 
 	// Step 3: Interactive entitlement questions.
-	entitlements, err := resolveInitEntitlements(reader, target, language, opts)
+	entitlements, err := resolveInitEntitlements(target, language, opts)
 	if err != nil {
 		return err
 	}
@@ -242,17 +324,414 @@ func runInitWizard(args []string, opts initOptions) error {
 	}
 
 	// Step 6: Offer AI assistant session.
-	if err := resolveInitAssistant(reader, appID, target, language, entitlements, opts); err != nil {
+	if err := resolveInitAssistant(appID, target, language, entitlements, opts); err != nil {
 		return err
 	}
 
 	return nil
 }
 
+// resolveInitTemplateForTarget determines which template to use, filtering by target.
+// Returns (template name, meta, error). Empty template name means skip templates.
+// Fetches meta.json from the templates repo when needed.
+func resolveInitTemplateForTarget(target string, opts initOptions) (string, *repoMeta, error) {
+	if opts.templateSet {
+		tmpl := normalizeInitChoice(opts.template)
+
+		// Fetch meta.json to validate or show picker.
+		meta, err := fetchRepoMetaWithUI(opts.branch)
+		if err != nil {
+			return "", nil, err
+		}
+
+		if tmpl == "_pick" {
+			// Bare --template (no value): show interactive picker filtered by target.
+			name, err := pickTemplateNameForTarget(target, meta)
+			return name, meta, err
+		}
+
+		// Explicit template name: validate it.
+		for _, t := range meta.Templates {
+			if t.Name == tmpl {
+				return tmpl, meta, nil
+			}
+		}
+		return "", nil, fmt.Errorf("unknown template %q (available: %s)", opts.template, metaTemplateNames(meta))
+	}
+
+	// --target set without --template means manual flow (user is not using templates).
+	if opts.targetSet {
+		return "", nil, nil
+	}
+
+	// Other manual-flow flags skip the template picker.
+	if opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements {
+		return "", nil, nil
+	}
+
+	// In interactive mode, fetch meta and offer templates for this target.
+	meta, err := fetchRepoMetaWithUI(opts.branch)
+	if err != nil {
+		return "", nil, err
+	}
+	name, err := pickTemplateOrSkipForTarget(target, meta)
+	if err != nil {
+		return "", nil, err
+	}
+	return name, meta, nil
+}
+
+// templateTargetMatch returns true if the template supports the given target.
+// Templates without a Targets list default to WendyOS only; Wendy Lite templates
+// must explicitly include "wendy-lite" in their Targets list.
+func templateTargetMatch(t repoMetaTemplate, target string) bool {
+	if len(t.Targets) == 0 {
+		return target == targetWendyOS
+	}
+	for _, tgt := range t.Targets {
+		if tgt == target {
+			return true
+		}
+	}
+	return false
+}
+
+// pickTemplateNameForTarget shows a picker with templates available for the given target.
+func pickTemplateNameForTarget(target string, meta *repoMeta) (string, error) {
+	fmt.Println()
+	var items []tui.PickerItem
+	for _, t := range meta.Templates {
+		if templateTargetMatch(t, target) {
+			items = append(items, tui.PickerItem{
+				Name:        t.Name,
+				Description: t.Description,
+				Value:       t.Name,
+			})
+		}
+	}
+	if len(items) == 0 {
+		return "", fmt.Errorf("no templates available for %s", target)
+	}
+	return pickFromItems("Choose a template", items)
+}
+
+// pickTemplateOrSkipForTarget shows templates for the given target plus a "No template" option.
+func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) {
+	fmt.Println()
+	var items []tui.PickerItem
+	for _, t := range meta.Templates {
+		if templateTargetMatch(t, target) {
+			items = append(items, tui.PickerItem{
+				Name:        t.Name,
+				Description: t.Description,
+				Value:       t.Name,
+			})
+		}
+	}
+	items = append(items, tui.PickerItem{
+		Name:        "No template",
+		Description: "Configure target, language, and entitlements manually",
+		Value:       "",
+		SortKey:     "~",
+	})
+	return pickFromItems("Start from a template?", items)
+}
+
+// resolveTemplateLanguage picks the language for the template flow.
+// Wendy Lite always uses Swift; WendyOS offers the full language picker.
+func resolveTemplateLanguage(target string, meta *repoMeta, opts initOptions) (string, error) {
+	if target == targetWendyLite {
+		if opts.languageSet && normalizeInitChoice(opts.language) != langSwift {
+			return "", fmt.Errorf("%s templates require %s", targetWendyLite, langSwift)
+		}
+		return langSwift, nil
+	}
+
+	if opts.languageSet {
+		lang := normalizeInitChoice(opts.language)
+		if !isTemplateLanguage(lang, meta) {
+			names := make([]string, len(meta.Languages))
+			for i, l := range meta.Languages {
+				names[i] = l.Key
+			}
+			return "", fmt.Errorf("invalid language %q for templates (available: %s)", opts.language, strings.Join(names, ", "))
+		}
+		return lang, nil
+	}
+
+	fmt.Println()
+	var items []tui.PickerItem
+	for _, l := range meta.Languages {
+		items = append(items, tui.PickerItem{
+			Name:  l.Name,
+			Value: l.Key,
+		})
+	}
+	return pickFromItems("What language will you use?", items)
+}
+
+func metaTemplateNames(meta *repoMeta) string {
+	names := make([]string, len(meta.Templates))
+	for i, t := range meta.Templates {
+		names[i] = t.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// fetchRepoMetaWithUI wraps fetchRepoMeta with a bubbletea spinner when
+// stdout is a TTY. In non-interactive contexts it falls back to a plain
+// printf so logs stay readable. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func fetchRepoMetaWithUI(branch string) (*repoMeta, error) {
+	if !isInteractiveTerminal() {
+		fmt.Println("Fetching template registry...")
+		return fetchRepoMeta(context.Background(), branch)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner("Fetching template registry..."))
+
+	var (
+		meta     *repoMeta
+		fetchErr error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		meta, fetchErr = fetchRepoMeta(ctx, branch)
+		prog.Send(tui.SpinnerDoneMsg{Err: fetchErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	// If the user quit before the fetch completed, cancel the request and
+	// wait for the goroutine to finish so we don't leak it.
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-done
+		return nil, ErrUserCancelled
+	}
+
+	<-done
+	return meta, fetchErr
+}
+
+// downloadTemplateArchiveWithUI wraps downloadTemplateArchive with a
+// bubbletea progress bar when stdout is a TTY. In non-interactive contexts
+// it falls back to plain text. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]byte, *templateManifest, error) {
+	title := fmt.Sprintf("Downloading template %q for %s (branch: %s)", tmpl, language, resolveTemplateBranch(branch))
+
+	if !isInteractiveTerminal() {
+		fmt.Printf("\n%s...\n", title)
+		return downloadTemplateArchive(context.Background(), language, tmpl, branch, nil)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewProgress(title).WithoutErrorView())
+
+	var (
+		files    map[string][]byte
+		manifest *templateManifest
+		dlErr    error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		files, manifest, dlErr = downloadTemplateArchive(ctx, language, tmpl, branch, func(written, total int64) {
+			if total > 0 {
+				prog.Send(tui.ProgressUpdateMsg{
+					Percent: float64(written) / float64(total),
+					Written: written,
+					Total:   total,
+				})
+			}
+		})
+		prog.Send(tui.ProgressDoneMsg{Err: dlErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, nil, fmt.Errorf("progress TUI: %w", err)
+	}
+
+	// If the user quit via q / ctrl+c, ProgressModel.Err() returns
+	// context.Canceled. Cancel the in-flight request and surface
+	// ErrUserCancelled so the caller doesn't dereference nil manifest/files.
+	if pm, ok := finalModel.(tui.ProgressModel); ok {
+		if errors.Is(pm.Err(), context.Canceled) {
+			cancel()
+			<-done
+			return nil, nil, ErrUserCancelled
+		}
+	}
+
+	<-done
+	return files, manifest, dlErr
+}
+
+// runTemplateFlow handles init when a template is selected.
+// destDir is the resolved project directory (either cwd or a new subdir).
+func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
+	language, err := resolveTemplateLanguage(target, meta, opts)
+	if err != nil {
+		return err
+	}
+
+	// Parse --var overrides.
+	varOverrides, err := parseVarFlags(opts.vars)
+	if err != nil {
+		return err
+	}
+
+	files, manifest, err := downloadTemplateArchiveWithUI(language, tmpl, opts.branch)
+	if err != nil {
+		return err
+	}
+
+	// Collect variable values from flags or interactive prompts.
+	vals, err := collectTemplateValues(manifest, appID, varOverrides)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("creating project directory: %w", err)
+	}
+
+	// Render and write all template files.
+	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals); err != nil {
+		return err
+	}
+
+	fmt.Printf("\nScaffolded %s project from template %q\n", language, tmpl)
+	fmt.Printf("  Directory: %s/\n", destDir)
+	for _, v := range manifest.Variables {
+		if val, ok := vals[v.Name]; ok {
+			fmt.Printf("  %s: %v\n", v.Name, val)
+		}
+	}
+
+	// Offer git init.
+	if err := maybeGitInit(destDir, opts); err != nil {
+		return err
+	}
+
+	fmt.Println("\nYour project is ready! Run `" + templateRunCommand(cwd, destDir, appID) + "` to build and deploy.")
+
+	return nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+func templateRunCommand(cwd, destDir, appID string) string {
+	if filepath.Clean(destDir) == filepath.Clean(cwd) {
+		return "wendy run"
+	}
+
+	return "cd " + shellQuote(appID) + " && wendy run"
+}
+
+// resolveInitDestAndID determines the destination directory and app ID for template flow.
+// In fully interactive mode it asks whether to initialize in the current directory
+// or create a new project subdirectory.
+func resolveInitDestAndID(cwd string, args []string, opts initOptions) (string, string, error) {
+	// Explicit app ID provided: always create a new subdirectory.
+	if len(args) > 0 || opts.appIDSet {
+		appID, err := resolveInitAppID(cwd, args, opts)
+		if err != nil {
+			return "", "", err
+		}
+		return filepath.Join(cwd, appID), appID, nil
+	}
+
+	// Fully interactive (no directive flags): ask where to set up the project.
+	if !opts.targetSet && !opts.entitlementsSet && !opts.allEntitlements && !opts.noExtraEntitlements {
+		fmt.Println()
+		useCurrentDir, err := tui.ConfirmDefaultYes("Initialize in the current directory?")
+		if err != nil {
+			return "", "", err
+		}
+		if useCurrentDir {
+			return cwd, strings.TrimSpace(filepath.Base(cwd)), nil
+		}
+
+		fmt.Println()
+		appID, err := tui.PromptText("Project name", "directory name and app identifier", func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("project name cannot be empty")
+			}
+			return nil
+		})
+		if err != nil {
+			return "", "", err
+		}
+		appID = strings.TrimSpace(appID)
+		return filepath.Join(cwd, appID), appID, nil
+	}
+
+	// Semi-interactive or non-interactive without explicit app ID: infer from cwd.
+	return cwd, strings.TrimSpace(filepath.Base(cwd)), nil
+}
+
+// maybeGitInit optionally runs git init in the project directory.
+func maybeGitInit(dir string, opts initOptions) error {
+	doInit := true
+
+	if opts.gitInitSet {
+		switch normalizeInitChoice(opts.gitInit) {
+		case "yes", "y", "true":
+			doInit = true
+		case "no", "n", "false":
+			doInit = false
+		default:
+			return fmt.Errorf("invalid --git-init value %q (expected yes or no)", opts.gitInit)
+		}
+	} else {
+		// Interactive yes/no prompt.
+		fmt.Println()
+		var err error
+		doInit, err = tui.ConfirmDefaultYes("Initialize a git repository?")
+		if err != nil {
+			return err
+		}
+	}
+
+	if !doInit {
+		return nil
+	}
+
+	cmd := exec.Command("git", "init", "-b", "main", dir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("  Warning: git init failed: %v\n", err)
+	}
+
+	return nil
+}
+
 func resolveInitAppID(cwd string, args []string, opts initOptions) (string, error) {
-	rawAppID := filepath.Base(cwd)
 	if len(args) > 0 {
-		rawAppID = args[0]
+		appID := strings.TrimSpace(args[0])
+		if appID == "" {
+			return "", fmt.Errorf("app ID cannot be empty or whitespace")
+		}
+		return appID, nil
 	}
 
 	if opts.appIDSet {
@@ -260,26 +739,22 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 		if flagAppID == "" {
 			return "", fmt.Errorf("app ID cannot be empty or whitespace")
 		}
-
-		if len(args) > 0 {
-			positionalAppID := strings.TrimSpace(args[0])
-			if positionalAppID == "" {
-				return "", fmt.Errorf("app ID positional argument cannot be empty or whitespace")
-			}
-			if positionalAppID != flagAppID {
-				return "", fmt.Errorf("app ID mismatch: positional argument %q does not match --app-id %q", args[0], opts.appID)
-			}
-		}
-
 		return flagAppID, nil
 	}
 
-	appID := strings.TrimSpace(rawAppID)
-	if appID == "" {
-		return "", fmt.Errorf("could not infer a valid app ID; please provide a non-empty value via --app-id or as a positional argument")
+	// Non-template flow can infer from the current directory name.
+	if !opts.templateSet {
+		appID := strings.TrimSpace(filepath.Base(cwd))
+		if appID == "" {
+			return "", fmt.Errorf("could not infer a valid app ID; please provide a non-empty value via --app-id or as a positional argument")
+		}
+		return appID, nil
 	}
 
-	return appID, nil
+	// Template flow (both --template and interactive) needs an explicit
+	// app ID since it becomes the project directory name. Return empty
+	// here — runTemplateFlow will prompt if needed.
+	return "", nil
 }
 
 func resolveInitTarget(opts initOptions) (string, error) {
@@ -293,8 +768,8 @@ func resolveInitTarget(opts initOptions) (string, error) {
 
 	fmt.Println()
 	return pickFromItems("What is your target device?", []tui.PickerItem{
-		{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS},
-		{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite},
+		{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS, SortKey: "0"},
+		{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "1"},
 	})
 }
 
@@ -314,23 +789,23 @@ func resolveInitLanguage(target string, opts initOptions) (string, error) {
 	return pickInitLanguage(target)
 }
 
-func resolveInitEntitlements(reader *bufio.Reader, target, language string, opts initOptions) ([]appconfig.Entitlement, error) {
+func resolveInitEntitlements(target, language string, opts initOptions) ([]appconfig.Entitlement, error) {
 	if initEntitlementsProvided(opts) {
 		return buildInitEntitlementsFromFlags(target, opts)
 	}
 
 	fmt.Println()
-	return askEntitlementQuestions(reader, target, language)
+	return askEntitlementQuestions(target, language)
 }
 
-func resolveInitAssistant(reader *bufio.Reader, appID, target, language string, entitlements []appconfig.Entitlement, opts initOptions) error {
+func resolveInitAssistant(appID, target, language string, entitlements []appconfig.Entitlement, opts initOptions) error {
 	if opts.assistantSet {
 		choice := normalizeInitChoice(opts.assistant)
-		return runAIAssistantChoice(choice, appID, target, language, entitlements, opts.installClaudeSkills, nil)
+		return runAIAssistantChoice(choice, appID, target, language, entitlements, opts.installClaudeSkills, false)
 	}
 
 	fmt.Println()
-	return offerAIAssistant(reader, appID, target, language, entitlements)
+	return offerAIAssistant(appID, target, language, entitlements)
 }
 
 func pickInitLanguage(target string) (string, error) {
@@ -353,7 +828,8 @@ func pickInitLanguage(target string) (string, error) {
 	}
 }
 
-func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]appconfig.Entitlement, error) {
+// askEntitlementQuestions is a variable so tests can replace it.
+var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
 	// Always include network.
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork},
@@ -365,21 +841,23 @@ func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]a
 		return entitlements, nil
 	}
 
-	fmt.Println("Let's figure out what your app needs access to.")
-	fmt.Println("Answer y/n for each capability:")
-	fmt.Println()
-
-	for _, q := range wendyOSEntitlementQuestions {
-		answer, err := promptYesNo(reader, q.question)
-		if err != nil {
-			return nil, err
+	// Build checklist items from the entitlement questions.
+	items := make([]tui.ChecklistItem, len(wendyOSEntitlementQuestions))
+	for i, q := range wendyOSEntitlementQuestions {
+		items[i] = tui.ChecklistItem{
+			Label:       q.question,
+			Description: q.description,
+			Value:       q.entitlement,
 		}
+	}
 
-		if !answer {
-			continue
-		}
+	selected, err := tui.RunChecklist("What does your app need access to?", items)
+	if err != nil {
+		return nil, err
+	}
 
-		ent := appconfig.Entitlement{Type: q.entitlement}
+	for _, item := range selected {
+		ent := appconfig.Entitlement{Type: item.Value}
 
 		// Prompt for required fields on certain entitlement types.
 		if err := promptEntitlementFields(&ent); err != nil {
@@ -393,7 +871,7 @@ func askEntitlementQuestions(reader *bufio.Reader, target, language string) ([]a
 }
 
 func initEntitlementsProvided(opts initOptions) bool {
-	return opts.entitlementsSet || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
+	return opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet
 }
 
 func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfig.Entitlement, error) {
@@ -401,24 +879,35 @@ func buildInitEntitlementsFromFlags(target string, opts initOptions) ([]appconfi
 	seen := map[string]bool{appconfig.EntitlementNetwork: true}
 
 	if opts.noExtraEntitlements {
-		if opts.entitlementsSet || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
+		if opts.entitlementsSet || opts.allEntitlements || opts.gpioPinsSet || opts.i2cDeviceSet || opts.persistNameSet || opts.persistPathSet {
 			return nil, fmt.Errorf("--no-extra-entitlements cannot be combined with entitlement-specific flags")
 		}
 		return entitlements, nil
 	}
 
-	rawTypes := make([]string, 0, len(opts.entitlements)+3)
-	parsedEntitlementFlag := false
-	for _, rawType := range opts.entitlements {
-		entType := normalizeInitChoice(rawType)
-		if entType == "" {
-			continue
-		}
-		parsedEntitlementFlag = true
-		rawTypes = append(rawTypes, entType)
+	if opts.allEntitlements && opts.entitlementsSet {
+		return nil, fmt.Errorf("--all-entitlements cannot be combined with --entitlement")
 	}
-	if opts.entitlementsSet && !parsedEntitlementFlag {
-		return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+
+	rawTypes := make([]string, 0, len(opts.entitlements)+3)
+
+	if opts.allEntitlements {
+		for _, q := range wendyOSEntitlementQuestions {
+			rawTypes = append(rawTypes, q.entitlement)
+		}
+	} else {
+		parsedEntitlementFlag := false
+		for _, rawType := range opts.entitlements {
+			entType := normalizeInitChoice(rawType)
+			if entType == "" {
+				continue
+			}
+			parsedEntitlementFlag = true
+			rawTypes = append(rawTypes, entType)
+		}
+		if opts.entitlementsSet && !parsedEntitlementFlag {
+			return nil, fmt.Errorf("--entitlement requires at least one valid entitlement type")
+		}
 	}
 
 	if opts.gpioPinsSet {
@@ -518,14 +1007,10 @@ func validateInitAssistantOptions(opts initOptions) error {
 	return nil
 }
 
-func promptYesNo(reader *bufio.Reader, question string) (bool, error) {
-	fmt.Printf("  %s [y/N] ", question)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return false, err
-	}
-	answer := strings.TrimSpace(strings.ToLower(line))
-	return answer == "y" || answer == "yes", nil
+// promptYesNo displays a styled yes/no prompt. It is a variable so tests can
+// replace it with a non-TTY implementation.
+var promptYesNo = func(question string) (bool, error) {
+	return tui.Confirm(question)
 }
 
 func scaffoldProject(dir, appID, target, language string) error {
@@ -632,7 +1117,7 @@ CMD ["uv", "run", "%s"]
 	return nil
 }
 
-func offerAIAssistant(reader *bufio.Reader, appID, target, language string, entitlements []appconfig.Entitlement) error {
+func offerAIAssistant(appID, target, language string, entitlements []appconfig.Entitlement) error {
 	// Check which AI assistants are available.
 	hasClaude := isCommandAvailable("claude")
 	hasCodex := isCommandAvailable("codex")
@@ -667,7 +1152,7 @@ func offerAIAssistant(reader *bufio.Reader, appID, target, language string, enti
 		return err
 	}
 
-	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, reader)
+	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, true)
 }
 
 const wendySkillsMarketplace = "wendylabsinc/claude-skills"
@@ -676,15 +1161,15 @@ const wendySkillsPluginName = "wendy@claude-skills"
 // installWendySkills checks if the Wendy skills plugin is installed and offers
 // to install it if missing. This gives Claude expert knowledge about Wendy
 // development.
-func installWendySkills(reader *bufio.Reader, autoInstall bool) {
+func installWendySkills(autoInstall bool) error {
 	// Check if the plugin is already installed by looking at the plugin list output.
 	out, err := exec.Command("claude", "plugin", "list").Output()
 	if err != nil {
-		return
+		return nil
 	}
 
 	if strings.Contains(string(out), "wendy@claude-skills") {
-		return
+		return nil
 	}
 
 	fmt.Println("\nThe Wendy skills plugin gives Claude expert knowledge about")
@@ -692,9 +1177,12 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	fmt.Println()
 
 	if !autoInstall {
-		install, err := promptYesNo(reader, "Install Wendy skills for Claude Code?")
-		if err != nil || !install {
-			return
+		install, err := promptYesNo("Install Wendy skills for Claude Code?")
+		if err != nil {
+			return err
+		}
+		if !install {
+			return nil
 		}
 
 		fmt.Println()
@@ -707,7 +1195,7 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	if err := addMarketplace.Run(); err != nil {
 		fmt.Printf("  Could not add marketplace: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return
+		return nil
 	}
 
 	// Install the plugin.
@@ -717,13 +1205,14 @@ func installWendySkills(reader *bufio.Reader, autoInstall bool) {
 	if err := installCmd.Run(); err != nil {
 		fmt.Printf("  Could not install plugin: %v\n", err)
 		fmt.Println("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return
+		return nil
 	}
 
 	fmt.Println("  Wendy skills installed successfully!")
+	return nil
 }
 
-func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, reader *bufio.Reader) error {
+func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, interactive bool) error {
 	if choice == assistantSkip {
 		fmt.Println("\nYour project is ready! Run `wendy run` to build and deploy.")
 		return nil
@@ -734,11 +1223,15 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 	}
 
 	if choice == assistantClaude {
+		var skillsErr error
 		switch {
 		case installClaudeSkills:
-			installWendySkills(nil, true)
-		case reader != nil:
-			installWendySkills(reader, false)
+			skillsErr = installWendySkills(true)
+		case interactive:
+			skillsErr = installWendySkills(false)
+		}
+		if skillsErr != nil {
+			return skillsErr
 		}
 	}
 

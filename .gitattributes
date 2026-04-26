@@ -1,0 +1,3 @@
+# Mark generated protobuf/gRPC Swift files so GitHub collapses them in PRs
+swift/Sources/*/Proto/**/*.pb.swift    linguist-generated=true
+swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true

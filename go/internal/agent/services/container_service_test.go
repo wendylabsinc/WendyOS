@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"go.uber.org/zap"
@@ -32,6 +34,8 @@ type mockContainerdClient struct {
 	progressPhases []agentpb.CreateContainerProgress_Phase
 	startOutputCh  chan ContainerOutput
 	startErr       error
+	statsResult    []*agentpb.ContainerStats
+	statsErr       error
 }
 
 func (m *mockContainerdClient) ListContainers(_ context.Context) ([]*agentpb.AppContainer, error) {
@@ -74,6 +78,30 @@ func (m *mockContainerdClient) StartContainer(_ context.Context, _ string) (<-ch
 		return nil, m.startErr
 	}
 	return m.startOutputCh, nil
+}
+
+func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader) (<-chan ContainerOutput, error) {
+	if m.startErr != nil {
+		return nil, m.startErr
+	}
+	return m.startOutputCh, nil
+}
+func (m *mockContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.ContainerStats, error) {
+	return m.statsResult, m.statsErr
+}
+
+// attachTestMock embeds mockContainerdClient and overrides StartContainerWithStdin
+// so tests can capture the appName and stdin reader passed by AttachContainer.
+type attachTestMock struct {
+	mockContainerdClient
+	onStartWithStdin func(appName string, stdin io.Reader) (<-chan ContainerOutput, error)
+}
+
+func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+	if m.onStartWithStdin != nil {
+		return m.onStartWithStdin(appName, stdin)
+	}
+	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin)
 }
 
 // ---------- bufconn helper ----------
@@ -328,5 +356,264 @@ func TestCreateContainerWithProgress(t *testing.T) {
 	}
 	if !gotCompleted {
 		t.Error("did not receive Completed response")
+	}
+}
+
+func TestAttachContainer(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	capturedAppCh := make(chan string, 1)
+	stdinDataCh := make(chan string, 1)
+
+	mock := &attachTestMock{
+		onStartWithStdin: func(appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+			capturedAppCh <- appName
+			go func() {
+				// Read all stdin bytes, then produce output so the server
+				// doesn't close until we've verified what was forwarded.
+				data, _ := io.ReadAll(stdin)
+				stdinDataCh <- string(data)
+				outputCh <- ContainerOutput{Stdout: []byte("pong")}
+				close(outputCh)
+			}()
+			return outputCh, nil
+		},
+	}
+
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatalf("AttachContainer: %v", err)
+	}
+
+	// First message must be app_name.
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_AppName{AppName: "echo-app"},
+	}); err != nil {
+		t.Fatalf("send app_name: %v", err)
+	}
+
+	// Verify StartContainerWithStdin was called with the correct app name.
+	if got := <-capturedAppCh; got != "echo-app" {
+		t.Errorf("appName = %q; want echo-app", got)
+	}
+
+	// Forward stdin data.
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: []byte("ping")},
+	}); err != nil {
+		t.Fatalf("send stdin_data: %v", err)
+	}
+
+	// Close client send so the server's stdin reader reaches EOF, which unblocks
+	// the mock goroutine's io.ReadAll and lets it produce output.
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	// Expect Started response.
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv started: %v", err)
+	}
+	if resp.GetStarted() == nil {
+		t.Error("expected Started response")
+	}
+
+	// Expect stdout containing "pong".
+	resp, err = stream.Recv()
+	if err != nil {
+		t.Fatalf("recv stdout: %v", err)
+	}
+	if string(resp.GetStdoutOutput().GetData()) != "pong" {
+		t.Errorf("stdout = %q; want pong", resp.GetStdoutOutput().GetData())
+	}
+
+	// Stream should end with EOF.
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("expected EOF; got %v", err)
+	}
+
+	// Confirm stdin bytes reached the container's stdin reader.
+	if got := <-stdinDataCh; got != "ping" {
+		t.Errorf("stdin data = %q; want ping", got)
+	}
+}
+
+// ---------- volume tests ----------
+
+func TestListVolumes_Empty(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	resp, err := cl.ListVolumes(context.Background(), &agentpb.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(resp.GetVolumes()) != 0 {
+		t.Errorf("expected 0 volumes, got %d", len(resp.GetVolumes()))
+	}
+}
+
+func TestListVolumes_WithVolumes(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	// Create two volume directories, one with a file inside.
+	if err := os.MkdirAll(filepath.Join(tmp, "app-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "app-data", "test.db"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "other-vol"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	resp, err := cl.ListVolumes(context.Background(), &agentpb.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(resp.GetVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes, got %d", len(resp.GetVolumes()))
+	}
+
+	// Find the volume with data.
+	var found bool
+	for _, v := range resp.GetVolumes() {
+		if v.GetName() == "app-data" {
+			found = true
+			if v.GetSizeBytes() != 5 {
+				t.Errorf("app-data size = %d, want 5", v.GetSizeBytes())
+			}
+			if v.GetPath() != filepath.Join(tmp, "app-data") {
+				t.Errorf("app-data path = %q", v.GetPath())
+			}
+			if v.GetCreatedAt() == "" {
+				t.Error("app-data created_at should not be empty")
+			}
+		}
+	}
+	if !found {
+		t.Error("app-data volume not found in response")
+	}
+}
+
+func TestRemoveVolume_Success(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	volPath := filepath.Join(tmp, "my-vol")
+	if err := os.MkdirAll(volPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: "my-vol"})
+	if err != nil {
+		t.Fatalf("RemoveVolume: %v", err)
+	}
+
+	if _, err := os.Stat(volPath); !os.IsNotExist(err) {
+		t.Error("volume directory should have been removed")
+	}
+}
+
+func TestRemoveVolume_NotFound(t *testing.T) {
+	tmp := t.TempDir()
+	old := volumesDir
+	volumesDir = tmp
+	t.Cleanup(func() { volumesDir = old })
+
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: "nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent volume")
+	}
+}
+
+func TestRemoveVolume_InvalidName(t *testing.T) {
+	cl, cleanup := startContainerServer(t, &mockContainerdClient{})
+	defer cleanup()
+
+	for _, name := range []string{"", ".", "..", "/"} {
+		_, err := cl.RemoveVolume(context.Background(), &agentpb.RemoveVolumeRequest{Name: name})
+		if err == nil {
+			t.Errorf("expected error for invalid name %q", name)
+		}
+	}
+}
+
+func TestDirSize(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "sub", "b.txt"), []byte("world!"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	size := dirSize(tmp)
+	if size != 11 { // "hello" (5) + "world!" (6)
+		t.Errorf("dirSize = %d, want 11", size)
+	}
+}
+
+func TestListContainerStats(t *testing.T) {
+	stats := []*agentpb.ContainerStats{
+		{AppName: "app-one", MemoryBytes: 42_000_000, StorageBytes: 128_000_000},
+		{AppName: "app-two", MemoryBytes: 18_000_000, StorageBytes: 96_000_000},
+	}
+	mock := &mockContainerdClient{}
+	mock.statsResult = stats
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	resp, err := client.ListContainerStats(context.Background(), &agentpb.ListContainerStatsRequest{})
+	if err != nil {
+		t.Fatalf("ListContainerStats: %v", err)
+	}
+	if len(resp.Stats) != 2 {
+		t.Fatalf("len(Stats) = %d, want 2", len(resp.Stats))
+	}
+	if resp.Stats[0].AppName != "app-one" {
+		t.Errorf("Stats[0].AppName = %q, want app-one", resp.Stats[0].AppName)
+	}
+	if resp.Stats[0].MemoryBytes != 42_000_000 {
+		t.Errorf("Stats[0].MemoryBytes = %d, want 42000000", resp.Stats[0].MemoryBytes)
+	}
+	if resp.Stats[1].StorageBytes != 96_000_000 {
+		t.Errorf("Stats[1].StorageBytes = %d, want 96000000", resp.Stats[1].StorageBytes)
+	}
+}
+
+func TestListContainerStats_Error(t *testing.T) {
+	mock := &mockContainerdClient{statsErr: fmt.Errorf("cgroup unavailable")}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ListContainerStats(context.Background(), &agentpb.ListContainerStatsRequest{})
+	if err == nil {
+		t.Fatal("expected error from ListContainerStats")
 	}
 }

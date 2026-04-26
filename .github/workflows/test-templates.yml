@@ -1,0 +1,192 @@
+name: Template Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      templates_branch:
+        description: 'Templates repo branch (default: main)'
+        required: false
+        default: 'main'
+      template:
+        description: 'Filter to a specific template name (empty = all)'
+        required: false
+        default: ''
+      language:
+        description: 'Filter to a specific language (empty = all)'
+        required: false
+        default: ''
+      deploy:
+        description: 'Deploy generated projects to hardware device'
+        type: boolean
+        default: true
+      hostname:
+        description: 'Device hostname for deploy phase (empty = auto-discover)'
+        required: false
+        default: ''
+
+  workflow_call:
+    inputs:
+      templates_branch:
+        type: string
+        default: 'main'
+      template:
+        type: string
+        default: ''
+      language:
+        type: string
+        default: ''
+      deploy:
+        type: boolean
+        default: true
+      hostname:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: template-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-validate:
+    name: Generate & Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run template generation tests
+        env:
+          INPUT_TEMPLATES_BRANCH: ${{ inputs.templates_branch }}
+          INPUT_TEMPLATE: ${{ inputs.template }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+        run: |
+          args=(-w ./bin/wendy --skip-run)
+
+          if [[ -n "$INPUT_TEMPLATES_BRANCH" && "$INPUT_TEMPLATES_BRANCH" != "main" ]]; then
+            args+=(--templates-branch "$INPUT_TEMPLATES_BRANCH")
+          fi
+
+          if [[ -n "$INPUT_TEMPLATE" ]]; then
+            args+=(--template "$INPUT_TEMPLATE")
+          fi
+
+          if [[ -n "$INPUT_LANGUAGE" ]]; then
+            args+=(--language "$INPUT_LANGUAGE")
+          fi
+
+          scripts/test-templates.sh "${args[@]}"
+
+      - name: Cleanup
+        if: always()
+        run: make clean
+
+  deploy-to-device:
+    name: Deploy (${{ matrix.os }})
+    if: inputs.deploy == true
+    needs: [generate-validate]
+    runs-on: [self-hosted, wendy-developer, '${{ matrix.os }}']
+    concurrency:
+      group: template-deploy-${{ matrix.os }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macOS, Linux]
+    defaults:
+      run:
+        working-directory: go
+    env:
+      INPUT_HOSTNAME: ${{ inputs.hostname }}
+      INPUT_TEMPLATES_BRANCH: ${{ inputs.templates_branch }}
+      INPUT_TEMPLATE: ${{ inputs.template }}
+      INPUT_LANGUAGE: ${{ inputs.language }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Run template tests with deploy
+        run: |
+          ARGS=(-w ./bin/wendy)
+
+          if [[ -n "$INPUT_HOSTNAME" ]]; then
+            ARGS+=(-h "$INPUT_HOSTNAME")
+          fi
+
+          if [[ -n "$INPUT_TEMPLATES_BRANCH" && "$INPUT_TEMPLATES_BRANCH" != "main" ]]; then
+            ARGS+=(--templates-branch "$INPUT_TEMPLATES_BRANCH")
+          fi
+
+          if [[ -n "$INPUT_TEMPLATE" ]]; then
+            ARGS+=(--template "$INPUT_TEMPLATE")
+          fi
+
+          if [[ -n "$INPUT_LANGUAGE" ]]; then
+            ARGS+=(--language "$INPUT_LANGUAGE")
+          fi
+
+          scripts/test-templates.sh "${ARGS[@]}"
+
+      - name: Cleanup
+        if: always()
+        run: make clean
+
+  summary:
+    name: Template Test Summary
+    runs-on: ubuntu-latest
+    needs: [generate-validate, deploy-to-device]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "## Template Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.generate-validate.result }}" == "success" ]]; then
+            echo "- Generate & Validate: passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Generate & Validate: ${{ needs.generate-validate.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.deploy-to-device.result }}" == "success" ]]; then
+            echo "- Deploy to Device: passed" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ needs.deploy-to-device.result }}" == "skipped" ]]; then
+            echo "- Deploy to Device: skipped (not requested)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Deploy to Device: ${{ needs.deploy-to-device.result }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.generate-validate.result }}" == "failure" ]]; then
+            echo ""
+            echo "Template generation tests failed."
+            exit 1
+          fi
+
+          if [[ "${{ needs.deploy-to-device.result }}" == "failure" ]]; then
+            echo ""
+            echo "Template deploy tests failed."
+            exit 1
+          fi

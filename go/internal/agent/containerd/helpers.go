@@ -57,7 +57,10 @@ func parseRestartPolicyLabel(label string) (string, int) {
 func shouldRefreshImageFromRegistry(imageName string) bool {
 	return strings.HasPrefix(imageName, "localhost:5000/") ||
 		strings.HasPrefix(imageName, "127.0.0.1:5000/") ||
-		strings.HasPrefix(imageName, "[::1]:5000/")
+		strings.HasPrefix(imageName, "[::1]:5000/") ||
+		strings.HasPrefix(imageName, "localhost:5555/") ||
+		strings.HasPrefix(imageName, "127.0.0.1:5555/") ||
+		strings.HasPrefix(imageName, "[::1]:5555/")
 }
 
 // gcTimestamp returns an RFC3339 timestamp string suitable for use as a GC root

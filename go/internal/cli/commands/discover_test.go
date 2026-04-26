@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -350,6 +351,9 @@ func defaultOpts() discovery.DiscoveryOptions {
 }
 
 func TestCopyToClipboard_FallsBackOnRunFailure(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS has only one clipboard candidate (pbcopy); fallback-to-second-tool test is Linux-only")
+	}
 	origLookPath := execLookPath
 	origCommand := execCommand
 	origWriter := clipboardWriter

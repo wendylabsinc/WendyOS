@@ -10,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	cgroupv1 "github.com/containerd/cgroups/v3/cgroup1/stats"
+	cgroupv2 "github.com/containerd/cgroups/v3/cgroup2/stats"
 	tasks "github.com/containerd/containerd/api/services/tasks/v1"
+	"github.com/containerd/containerd/api/types"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -19,6 +22,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/typeurl/v2"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
@@ -316,6 +320,26 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
 }
 
+func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainerProgress {
+	switch progress.Phase {
+	case "start":
+		return &agentpb.CreateContainerProgress{
+			Phase:       agentpb.CreateContainerProgress_UNPACKING,
+			TotalLayers: int32(progress.TotalLayers),
+		}
+	case "layer":
+		return &agentpb.CreateContainerProgress{
+			Phase:          agentpb.CreateContainerProgress_APPLYING_LAYER,
+			LayerIndex:     int32(progress.LayerIndex),
+			TotalLayers:    int32(progress.TotalLayers),
+			LayerSize:      progress.LayerSize,
+			ReusedSnapshot: progress.Reused,
+		}
+	default:
+		return nil
+	}
+}
+
 func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -361,10 +385,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Start D-Bus proxy if bluetooth entitlement is present.
+	var dbusProxyStarted bool
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
 			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
 		}
+		dbusProxyStarted = true
+		defer func() {
+			if dbusProxyStarted {
+				_ = c.proxyManager.Stop(appName)
+			}
+		}()
 	}
 
 	// For local-registry images, always pull from the embedded HTTP registry
@@ -402,7 +433,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if err := image.Unpack(ctx, ""); err != nil {
+		if _, err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+			if mapped := toCreateContainerProgress(progress); mapped != nil {
+				report(mapped)
+			}
+		}); err != nil {
 			return fmt.Errorf("unpacking image %q: %w", imageName, err)
 		}
 	}
@@ -462,17 +497,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:wendy-agent:%s", appName)
 
+	// Apply the NVIDIA CDI spec before entitlements so that entitlements can
+	// override CDI-injected env vars (e.g. NVIDIA_VISIBLE_DEVICES=void → =all).
+	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
+		c.applyCDIGPU(spec)
+	}
+
 	opts := localoci.ApplyOptions{
 		DBusProxyAvailable: c.proxyManager != nil,
 	}
 	if err := localoci.ApplyEntitlements(spec, appCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
-	}
-
-	// If the app has a GPU entitlement, apply the NVIDIA CDI spec to get
-	// platform-correct library mounts (paths vary across Jetson models).
-	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
-		c.applyCDIGPU(spec)
 	}
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
@@ -499,6 +534,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	// Container created successfully; keep the D-Bus proxy running.
+	dbusProxyStarted = false
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 
@@ -606,6 +644,71 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	c.logger.Info("Container started", zap.String("app_name", appName))
 
 	// Stream output from the pipes.
+	outputCh := make(chan services.ContainerOutput, 64)
+	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
+
+	return outputCh, nil
+}
+
+// StartContainerWithStdin is like StartContainer but attaches the provided
+// stdin reader to the container's standard input.
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+	ctx = c.withNamespace(ctx)
+
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	c.deleteStaleTask(ctx, container, appName)
+
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			c.logger.Warn("Orphaned task detected, force-deleting and recreating container", zap.String("app_name", appName))
+			c.forceDeleteTask(ctx, appName)
+			if rerr := c.recreateContainer(ctx, container, appName); rerr != nil {
+				c.logger.Error("Failed to recreate container", zap.Error(rerr))
+			} else {
+				container, err = c.client.LoadContainer(ctx, appName)
+				if err == nil {
+					task, err = container.NewTask(ctx, cio.NewCreator(cio.WithStreams(stdin, stdoutW, stderrW)))
+				}
+			}
+		}
+		if err != nil {
+			stdoutR.Close()
+			stdoutW.Close()
+			stderrR.Close()
+			stderrW.Close()
+			return nil, fmt.Errorf("creating task for %q: %w", appName, err)
+		}
+	}
+
+	exitStatusCh, err := task.Wait(ctx)
+	if err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+	}
+
+	if err := task.Start(ctx); err != nil {
+		_, _ = task.Delete(ctx)
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
+		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
+	}
+
+	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 
@@ -930,6 +1033,64 @@ func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, e
 	}
 
 	return result, nil
+}
+
+// GetContainerStats collects memory and image-size stats for all Wendy-managed containers.
+// Memory is read from cgroup metrics (only available for running tasks). Storage is the
+// image size from the content store. Both values are 0 if unavailable.
+func (c *Client) GetContainerStats(ctx context.Context) ([]*agentpb.ContainerStats, error) {
+	ctx = c.withNamespace(ctx)
+
+	containers, err := c.client.Containers(ctx, fmt.Sprintf("labels.%q", labelKeyAppVersion))
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+
+	var result []*agentpb.ContainerStats
+	for _, ctr := range containers {
+		appName := ctr.ID()
+		stat := &agentpb.ContainerStats{AppName: appName}
+
+		// Storage: image size from content store.
+		if img, imgErr := ctr.Image(ctx); imgErr == nil {
+			if sz, szErr := img.Size(ctx); szErr == nil {
+				stat.StorageBytes = sz
+			}
+		}
+
+		// Memory: cgroup metrics from running task.
+		if task, taskErr := ctr.Task(ctx, nil); taskErr == nil {
+			if metric, metErr := task.Metrics(ctx); metErr == nil {
+				stat.MemoryBytes = extractMemoryBytes(metric)
+			}
+		}
+
+		result = append(result, stat)
+	}
+	return result, nil
+}
+
+// extractMemoryBytes decodes cgroup v1 or v2 task metrics and returns memory usage in bytes.
+func extractMemoryBytes(metric *types.Metric) int64 {
+	switch {
+	case typeurl.Is(metric.Data, (*cgroupv1.Metrics)(nil)):
+		m := &cgroupv1.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return 0
+		}
+		if m.Memory != nil && m.Memory.Usage != nil {
+			return int64(m.Memory.Usage.Usage)
+		}
+	case typeurl.Is(metric.Data, (*cgroupv2.Metrics)(nil)):
+		m := &cgroupv2.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return 0
+		}
+		if m.Memory != nil {
+			return int64(m.Memory.Usage)
+		}
+	}
+	return 0
 }
 
 // streamReader is a helper that continuously reads from a reader and sends

@@ -221,9 +221,14 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		return fmt.Errorf("writing image: %w", err)
 	}
 
-	// Sync to flush any remaining writes, then eject.
-	exec.Command("sync").Run()                            //nolint:errcheck
-	exec.Command("diskutil", "eject", d.DevicePath).Run() //nolint:errcheck
+	// Sync to flush any remaining writes.
+	exec.Command("sync").Run() //nolint:errcheck
 
 	return nil
+}
+
+// ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
+// Called by the caller after all post-flash operations are complete.
+func ejectDisk(devPath string) {
+	exec.Command("diskutil", "eject", devPath).Run() //nolint:errcheck
 }

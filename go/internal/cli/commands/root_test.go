@@ -22,9 +22,9 @@ func TestRootCommand_HasAllSubcommands(t *testing.T) {
 		"bluetooth",
 		"auth",
 		"cache",
-		"update",
 		"info",
 		"analytics",
+		"utils",
 	}
 
 	cmds := root.Commands()

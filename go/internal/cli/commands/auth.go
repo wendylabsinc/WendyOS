@@ -379,7 +379,9 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 }
 
 // openBrowser opens the given URL in the default browser.
-func openBrowser(url string) error {
+// It is non-blocking: the browser process is detached so callers like
+// auth login don't hang. It is a package-level var so tests can replace it.
+var openBrowser = func(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -391,7 +393,13 @@ func openBrowser(url string) error {
 	default:
 		return fmt.Errorf("unsupported platform")
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return nil
 }
 
 // authConfigToJSON marshals an auth config for debugging.

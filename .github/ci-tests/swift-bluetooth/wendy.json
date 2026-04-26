@@ -1,0 +1,10 @@
+{
+    "appId": "sh.wendy.ci.swift-bluetooth",
+    "version": "1.0.0",
+    "language": "swift",
+    "entitlements": [
+        {
+            "type": "bluetooth"
+        }
+    ]
+}

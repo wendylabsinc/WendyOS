@@ -3,6 +3,7 @@ package commands
 
 import (
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -27,10 +28,9 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Skip heavy init for internal subprocess commands and cloud
-			// commands, which talk to the cloud gRPC directly and do not
-			// need local device discovery or BLE initialisation.
-			if cmd.Name() == "__ble-check" {
+			// Skip heavy init for commands that don't need device/cloud setup.
+			switch cmd.Name() {
+			case "__ble-check", "open-browser":
 				return nil
 			}
 			if strings.Contains(cmd.CommandPath(), " cloud") {
@@ -58,6 +58,27 @@ func NewRootCmd() *cobra.Command {
 				}
 			}
 
+			if dueCLIUpdateCheck(cfg) {
+				scheduleCLIUpdateCheck(cfg)
+			}
+
+			return nil
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			select {
+			case latest := <-cliUpdateNoticeCh:
+				var updateCmd string
+				switch runtime.GOOS {
+				case "windows":
+					updateCmd = "winget upgrade WendyLabs.Wendy"
+				case "darwin":
+					updateCmd = "brew upgrade wendy"
+				default:
+					updateCmd = "curl -fsSL https://install.wendy.sh/cli.sh | bash"
+				}
+				cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n", latest, version.Version, updateCmd)
+			default:
+			}
 			return nil
 		},
 	}
@@ -81,6 +102,8 @@ func NewRootCmd() *cobra.Command {
 	initCmd.GroupID = "project"
 	projectCmd := newProjectCmd()
 	projectCmd.GroupID = "project"
+	jsonCmd := newJSONCmd()
+	jsonCmd.GroupID = "project"
 
 	// Cloud Commands
 	authCmd := newAuthCmd()
@@ -104,12 +127,12 @@ func NewRootCmd() *cobra.Command {
 	// Misc Commands
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "misc"
-	updateCmd := newUpdateCmd()
-	updateCmd.GroupID = "misc"
 	infoCmd := newInfoCmd()
 	infoCmd.GroupID = "misc"
 	analyticsCmd := newAnalyticsCmd()
 	analyticsCmd.GroupID = "misc"
+	utilsCmd := newUtilsCmd()
+	utilsCmd.GroupID = "misc"
 
 	// Hidden command used by a subprocess to test CoreBluetooth access.
 	// The main process spawns a child process that runs this command so
@@ -129,6 +152,7 @@ func NewRootCmd() *cobra.Command {
 		buildCmd,
 		initCmd,
 		projectCmd,
+		jsonCmd,
 		authCmd,
 		cloudCmd,
 		deviceCmd,
@@ -138,9 +162,9 @@ func NewRootCmd() *cobra.Command {
 		bluetoothCmd,
 		hardwareCmd,
 		cacheCmd,
-		updateCmd,
 		infoCmd,
 		analyticsCmd,
+		utilsCmd,
 	)
 
 	root.SetHelpCommandGroupID("misc")

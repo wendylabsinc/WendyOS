@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,10 +13,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -44,7 +48,7 @@ func newAppsCmd() *cobra.Command {
 func newAppsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List running applications",
+		Short: "List deployed applications",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
@@ -69,6 +73,12 @@ func newAppsListCmd() *cobra.Command {
 }
 
 func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	// Interactive dashboard when stdin/stdout are interactive and --json is not set.
+	if !jsonOutput && isInteractiveTerminal() {
+		return runAppsDashboard(ctx, conn)
+	}
+
+	// Static / JSON path (unchanged).
 	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
 	if err != nil {
 		return fmt.Errorf("listing containers: %w", err)
@@ -95,7 +105,6 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 			RunningState string `json:"runningState,omitempty"`
 			FailureCount uint32 `json:"failureCount,omitempty"`
 		}
-
 		apps := make([]jsonApp, len(containers))
 		for i, c := range containers {
 			apps[i] = jsonApp{
@@ -105,7 +114,6 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 				FailureCount: c.GetFailureCount(),
 			}
 		}
-
 		data, err := json.MarshalIndent(apps, "", "  ")
 		if err != nil {
 			return err
@@ -115,10 +123,9 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications running.")
+		fmt.Println("No applications deployed.")
 		return nil
 	}
-
 	headers := []string{"", "Name", "Version", "Failures"}
 	var rows [][]string
 	for _, c := range containers {
@@ -130,6 +137,69 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 		})
 	}
 	fmt.Print(tui.RenderTable(headers, rows))
+	return nil
+}
+
+// streamAppLogs streams logs for a single app to stdout after the dashboard exits.
+func streamAppLogs(ctx context.Context, conn *grpcclient.AgentConnection, appName string) error {
+	fmt.Printf("Streaming logs for %s (Ctrl+C to stop)…\n", appName)
+	req := &agentpb.StreamLogsRequest{AppName: &appName}
+	stream, err := conn.TelemetryService.StreamLogs(ctx, req)
+	if err != nil {
+		return fmt.Errorf("starting log stream: %w", err)
+	}
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("receiving logs: %w", err)
+		}
+		logs := resp.GetLogs()
+		if logs == nil {
+			continue
+		}
+		for _, rl := range logs.GetResourceLogs() {
+			svc := resourceServiceName(rl.GetResource())
+			for _, sl := range rl.GetScopeLogs() {
+				for _, lr := range sl.GetLogRecords() {
+					printLogRecord(svc, lr)
+				}
+			}
+		}
+	}
+}
+
+func runAppsDashboard(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	// Use a cancellable context so background goroutines stop when the program exits.
+	dashCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	m := newAppsDashboardModel(conn, dashCtx)
+
+	// Wire up the 'd' key to set the current device as default (same pattern as picker).
+	m.OnSetDefault = func() {
+		if cfg, err := config.Load(); err == nil {
+			cfg.DefaultDevice = conn.Host
+			_ = config.Save(cfg)
+		}
+	}
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	result, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("apps dashboard: %w", err)
+	}
+
+	final, ok := result.(appsDashboardModel)
+	if !ok {
+		return nil
+	}
+
+	if final.action == appsDashActionLogs && final.selectedApp != "" {
+		return streamAppLogs(ctx, conn, final.selectedApp)
+	}
 	return nil
 }
 
@@ -149,7 +219,7 @@ func appsListProvider(ctx context.Context, cm providers.ContainerManager) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications found.")
+		fmt.Println("No applications deployed.")
 		return nil
 	}
 
@@ -186,28 +256,40 @@ func newAppsStartCmd() *cobra.Command {
 			}
 
 			if target.Agent != nil {
-				stream, err := target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-					AppName: appName,
-				})
+				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName)
 				if err != nil {
-					return fmt.Errorf("starting container: %w", err)
+					return err
 				}
+				gotFirstResponse := false
 				for {
-					resp, err := stream.Recv()
+					resp, err := outStream.Recv()
 					if err == io.EOF {
 						break
 					}
 					if err != nil {
+						if stdinAttempted && !gotFirstResponse && status.Code(err) == codes.Unimplemented {
+							cliNotice("Notice: stdin not attached (not supported by agent)")
+							startStream, startErr := target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+								AppName: appName,
+							})
+							if startErr != nil {
+								return fmt.Errorf("starting container: %w", startErr)
+							}
+							outStream = startStream
+							stdinAttempted = false
+							continue
+						}
 						return fmt.Errorf("receiving start response: %w", err)
 					}
+					gotFirstResponse = true
 					if out := resp.GetStdoutOutput(); out != nil {
-						fmt.Print(string(out.GetData()))
+						os.Stdout.Write(out.GetData())
 					}
 					if out := resp.GetStderrOutput(); out != nil {
-						fmt.Print(string(out.GetData()))
+						os.Stderr.Write(out.GetData())
 					}
 				}
-				fmt.Printf("Application %s started.\n", appName)
+				fmt.Printf("Application %s stopped.\n", appName)
 				return nil
 			}
 
@@ -281,19 +363,14 @@ func newAppsStopCmd() *cobra.Command {
 
 func newAppsRemoveCmd() *cobra.Command {
 	var force bool
+	var cleanup bool
+	var deleteVolumes bool
 
 	cmd := &cobra.Command{
 		Use:   "remove [app-name]",
 		Short: "Remove an application",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// If an explicit name was given without --force, print confirmation
-			// without requiring a device connection (preserves original behavior).
-			if len(args) > 0 && !force {
-				fmt.Printf("Are you sure you want to remove %s? This cannot be undone. Use --force to skip confirmation.\n", args[0])
-				return nil
-			}
-
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
 			if err != nil {
@@ -309,20 +386,65 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if !force {
-					fmt.Printf("Are you sure you want to remove %s? This cannot be undone. Use --force to skip confirmation.\n", appName)
+			}
+
+			// Confirmation prompt (unless --force).
+			if !force {
+				confirmed, err := tui.Confirm(fmt.Sprintf("Remove %s? This cannot be undone.", appName))
+				if err != nil {
+					if errors.Is(err, tui.ErrCancelled) {
+						return ErrUserCancelled
+					}
+					return err
+				}
+				if !confirmed {
+					fmt.Println("Cancelled.")
 					return nil
+				}
+			}
+
+			// If neither --cleanup nor --delete-volumes was explicitly set,
+			// offer an interactive checklist for cleanup options.
+			cleanupSet := cmd.Flags().Changed("cleanup")
+			volumesSet := cmd.Flags().Changed("delete-volumes")
+			if !cleanupSet && !volumesSet && !force {
+				items := []tui.ChecklistItem{
+					{Label: "Delete container image", Description: "Frees disk space", Value: "cleanup"},
+					{Label: "Delete persistent volumes", Description: "Removes data in /var/lib/wendy/volumes", Value: "volumes"},
+				}
+				selected, err := tui.RunChecklist("Also clean up?", items)
+				if err != nil {
+					if errors.Is(err, tui.ErrCancelled) {
+						return ErrUserCancelled
+					}
+					return err
+				}
+				for _, item := range selected {
+					switch item.Value {
+					case "cleanup":
+						cleanup = true
+					case "volumes":
+						deleteVolumes = true
+					}
 				}
 			}
 
 			if target.Agent != nil {
 				_, err = target.Agent.ContainerService.DeleteContainer(ctx, &agentpb.DeleteContainerRequest{
-					AppName: appName,
+					AppName:       appName,
+					DeleteImage:   cleanup,
+					DeleteVolumes: deleteVolumes,
 				})
 				if err != nil {
 					return fmt.Errorf("removing container: %w", err)
 				}
 				fmt.Printf("Application %s removed.\n", appName)
+				if cleanup {
+					fmt.Println("  Container image cleanup requested.")
+				}
+				if deleteVolumes {
+					fmt.Println("  Persistent volume deletion requested.")
+				}
 				return nil
 			}
 
@@ -343,6 +465,8 @@ func newAppsRemoveCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&cleanup, "cleanup", false, "Also delete the container image (frees disk space; agent-connected devices only)")
+	cmd.Flags().BoolVar(&deleteVolumes, "delete-volumes", false, "Also delete persistent volumes (/var/lib/wendy/volumes; agent-connected devices only)")
 	return cmd
 }
 

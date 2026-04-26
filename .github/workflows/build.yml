@@ -3,6 +3,10 @@ name: Build products and release
 on:
   push:
     branches: [main]
+    paths:
+      - 'go/**'
+      - 'swift/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       publish:
@@ -18,6 +22,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  XCODE_VERSION: '26.3'
+
 jobs:
   determine-version:
     name: Determine Version
@@ -28,7 +35,7 @@ jobs:
       is_prerelease: ${{ steps.set-version.outputs.is_prerelease }}
       tag_name: ${{ steps.set-version.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -101,10 +108,10 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -135,7 +142,7 @@ jobs:
           echo "archive=$ARCHIVE" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.archive }}
           path: ${{ env.archive }}
@@ -157,10 +164,10 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -185,12 +192,78 @@ jobs:
           echo "archive=$ARCHIVE" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.archive }}
           path: ${{ env.archive }}
           retention-days: 14
           if-no-files-found: error
+
+  build-agent-macos-app:
+    name: wendy-agent-macos-app
+    runs-on: macos-26
+    timeout-minutes: 45
+    needs: [determine-version]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Setup macOS signing
+        id: signing
+        working-directory: swift
+        env:
+          DEVELOPER_ID_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
+          DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        shell: bash
+        run: bash ./Scripts/SetupSigningCI.sh
+
+      - name: Build WendyAgentMac app
+        id: build_wendy_agent_mac_app
+        working-directory: swift
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+          OUTPUT_DIR: ${{ github.workspace }}/swift/Build
+          DERIVED_DATA_PATH: ${{ github.workspace }}/swift/Build/Xcode
+          ARCHIVE_PATH: ${{ github.workspace }}/swift/Build/WendyAgentMac.xcarchive
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
+          NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
+        shell: bash
+        run: bash ./Scripts/Build.sh
+
+      - name: Upload notarized app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: wendy-agent-macos-app-${{ needs.determine-version.outputs.version }}
+          path: ${{ steps.build_wendy_agent_mac_app.outputs.app_path }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload release zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_wendy_agent_mac_app.outputs.artifact_name }}
+          path: ${{ steps.build_wendy_agent_mac_app.outputs.artifact_path }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Clean up signing assets
+        if: always()
+        shell: bash
+        env:
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
@@ -207,7 +280,7 @@ jobs:
             goarch: arm64
             rpm-arch: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install FPM dependencies
         run: |
@@ -396,14 +469,14 @@ jobs:
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
 
       - name: Upload .deb packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-packages-deb-${{ matrix.arch }}
           path: "*.deb"
           retention-days: 14
 
       - name: Upload .rpm packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-packages-rpm-${{ matrix.arch }}
           path: "*.rpm"
@@ -414,6 +487,9 @@ jobs:
     runs-on: windows-latest
     needs: [determine-version, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       matrix:
         include:
@@ -421,8 +497,12 @@ jobs:
             goarch: amd64
           - arch: arm64
             goarch: arm64
+    env:
+      SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      SIGNING_ACCOUNT: wendy-signing
+      SIGNING_PROFILE: wendy-cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install WiX
         run: dotnet tool install --global wix
@@ -435,6 +515,41 @@ jobs:
       - name: Extract artifact
         run: |
           Expand-Archive "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip" -DestinationPath .
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign wendy.exe
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files-folder: wendy-cli-windows-${{ matrix.goarch }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Re-zip with signed exe
+        run: |
+          $VERSION = "${{ needs.determine-version.outputs.version }}"
+          $ARCHIVE = "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.zip"
+          Remove-Item $ARCHIVE
+          Compress-Archive -Path "wendy-cli-windows-${{ matrix.goarch }}" -DestinationPath $ARCHIVE
+
+      - name: Upload signed zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+          path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
 
       - name: Build MSI
         run: |
@@ -449,14 +564,26 @@ jobs:
           $MSI_ARCH = if ("${{ matrix.arch }}" -eq "arm64") { "arm64" } else { "x64" }
 
           wix build `
+            -acceptEula wix7 `
             -d Version="$MSI_VERSION" `
             -d ExePath="wendy-cli-windows-${{ matrix.goarch }}/wendy.exe" `
             -arch $MSI_ARCH `
             -o "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.msi" `
             go/installer/windows/wendy.wxs
 
+      - name: Sign MSI
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Upload MSI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi
           path: "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi"
@@ -466,7 +593,7 @@ jobs:
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
     runs-on: ubuntu-latest
-    needs: [determine-version, package-linux]
+    needs: [determine-version, package-linux, test-templates]
     if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
     permissions:
       contents: read
@@ -487,13 +614,13 @@ jobs:
           path: packages/rpm
 
       - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
 
       - name: Upload APT packages
         run: |
@@ -520,7 +647,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, package-linux, package-windows]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, package-linux, package-windows, test-templates]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     steps:
       - name: Download artifact
@@ -538,7 +665,7 @@ jobs:
           } >> $GITHUB_ENV
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ needs.determine-version.outputs.version }}
           tag_name: ${{ needs.determine-version.outputs.tag_name }}
@@ -554,7 +681,7 @@ jobs:
       # Update floating 'latest' tag for nightly prereleases
       - name: Checkout repo
         if: needs.determine-version.outputs.is_release != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Update 'latest' tag
@@ -570,11 +697,38 @@ jobs:
           git tag -fa latest "$TARGET_SHA" -m "Latest prerelease: $TAG"
           git push -f origin refs/tags/latest
 
+      # Discord notification for nightly prereleases
+      - name: Notify Discord (nightly)
+        if: needs.determine-version.outputs.is_prerelease == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.tag_name }}"
+          REPO="${{ github.repository }}"
+          URL="https://github.com/${REPO}/releases/tag/${VERSION}"
+
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            DESC=$'## Update the agent on your device\n```\nwendy device update --nightly\n```'
+            PAYLOAD=$(jq -n \
+              --arg content "🌙 **New nightly build**: **${VERSION}**" \
+              --arg title "Nightly ${VERSION}" \
+              --arg url "$URL" \
+              --arg desc "$DESC" \
+              --arg footer "${REPO} • ${VERSION}" \
+              '{content: $content, embeds: [{title: $title, url: $url, description: $desc, color: 8421504, footer: {text: $footer}}]}')
+            curl -sS -X POST -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "$DISCORD_WEBHOOK_URL" && echo "Discord nightly notification sent" || echo "Discord nightly notification failed"
+          else
+            echo "DISCORD_NIGHTLY_WEBHOOK_URL not configured, skipping notification"
+          fi
+
       # Discord notification for stable releases
       - name: Notify Discord
         if: needs.determine-version.outputs.is_prerelease == 'false'
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.determine-version.outputs.tag_name }}"
@@ -593,6 +747,15 @@ jobs:
           **Linux/macOS**
           ```
           curl -fsSL https://install.wendy.sh/cli.sh | bash
+          ```
+
+          **Windows (install)**
+          ```
+          winget install WendyLabs.Wendy
+          ```
+          **Windows (update)**
+          ```
+          winget upgrade WendyLabs.Wendy
           ```
 
           ## Install the Wendy Agent
@@ -632,10 +795,10 @@ jobs:
             echo "DISCORD_WEBHOOK_URL not configured, skipping notification"
           fi
 
-      # Bump the formula in homebrew-tap
+      # Bump Homebrew tap formula and cask
       - name: Create GitHub App Token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.CLI_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.CLI_PUBLISHER_APP_PRIVATE_KEY }}
@@ -643,117 +806,167 @@ jobs:
           repositories: homebrew-tap
 
       - name: Checkout tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: wendylabsinc/homebrew-tap
           token: ${{ steps.app-token.outputs.token }}
           ref: main
           path: tap
 
-      - name: Calculate binary checksums
+      - name: Calculate release artifact checksums
         id: checksums
         run: |
           set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
           TAG_NAME="${{ needs.determine-version.outputs.tag_name }}"
 
-          MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-darwin-arm64-${VERSION}.tar.gz"
-          MACOS_SHA=$(curl -fsSL "$MACOS_URL" | sha256sum | awk '{print $1}')
+          CLI_MACOS_FILE="wendy-cli-darwin-arm64-${VERSION}.tar.gz"
+          CLI_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${CLI_MACOS_FILE}"
+          CLI_MACOS_SHA=$(curl -fsSL "$CLI_MACOS_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-arm64-${VERSION}.tar.gz"
+          LINUX_ARM_FILE="wendy-cli-linux-arm64-${VERSION}.tar.gz"
+          LINUX_ARM_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_ARM_FILE}"
           LINUX_ARM_SHA=$(curl -fsSL "$LINUX_ARM_URL" | sha256sum | awk '{print $1}')
 
-          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/wendy-cli-linux-amd64-${VERSION}.tar.gz"
+          LINUX_X86_FILE="wendy-cli-linux-amd64-${VERSION}.tar.gz"
+          LINUX_X86_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${LINUX_X86_FILE}"
           LINUX_X86_SHA=$(curl -fsSL "$LINUX_X86_URL" | sha256sum | awk '{print $1}')
 
-          echo "URLs and SHA256s:"
-          echo "  macOS ARM64: ${MACOS_URL} -> ${MACOS_SHA}"
-          echo "  Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
-          echo "  Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
+          AGENT_MACOS_FILE="wendy-agent-macos-arm64-${VERSION}.zip"
+          AGENT_MACOS_URL="https://github.com/wendylabsinc/wendy-agent/releases/download/${TAG_NAME}/${AGENT_MACOS_FILE}"
+          AGENT_MACOS_SHA=$(curl -fsSL "$AGENT_MACOS_URL" | sha256sum | awk '{print $1}')
 
-          echo "macos_url=${MACOS_URL}" >> $GITHUB_OUTPUT
-          echo "macos_sha=${MACOS_SHA}" >> $GITHUB_OUTPUT
+          echo "URLs and SHA256s:"
+          echo "  CLI macOS ARM64: ${CLI_MACOS_URL} -> ${CLI_MACOS_SHA}"
+          echo "  CLI Linux ARM64: ${LINUX_ARM_URL} -> ${LINUX_ARM_SHA}"
+          echo "  CLI Linux x86_64: ${LINUX_X86_URL} -> ${LINUX_X86_SHA}"
+          echo "  Agent macOS app: ${AGENT_MACOS_URL} -> ${AGENT_MACOS_SHA}"
+
+          echo "cli_macos_url=${CLI_MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "cli_macos_sha=${CLI_MACOS_SHA}" >> $GITHUB_OUTPUT
           echo "linux_arm_url=${LINUX_ARM_URL}" >> $GITHUB_OUTPUT
           echo "linux_arm_sha=${LINUX_ARM_SHA}" >> $GITHUB_OUTPUT
           echo "linux_x86_url=${LINUX_X86_URL}" >> $GITHUB_OUTPUT
           echo "linux_x86_sha=${LINUX_X86_SHA}" >> $GITHUB_OUTPUT
+          echo "agent_macos_url=${AGENT_MACOS_URL}" >> $GITHUB_OUTPUT
+          echo "agent_macos_sha=${AGENT_MACOS_SHA}" >> $GITHUB_OUTPUT
 
-      # Nightly: update wendy-nightly.rb and push directly to main
-      - name: Bump nightly formula
+      # Nightly: update formula and cask directly on main
+      - name: Bump nightly formula and cask
         if: needs.determine-version.outputs.is_release != 'true'
         run: |
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
           FORMULA="Formula/wendy-nightly.rb"
+          CASK="Casks/wendy-agent-nightly.rb"
 
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.cli_macos_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
 
-          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.cli_macos_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
 
           # Update bottle root_url version
           sed -i "s|wendy-nightly-[^\"]*|wendy-nightly-${VERSION}|" "$FORMULA"
 
+          mkdir -p "$(dirname "$CASK")"
+          cat > "$CASK" <<EOF
+          cask "wendy-agent-nightly" do
+            version "${VERSION}"
+            sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
+
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-arm64-#{version}.zip"
+            name "Wendy Agent"
+            desc "Wendy Agent for macOS (nightly)"
+            homepage "https://github.com/wendylabsinc/wendy-agent"
+
+            app "WendyAgentMac.app"
+          end
+          EOF
+
           # Verify all URLs and checksums were actually updated
-          echo "Verifying formula was updated correctly..."
+          echo "Verifying nightly formula and cask..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
-          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.cli_macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
+          grep -q "version \"${VERSION}\"" "$CASK" || { echo "::error::Failed to update nightly cask version"; exit 1; }
+          grep -q "sha256 \"${{ steps.checksums.outputs.agent_macos_sha }}\"" "$CASK" || { echo "::error::Failed to update nightly cask SHA256"; exit 1; }
 
           echo "Updated nightly formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
+          echo "Updated nightly cask:"
+          grep -E "version|sha256|url" "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FORMULA"
+          git add "$FORMULA" "$CASK"
           git commit -m "wendy-nightly: update to ${VERSION}"
           git push origin main
 
-      # Stable: update wendy.rb via PR
-      - name: Bump stable formula
+      # Stable: update the CLI formula and macOS agent cask via PR
+      - name: Bump stable formula and cask
         if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
         run: |
           set -euo pipefail
           cd tap
           VERSION="${{ needs.determine-version.outputs.version }}"
-          BRANCH="ci/bump-wendy-${VERSION}"
+          BRANCH="ci/bump-wendy-tap-${VERSION}"
           FORMULA="Formula/wendy.rb"
+          CASK="Casks/wendy-agent.rb"
 
           git checkout -b "$BRANCH"
 
-          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.macos_url }}|" "$FORMULA"
+          sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-darwin-arm64[^\"]*|${{ steps.checksums.outputs.cli_macos_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-arm64[^\"]*|${{ steps.checksums.outputs.linux_arm_url }}|" "$FORMULA"
           sed -i "s|https://github.com/wendylabsinc/wendy-agent/releases/download/[^/]*/wendy-cli-linux-amd64[^\"]*|${{ steps.checksums.outputs.linux_x86_url }}|" "$FORMULA"
 
-          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.macos_sha }}\"|" "$FORMULA"
+          sed -i "/wendy-cli-darwin-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.cli_macos_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-arm64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_arm_sha }}\"|" "$FORMULA"
           sed -i "/wendy-cli-linux-amd64.*tar\.gz/,/sha256/ s|sha256 \"[^\"]*\"|sha256 \"${{ steps.checksums.outputs.linux_x86_sha }}\"|" "$FORMULA"
 
           # Update bottle root_url version
           sed -i "s|wendy-[0-9][^\"]*|wendy-${VERSION}|" "$FORMULA"
 
+          mkdir -p "$(dirname "$CASK")"
+          cat > "$CASK" <<EOF
+          cask "wendy-agent" do
+            version "${VERSION}"
+            sha256 "${{ steps.checksums.outputs.agent_macos_sha }}"
+
+            url "https://github.com/wendylabsinc/wendy-agent/releases/download/#{version}/wendy-agent-macos-arm64-#{version}.zip"
+            name "Wendy Agent"
+            desc "Wendy Agent for macOS"
+            homepage "https://github.com/wendylabsinc/wendy-agent"
+
+            app "WendyAgentMac.app"
+          end
+          EOF
+
           # Verify all URLs and checksums were actually updated
-          echo "Verifying formula was updated correctly..."
+          echo "Verifying stable formula and cask..."
           grep -q "wendy-cli-darwin-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update macOS URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-arm64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 URL in formula"; exit 1; }
           grep -q "wendy-cli-linux-amd64-${VERSION}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 URL in formula"; exit 1; }
-          grep -q "${{ steps.checksums.outputs.macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
+          grep -q "${{ steps.checksums.outputs.cli_macos_sha }}" "$FORMULA" || { echo "::error::Failed to update macOS SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_arm_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux ARM64 SHA256 in formula"; exit 1; }
           grep -q "${{ steps.checksums.outputs.linux_x86_sha }}" "$FORMULA" || { echo "::error::Failed to update Linux AMD64 SHA256 in formula"; exit 1; }
+          grep -q "version \"${VERSION}\"" "$CASK" || { echo "::error::Failed to update macOS agent cask version"; exit 1; }
+          grep -q "sha256 \"${{ steps.checksums.outputs.agent_macos_sha }}\"" "$CASK" || { echo "::error::Failed to update macOS agent cask SHA256"; exit 1; }
 
           echo "Updated stable formula:"
           grep -A 1 "url\|sha256" "$FORMULA" | head -20
+          echo "Updated stable cask:"
+          grep -E "version|sha256|url" "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FORMULA"
+          git add "$FORMULA" "$CASK"
           git commit -m "wendy: bump to ${VERSION}"
           git push -u origin "$BRANCH"
 
@@ -765,15 +978,17 @@ jobs:
           VERSION="${{ needs.determine-version.outputs.version }}"
           gh pr create \
             --repo wendylabsinc/homebrew-tap \
-            --head "ci/bump-wendy-${VERSION}" \
+            --head "ci/bump-wendy-tap-${VERSION}" \
             --base main \
             --title "wendy: bump to ${VERSION}" \
             --label pr-pull \
             --body "Automated bump from release ${VERSION}
 
-          This PR updates the wendy formula to version ${VERSION}.
+          This PR updates the stable Homebrew formula for the CLI and the
+          stable cask for the macOS agent app.
 
-          All platforms use pre-built Go binaries."
+          The formula continues to use pre-built Go binaries, and the cask
+          points at the GitHub release app zip."
 
   publish-aur:
     name: Publish AUR Packages
@@ -792,7 +1007,7 @@ jobs:
             x86_64_artifact: wendy-agent-linux-amd64
             aarch64_artifact: wendy-agent-linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Calculate checksums from release
         id: checksums
@@ -839,18 +1054,18 @@ jobs:
           entrypoint: /bin/bash
           args: |
             -c "
+            set -euo pipefail
             pacman -Sy --noconfirm base-devel shadow
-            cd $(dirname ${{ matrix.pkgbuild_path }})
+            PKGDIR=$(dirname '${{ matrix.pkgbuild_path }}')
             if ! id -u builder >/dev/null 2>&1; then
               useradd -m builder
             fi
-            chown -R builder:builder .
-            su builder -s /bin/bash -c 'makepkg --printsrcinfo > .SRCINFO'
-            cat .SRCINFO
+            chown -R builder:builder \"$PKGDIR\"
+            su builder -s /bin/bash -c \"cd \\\"$PKGDIR\\\" && makepkg --printsrcinfo\" | tee \"$PKGDIR/.SRCINFO\"
             "
 
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
           pkgname: ${{ matrix.pkgname }}
           pkgbuild: ${{ matrix.pkgbuild_path }}
@@ -871,6 +1086,7 @@ jobs:
 
       - name: Update Winget package
         run: |
+          $ErrorActionPreference = "Stop"
           $version = "${{ needs.determine-version.outputs.version }}"
           $tag = "${{ needs.determine-version.outputs.tag_name }}"
           $base = "https://github.com/wendylabsinc/wendy-agent/releases/download/$tag"
@@ -878,18 +1094,144 @@ jobs:
           $amd64Url = "$base/wendy-cli-windows-amd64-$version.msi"
           $arm64Url = "$base/wendy-cli-windows-arm64-$version.msi"
 
+          function Invoke-GitHubApi {
+            param(
+              [Parameter(Mandatory = $true)][string]$Method,
+              [Parameter(Mandatory = $true)][string]$Uri,
+              $Body = $null
+            )
+
+            $headers = @{
+              Authorization = "Bearer $token"
+              Accept = "application/vnd.github+json"
+              "X-GitHub-Api-Version" = "2022-11-28"
+            }
+
+            $params = @{
+              Method = $Method
+              Uri = $Uri
+              Headers = $headers
+            }
+
+            if ($null -ne $Body) {
+              $params.ContentType = "application/json"
+              $params.Body = $Body
+            }
+
+            Invoke-RestMethod @params
+          }
+
+          function Sync-WingetFork {
+            $viewer = Invoke-GitHubApi -Method Get -Uri "https://api.github.com/user"
+            $upstream = Invoke-GitHubApi -Method Get -Uri "https://api.github.com/repos/microsoft/winget-pkgs"
+            $syncBody = @{
+              branch = $upstream.default_branch
+            } | ConvertTo-Json
+
+            Write-Host "Syncing $($viewer.login)/winget-pkgs with microsoft/winget-pkgs@$($upstream.default_branch)..."
+
+            try {
+              $response = Invoke-GitHubApi -Method Post -Uri "https://api.github.com/repos/$($viewer.login)/winget-pkgs/merge-upstream" -Body $syncBody
+              if ($response.message) {
+                Write-Host $response.message
+              }
+            } catch {
+              $statusCode = $null
+              if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $statusCode = $_.Exception.Response.StatusCode.value__
+              }
+              $errorMessage = $null
+              if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $errorMessage = $_.ErrorDetails.Message
+              }
+              if ([string]::IsNullOrWhiteSpace($errorMessage)) {
+                $errorMessage = $_.Exception.Message
+              }
+
+              if ($statusCode -eq 409) {
+                Write-Host "winget-pkgs fork is already up to date."
+                return
+              }
+
+              if (
+                $statusCode -eq 422 -and (
+                  $errorMessage -match "refusing to allow a Personal Access Token to create or update workflow" -or
+                  $errorMessage -match "workflow scope"
+                )
+              ) {
+                throw "WINGET_GITHUB_TOKEN cannot sync $($viewer.login)/winget-pkgs because GitHub rejected workflow file updates in the fork. Update the secret to a token with workflow scope (for a classic PAT) or equivalent workflow-file write permission, then rerun the release workflow. GitHub API response: $errorMessage"
+              }
+
+              throw
+            }
+          }
+
+          function Invoke-WingetCreate {
+            param(
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            $output = @(& .\wingetcreate.exe @Arguments 2>&1 | ForEach-Object { "$_" })
+            $exitCode = $LASTEXITCODE
+
+            foreach ($line in $output) {
+              Write-Host $line
+            }
+
+            [PSCustomObject]@{
+              ExitCode = $exitCode
+              Output = $output -join "`n"
+            }
+          }
+
+          function Test-WingetForkSyncError {
+            param(
+              [Parameter(Mandatory = $true)][string]$Output
+            )
+
+            $Output -match "The forked repository could not be synced with the upstream commits"
+          }
+
+          function Invoke-WingetCreateWithForkSyncRetry {
+            param(
+              [Parameter(Mandatory = $true)][string]$Operation,
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            $result = Invoke-WingetCreate -Arguments $Arguments
+            if ($result.ExitCode -eq 0) {
+              return $result
+            }
+
+            if (-not (Test-WingetForkSyncError -Output $result.Output)) {
+              return $result
+            }
+
+            Write-Host "wingetcreate $Operation failed because the winget-pkgs fork is out of sync. Retrying after syncing the fork..."
+            Sync-WingetFork
+            Invoke-WingetCreate -Arguments $Arguments
+          }
+
           # Try update first (works once the package exists in winget-pkgs)
-          .\wingetcreate.exe update WendyLabs.Wendy `
-            --version $version `
-            --urls $amd64Url $arm64Url `
-            --submit `
-            --token $token
-          if ($LASTEXITCODE -eq 0) {
+          $updateResult = Invoke-WingetCreateWithForkSyncRetry -Operation "update" -Arguments @(
+            "update",
+            "WendyLabs.Wendy",
+            "--version", $version,
+            "--urls", $amd64Url, $arm64Url,
+            "--submit",
+            "--token", $token
+          )
+          if ($updateResult.ExitCode -eq 0) {
             Write-Host "Winget package updated successfully."
             exit 0
           }
 
-          Write-Host "Update failed (package may not exist yet). Generating initial manifest..."
+          if (Test-WingetForkSyncError -Output $updateResult.Output) {
+            Write-Error "Winget update failed after syncing the winget-pkgs fork."
+            exit $updateResult.ExitCode
+          }
+
+          Write-Host "Update failed without a fork sync error. Generating initial manifest..."
 
           # Download installers to compute SHA256 hashes
           Invoke-WebRequest -Uri $amd64Url -OutFile amd64.msi
@@ -953,12 +1295,22 @@ jobs:
           "@ -replace '(?m)^          ', '' | Set-Content "$manifestDir\WendyLabs.Wendy.locale.en-US.yaml" -Encoding utf8
 
           # Submit the generated manifest
-          .\wingetcreate.exe submit `
-            --prtitle "New package: WendyLabs.Wendy version $version" `
-            --token $token `
+          $submitResult = Invoke-WingetCreateWithForkSyncRetry -Operation "submit" -Arguments @(
+            "submit",
+            "--prtitle", "New package: WendyLabs.Wendy version $version",
+            "--token", $token,
             $manifestDir
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Winget manifest submission failed with exit code $LASTEXITCODE."
-            exit $LASTEXITCODE
+          )
+          if ($submitResult.ExitCode -ne 0) {
+            Write-Error "Winget manifest submission failed with exit code $($submitResult.ExitCode)."
+            exit $submitResult.ExitCode
           }
           Write-Host "Initial Winget manifest submitted successfully."
+
+  test-templates:
+    name: Template Tests
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test-templates.yml
+    with:
+      deploy: false

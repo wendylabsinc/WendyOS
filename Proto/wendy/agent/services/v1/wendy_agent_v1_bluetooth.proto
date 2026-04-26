@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package wendy.agent.services.v1;
 
+import "wendy/agent/services/v1/wendy_agent_v1_service.proto";
+
 // Bluetooth command sent from CLI to Agent over L2CAP
 message BluetoothCommand {
     oneof command {
@@ -18,6 +20,10 @@ message BluetoothCommand {
         BluetoothConnectCommand bluetooth_connect = 11;
         BluetoothDisconnectCommand bluetooth_disconnect = 12;
         BluetoothForgetCommand bluetooth_forget = 13;
+        WifiKnownListCommand wifi_known_list = 14;
+        WifiSetPriorityCommand wifi_set_priority = 15;
+        WifiReorderCommand wifi_reorder = 16;
+        WifiForgetCommand wifi_forget = 17;
     }
 }
 
@@ -50,6 +56,23 @@ message BluetoothForgetCommand {
 message WifiConnectCommand {
     string ssid = 1;
     string password = 2;
+    optional WiFiSecurityType security = 3;
+    optional bool hidden = 4;
+}
+
+message WifiKnownListCommand {}
+
+message WifiSetPriorityCommand {
+    string ssid = 1;
+    int32 priority = 2;
+}
+
+message WifiReorderCommand {
+    repeated string order_ssids = 1;
+}
+
+message WifiForgetCommand {
+    string ssid = 1;
 }
 
 message AppsStopCommand {
@@ -78,6 +101,10 @@ message BluetoothResponse {
         BluetoothConnectResponse bluetooth_connect = 12;
         BluetoothDisconnectResponse bluetooth_disconnect = 13;
         BluetoothForgetResponse bluetooth_forget = 14;
+        WifiKnownListResponse wifi_known_list = 15;
+        WifiSetPriorityResponse wifi_set_priority = 16;
+        WifiReorderResponse wifi_reorder = 17;
+        WifiForgetResponse wifi_forget = 18;
     }
 }
 
@@ -154,10 +181,41 @@ message BluetoothForgetResponse {
     optional string error_message = 2;
 }
 
+message WifiKnownListResponse {
+    repeated KnownWifiNetworkInfo networks = 1;
+}
+
+message KnownWifiNetworkInfo {
+    string ssid = 1;
+    string uuid = 2;
+    int32 priority = 3;
+    WiFiSecurityType security = 4;
+}
+
+message WifiSetPriorityResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message WifiReorderResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message WifiForgetResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
 // Shared types
 message WifiNetworkInfo {
     string ssid = 1;
     optional int32 signal_strength = 2;
+    WiFiSecurityType security = 3;
+    bool is_known = 4;
+    bool is_connected = 5;
+    optional int32 priority = 6;
+    optional int32 rssi_dbm = 7;
 }
 
 message AppInfo {

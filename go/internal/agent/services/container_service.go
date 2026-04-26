@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -277,6 +280,111 @@ func (s *ContainerService) streamContainerOutput(
 	}
 }
 
+// AttachContainer starts a container and multiplexes stdin from the client
+// with stdout/stderr back to the client over a single bidirectional stream.
+// The first client message must set app_name; subsequent messages carry stdin data.
+func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse]) error {
+	// First message must identify the app.
+	first, err := stream.Recv()
+	if err == io.EOF {
+		return status.Error(codes.InvalidArgument, "missing first attach message")
+	}
+	if err != nil {
+		return err
+	}
+	appName := first.GetAppName()
+	if appName == "" {
+		return status.Error(codes.InvalidArgument, "app_name required as first message")
+	}
+
+	ctx := stream.Context()
+
+	// Pipe client stdin messages into the container's stdin.
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	// Goroutine: forward stdin_data messages from the gRPC stream to stdinW.
+	go func() {
+		defer stdinW.Close()
+		for {
+			msg, recvErr := stream.Recv()
+			if recvErr != nil {
+				return // client disconnected or closed send
+			}
+			if data := msg.GetStdinData(); len(data) > 0 {
+				if _, writeErr := stdinW.Write(data); writeErr != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR)
+	if err != nil {
+		stdinR.Close()
+		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+	}
+
+	// Send started notification.
+	if err := stream.Send(&agentpb.RunContainerLayersResponse{
+		ResponseType: &agentpb.RunContainerLayersResponse_Started_{
+			Started: &agentpb.RunContainerLayersResponse_Started{},
+		},
+	}); err != nil {
+		return err
+	}
+
+	// Fan-out via log manager if configured.
+	var readCh <-chan ContainerOutput
+	if s.logManager != nil {
+		subID, subCh := s.logManager.Subscribe(appName)
+		defer s.logManager.Unsubscribe(appName, subID)
+		readCh = subCh
+
+		go func() {
+			for output := range outputCh {
+				s.logManager.Publish(appName, output)
+			}
+			s.logManager.Publish(appName, ContainerOutput{Done: true})
+		}()
+	} else {
+		readCh = outputCh
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case output, ok := <-readCh:
+			if !ok || output.Done {
+				return nil
+			}
+			if len(output.Stdout) > 0 {
+				if err := stream.Send(&agentpb.RunContainerLayersResponse{
+					ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{
+						StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{
+							Data: output.Stdout,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			}
+			if len(output.Stderr) > 0 {
+				if err := stream.Send(&agentpb.RunContainerLayersResponse{
+					ResponseType: &agentpb.RunContainerLayersResponse_StderrOutput{
+						StderrOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{
+							Data: output.Stderr,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
 // StopContainer stops a running container.
 func (s *ContainerService) StopContainer(ctx context.Context, req *agentpb.StopContainerRequest) (*agentpb.StopContainerResponse, error) {
 	if err := s.containerd.StopContainer(ctx, req.GetAppName()); err != nil {
@@ -286,16 +394,162 @@ func (s *ContainerService) StopContainer(ctx context.Context, req *agentpb.StopC
 	return &agentpb.StopContainerResponse{}, nil
 }
 
-// DeleteContainer deletes a container and optionally its image.
+// DeleteContainer deletes a container and optionally its image and volumes.
 func (s *ContainerService) DeleteContainer(ctx context.Context, req *agentpb.DeleteContainerRequest) (*agentpb.DeleteContainerResponse, error) {
 	if err := s.containerd.DeleteContainer(ctx, req.GetAppName(), req.GetDeleteImage()); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete container: %v", err)
 	}
+
+	if req.GetDeleteVolumes() {
+		s.deleteVolumes(req.GetAppName())
+	}
+
 	s.logger.Info("Container deleted",
 		zap.String("app_name", req.GetAppName()),
 		zap.Bool("delete_image", req.GetDeleteImage()),
+		zap.Bool("delete_volumes", req.GetDeleteVolumes()),
 	)
 	return &agentpb.DeleteContainerResponse{}, nil
+}
+
+// volumesDir is the base directory for persistent volumes. It's a variable
+// (not const) so tests can override it with a temp directory.
+var volumesDir = "/var/lib/wendy/volumes"
+
+// deleteVolumes removes persistent volume directories for an app.
+func (s *ContainerService) deleteVolumes(appName string) {
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil {
+		s.logger.Warn("Failed to read volumes directory",
+			zap.String("base", volumesDir),
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == appName || strings.HasPrefix(name, appName+"-") {
+			path := filepath.Join(volumesDir, name)
+			if err := os.RemoveAll(path); err != nil {
+				s.logger.Warn("Failed to remove volume", zap.String("path", path), zap.Error(err))
+			} else {
+				s.logger.Info("Volume removed", zap.String("path", path))
+			}
+		}
+	}
+}
+
+// ListVolumes lists persistent volumes and which apps use them.
+func (s *ContainerService) ListVolumes(ctx context.Context, _ *agentpb.ListVolumesRequest) (*agentpb.ListVolumesResponse, error) {
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &agentpb.ListVolumesResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "reading volumes dir: %v", err)
+	}
+
+	usedBy := s.buildVolumeUsageMap(ctx)
+
+	var volumes []*agentpb.VolumeInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		path := filepath.Join(volumesDir, name)
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+
+		volumes = append(volumes, &agentpb.VolumeInfo{
+			Name:      name,
+			Path:      path,
+			SizeBytes: dirSize(path),
+			CreatedAt: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+			UsedBy:    usedBy[name],
+		})
+	}
+
+	return &agentpb.ListVolumesResponse{Volumes: volumes}, nil
+}
+
+// RemoveVolume deletes a persistent volume directory.
+func (s *ContainerService) RemoveVolume(_ context.Context, req *agentpb.RemoveVolumeRequest) (*agentpb.RemoveVolumeResponse, error) {
+	name := filepath.Base(req.GetName())
+	if name == "" || name == "." || name == ".." || name == "/" {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume name")
+	}
+
+	path := filepath.Join(volumesDir, name)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, status.Errorf(codes.NotFound, "volume %q not found", name)
+		}
+		return nil, status.Errorf(codes.Internal, "checking volume %q: %v", name, err)
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		return nil, status.Errorf(codes.Internal, "removing volume: %v", err)
+	}
+
+	s.logger.Info("Volume removed", zap.String("name", name), zap.String("path", path))
+	return &agentpb.RemoveVolumeResponse{}, nil
+}
+
+// buildVolumeUsageMap heuristically maps volumes to apps by matching
+// container names. A volume "foo-data" is likely used by app "foo".
+func (s *ContainerService) buildVolumeUsageMap(ctx context.Context) map[string][]string {
+	usage := make(map[string][]string)
+	containers, err := s.containerd.ListContainers(ctx)
+	if err != nil {
+		return usage
+	}
+	var appNames []string
+	for _, c := range containers {
+		appNames = append(appNames, c.AppName)
+	}
+
+	entries, _ := os.ReadDir(volumesDir)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		volName := e.Name()
+		for _, app := range appNames {
+			if volName == app || strings.HasPrefix(volName, app+"-") {
+				usage[volName] = append(usage[volName], app)
+			}
+		}
+	}
+	return usage
+}
+
+// dirSize computes the total size of all files in a directory tree.
+func dirSize(path string) int64 {
+	var size int64
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		size += info.Size()
+		return nil
+	})
+	return size
+}
+
+// ListContainerStats returns memory and storage stats for all Wendy-managed containers.
+func (s *ContainerService) ListContainerStats(ctx context.Context, _ *agentpb.ListContainerStatsRequest) (*agentpb.ListContainerStatsResponse, error) {
+	stats, err := s.containerd.GetContainerStats(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "getting container stats: %v", err)
+	}
+	return &agentpb.ListContainerStatsResponse{Stats: stats}, nil
 }
 
 // ListContainers lists running containers.

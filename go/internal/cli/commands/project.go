@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +19,7 @@ import (
 var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNetwork:   "Access network interfaces",
 	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
-	appconfig.EntitlementVideo:     "Access video cameras",
+	appconfig.EntitlementVideo:     "Deprecated: use camera instead",
 	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
 	appconfig.EntitlementPersist:   "Persist data across restarts",
 	appconfig.EntitlementAudio:     "Access audio input/output devices",
@@ -27,6 +27,8 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementUSB:       "Access USB peripherals",
 	appconfig.EntitlementI2C:       "Access I2C bus devices",
 	appconfig.EntitlementGPIO:      "Access GPIO pins",
+	appconfig.EntitlementSPI:       "Access SPI bus devices (displays, sensors, flash - may require GPIO access)",
+	appconfig.EntitlementInput:     "Access HID input devices (barcode scanners, keyboards)",
 }
 
 func newProjectCmd() *cobra.Command {
@@ -168,6 +170,9 @@ func newEntitlementsAddCmd() *cobra.Command {
 			ent := appconfig.Entitlement{Type: entType}
 
 			if err := promptEntitlementFields(&ent); err != nil {
+				if errors.Is(err, tui.ErrCancelled) {
+					return ErrUserCancelled
+				}
 				return err
 			}
 
@@ -240,47 +245,71 @@ func newEntitlementsRemoveCmd() *cobra.Command {
 }
 
 // promptEntitlementFields interactively prompts for required fields based on
-// the entitlement type.
+// the entitlement type. Uses Bubble Tea text inputs with inline validation
+// so the user can fix errors without restarting the wizard.
 func promptEntitlementFields(ent *appconfig.Entitlement) error {
-	reader := bufio.NewReader(os.Stdin)
+	notEmpty := func(label string) tui.ValidateFunc {
+		return func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("%s cannot be empty", label)
+			}
+			return nil
+		}
+	}
 
 	switch ent.Type {
 	case appconfig.EntitlementPersist:
-		fmt.Println("The container ID is a shared namespace — apps with the same ID can access each other's data.")
-		name, err := promptLine(reader, "Container ID: ")
+		name, err := tui.PromptText(
+			"App ID",
+			"shared namespace — apps with the same ID can access each other's data",
+			notEmpty("app ID"),
+		)
 		if err != nil {
 			return err
-		}
-		if name == "" {
-			return fmt.Errorf("persist entitlement requires a name")
 		}
 		ent.Name = name
 
-		path, err := promptLine(reader, "Mount path (inside your container, e.g. /data): ")
+		path, err := tui.PromptTextWithDefault(
+			"Mount path",
+			"inside your container",
+			"/data",
+			notEmpty("mount path"),
+		)
 		if err != nil {
 			return err
-		}
-		if path == "" {
-			return fmt.Errorf("persist entitlement requires a path")
 		}
 		ent.Path = path
 
 	case appconfig.EntitlementI2C:
-		device, err := promptLine(reader, "I2C device (e.g. /dev/i2c-1): ")
+		device, err := tui.PromptTextWithDefault(
+			"I2C device",
+			"",
+			"/dev/i2c-1",
+			notEmpty("I2C device"),
+		)
 		if err != nil {
 			return err
-		}
-		if device == "" {
-			return fmt.Errorf("i2c entitlement requires a device")
 		}
 		ent.Device = device
 
 	case appconfig.EntitlementGPIO:
-		input, err := promptLine(reader, "GPIO pins (comma-separated, e.g. 17,27,22): ")
-		if err != nil {
-			return err
-		}
-		pins, err := parsePins(input)
+		var pins []int
+		_, err := tui.PromptText(
+			"GPIO pins",
+			"comma-separated, e.g. 17,27,22 — leave empty for all",
+			func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					pins = nil
+					return nil
+				}
+				p, err := parsePins(v)
+				if err != nil {
+					return err
+				}
+				pins = p
+				return nil
+			},
+		)
 		if err != nil {
 			return err
 		}
@@ -288,15 +317,6 @@ func promptEntitlementFields(ent *appconfig.Entitlement) error {
 	}
 
 	return nil
-}
-
-func promptLine(reader *bufio.Reader, prompt string) (string, error) {
-	fmt.Print(prompt)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
 }
 
 func parsePins(input string) ([]int, error) {

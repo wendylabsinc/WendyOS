@@ -1,0 +1,212 @@
+name: Swift Tests
+
+on:
+  pull_request:
+    paths:
+      - 'swift/**'
+      - 'Proto/**'
+      - '.github/workflows/**'
+
+concurrency:
+  group: swift-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  XCODE_VERSION: '26.3'
+
+jobs:
+  test:
+    name: Run WendyAgentCore Tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Capture selected Xcode version
+        id: xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM package resolution
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/Build/SwiftPM/checkouts
+            swift/Build/SwiftPM/repositories
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.cache/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
+            swiftpm-${{ runner.os }}-
+
+      - name: Run swift test
+        working-directory: swift
+        shell: bash
+        run: bash ./Scripts/Test.sh
+
+  build:
+    name: Build WendyAgentMac app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Capture selected Xcode version
+        id: xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Xcode package resolution
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/Build/CI/PackageCache
+            swift/Build/CI/SourcePackages
+          key: xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
+          restore-keys: |
+            xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
+            xcode-packages-${{ runner.os }}-
+
+      - name: Resolve Swift package dependencies
+        working-directory: swift
+        env:
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/Build/CI/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/Build/CI/SourcePackages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PACKAGE_CACHE_DIR" "$SOURCE_PACKAGES_DIR"
+
+          xcodebuild -resolvePackageDependencies \
+            -workspace WendyAgent.xcworkspace \
+            -scheme WendyAgentMac \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -packageCachePath "$PACKAGE_CACHE_DIR" \
+            -skipMacroValidation
+
+      - name: Build WendyAgentMac app
+        id: build_wendy_agent_mac_app
+        working-directory: swift
+        env:
+          DERIVED_DATA_PATH: ${{ github.workspace }}/swift/Build/Xcode
+          PACKAGE_CACHE_DIR: ${{ github.workspace }}/swift/Build/CI/PackageCache
+          SOURCE_PACKAGES_DIR: ${{ github.workspace }}/swift/Build/CI/SourcePackages
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$DERIVED_DATA_PATH"
+
+          xcodebuild build \
+            -workspace WendyAgent.xcworkspace \
+            -scheme WendyAgentMac \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -packageCachePath "$PACKAGE_CACHE_DIR" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            -skipMacroValidation
+
+  lint:
+    name: Lint Swift Sources
+    runs-on: ubuntu-latest
+    container: swift:6.2.3
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run Swift Lint
+        id: lint
+        working-directory: swift
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          bash ./Scripts/Lint.sh 2>&1 | tee lint_output.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo "lint_output<<EOF"
+            cat lint_output.txt
+            echo "EOF"
+            echo "exit_code=$status"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Remove Previous Lint Comment
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const targetHeader = '## Swift Lint Failed';
+            for (const comment of comments) {
+              if (comment.user?.type === 'Bot' && comment.body?.includes(targetHeader)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+      - name: Comment on PR
+        if: steps.lint.outputs.exit_code != '0'
+        uses: actions/github-script@v6
+        env:
+          LINT_OUTPUT: ${{ steps.lint.outputs.lint_output }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const lintOutput = process.env.LINT_OUTPUT?.trim();
+            const formattedOutput = lintOutput ? `\`\`\`\n${lintOutput}\n\`\`\`` : '_No linter output captured._';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Swift Lint Failed
+            
+            The Swift linter found issues with your code. Please run the following commands to fix them:
+            
+            \`\`\`
+            cd swift
+            make format
+            \`\`\`
+            
+            <details>
+            <summary>Lint issues</summary>
+            
+            ${formattedOutput}
+            
+            </details>
+            
+            Then commit and push the changes.`
+            });
+
+      - name: Fail workflow on lint issues
+        if: steps.lint.outputs.exit_code != '0'
+        run: exit 1

@@ -52,13 +52,17 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceTelemetryStreamCmd(),
 		newWifiCmd(),
 		newAppsCmd(),
+		newVolumesCmd(),
 	)
 
 	return cmd
 }
 
 func newDeviceVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var checkUpdates bool
+	var prerelease bool
+
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Get the agent version on the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -74,14 +78,41 @@ func newDeviceVersionCmd() *cobra.Command {
 				return fmt.Errorf("getting agent version: %w", err)
 			}
 
+			agentVersion := resp.GetVersion()
+
+			var latestVersion string
+			if checkUpdates {
+				release, err := fetchAgentRelease(prerelease)
+				if err != nil {
+					return fmt.Errorf("checking for updates: %w", err)
+				}
+				latestVersion = release.TagName
+			}
+
 			if jsonOutput {
-				data, err := json.MarshalIndent(map[string]string{
-					"version":         resp.GetVersion(),
+				out := map[string]any{
+					"version":         agentVersion,
 					"os":              resp.GetOs(),
 					"osVersion":       resp.GetOsVersion(),
 					"cpuArchitecture": resp.GetCpuArchitecture(),
+					"deviceType":      resp.GetDeviceType(),
 					"cliVersion":      version.Version,
-				}, "", "  ")
+					"hasGpu":          resp.GetHasGpu(),
+				}
+				if v := resp.GetGpuVendor(); v != "" {
+					out["gpuVendor"] = v
+				}
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					out["jetpackVersion"] = jv
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					out["cudaVersion"] = cv
+				}
+				if checkUpdates {
+					out["latestVersion"] = latestVersion
+					out["updateAvailable"] = version.CompareVersions(latestVersion, agentVersion) > 0
+				}
+				data, err := json.MarshalIndent(out, "", "  ")
 				if err != nil {
 					return err
 				}
@@ -89,20 +120,49 @@ func newDeviceVersionCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Agent Version: %s\n", resp.GetVersion())
+			fmt.Printf("Agent Version: %s\n", agentVersion)
 			fmt.Printf("OS: %s %s\n", resp.GetOs(), resp.GetOsVersion())
 			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
+			if dt := resp.GetDeviceType(); dt != "" {
+				fmt.Printf("Device Type: %s\n", dt)
+			}
+			if resp.GetHasGpu() {
+				vendor := resp.GetGpuVendor()
+				if vendor == "" {
+					vendor = "unknown"
+				}
+				fmt.Printf("GPU: %s\n", vendor)
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					fmt.Printf("JetPack: %s\n", jv)
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					fmt.Printf("CUDA: %s\n", cv)
+				}
+			}
 			fmt.Printf("CLI Version: %s\n", version.Version)
 
-			if cmp := version.CompareVersions(version.Version, resp.GetVersion()); cmp > 0 {
+			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
 				fmt.Println("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
 				fmt.Println("\nNote: CLI is behind the agent. Consider updating the CLI.")
 			}
 
+			if checkUpdates {
+				if version.CompareVersions(latestVersion, agentVersion) > 0 {
+					fmt.Printf("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update\n", latestVersion, agentVersion)
+				} else {
+					fmt.Println("\nAgent is up to date.")
+				}
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&checkUpdates, "check-updates", false, "Check for available agent updates on GitHub")
+	cmd.Flags().BoolVar(&prerelease, "prerelease", false, "Include prerelease (nightly) builds when checking for updates")
+
+	return cmd
 }
 
 func newDeviceSetDefaultCmd() *cobra.Command {
@@ -141,7 +201,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 // pickDeviceForDefault runs the interactive device picker and returns a
 // hostname or provider key suitable for storing as the default device.
 func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false)
+	selected, err := pickDevice(ctx, nil, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -1085,7 +1145,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth())
+			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth(), SuppressUpdateCheck())
 			if err != nil {
 				return err
 			}
@@ -1097,6 +1157,18 @@ func newDeviceUpdateCmd() *cobra.Command {
 				binaryData, err = os.ReadFile(binaryPath)
 				if err != nil {
 					return fmt.Errorf("reading binary: %w", err)
+				}
+
+				// Validate the binary's ELF architecture against the device.
+				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+				if err != nil {
+					return fmt.Errorf("could not query device architecture to verify binary: %w", err)
+				}
+				deviceArch := versionResp.GetCpuArchitecture()
+				if deviceArch != "" {
+					if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
+						return err
+					}
 				}
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
@@ -1211,7 +1283,61 @@ func newDeviceUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-// deviceUpdateUpload streams the binary data to the agent's UpdateAgent RPC.
+// checkELFArchitecture reads the ELF e_machine field from data and returns an
+// error if it does not match the device's reported GOARCH (e.g. "amd64", "arm64").
+// Non-ELF binaries (e.g. scripts) are accepted without complaint.
+func checkELFArchitecture(data []byte, deviceArch string) error {
+	// Only amd64 and arm64 are supported targets.
+	switch deviceArch {
+	case "amd64", "arm64":
+		// supported, continue
+	default:
+		return fmt.Errorf("device reports unsupported architecture %q; only amd64 and arm64 are supported", deviceArch)
+	}
+
+	// ELF magic + header fields up to e_machine occupy 20 bytes.
+	if len(data) < 20 {
+		return nil
+	}
+	if data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' {
+		return nil // not an ELF binary — skip check
+	}
+
+	// Respect EI_DATA (byte 5) when reading the 2-byte e_machine field at offset 18.
+	const (
+		elfDataLittle = 1 // ELFDATA2LSB
+		elfDataBig    = 2 // ELFDATA2MSB
+
+		emX86_64  = 62  // EM_X86_64  → amd64
+		emAArch64 = 183 // EM_AARCH64 → arm64
+	)
+
+	var machine uint16
+	switch data[5] {
+	case elfDataLittle:
+		machine = uint16(data[18]) | uint16(data[19])<<8
+	case elfDataBig:
+		machine = uint16(data[18])<<8 | uint16(data[19])
+	default:
+		return nil // unknown ELF endianness — skip check
+	}
+
+	var binaryArch string
+	switch machine {
+	case emX86_64:
+		binaryArch = "amd64"
+	case emAArch64:
+		binaryArch = "arm64"
+	default:
+		return nil // unrecognised ELF machine type — let the device decide
+	}
+
+	if binaryArch != deviceArch {
+		return fmt.Errorf("binary is %s but device is %s; provide the correct binary with --binary", binaryArch, deviceArch)
+	}
+	return nil
+}
+
 func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {

@@ -28,3 +28,6 @@ go/wendy
 
 # Local settings
 *.local.*
+
+# Git worktrees
+.worktrees/

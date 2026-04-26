@@ -377,24 +377,24 @@ func (r *OTELTraceReceiver) Export(_ context.Context, req *otelpb.ExportTraceSer
 }
 
 // matchResourceAttributes checks whether a resource's attributes match the given
-// service name and app name filters. Returns true if all specified filters match.
-func matchResourceAttributes(resource *otelpb.Resource, serviceName, appName *string) bool {
+// service name filter. Returns true if all specified filters match.
+func matchResourceAttributes(resource *otelpb.Resource, serviceName *string, appName *string) bool {
 	if serviceName == nil && appName == nil {
 		return true
 	}
 	for _, attr := range resource.GetAttributes() {
-		if serviceName != nil && attr.GetKey() == "service.name" {
-			if attr.GetValue().GetStringValue() != *serviceName {
-				return false
+		if attr.GetKey() == "service.name" {
+			val := attr.GetValue().GetStringValue()
+			if serviceName != nil && val == *serviceName {
+				return true
 			}
-		}
-		if appName != nil && attr.GetKey() == "wendy.app.name" {
-			if attr.GetValue().GetStringValue() != *appName {
-				return false
+			if appName != nil && val == *appName {
+				return true
 			}
+			return false
 		}
 	}
-	return true
+	return false
 }
 
 // resourceServiceName extracts the service.name attribute from a resource, if present.
@@ -428,7 +428,7 @@ func filterLogs(req *otelpb.ExportLogsServiceRequest, filter *agentpb.StreamLogs
 
 	var filteredResourceLogs []*otelpb.ResourceLogs
 	for _, rl := range req.GetResourceLogs() {
-		// Check resource attributes for service.name and wendy.app.name.
+		// Check resource attributes for service.name.
 		if !matchResourceAttributes(rl.GetResource(), serviceName, appName) {
 			continue
 		}

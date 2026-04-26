@@ -12,9 +12,13 @@ import (
 // NetworkManager abstracts WiFi management operations (typically backed by nmcli).
 type NetworkManager interface {
 	ListWiFiNetworks(ctx context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error)
-	ConnectToWiFi(ctx context.Context, ssid, password string) error
+	ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error
 	GetWiFiStatus(ctx context.Context) (connected bool, ssid string, err error)
 	DisconnectWiFi(ctx context.Context) error
+	ListKnownWiFiNetworks(ctx context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error)
+	SetWiFiNetworkPriority(ctx context.Context, ssid string, priority int32) error
+	ReorderKnownWiFiNetworks(ctx context.Context, orderedSSIDs []string) error
+	ForgetWiFiNetwork(ctx context.Context, ssid string) error
 }
 
 // HardwareDiscoverer discovers hardware capabilities by probing sysfs, /dev, /proc, etc.
@@ -42,9 +46,11 @@ type ContainerdClient interface {
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error
 	StartContainer(ctx context.Context, appName string) (<-chan ContainerOutput, error)
+	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error
 	DeleteContainer(ctx context.Context, appName string, deleteImage bool) error
 	ListContainers(ctx context.Context) ([]*agentpb.AppContainer, error)
+	GetContainerStats(ctx context.Context) ([]*agentpb.ContainerStats, error)
 }
 
 // ContainerOutput represents a chunk of output from a running container.
