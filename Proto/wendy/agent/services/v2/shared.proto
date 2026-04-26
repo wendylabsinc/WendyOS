@@ -3,10 +3,10 @@ package wendy.agent.services.v2;
 option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
 
 enum RestartPolicyMode {
-    DEFAULT = 0;
-    UNLESS_STOPPED = 1;
-    NO = 2;
-    ON_FAILURE = 3;
+    RESTART_POLICY_MODE_UNSPECIFIED = 0;
+    RESTART_POLICY_MODE_UNLESS_STOPPED = 1;
+    RESTART_POLICY_MODE_NO = 2;
+    RESTART_POLICY_MODE_ON_FAILURE = 3;
 }
 
 message RestartPolicy {
@@ -15,8 +15,9 @@ message RestartPolicy {
 }
 
 enum AppRunningState {
-    STOPPED = 0;
-    RUNNING = 1;
+    APP_RUNNING_STATE_UNSPECIFIED = 0;
+    APP_RUNNING_STATE_STOPPED = 1;
+    APP_RUNNING_STATE_RUNNING = 2;
 }
 
 message AppContainer {

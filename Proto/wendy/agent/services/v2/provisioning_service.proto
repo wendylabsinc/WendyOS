@@ -10,7 +10,7 @@ service WendyProvisioningService {
 message IsProvisionedRequest {}
 
 message IsProvisionedResponse {
-    oneof response {
+    oneof response_type {
         NotProvisionedResponse not_provisioned = 1;
         ProvisionedResponse provisioned = 2;
     }
