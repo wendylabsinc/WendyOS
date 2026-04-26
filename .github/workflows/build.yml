@@ -165,6 +165,9 @@ jobs:
     name: Update master manifest
     needs: build
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    concurrency:
+      group: update-master-manifest
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -208,10 +211,24 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
           for DEVICE in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano; do
-            go run upload_and_manifest.go \
-              --device "$DEVICE" \
-              --version "${VERSION}-nightly" \
-              --nightly \
-              --master-manifest-only \
-              --access-token "$TOKEN"
+            # Outer shell retry handles transient 412 bursts from concurrent writers
+            # (e.g. Cloud Function draining a Pub/Sub backlog). The publisher already
+            # retries internally 10x with exponential backoff; this adds 5 extra rounds.
+            for attempt in 1 2 3 4 5; do
+              if go run upload_and_manifest.go \
+                --device "$DEVICE" \
+                --version "${VERSION}-nightly" \
+                --nightly \
+                --master-manifest-only \
+                --access-token "$TOKEN"; then
+                break
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                echo "Outer attempt $attempt failed for $DEVICE, sleeping before retry..."
+                sleep $((attempt * 30))
+              else
+                echo "All outer attempts exhausted for $DEVICE"
+                exit 1
+              fi
+            done
           done
