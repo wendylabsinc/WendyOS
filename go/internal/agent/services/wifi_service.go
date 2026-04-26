@@ -64,7 +64,11 @@ func (s *WiFiService) GetWiFiStatus(ctx context.Context, _ *agentpbv2.GetWiFiSta
 		msg := err.Error()
 		return &agentpbv2.GetWiFiStatusResponse{ErrorMessage: &msg}, nil
 	}
-	return &agentpbv2.GetWiFiStatusResponse{Connected: connected, Ssid: &ssid}, nil
+	resp := &agentpbv2.GetWiFiStatusResponse{Connected: connected}
+	if connected && ssid != "" {
+		resp.Ssid = &ssid
+	}
+	return resp, nil
 }
 
 func (s *WiFiService) DisconnectWiFi(ctx context.Context, _ *agentpbv2.DisconnectWiFiRequest) (*agentpbv2.DisconnectWiFiResponse, error) {
