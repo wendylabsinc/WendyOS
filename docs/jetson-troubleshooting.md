@@ -1,6 +1,10 @@
 # Jetson Operations How-To
 
-Operational commands and fixes for WendyOS on NVIDIA Jetson Orin Nano.
+Operational commands and fixes for WendyOS on NVIDIA Jetson Orin devices
+(Orin Nano DevKit and AGX Orin DevKit). The procedures below operate on
+chip-wide Tegra234 mechanisms (UEFI variables under the L4T RootfsStatus
+GUID, Mender data under `/data`) and apply to both boards unless explicitly
+noted.
 
 ---
 

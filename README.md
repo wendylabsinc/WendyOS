@@ -12,6 +12,7 @@ This repository provides the meta-layer and build flow to build **WendyOS** — 
 | Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-wendyos` | SD |
 | Jetson Orin Nano DevKit | Tegra234 | 8GB | `jetson-orin-nano-devkit-nvme-wendyos` | NVMe |
 | Jetson AGX Orin DevKit | Tegra234 | 64GB | `jetson-agx-orin-devkit-nvme-wendyos` | NVMe |
+| Jetson AGX Orin DevKit | Tegra234 | 64GB | `jetson-agx-orin-devkit-emmc-wendyos` | onboard eMMC |
 | Raspberry Pi 5 | Broadcom BCM2712 | 8GB | `raspberrypi5-wendyos` | SD |
 | Raspberry Pi 5 | Broadcom BCM2712 | 8GB | `raspberrypi5-nvme-wendyos` | NVMe |
 
@@ -156,6 +157,10 @@ make build
 make setup BOARD=jetson-agx-orin
 make build
 
+# Jetson AGX Orin (onboard eMMC)
+make setup BOARD=jetson-agx-orin-emmc
+make build
+
 # Raspberry Pi 5 (SD card)
 make setup BOARD=rpi5-sd
 make build
@@ -210,6 +215,7 @@ make build
    BOARD=jetson-orin-nano-nvme ./meta-wendyos/bootstrap.sh
    BOARD=jetson-orin-nano-sd   ./meta-wendyos/bootstrap.sh
    BOARD=jetson-agx-orin       ./meta-wendyos/bootstrap.sh
+   BOARD=jetson-agx-orin-emmc  ./meta-wendyos/bootstrap.sh
    BOARD=rpi5-sd               ./meta-wendyos/bootstrap.sh
    BOARD=rpi5-nvme             ./meta-wendyos/bootstrap.sh
    BOARD=qemu-arm64            ./meta-wendyos/bootstrap.sh
@@ -238,6 +244,7 @@ make build
      - `jetson-orin-nano-nvme`   → `jetson-orin-nano-devkit-nvme-wendyos`
      - `jetson-orin-nano-sd`     → `jetson-orin-nano-devkit-wendyos`
      - `jetson-agx-orin`         → `jetson-agx-orin-devkit-nvme-wendyos`
+     - `jetson-agx-orin-emmc`    → `jetson-agx-orin-devkit-emmc-wendyos`
      - `rpi5-sd`                 → `raspberrypi5-wendyos`
      - `rpi5-nvme`               → `raspberrypi5-nvme-wendyos`
      - `qemu-arm64`              → `qemuarm64-wendyos`
@@ -275,6 +282,7 @@ build/tmp/deploy/images/<machine>/wendyos-image-<machine>.rootfs.tegraflash.tar.
 **Important**: The flashing script differs based on your target machine:
 - **NVMe** (`jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`) → use `doexternal.sh`
 - **SD card** (`jetson-orin-nano-devkit-wendyos`) → use `dosdcard.sh`
+- **Onboard eMMC** (`jetson-agx-orin-devkit-emmc-wendyos`) → use `initrd-flash.sh` (eMMC is internal — `doexternal.sh` does not apply). **This will overwrite the factory NVIDIA JetPack image on the AGX Orin DevKit's onboard 64GB eMMC.**
 
 #### For SD Card Builds
 
@@ -306,12 +314,20 @@ This creates `wendyos.img`, which you can flash using dd or GUI tools (see below
 
 #### For NVMe Builds
 
+Set `MACHINE` to match the build target — examples below work for both Orin Nano NVMe and AGX Orin DevKit:
+
+```bash
+# Pick one
+MACHINE=jetson-orin-nano-devkit-nvme-wendyos
+MACHINE=jetson-agx-orin-devkit-nvme-wendyos
+```
+
 **Option 1: Directly Flash to NVMe**
 
 ```bash
 cd /path/to/project
 mkdir ./deploy
-tar -xzf ./build/tmp/deploy/images/jetson-orin-nano-devkit-nvme-wendyos/wendyos-image-*.tegraflash.tar.gz -C ./deploy
+tar -xzf ./build/tmp/deploy/images/${MACHINE}/wendyos-image-${MACHINE}.tegraflash.tar.gz -C ./deploy
 cd ./deploy
 sudo ./doexternal.sh /dev/nvme0n1
 ```
@@ -325,7 +341,7 @@ Replace `/dev/nvme0n1` with your actual NVMe device path.
 ```bash
 cd /path/to/project
 mkdir ./deploy
-tar -xzf ./build/tmp/deploy/images/jetson-orin-nano-devkit-nvme-wendyos/wendyos-image-*.tegraflash.tar.gz -C ./deploy
+tar -xzf ./build/tmp/deploy/images/${MACHINE}/wendyos-image-${MACHINE}.tegraflash.tar.gz -C ./deploy
 cd ./deploy
 sudo ./doexternal.sh -s 64G wendyos-nvme.img
 ```
@@ -377,10 +393,12 @@ The `initrd-flash` method is an alternative USB-based flashing approach provided
 
 #### Prerequisites
 
-- NVIDIA Jetson Orin Nano Developer Kit
+- A supported Jetson Developer Kit:
+  - Jetson Orin Nano DevKit (NVMe or SD)
+  - Jetson AGX Orin DevKit (NVMe or onboard eMMC)
 - USB-C cable (for recovery mode connection)
 - Host PC running Linux (Ubuntu 20.04+ recommended), MacOS
-- Device in recovery mode
+- Device in recovery mode (procedure differs per board — see step 2 below)
 
 #### Recovery from Bricked Device
 
@@ -399,13 +417,21 @@ In these cases, `initrd-flash` is often the **only way** to recover the device w
 
 **1. Unpack the Flash Package**
 
+Set `MACHINE` to match what you built (use the same value passed to `make build`):
+
 ```bash
+# Pick one
+MACHINE=jetson-orin-nano-devkit-nvme-wendyos
+MACHINE=jetson-agx-orin-devkit-nvme-wendyos
+MACHINE=jetson-agx-orin-devkit-emmc-wendyos      # AGX Orin onboard eMMC
+MACHINE=jetson-orin-nano-devkit-wendyos          # SD-based Nano
+
 cd /path/to/project
 mkdir -p ./deploy
 cd ./deploy
 
 # Extract the tegraflash package
-tar -xzf ../build/tmp/deploy/images/jetson-orin-nano-devkit-nvme-wendyos/wendyos-image-jetson-orin-nano-devkit-nvme-wendyos.tegraflash.tar.gz
+tar -xzf ../build/tmp/deploy/images/${MACHINE}/wendyos-image-${MACHINE}.tegraflash.tar.gz
 
 # Verify the initrd-flash script exists
 ls -la initrd-flash.sh
@@ -413,7 +439,17 @@ ls -la initrd-flash.sh
 
 **2. Put Device in Recovery Mode**
 
-The Jetson Orin Nano Developer Kit does **not** have a physical Force Recovery button. You must short pins on the button header:
+The procedure differs by board. If the device is currently running WendyOS, you can also enter recovery from Linux with:
+
+```bash
+sudo reboot --force forced-recovery
+```
+
+Otherwise, follow the cold-entry procedure for your board.
+
+**Jetson Orin Nano Developer Kit**
+
+The Orin Nano DevKit does **not** have a physical Force Recovery button. You must short pins on the button header:
 
 - Power off the Jetson device completely
 - Connect the USB-C port (next to the power jack) to your host PC
@@ -429,6 +465,19 @@ The Jetson Orin Nano Developer Kit does **not** have a physical Force Recovery b
 
 **Note**: Consult your carrier board documentation or silkscreen labels to identify the exact Force Recovery and Ground pin locations.
 
+**Jetson AGX Orin Developer Kit**
+
+The AGX Orin DevKit (P3737-0000 carrier) **has** a dedicated physical Force Recovery button. No jumper is required:
+
+- Power off the device completely
+- Connect the front USB-C port (the one labeled for recovery / next to the power button) to your host PC
+- Press and hold the **Force Recovery** button
+- While still holding it, tap the **Power** button
+- Release both buttons
+- The device should now be in recovery mode
+
+**Note**: The three buttons on the front of the AGX Orin DevKit are typically labeled **POWER**, **FORCE RECOVERY**, and **RESET**. Check the silkscreen on your carrier if labels are unclear.
+
 **3. Verify Recovery Mode**
 
 On your host PC, verify the device is detected:
@@ -441,13 +490,13 @@ lsusb | grep -i nvidia
 If not detected:
 - Try a different USB cable (must support data transfer)
 - Try a different USB port on your PC
-- Verify you shorted the correct pins (FC REC and GND)
-- Ensure the short was maintained during power-on
-- Check the carrier board silkscreen or documentation for pin labels
-- Try shorting the pins again and power cycling
+- Re-do the recovery-mode procedure for your board:
+  - **Orin Nano**: verify you shorted the correct pins (FC REC and GND), and ensure the short was maintained during power-on
+  - **AGX Orin**: hold **Force Recovery**, tap **Power**, then release both
+- Check the carrier board silkscreen or documentation for pin / button labels
 - Check that your user is in the `dialout` group: `sudo usermod -aG dialout $USER`
 
-**Tip**: The button header pins are typically labeled on the carrier board silkscreen. Look for "FC REC" or "RECOVERY" and "GND" markings next to the pins.
+**Tip**: On the Orin Nano, the button-header pins are labeled on the silkscreen — look for "FC REC" / "RECOVERY" and "GND". On the AGX Orin DevKit, the **FORCE RECOVERY** button sits between the Power and Reset buttons on the front panel.
 
 **4. Disable Desktop Automounting**
 
@@ -486,7 +535,7 @@ sudo ./initrd-flash.sh
 ```
 
 **Note:** The script reads configuration from `.env.initrd-flash` (created during build), which contains:
-- Machine type (e.g., `jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`, `jetson-orin-nano-devkit-wendyos`)
+- Machine type (e.g., `jetson-orin-nano-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-nvme-wendyos`, `jetson-agx-orin-devkit-emmc-wendyos`, `jetson-orin-nano-devkit-wendyos`)
 - Target device (NVMe or eMMC)
 - Board IDs and other hardware parameters
 

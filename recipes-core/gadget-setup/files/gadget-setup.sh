@@ -217,12 +217,24 @@ log_info "UDC activated: $UDC"
 #   /sys/class/usb_role/usb2-0-role-switch/role
 # (name comes from dev_set_name(&port->dev, "usb2-0") in xusb.c and
 #  dev_set_name(&sw->dev, "%s-role-switch", dev_name(parent)) in roles/class.c)
+# On AGX-style topologies the role-switch instance index may differ from
+# usb2-0, so fall back to a glob over /sys/class/usb_role/usb2-*-role-switch
+# and pick the first match if the literal path is absent.
 if [ "$USB_CONTROLLER" = "tegra-xudc" ]; then
     ROLE_SW_PATH="/sys/class/usb_role/usb2-0-role-switch/role"
+    if [ ! -f "$ROLE_SW_PATH" ]; then
+        set -- /sys/class/usb_role/usb2-*-role-switch/role
+        if [ -f "$1" ]; then
+            ROLE_SW_PATH="$1"
+            log_info "tegra-xudc: using role switch at $ROLE_SW_PATH"
+        fi
+    fi
     if [ -f "$ROLE_SW_PATH" ]; then
-        echo "device" > "$ROLE_SW_PATH" 2>/dev/null && \
-            log_info "Forced USB role switch to device" || \
+        if echo "device" > "$ROLE_SW_PATH" 2>/dev/null; then
+            log_info "Forced USB role switch to device"
+        else
             log_warning "Failed to force USB role switch to device"
+        fi
     else
         log_warning "tegra-xudc: USB role switch not found at $ROLE_SW_PATH — XUDC may stay in default state"
     fi
