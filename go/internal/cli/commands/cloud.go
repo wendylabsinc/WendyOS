@@ -36,7 +36,7 @@ func newCloudDiscoverCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Int32Var(&orgID, "org", 0, "Organisation ID to list devices for (default: all)")
+	cmd.Flags().Int32Var(&orgID, "org", 1, "Organisation ID to list devices for")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "localhost:50051", "Cloud gRPC endpoint")
 
 	return cmd

@@ -3,6 +3,7 @@ package commands
 
 import (
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/analytics"
@@ -26,8 +27,13 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Skip heavy init for internal subprocess commands.
+			// Skip heavy init for internal subprocess commands and cloud
+			// commands, which talk to the cloud gRPC directly and do not
+			// need local device discovery or BLE initialisation.
 			if cmd.Name() == "__ble-check" {
+				return nil
+			}
+			if strings.Contains(cmd.CommandPath(), " cloud") {
 				return nil
 			}
 			providers.Initialize(cmd.Context())
