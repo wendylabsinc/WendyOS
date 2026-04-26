@@ -16,7 +16,7 @@ enum AudioDeviceType {
 }
 
 message AudioDevice {
-    uint32 id = 1;
+    uint32 device_id = 1;
     string name = 2;
     string description = 3;
     AudioDeviceType type = 4;
