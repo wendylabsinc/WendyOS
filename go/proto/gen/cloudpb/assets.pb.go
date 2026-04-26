@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.34.0
-// source: assets.proto
+// source: cloud/assets.proto
 
 package cloudpb
 
@@ -57,7 +57,7 @@ type Asset struct {
 
 func (x *Asset) Reset() {
 	*x = Asset{}
-	mi := &file_assets_proto_msgTypes[0]
+	mi := &file_cloud_assets_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -69,7 +69,7 @@ func (x *Asset) String() string {
 func (*Asset) ProtoMessage() {}
 
 func (x *Asset) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[0]
+	mi := &file_cloud_assets_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -82,7 +82,7 @@ func (x *Asset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Asset.ProtoReflect.Descriptor instead.
 func (*Asset) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{0}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Asset) GetId() int32 {
@@ -274,7 +274,7 @@ type CreateAssetRequest struct {
 
 func (x *CreateAssetRequest) Reset() {
 	*x = CreateAssetRequest{}
-	mi := &file_assets_proto_msgTypes[1]
+	mi := &file_cloud_assets_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -286,7 +286,7 @@ func (x *CreateAssetRequest) String() string {
 func (*CreateAssetRequest) ProtoMessage() {}
 
 func (x *CreateAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[1]
+	mi := &file_cloud_assets_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -299,7 +299,7 @@ func (x *CreateAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAssetRequest.ProtoReflect.Descriptor instead.
 func (*CreateAssetRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{1}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CreateAssetRequest) GetOrganizationId() int32 {
@@ -451,7 +451,7 @@ type GetAssetRequest struct {
 
 func (x *GetAssetRequest) Reset() {
 	*x = GetAssetRequest{}
-	mi := &file_assets_proto_msgTypes[2]
+	mi := &file_cloud_assets_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +463,7 @@ func (x *GetAssetRequest) String() string {
 func (*GetAssetRequest) ProtoMessage() {}
 
 func (x *GetAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[2]
+	mi := &file_cloud_assets_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +476,7 @@ func (x *GetAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAssetRequest.ProtoReflect.Descriptor instead.
 func (*GetAssetRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{2}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetAssetRequest) GetId() int32 {
@@ -511,7 +511,7 @@ type UpdateAssetRequest struct {
 
 func (x *UpdateAssetRequest) Reset() {
 	*x = UpdateAssetRequest{}
-	mi := &file_assets_proto_msgTypes[3]
+	mi := &file_cloud_assets_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +523,7 @@ func (x *UpdateAssetRequest) String() string {
 func (*UpdateAssetRequest) ProtoMessage() {}
 
 func (x *UpdateAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[3]
+	mi := &file_cloud_assets_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +536,7 @@ func (x *UpdateAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAssetRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAssetRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{3}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *UpdateAssetRequest) GetId() int32 {
@@ -667,7 +667,7 @@ type DeleteAssetRequest struct {
 
 func (x *DeleteAssetRequest) Reset() {
 	*x = DeleteAssetRequest{}
-	mi := &file_assets_proto_msgTypes[4]
+	mi := &file_cloud_assets_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +679,7 @@ func (x *DeleteAssetRequest) String() string {
 func (*DeleteAssetRequest) ProtoMessage() {}
 
 func (x *DeleteAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[4]
+	mi := &file_cloud_assets_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,7 +692,7 @@ func (x *DeleteAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAssetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteAssetRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{4}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DeleteAssetRequest) GetId() int32 {
@@ -711,7 +711,7 @@ type DeleteAssetResponse struct {
 
 func (x *DeleteAssetResponse) Reset() {
 	*x = DeleteAssetResponse{}
-	mi := &file_assets_proto_msgTypes[5]
+	mi := &file_cloud_assets_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -723,7 +723,7 @@ func (x *DeleteAssetResponse) String() string {
 func (*DeleteAssetResponse) ProtoMessage() {}
 
 func (x *DeleteAssetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[5]
+	mi := &file_cloud_assets_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -736,7 +736,7 @@ func (x *DeleteAssetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAssetResponse.ProtoReflect.Descriptor instead.
 func (*DeleteAssetResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{5}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeleteAssetResponse) GetSuccess() bool {
@@ -750,18 +750,16 @@ type ListAssetsRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId  int32                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	IsComputeDevice *bool                  `protobuf:"varint,2,opt,name=is_compute_device,json=isComputeDevice,proto3,oneof" json:"is_compute_device,omitempty"`
-	// Offset/limit based pagination (offset = starting row, limit = page size)
-	Offset        *int32  `protobuf:"varint,3,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
-	Limit         *int32  `protobuf:"varint,4,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
-	Filter        *string `protobuf:"bytes,5,opt,name=filter,proto3,oneof" json:"filter,omitempty"`                            // Filter by name, details, asset_type, device_type, or tags
-	OnlineOnly    *bool   `protobuf:"varint,6,opt,name=online_only,json=onlineOnly,proto3,oneof" json:"online_only,omitempty"` // If true, only return assets with active broker presence
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PageSize        int32                  `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken       string                 `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Filter          *string                `protobuf:"bytes,5,opt,name=filter,proto3,oneof" json:"filter,omitempty"` // Filter by name, details, asset_type, device_type, or tags
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListAssetsRequest) Reset() {
 	*x = ListAssetsRequest{}
-	mi := &file_assets_proto_msgTypes[6]
+	mi := &file_cloud_assets_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -773,7 +771,7 @@ func (x *ListAssetsRequest) String() string {
 func (*ListAssetsRequest) ProtoMessage() {}
 
 func (x *ListAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[6]
+	mi := &file_cloud_assets_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -786,7 +784,7 @@ func (x *ListAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsRequest.ProtoReflect.Descriptor instead.
 func (*ListAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{6}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListAssetsRequest) GetOrganizationId() int32 {
@@ -803,18 +801,18 @@ func (x *ListAssetsRequest) GetIsComputeDevice() bool {
 	return false
 }
 
-func (x *ListAssetsRequest) GetOffset() int32 {
-	if x != nil && x.Offset != nil {
-		return *x.Offset
+func (x *ListAssetsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
 	}
 	return 0
 }
 
-func (x *ListAssetsRequest) GetLimit() int32 {
-	if x != nil && x.Limit != nil {
-		return *x.Limit
+func (x *ListAssetsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
 	}
-	return 0
+	return ""
 }
 
 func (x *ListAssetsRequest) GetFilter() string {
@@ -824,25 +822,17 @@ func (x *ListAssetsRequest) GetFilter() string {
 	return ""
 }
 
-func (x *ListAssetsRequest) GetOnlineOnly() bool {
-	if x != nil && x.OnlineOnly != nil {
-		return *x.OnlineOnly
-	}
-	return false
-}
-
 type ListAssetsResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// One asset per streamed response and total count for the full query
-	Asset         *Asset `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
-	Total         int32  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Assets        []*Asset               `protobuf:"bytes,1,rep,name=assets,proto3" json:"assets,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListAssetsResponse) Reset() {
 	*x = ListAssetsResponse{}
-	mi := &file_assets_proto_msgTypes[7]
+	mi := &file_cloud_assets_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -854,7 +844,7 @@ func (x *ListAssetsResponse) String() string {
 func (*ListAssetsResponse) ProtoMessage() {}
 
 func (x *ListAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[7]
+	mi := &file_cloud_assets_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -867,36 +857,35 @@ func (x *ListAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsResponse.ProtoReflect.Descriptor instead.
 func (*ListAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{7}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *ListAssetsResponse) GetAsset() *Asset {
+func (x *ListAssetsResponse) GetAssets() []*Asset {
 	if x != nil {
-		return x.Asset
+		return x.Assets
 	}
 	return nil
 }
 
-func (x *ListAssetsResponse) GetTotal() int32 {
+func (x *ListAssetsResponse) GetNextPageToken() string {
 	if x != nil {
-		return x.Total
+		return x.NextPageToken
 	}
-	return 0
+	return ""
 }
 
 type ListAssetChildrenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ParentAssetId int32                  `protobuf:"varint,1,opt,name=parent_asset_id,json=parentAssetId,proto3" json:"parent_asset_id,omitempty"`
-	// Offset/limit based pagination
-	Offset        *int32 `protobuf:"varint,2,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
-	Limit         *int32 `protobuf:"varint,3,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
+	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListAssetChildrenRequest) Reset() {
 	*x = ListAssetChildrenRequest{}
-	mi := &file_assets_proto_msgTypes[8]
+	mi := &file_cloud_assets_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -908,7 +897,7 @@ func (x *ListAssetChildrenRequest) String() string {
 func (*ListAssetChildrenRequest) ProtoMessage() {}
 
 func (x *ListAssetChildrenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[8]
+	mi := &file_cloud_assets_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -921,7 +910,7 @@ func (x *ListAssetChildrenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetChildrenRequest.ProtoReflect.Descriptor instead.
 func (*ListAssetChildrenRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{8}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListAssetChildrenRequest) GetParentAssetId() int32 {
@@ -931,31 +920,31 @@ func (x *ListAssetChildrenRequest) GetParentAssetId() int32 {
 	return 0
 }
 
-func (x *ListAssetChildrenRequest) GetOffset() int32 {
-	if x != nil && x.Offset != nil {
-		return *x.Offset
+func (x *ListAssetChildrenRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
 	}
 	return 0
 }
 
-func (x *ListAssetChildrenRequest) GetLimit() int32 {
-	if x != nil && x.Limit != nil {
-		return *x.Limit
+func (x *ListAssetChildrenRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
 	}
-	return 0
+	return ""
 }
 
 type ListAssetChildrenResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Asset         *Asset                 `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
-	Total         int32                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	Assets        []*Asset               `protobuf:"bytes,1,rep,name=assets,proto3" json:"assets,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListAssetChildrenResponse) Reset() {
 	*x = ListAssetChildrenResponse{}
-	mi := &file_assets_proto_msgTypes[9]
+	mi := &file_cloud_assets_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -967,7 +956,7 @@ func (x *ListAssetChildrenResponse) String() string {
 func (*ListAssetChildrenResponse) ProtoMessage() {}
 
 func (x *ListAssetChildrenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[9]
+	mi := &file_cloud_assets_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -980,21 +969,21 @@ func (x *ListAssetChildrenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetChildrenResponse.ProtoReflect.Descriptor instead.
 func (*ListAssetChildrenResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{9}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ListAssetChildrenResponse) GetAsset() *Asset {
+func (x *ListAssetChildrenResponse) GetAssets() []*Asset {
 	if x != nil {
-		return x.Asset
+		return x.Assets
 	}
 	return nil
 }
 
-func (x *ListAssetChildrenResponse) GetTotal() int32 {
+func (x *ListAssetChildrenResponse) GetNextPageToken() string {
 	if x != nil {
-		return x.Total
+		return x.NextPageToken
 	}
-	return 0
+	return ""
 }
 
 type GetAssetLineageRequest struct {
@@ -1006,7 +995,7 @@ type GetAssetLineageRequest struct {
 
 func (x *GetAssetLineageRequest) Reset() {
 	*x = GetAssetLineageRequest{}
-	mi := &file_assets_proto_msgTypes[10]
+	mi := &file_cloud_assets_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1018,7 +1007,7 @@ func (x *GetAssetLineageRequest) String() string {
 func (*GetAssetLineageRequest) ProtoMessage() {}
 
 func (x *GetAssetLineageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[10]
+	mi := &file_cloud_assets_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1031,7 +1020,7 @@ func (x *GetAssetLineageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAssetLineageRequest.ProtoReflect.Descriptor instead.
 func (*GetAssetLineageRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{10}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetAssetLineageRequest) GetAssetId() int32 {
@@ -1055,7 +1044,7 @@ type GetAssetLineageResponse struct {
 
 func (x *GetAssetLineageResponse) Reset() {
 	*x = GetAssetLineageResponse{}
-	mi := &file_assets_proto_msgTypes[11]
+	mi := &file_cloud_assets_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1067,7 +1056,7 @@ func (x *GetAssetLineageResponse) String() string {
 func (*GetAssetLineageResponse) ProtoMessage() {}
 
 func (x *GetAssetLineageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[11]
+	mi := &file_cloud_assets_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1080,7 +1069,7 @@ func (x *GetAssetLineageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAssetLineageResponse.ProtoReflect.Descriptor instead.
 func (*GetAssetLineageResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{11}
+	return file_cloud_assets_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetAssetLineageResponse) GetRootAsset() *Asset {
@@ -1104,271 +1093,11 @@ func (x *GetAssetLineageResponse) GetRequestedAssetId() int32 {
 	return 0
 }
 
-type ListAssetsByAppRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId  int32                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	AppId           string                 `protobuf:"bytes,2,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	IsComputeDevice *bool                  `protobuf:"varint,3,opt,name=is_compute_device,json=isComputeDevice,proto3,oneof" json:"is_compute_device,omitempty"`
-	// Offset/limit based pagination (offset = starting row, limit = page size)
-	Offset        *int32  `protobuf:"varint,4,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
-	Limit         *int32  `protobuf:"varint,5,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
-	Filter        *string `protobuf:"bytes,6,opt,name=filter,proto3,oneof" json:"filter,omitempty"` // Filter by name, details, asset_type, device_type, or tags
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
+var File_cloud_assets_proto protoreflect.FileDescriptor
 
-func (x *ListAssetsByAppRequest) Reset() {
-	*x = ListAssetsByAppRequest{}
-	mi := &file_assets_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListAssetsByAppRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListAssetsByAppRequest) ProtoMessage() {}
-
-func (x *ListAssetsByAppRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListAssetsByAppRequest.ProtoReflect.Descriptor instead.
-func (*ListAssetsByAppRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *ListAssetsByAppRequest) GetOrganizationId() int32 {
-	if x != nil {
-		return x.OrganizationId
-	}
-	return 0
-}
-
-func (x *ListAssetsByAppRequest) GetAppId() string {
-	if x != nil {
-		return x.AppId
-	}
-	return ""
-}
-
-func (x *ListAssetsByAppRequest) GetIsComputeDevice() bool {
-	if x != nil && x.IsComputeDevice != nil {
-		return *x.IsComputeDevice
-	}
-	return false
-}
-
-func (x *ListAssetsByAppRequest) GetOffset() int32 {
-	if x != nil && x.Offset != nil {
-		return *x.Offset
-	}
-	return 0
-}
-
-func (x *ListAssetsByAppRequest) GetLimit() int32 {
-	if x != nil && x.Limit != nil {
-		return *x.Limit
-	}
-	return 0
-}
-
-func (x *ListAssetsByAppRequest) GetFilter() string {
-	if x != nil && x.Filter != nil {
-		return *x.Filter
-	}
-	return ""
-}
-
-type ListAssetsByAppResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// One asset per streamed response and total count for the full query
-	Asset         *Asset `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
-	Total         int32  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListAssetsByAppResponse) Reset() {
-	*x = ListAssetsByAppResponse{}
-	mi := &file_assets_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListAssetsByAppResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListAssetsByAppResponse) ProtoMessage() {}
-
-func (x *ListAssetsByAppResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListAssetsByAppResponse.ProtoReflect.Descriptor instead.
-func (*ListAssetsByAppResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *ListAssetsByAppResponse) GetAsset() *Asset {
-	if x != nil {
-		return x.Asset
-	}
-	return nil
-}
-
-func (x *ListAssetsByAppResponse) GetTotal() int32 {
-	if x != nil {
-		return x.Total
-	}
-	return 0
-}
-
-type FilterAssetsRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId int32                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	JqFilter       *string                `protobuf:"bytes,2,opt,name=jq_filter,json=jqFilter,proto3,oneof" json:"jq_filter,omitempty"` // JQ filter expression (e.g., ".asset_type == \"compute_device\"")
-	// Offset/limit based pagination
-	Offset        *int32 `protobuf:"varint,3,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
-	Limit         *int32 `protobuf:"varint,4,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FilterAssetsRequest) Reset() {
-	*x = FilterAssetsRequest{}
-	mi := &file_assets_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FilterAssetsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FilterAssetsRequest) ProtoMessage() {}
-
-func (x *FilterAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FilterAssetsRequest.ProtoReflect.Descriptor instead.
-func (*FilterAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *FilterAssetsRequest) GetOrganizationId() int32 {
-	if x != nil {
-		return x.OrganizationId
-	}
-	return 0
-}
-
-func (x *FilterAssetsRequest) GetJqFilter() string {
-	if x != nil && x.JqFilter != nil {
-		return *x.JqFilter
-	}
-	return ""
-}
-
-func (x *FilterAssetsRequest) GetOffset() int32 {
-	if x != nil && x.Offset != nil {
-		return *x.Offset
-	}
-	return 0
-}
-
-func (x *FilterAssetsRequest) GetLimit() int32 {
-	if x != nil && x.Limit != nil {
-		return *x.Limit
-	}
-	return 0
-}
-
-type FilterAssetsResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// One asset per streamed response and total count for the full query
-	Asset         *Asset `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
-	Total         int32  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FilterAssetsResponse) Reset() {
-	*x = FilterAssetsResponse{}
-	mi := &file_assets_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FilterAssetsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FilterAssetsResponse) ProtoMessage() {}
-
-func (x *FilterAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_assets_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FilterAssetsResponse.ProtoReflect.Descriptor instead.
-func (*FilterAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_assets_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *FilterAssetsResponse) GetAsset() *Asset {
-	if x != nil {
-		return x.Asset
-	}
-	return nil
-}
-
-func (x *FilterAssetsResponse) GetTotal() int32 {
-	if x != nil {
-		return x.Total
-	}
-	return 0
-}
-
-var File_assets_proto protoreflect.FileDescriptor
-
-const file_assets_proto_rawDesc = "" +
+const file_cloud_assets_proto_rawDesc = "" +
 	"\n" +
-	"\fassets.proto\x12\rwendycloud.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\"\xe5\b\n" +
+	"\x12cloud/assets.proto\x12\rwendycloud.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\"\xe5\b\n" +
 	"\x05Asset\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\x05R\x0eorganizationId\x12+\n" +
@@ -1512,32 +1241,27 @@ const file_assets_proto_rawDesc = "" +
 	"\x12DeleteAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\"/\n" +
 	"\x13DeleteAssetResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xae\x02\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xe7\x01\n" +
 	"\x11ListAssetsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12/\n" +
 	"\x11is_compute_device\x18\x02 \x01(\bH\x00R\x0fisComputeDevice\x88\x01\x01\x12\x1b\n" +
-	"\x06offset\x18\x03 \x01(\x05H\x01R\x06offset\x88\x01\x01\x12\x19\n" +
-	"\x05limit\x18\x04 \x01(\x05H\x02R\x05limit\x88\x01\x01\x12\x1b\n" +
-	"\x06filter\x18\x05 \x01(\tH\x03R\x06filter\x88\x01\x01\x12$\n" +
-	"\vonline_only\x18\x06 \x01(\bH\x04R\n" +
-	"onlineOnly\x88\x01\x01B\x14\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\x12\x1b\n" +
+	"\x06filter\x18\x05 \x01(\tH\x01R\x06filter\x88\x01\x01B\x14\n" +
 	"\x12_is_compute_deviceB\t\n" +
-	"\a_offsetB\b\n" +
-	"\x06_limitB\t\n" +
-	"\a_filterB\x0e\n" +
-	"\f_online_only\"V\n" +
-	"\x12ListAssetsResponse\x12*\n" +
-	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"\x8f\x01\n" +
+	"\a_filter\"j\n" +
+	"\x12ListAssetsResponse\x12,\n" +
+	"\x06assets\x18\x01 \x03(\v2\x14.wendycloud.v1.AssetR\x06assets\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"~\n" +
 	"\x18ListAssetChildrenRequest\x12&\n" +
 	"\x0fparent_asset_id\x18\x01 \x01(\x05R\rparentAssetId\x12\x1b\n" +
-	"\x06offset\x18\x02 \x01(\x05H\x00R\x06offset\x88\x01\x01\x12\x19\n" +
-	"\x05limit\x18\x03 \x01(\x05H\x01R\x05limit\x88\x01\x01B\t\n" +
-	"\a_offsetB\b\n" +
-	"\x06_limit\"]\n" +
-	"\x19ListAssetChildrenResponse\x12*\n" +
-	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"3\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"q\n" +
+	"\x19ListAssetChildrenResponse\x12,\n" +
+	"\x06assets\x18\x01 \x03(\v2\x14.wendycloud.v1.AssetR\x06assets\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"3\n" +
 	"\x16GetAssetLineageRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\x05R\aassetId\"\xb1\x01\n" +
 	"\x17GetAssetLineageResponse\x123\n" +
@@ -1545,59 +1269,31 @@ const file_assets_proto_rawDesc = "" +
 	"root_asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\trootAsset\x123\n" +
 	"\n" +
 	"all_assets\x18\x02 \x03(\v2\x14.wendycloud.v1.AssetR\tallAssets\x12,\n" +
-	"\x12requested_asset_id\x18\x03 \x01(\x05R\x10requestedAssetId\"\x94\x02\n" +
-	"\x16ListAssetsByAppRequest\x12'\n" +
-	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12\x15\n" +
-	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12/\n" +
-	"\x11is_compute_device\x18\x03 \x01(\bH\x00R\x0fisComputeDevice\x88\x01\x01\x12\x1b\n" +
-	"\x06offset\x18\x04 \x01(\x05H\x01R\x06offset\x88\x01\x01\x12\x19\n" +
-	"\x05limit\x18\x05 \x01(\x05H\x02R\x05limit\x88\x01\x01\x12\x1b\n" +
-	"\x06filter\x18\x06 \x01(\tH\x03R\x06filter\x88\x01\x01B\x14\n" +
-	"\x12_is_compute_deviceB\t\n" +
-	"\a_offsetB\b\n" +
-	"\x06_limitB\t\n" +
-	"\a_filter\"[\n" +
-	"\x17ListAssetsByAppResponse\x12*\n" +
-	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"\xbb\x01\n" +
-	"\x13FilterAssetsRequest\x12'\n" +
-	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12 \n" +
-	"\tjq_filter\x18\x02 \x01(\tH\x00R\bjqFilter\x88\x01\x01\x12\x1b\n" +
-	"\x06offset\x18\x03 \x01(\x05H\x01R\x06offset\x88\x01\x01\x12\x19\n" +
-	"\x05limit\x18\x04 \x01(\x05H\x02R\x05limit\x88\x01\x01B\f\n" +
-	"\n" +
-	"_jq_filterB\t\n" +
-	"\a_offsetB\b\n" +
-	"\x06_limit\"X\n" +
-	"\x14FilterAssetsResponse\x12*\n" +
-	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total2\x96\x06\n" +
+	"\x12requested_asset_id\x18\x03 \x01(\x05R\x10requestedAssetId2\xd3\x04\n" +
 	"\fAssetService\x12F\n" +
 	"\vCreateAsset\x12!.wendycloud.v1.CreateAssetRequest\x1a\x14.wendycloud.v1.Asset\x12@\n" +
 	"\bGetAsset\x12\x1e.wendycloud.v1.GetAssetRequest\x1a\x14.wendycloud.v1.Asset\x12F\n" +
 	"\vUpdateAsset\x12!.wendycloud.v1.UpdateAssetRequest\x1a\x14.wendycloud.v1.Asset\x12T\n" +
-	"\vDeleteAsset\x12!.wendycloud.v1.DeleteAssetRequest\x1a\".wendycloud.v1.DeleteAssetResponse\x12S\n" +
+	"\vDeleteAsset\x12!.wendycloud.v1.DeleteAssetRequest\x1a\".wendycloud.v1.DeleteAssetResponse\x12Q\n" +
 	"\n" +
-	"ListAssets\x12 .wendycloud.v1.ListAssetsRequest\x1a!.wendycloud.v1.ListAssetsResponse0\x01\x12b\n" +
-	"\x0fListAssetsByApp\x12%.wendycloud.v1.ListAssetsByAppRequest\x1a&.wendycloud.v1.ListAssetsByAppResponse0\x01\x12h\n" +
-	"\x11ListAssetChildren\x12'.wendycloud.v1.ListAssetChildrenRequest\x1a(.wendycloud.v1.ListAssetChildrenResponse0\x01\x12`\n" +
-	"\x0fGetAssetLineage\x12%.wendycloud.v1.GetAssetLineageRequest\x1a&.wendycloud.v1.GetAssetLineageResponse\x12Y\n" +
-	"\fFilterAssets\x12\".wendycloud.v1.FilterAssetsRequest\x1a#.wendycloud.v1.FilterAssetsResponse0\x01b\x06proto3"
+	"ListAssets\x12 .wendycloud.v1.ListAssetsRequest\x1a!.wendycloud.v1.ListAssetsResponse\x12f\n" +
+	"\x11ListAssetChildren\x12'.wendycloud.v1.ListAssetChildrenRequest\x1a(.wendycloud.v1.ListAssetChildrenResponse\x12`\n" +
+	"\x0fGetAssetLineage\x12%.wendycloud.v1.GetAssetLineageRequest\x1a&.wendycloud.v1.GetAssetLineageResponseb\x06proto3"
 
 var (
-	file_assets_proto_rawDescOnce sync.Once
-	file_assets_proto_rawDescData []byte
+	file_cloud_assets_proto_rawDescOnce sync.Once
+	file_cloud_assets_proto_rawDescData []byte
 )
 
-func file_assets_proto_rawDescGZIP() []byte {
-	file_assets_proto_rawDescOnce.Do(func() {
-		file_assets_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_assets_proto_rawDesc), len(file_assets_proto_rawDesc)))
+func file_cloud_assets_proto_rawDescGZIP() []byte {
+	file_cloud_assets_proto_rawDescOnce.Do(func() {
+		file_cloud_assets_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_cloud_assets_proto_rawDesc), len(file_cloud_assets_proto_rawDesc)))
 	})
-	return file_assets_proto_rawDescData
+	return file_cloud_assets_proto_rawDescData
 }
 
-var file_assets_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
-var file_assets_proto_goTypes = []any{
+var file_cloud_assets_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_cloud_assets_proto_goTypes = []any{
 	(*Asset)(nil),                     // 0: wendycloud.v1.Asset
 	(*CreateAssetRequest)(nil),        // 1: wendycloud.v1.CreateAssetRequest
 	(*GetAssetRequest)(nil),           // 2: wendycloud.v1.GetAssetRequest
@@ -1610,77 +1306,64 @@ var file_assets_proto_goTypes = []any{
 	(*ListAssetChildrenResponse)(nil), // 9: wendycloud.v1.ListAssetChildrenResponse
 	(*GetAssetLineageRequest)(nil),    // 10: wendycloud.v1.GetAssetLineageRequest
 	(*GetAssetLineageResponse)(nil),   // 11: wendycloud.v1.GetAssetLineageResponse
-	(*ListAssetsByAppRequest)(nil),    // 12: wendycloud.v1.ListAssetsByAppRequest
-	(*ListAssetsByAppResponse)(nil),   // 13: wendycloud.v1.ListAssetsByAppResponse
-	(*FilterAssetsRequest)(nil),       // 14: wendycloud.v1.FilterAssetsRequest
-	(*FilterAssetsResponse)(nil),      // 15: wendycloud.v1.FilterAssetsResponse
-	(*structpb.Struct)(nil),           // 16: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),     // 17: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),           // 12: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),     // 13: google.protobuf.Timestamp
 }
-var file_assets_proto_depIdxs = []int32{
-	16, // 0: wendycloud.v1.Asset.blob_metadata:type_name -> google.protobuf.Struct
-	17, // 1: wendycloud.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
-	17, // 2: wendycloud.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
-	16, // 3: wendycloud.v1.CreateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
-	16, // 4: wendycloud.v1.UpdateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
-	0,  // 5: wendycloud.v1.ListAssetsResponse.asset:type_name -> wendycloud.v1.Asset
-	0,  // 6: wendycloud.v1.ListAssetChildrenResponse.asset:type_name -> wendycloud.v1.Asset
+var file_cloud_assets_proto_depIdxs = []int32{
+	12, // 0: wendycloud.v1.Asset.blob_metadata:type_name -> google.protobuf.Struct
+	13, // 1: wendycloud.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
+	13, // 2: wendycloud.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 3: wendycloud.v1.CreateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
+	12, // 4: wendycloud.v1.UpdateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
+	0,  // 5: wendycloud.v1.ListAssetsResponse.assets:type_name -> wendycloud.v1.Asset
+	0,  // 6: wendycloud.v1.ListAssetChildrenResponse.assets:type_name -> wendycloud.v1.Asset
 	0,  // 7: wendycloud.v1.GetAssetLineageResponse.root_asset:type_name -> wendycloud.v1.Asset
 	0,  // 8: wendycloud.v1.GetAssetLineageResponse.all_assets:type_name -> wendycloud.v1.Asset
-	0,  // 9: wendycloud.v1.ListAssetsByAppResponse.asset:type_name -> wendycloud.v1.Asset
-	0,  // 10: wendycloud.v1.FilterAssetsResponse.asset:type_name -> wendycloud.v1.Asset
-	1,  // 11: wendycloud.v1.AssetService.CreateAsset:input_type -> wendycloud.v1.CreateAssetRequest
-	2,  // 12: wendycloud.v1.AssetService.GetAsset:input_type -> wendycloud.v1.GetAssetRequest
-	3,  // 13: wendycloud.v1.AssetService.UpdateAsset:input_type -> wendycloud.v1.UpdateAssetRequest
-	4,  // 14: wendycloud.v1.AssetService.DeleteAsset:input_type -> wendycloud.v1.DeleteAssetRequest
-	6,  // 15: wendycloud.v1.AssetService.ListAssets:input_type -> wendycloud.v1.ListAssetsRequest
-	12, // 16: wendycloud.v1.AssetService.ListAssetsByApp:input_type -> wendycloud.v1.ListAssetsByAppRequest
-	8,  // 17: wendycloud.v1.AssetService.ListAssetChildren:input_type -> wendycloud.v1.ListAssetChildrenRequest
-	10, // 18: wendycloud.v1.AssetService.GetAssetLineage:input_type -> wendycloud.v1.GetAssetLineageRequest
-	14, // 19: wendycloud.v1.AssetService.FilterAssets:input_type -> wendycloud.v1.FilterAssetsRequest
-	0,  // 20: wendycloud.v1.AssetService.CreateAsset:output_type -> wendycloud.v1.Asset
-	0,  // 21: wendycloud.v1.AssetService.GetAsset:output_type -> wendycloud.v1.Asset
-	0,  // 22: wendycloud.v1.AssetService.UpdateAsset:output_type -> wendycloud.v1.Asset
-	5,  // 23: wendycloud.v1.AssetService.DeleteAsset:output_type -> wendycloud.v1.DeleteAssetResponse
-	7,  // 24: wendycloud.v1.AssetService.ListAssets:output_type -> wendycloud.v1.ListAssetsResponse
-	13, // 25: wendycloud.v1.AssetService.ListAssetsByApp:output_type -> wendycloud.v1.ListAssetsByAppResponse
-	9,  // 26: wendycloud.v1.AssetService.ListAssetChildren:output_type -> wendycloud.v1.ListAssetChildrenResponse
-	11, // 27: wendycloud.v1.AssetService.GetAssetLineage:output_type -> wendycloud.v1.GetAssetLineageResponse
-	15, // 28: wendycloud.v1.AssetService.FilterAssets:output_type -> wendycloud.v1.FilterAssetsResponse
-	20, // [20:29] is the sub-list for method output_type
-	11, // [11:20] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	1,  // 9: wendycloud.v1.AssetService.CreateAsset:input_type -> wendycloud.v1.CreateAssetRequest
+	2,  // 10: wendycloud.v1.AssetService.GetAsset:input_type -> wendycloud.v1.GetAssetRequest
+	3,  // 11: wendycloud.v1.AssetService.UpdateAsset:input_type -> wendycloud.v1.UpdateAssetRequest
+	4,  // 12: wendycloud.v1.AssetService.DeleteAsset:input_type -> wendycloud.v1.DeleteAssetRequest
+	6,  // 13: wendycloud.v1.AssetService.ListAssets:input_type -> wendycloud.v1.ListAssetsRequest
+	8,  // 14: wendycloud.v1.AssetService.ListAssetChildren:input_type -> wendycloud.v1.ListAssetChildrenRequest
+	10, // 15: wendycloud.v1.AssetService.GetAssetLineage:input_type -> wendycloud.v1.GetAssetLineageRequest
+	0,  // 16: wendycloud.v1.AssetService.CreateAsset:output_type -> wendycloud.v1.Asset
+	0,  // 17: wendycloud.v1.AssetService.GetAsset:output_type -> wendycloud.v1.Asset
+	0,  // 18: wendycloud.v1.AssetService.UpdateAsset:output_type -> wendycloud.v1.Asset
+	5,  // 19: wendycloud.v1.AssetService.DeleteAsset:output_type -> wendycloud.v1.DeleteAssetResponse
+	7,  // 20: wendycloud.v1.AssetService.ListAssets:output_type -> wendycloud.v1.ListAssetsResponse
+	9,  // 21: wendycloud.v1.AssetService.ListAssetChildren:output_type -> wendycloud.v1.ListAssetChildrenResponse
+	11, // 22: wendycloud.v1.AssetService.GetAssetLineage:output_type -> wendycloud.v1.GetAssetLineageResponse
+	16, // [16:23] is the sub-list for method output_type
+	9,  // [9:16] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
-func init() { file_assets_proto_init() }
-func file_assets_proto_init() {
-	if File_assets_proto != nil {
+func init() { file_cloud_assets_proto_init() }
+func file_cloud_assets_proto_init() {
+	if File_cloud_assets_proto != nil {
 		return
 	}
-	file_assets_proto_msgTypes[0].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[1].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[3].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[6].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[8].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[12].OneofWrappers = []any{}
-	file_assets_proto_msgTypes[14].OneofWrappers = []any{}
+	file_cloud_assets_proto_msgTypes[0].OneofWrappers = []any{}
+	file_cloud_assets_proto_msgTypes[1].OneofWrappers = []any{}
+	file_cloud_assets_proto_msgTypes[3].OneofWrappers = []any{}
+	file_cloud_assets_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_assets_proto_rawDesc), len(file_assets_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cloud_assets_proto_rawDesc), len(file_cloud_assets_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_assets_proto_goTypes,
-		DependencyIndexes: file_assets_proto_depIdxs,
-		MessageInfos:      file_assets_proto_msgTypes,
+		GoTypes:           file_cloud_assets_proto_goTypes,
+		DependencyIndexes: file_cloud_assets_proto_depIdxs,
+		MessageInfos:      file_cloud_assets_proto_msgTypes,
 	}.Build()
-	File_assets_proto = out.File
-	file_assets_proto_goTypes = nil
-	file_assets_proto_depIdxs = nil
+	File_cloud_assets_proto = out.File
+	file_cloud_assets_proto_goTypes = nil
+	file_cloud_assets_proto_depIdxs = nil
 }
