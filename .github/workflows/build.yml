@@ -3,55 +3,131 @@ name: Build WendyOS Images
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
+# Required repo configuration (see docs/build-cache.md):
+#   secret  AWS_BUILD_CACHE_ROLE_ARN     IAM role with rw access to the cache bucket, trusts GitHub OIDC
+#   var     WENDYOS_BUILD_CACHE_BUCKET   S3 bucket name for sstate / downloads / hashserv
+#   var     WENDYOS_BUILD_CACHE_REGION   AWS region of the bucket (e.g. us-east-1)
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # detect-changes: compute the build matrix.
+  # On main / workflow_dispatch we always build every device (nightly).
+  # On pull_request we prune to only the devices whose paths actually changed.
+  # Any change touching a "global" path (distro conf, shared recipes, the
+  # workflow itself, etc.) falls back to building every device.
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    name: Detect affected devices
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      devices: ${{ steps.set.outputs.devices }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: set
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          ALL_MATRIX='[
+            {"device":"rpi3","board":"rpi3-sd","machine":"raspberrypi3-64-wendyos","publisher_device":"raspberry-pi-3"},
+            {"device":"rpi4","board":"rpi4-sd","machine":"raspberrypi4-64-wendyos","publisher_device":"raspberry-pi-4"},
+            {"device":"rpi5","board":"rpi5-sd","machine":"raspberrypi5-wendyos","publisher_device":"raspberry-pi-5"},
+            {"device":"jetson","board":"jetson-orin-nano-nvme","machine":"jetson-orin-nano-devkit-nvme-wendyos","publisher_device":"jetson-orin-nano"}
+          ]'
+
+          emit_all() {
+            echo "matrix={\"include\":${ALL_MATRIX}}" >> "$GITHUB_OUTPUT"
+            echo "devices=rpi3 rpi4 rpi5 jetson"      >> "$GITHUB_OUTPUT"
+          }
+
+          # Non-PR triggers: always build everything.
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "Trigger=${EVENT_NAME}: building all devices."
+            emit_all
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          echo "Changed files:"
+          printf '  %s\n' ${CHANGED:-<none>}
+
+          # Paths whose change can affect any device. Conservative: anything
+          # that isn't clearly board/machine-scoped is treated as global.
+          GLOBAL_RE='^(conf/distro/|conf/template/include/|conf/layer\.conf$|classes/|recipes-|wic/|scripts/|Makefile$|bootstrap\.sh$|\.github/workflows/build\.yml$)'
+
+          if echo "${CHANGED}" | grep -Eq "${GLOBAL_RE}"; then
+            echo "Global path changed -> building all devices."
+            emit_all
+            exit 0
+          fi
+
+          # Per-device path patterns. meta-rpi-extensions affects every Pi;
+          # meta-tegra-extensions affects Jetson only.
+          declare -A DEV_RE=(
+            [rpi3]='(^conf/template/boards/rpi3-sd/|^conf/machine/raspberrypi3-64-wendyos\.conf$|^meta-rpi-extensions/)'
+            [rpi4]='(^conf/template/boards/rpi4-sd/|^conf/machine/raspberrypi4-64-wendyos\.conf$|^meta-rpi-extensions/)'
+            [rpi5]='(^conf/template/boards/rpi5-sd/|^conf/machine/raspberrypi5-wendyos\.conf$|^meta-rpi-extensions/)'
+            [jetson]='(^conf/template/boards/jetson-orin-nano-nvme/|^conf/machine/jetson-orin-nano-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
+          )
+
+          INCLUDED=()
+          DEVICES=()
+          for dev in rpi3 rpi4 rpi5 jetson; do
+            if echo "${CHANGED}" | grep -Eq "${DEV_RE[$dev]}"; then
+              INCLUDED+=("$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")")
+              DEVICES+=("${dev}")
+            fi
+          done
+
+          if [[ ${#INCLUDED[@]} -eq 0 ]]; then
+            echo "No device-affecting paths changed -> empty matrix (build job will be skipped)."
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo 'devices='              >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Building devices: ${DEVICES[*]}"
+          MATRIX="{\"include\":[$(IFS=,; echo "${INCLUDED[*]}")]}"
+          echo "matrix=${MATRIX}"      >> "$GITHUB_OUTPUT"
+          echo "devices=${DEVICES[*]}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # build: per-device Yocto image build.
+  # Runner uses c7id.8xlarge (32 vCPU Sapphire Rapids, 64 GiB, 1.9 TB local
+  # NVMe) — Yocto is heavily I/O-bound and gp3 EBS caps out under do_rootfs.
+  # sstate-cache, downloads, and the per-device hashserv DB are primed from
+  # and saved back to S3 around the build.
+  # ---------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.device }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.devices != ''
     permissions:
       contents: read
       id-token: write
     runs-on:
       - runs-on
-      - family=c7i-flex.8xlarge
+      - family=c7id.8xlarge
       - spot=false
-      - volume=400gb:gp3
       - run-id=${{ github.run_id }}-${{ matrix.device }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - device: rpi3
-            board: rpi3-sd
-            machine: raspberrypi3-64-wendyos
-            publisher_device: raspberry-pi-3
-          - device: rpi4
-            board: rpi4-sd
-            machine: raspberrypi4-64-wendyos
-            publisher_device: raspberry-pi-4
-          - device: rpi5
-            board: rpi5-sd
-            machine: raspberrypi5-wendyos
-            publisher_device: raspberry-pi-5
-          - device: jetson
-            board: jetson-orin-nano-nvme
-            machine: jetson-orin-nano-devkit-nvme-wendyos
-            publisher_device: jetson-orin-nano
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    env:
+      CACHE_BUCKET: ${{ vars.WENDYOS_BUILD_CACHE_BUCKET }}
+      CACHE_REGION: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
 
     steps:
-      # Disabled: build caching is flaky for mender builds
-      # - name: Restore build cache
-      #   uses: runs-on/snapshot@v1
-      #   with:
-      #     path: ${{ github.workspace }}
-      #     volume_size: 500
-
-      # - name: Restore Docker image cache
-      #   uses: runs-on/snapshot@v1
-      #   with:
-      #     path: /var/lib/docker
-      #     volume_size: 50
-
       - name: Fix workspace permissions
         run: sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
@@ -60,11 +136,45 @@ jobs:
         with:
           path: wendyos
 
+      # ---------- Build cache: AWS auth + S3 prime ----------
+
+      - name: Configure AWS credentials for build cache
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BUILD_CACHE_ROLE_ARN }}
+          aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+
+      - name: Restore sstate-cache, downloads, and hashserv DB from S3
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "$GITHUB_WORKSPACE/sstate-cache" \
+            "$GITHUB_WORKSPACE/downloads" \
+            "$GITHUB_WORKSPACE/build"
+
+          # First run on a fresh bucket has nothing to pull — that's fine, the
+          # build proceeds cold and seeds the cache on the way out.
+          aws s3 sync --no-progress \
+            "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
+          aws s3 sync --no-progress \
+            "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
+          aws s3 cp --no-progress \
+            "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" \
+            "$GITHUB_WORKSPACE/build/hashserv.db" || true
+
+      # ---------- Build ----------
+
       - name: Bootstrap build environment
         working-directory: ${{ github.workspace }}
         env:
           BOARD: ${{ matrix.board }}
-        run: BOARD=$BOARD ./wendyos/bootstrap.sh
+        run: BOARD="$BOARD" ./wendyos/bootstrap.sh
+
+      # Note: SSTATE_DIR / DL_DIR are pinned to ${TOPDIR}/../{sstate-cache,downloads}
+      # by conf/template/include/local/common.inc, which matches the S3 sync paths
+      # below — no auto.conf override needed.
 
       - name: Fix workspace permissions for Docker
         run: chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
@@ -73,10 +183,35 @@ jobs:
         working-directory: ${{ github.workspace }}/wendyos
         env:
           MACHINE: ${{ matrix.machine }}
-        run: make build MACHINE=$MACHINE
+        run: make build MACHINE="$MACHINE"
 
       - name: Fix deploy directory permissions
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
+
+      # ---------- Build cache: save to S3 (always, even on failure) ----------
+
+      - name: Save sstate-cache, downloads, and hashserv DB to S3
+        if: always()
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          set -euo pipefail
+          # --size-only avoids re-uploading sstate siblings whose mtime drifted
+          # but content matches. Sstate filenames are content-hashed, so file
+          # size is a reliable freshness check.
+          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
+            aws s3 sync --no-progress --size-only \
+              "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
+          fi
+          if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
+            aws s3 sync --no-progress --size-only \
+              "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
+          fi
+          if [[ -f "$GITHUB_WORKSPACE/build/hashserv.db" ]]; then
+            aws s3 cp --no-progress \
+              "$GITHUB_WORKSPACE/build/hashserv.db" \
+              "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" || true
+          fi
 
       # --- Upload image and update device manifest (master manifest is handled by the publish job) ---
 
