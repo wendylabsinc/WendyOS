@@ -137,32 +137,35 @@ jobs:
           path: wendyos
 
       # ---------- Build cache: AWS auth + S3 prime ----------
-
-      - name: Configure AWS credentials for build cache
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_BUILD_CACHE_ROLE_ARN }}
-          aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
-
-      - name: Restore sstate-cache, downloads, and hashserv DB from S3
-        env:
-          DEVICE: ${{ matrix.device }}
-        run: |
-          set -euo pipefail
-          mkdir -p \
-            "$GITHUB_WORKSPACE/sstate-cache" \
-            "$GITHUB_WORKSPACE/downloads" \
-            "$GITHUB_WORKSPACE/build"
-
-          # First run on a fresh bucket has nothing to pull — that's fine, the
-          # build proceeds cold and seeds the cache on the way out.
-          aws s3 sync --no-progress \
-            "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
-          aws s3 sync --no-progress \
-            "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
-          aws s3 cp --no-progress \
-            "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" \
-            "$GITHUB_WORKSPACE/build/hashserv.db" || true
+      # TODO: Re-enable once the S3 bucket and IAM role described in
+      # docs/build-cache.md are provisioned. While disabled, every build
+      # runs cold (no warm-cache speedup) but the workflow still works.
+      #
+      # - name: Configure AWS credentials for build cache
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.AWS_BUILD_CACHE_ROLE_ARN }}
+      #     aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+      #
+      # - name: Restore sstate-cache, downloads, and hashserv DB from S3
+      #   env:
+      #     DEVICE: ${{ matrix.device }}
+      #   run: |
+      #     set -euo pipefail
+      #     mkdir -p \
+      #       "$GITHUB_WORKSPACE/sstate-cache" \
+      #       "$GITHUB_WORKSPACE/downloads" \
+      #       "$GITHUB_WORKSPACE/build"
+      #
+      #     # First run on a fresh bucket has nothing to pull — that's fine, the
+      #     # build proceeds cold and seeds the cache on the way out.
+      #     aws s3 sync --no-progress \
+      #       "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
+      #     aws s3 sync --no-progress \
+      #       "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
+      #     aws s3 cp --no-progress \
+      #       "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" \
+      #       "$GITHUB_WORKSPACE/build/hashserv.db" || true
 
       # ---------- Build ----------
 
@@ -189,29 +192,30 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
 
       # ---------- Build cache: save to S3 (always, even on failure) ----------
-
-      - name: Save sstate-cache, downloads, and hashserv DB to S3
-        if: always()
-        env:
-          DEVICE: ${{ matrix.device }}
-        run: |
-          set -euo pipefail
-          # --size-only avoids re-uploading sstate siblings whose mtime drifted
-          # but content matches. Sstate filenames are content-hashed, so file
-          # size is a reliable freshness check.
-          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
-            aws s3 sync --no-progress --size-only \
-              "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
-          fi
-          if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
-            aws s3 sync --no-progress --size-only \
-              "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
-          fi
-          if [[ -f "$GITHUB_WORKSPACE/build/hashserv.db" ]]; then
-            aws s3 cp --no-progress \
-              "$GITHUB_WORKSPACE/build/hashserv.db" \
-              "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" || true
-          fi
+      # TODO: Re-enable alongside the prime step above once S3 is provisioned.
+      #
+      # - name: Save sstate-cache, downloads, and hashserv DB to S3
+      #   if: always()
+      #   env:
+      #     DEVICE: ${{ matrix.device }}
+      #   run: |
+      #     set -euo pipefail
+      #     # --size-only avoids re-uploading sstate siblings whose mtime drifted
+      #     # but content matches. Sstate filenames are content-hashed, so file
+      #     # size is a reliable freshness check.
+      #     if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
+      #       aws s3 sync --no-progress --size-only \
+      #         "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
+      #     fi
+      #     if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
+      #       aws s3 sync --no-progress --size-only \
+      #         "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
+      #     fi
+      #     if [[ -f "$GITHUB_WORKSPACE/build/hashserv.db" ]]; then
+      #       aws s3 cp --no-progress \
+      #         "$GITHUB_WORKSPACE/build/hashserv.db" \
+      #         "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" || true
+      #     fi
 
       # --- Upload image and update device manifest (master manifest is handled by the publish job) ---
 
