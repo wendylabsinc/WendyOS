@@ -34,6 +34,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
@@ -121,6 +122,17 @@ func main() {
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
+
+	// v2 services
+	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
+	wifiSvc := services.NewWiFiService(logger, networkMgr)
+	bluetoothSvc := services.NewBluetoothService(logger, btManager)
+	agentUpdateSvc := services.NewAgentUpdateService(logger)
+	osUpdateSvc := services.NewOSUpdateService(logger)
+	containerSvcV2 := services.NewContainerServiceV2(containerSvc)
+	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
+	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
+	telemetrySvcV2 := services.NewTelemetryServiceV2(logger, broadcaster)
 
 	// OTEL receivers.
 	otelLogReceiver := services.NewOTELLogsReceiver(broadcaster)
@@ -243,6 +255,15 @@ func main() {
 		agentpb.RegisterWendyVideoServiceServer(srv, videoSvc)
 		agentpb.RegisterWendyProvisioningServiceServer(srv, provisioningSvc)
 		agentpb.RegisterWendyTelemetryServiceServer(srv, telemetrySvc)
+		agentpbv2.RegisterWendyDeviceInfoServiceServer(srv, deviceInfoSvc)
+		agentpbv2.RegisterWendyWiFiServiceServer(srv, wifiSvc)
+		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
+		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
+		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
+		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
+		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
+		agentpbv2.RegisterWendyTelemetryServiceServer(srv, telemetrySvcV2)
 	}
 
 	// startMTLSServer creates and starts the mTLS gRPC server on agentPort+1.
