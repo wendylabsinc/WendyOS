@@ -1,0 +1,93 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+import "wendy/agent/services/v2/shared.proto";
+
+service WendyContainerService {
+    rpc StartContainer(StartContainerRequest) returns (stream ContainerStreamResponse);
+    rpc AttachContainer(stream AttachContainerRequest) returns (stream ContainerStreamResponse);
+    rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
+    rpc DeleteContainer(DeleteContainerRequest) returns (DeleteContainerResponse);
+    rpc ListContainers(ListContainersRequest) returns (stream ListContainersResponse);
+    rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+    rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
+    rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
+}
+
+message StartContainerRequest {
+    string app_name = 1;
+}
+
+message AttachContainerRequest {
+    oneof request_type {
+        string app_name = 1;
+        bytes stdin_data = 2;
+    }
+}
+
+message ContainerStreamResponse {
+    oneof response_type {
+        Started started = 1;
+        ConsoleOutput stdout_output = 2;
+        ConsoleOutput stderr_output = 3;
+    }
+
+    message Started {}
+
+    message ConsoleOutput {
+        bytes data = 1;
+    }
+}
+
+message StopContainerRequest {
+    string app_name = 1;
+}
+
+message StopContainerResponse {}
+
+message DeleteContainerRequest {
+    string app_name = 1;
+    bool delete_image = 2;
+    bool delete_volumes = 3;
+}
+
+message DeleteContainerResponse {}
+
+message ListContainersRequest {}
+
+message ListContainersResponse {
+    AppContainer container = 1;
+}
+
+message ListVolumesRequest {}
+
+message VolumeInfo {
+    string name = 1;
+    string path = 2;
+    int64 size_bytes = 3;
+    string created_at = 4;
+    repeated string used_by = 5;
+}
+
+message ListVolumesResponse {
+    repeated VolumeInfo volumes = 1;
+}
+
+message RemoveVolumeRequest {
+    string name = 1;
+}
+
+message RemoveVolumeResponse {}
+
+message ContainerStats {
+    string app_name = 1;
+    int64 memory_bytes = 2;
+    int64 storage_bytes = 3;
+}
+
+message ListContainerStatsRequest {}
+
+message ListContainerStatsResponse {
+    repeated ContainerStats stats = 1;
+}

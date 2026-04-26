@@ -1,0 +1,46 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyBluetoothService {
+    rpc ScanBluetoothPeripherals(stream ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
+    rpc ConnectBluetoothPeripheral(ConnectBluetoothPeripheralRequest) returns (ConnectBluetoothPeripheralResponse);
+    rpc DisconnectBluetoothPeripheral(DisconnectBluetoothPeripheralRequest) returns (DisconnectBluetoothPeripheralResponse);
+    rpc ForgetBluetoothPeripheral(ForgetBluetoothPeripheralRequest) returns (ForgetBluetoothPeripheralResponse);
+}
+
+message DiscoveredBluetoothPeripheral {
+    string name = 1;
+    string address = 2;
+    int32 rssi = 3;
+    string device_type = 4;
+    bool paired = 5;
+    bool connected = 6;
+    bool trusted = 7;
+}
+
+message ScanBluetoothPeripheralsRequest {}
+
+message ScanBluetoothPeripheralsResponse {
+    repeated DiscoveredBluetoothPeripheral discovered_devices = 1;
+}
+
+message ConnectBluetoothPeripheralRequest {
+    string address = 1;
+    bool pair = 2;
+    bool trust = 3;
+}
+
+message ConnectBluetoothPeripheralResponse {}
+
+message DisconnectBluetoothPeripheralRequest {
+    string address = 1;
+}
+
+message DisconnectBluetoothPeripheralResponse {}
+
+message ForgetBluetoothPeripheralRequest {
+    string address = 1;
+}
+
+message ForgetBluetoothPeripheralResponse {}

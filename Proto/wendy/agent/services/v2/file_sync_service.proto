@@ -1,0 +1,72 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyFileSyncService {
+    rpc SyncFiles(stream FileSyncRequest) returns (stream FileSyncResponse);
+}
+
+message FileSyncEntry {
+    string path   = 1;
+    int64  size   = 2;
+    bytes  sha256 = 3;
+    uint32 mode   = 4;
+}
+
+message FileSyncRequest {
+    oneof request_type {
+        FileSyncStart  start  = 1;
+        FileSyncChunk  chunk  = 2;
+        FileSyncCommit commit = 3;
+        FileSyncChmod  chmod  = 4;
+        FileSyncDelete delete = 5;
+    }
+}
+
+message FileSyncStart {
+    string           app_id   = 1;
+    FileSyncManifest manifest = 2;
+}
+
+message FileSyncChunk {
+    string path            = 1;
+    bytes  data            = 2;
+    uint64 sequence        = 3;
+    int64  cumulative_size = 4;
+    bytes  sha256          = 5;
+}
+
+message FileSyncCommit {
+    string path   = 1;
+    bytes  sha256 = 2;
+    int64  size   = 3;
+}
+
+message FileSyncChmod {
+    string path   = 1;
+    uint32 mode   = 2;
+    int64  size   = 3;
+    bytes  sha256 = 4;
+}
+
+message FileSyncDelete {
+    repeated string paths = 1;
+}
+
+message FileSyncResponse {
+    oneof response_type {
+        FileSyncManifest manifest = 1;
+        FileSyncAck      ack      = 2;
+        FileSyncComplete complete = 3;
+    }
+}
+
+message FileSyncManifest {
+    repeated FileSyncEntry files = 1;
+}
+
+message FileSyncAck {
+    string path = 1;
+}
+
+message FileSyncComplete {}

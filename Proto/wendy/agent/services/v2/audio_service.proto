@@ -1,0 +1,65 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyAudioService {
+    rpc ListAudioDevices(ListAudioDevicesRequest) returns (ListAudioDevicesResponse);
+    rpc SetDefaultAudioDevice(SetDefaultAudioDeviceRequest) returns (SetDefaultAudioDeviceResponse);
+    rpc StreamAudioLevels(StreamAudioLevelsRequest) returns (stream AudioLevelUpdate);
+    rpc StreamAudio(StreamAudioRequest) returns (stream AudioChunk);
+}
+
+enum AudioDeviceType {
+    AUDIO_DEVICE_TYPE_UNSPECIFIED = 0;
+    AUDIO_DEVICE_TYPE_INPUT = 1;
+    AUDIO_DEVICE_TYPE_OUTPUT = 2;
+}
+
+message AudioDevice {
+    uint32 id = 1;
+    string name = 2;
+    string description = 3;
+    AudioDeviceType type = 4;
+    bool is_default = 5;
+}
+
+message ListAudioDevicesRequest {
+    optional AudioDeviceType type_filter = 1;
+}
+
+message ListAudioDevicesResponse {
+    repeated AudioDevice devices = 1;
+}
+
+message SetDefaultAudioDeviceRequest {
+    uint32 device_id = 1;
+}
+
+message SetDefaultAudioDeviceResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message StreamAudioLevelsRequest {
+    uint32 device_id = 1;
+    uint32 update_rate_hz = 2;
+}
+
+message AudioLevelUpdate {
+    float peak_db = 1;
+    float rms_db = 2;
+    uint64 timestamp_ns = 3;
+}
+
+message StreamAudioRequest {
+    uint32 device_id = 1;
+    uint32 sample_rate = 2;
+    uint32 channels = 3;
+}
+
+message AudioChunk {
+    bytes pcm_data = 1;
+    uint64 timestamp_ns = 2;
+    uint32 sample_rate = 3;
+    uint32 channels = 4;
+}

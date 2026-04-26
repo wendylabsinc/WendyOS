@@ -1,0 +1,27 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+enum RestartPolicyMode {
+    DEFAULT = 0;
+    UNLESS_STOPPED = 1;
+    NO = 2;
+    ON_FAILURE = 3;
+}
+
+message RestartPolicy {
+    RestartPolicyMode mode = 1;
+    int32 on_failure_max_retries = 2;
+}
+
+enum AppRunningState {
+    STOPPED = 0;
+    RUNNING = 1;
+}
+
+message AppContainer {
+    string app_name = 1;
+    string app_version = 2;
+    AppRunningState running_state = 3;
+    uint32 failure_count = 4;
+}
