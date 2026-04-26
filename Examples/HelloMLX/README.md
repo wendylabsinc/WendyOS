@@ -45,13 +45,21 @@ Download it with:
 
 The model is about 16 GB, so make sure you have enough disk space on the development Mac before continuing.
 
-## 4. Connect the two Macs
+## 4. Install Metal Toolchain on the development Mac
+
+The Metal toolchain is required to build this demo. Install it with:
+
+```sh
+xcodebuild -downloadComponent MetalToolchain
+```
+
+## 5. Connect the two Macs
 
 Connect the development Mac and target Mac with a Thunderbolt 4 or Thunderbolt 5 cable.
 
 This is strongly recommended because the VLM model is about 16 GB and will take a long time to transfer over slower links.
 
-## 5. Run the demo
+## 6. Run the demo
 
 From the `Examples/HelloMLX` directory on the development Mac:
 
@@ -63,7 +71,7 @@ The `wendy` UX will let you pick the target Mac.
 
 `wendy run` builds the app, deploys the files declared in `wendy.json`, including the local VLM model, starts the app on the target Mac, and streams logs.
 
-## 6. How the demo works
+## 7. How the demo works
 
 This demo runs a vision-language model on the target Mac and evaluates a prompt against frames captured from the target Mac's webcam.
 
@@ -94,7 +102,7 @@ Available cameras:
 
 The key line is `HELLO_MLX_URL=...`. Open that URL in a browser to access the demo UI on the target Mac.
 
-## 7. Stop the demo
+## 8. Stop the demo
 
 To stop the deployed app:
 
