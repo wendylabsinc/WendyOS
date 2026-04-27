@@ -8,9 +8,9 @@ service WendyVideoService {
 }
 
 message VideoDevice {
-    uint32 id          = 1;
-    string name        = 2;
-    string path        = 3;
+    uint32 id          = 1; // numeric suffix of /dev/videoN
+    string name        = 2; // human-readable name from sysfs
+    string path        = 3; // e.g. "/dev/video0"
 }
 
 message ListVideoDevicesRequest {}
@@ -20,13 +20,13 @@ message ListVideoDevicesResponse {
 }
 
 message StreamVideoRequest {
-    uint32 device_id  = 1;
-    uint32 width      = 2;
-    uint32 height     = 3;
-    uint32 framerate  = 4;
+    uint32 device_id  = 1; // 0 = first available device
+    uint32 width      = 2; // pixels; 0 = device default
+    uint32 height     = 3; // pixels; 0 = device default
+    uint32 framerate  = 4; // fps; 0 = device default
 }
 
 message VideoFrame {
-    bytes  data         = 1;
-    uint64 timestamp_ns = 2;
+    bytes  data         = 1; // raw H.264 NAL units
+    uint64 timestamp_ns = 2; // wall-clock timestamp in nanoseconds
 }
