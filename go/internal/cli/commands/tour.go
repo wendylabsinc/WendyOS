@@ -26,41 +26,47 @@ import (
 type tourPhase int
 
 const (
-	phaseWelcome        tourPhase = iota
-	phaseLoadDevices              // spinner while fetching manifest
-	phaseDeviceList               // arrow-key device picker
-	phaseOSInstalled              // "Is WendyOS installed?" (supported devices)
-	phaseExistingDeviceScan       // spinner while scanning for already-running devices
-	phaseExistingDevicePicker     // pick a discovered device from the list
-	phaseEnterHostname            // ask hostname for "Other Linux" apt path
-	phaseAptInstall               // apt install instructions
-	phaseStorageGuide             // NVMe vs SD guide
-	phaseDriveWait                // refreshing drive table
-	phaseDeviceName               // text input for device name
-	phaseWifiDetect               // async: detect current SSID
-	phaseWifiQuestion             // "Use [SSID]?" or options menu
-	phaseWifiScanLoading          // spinner while scanning nearby networks
-	phaseWifiNetworkPicker        // pick from scanned networks
-	phaseWifiPassword             // enter password for detected/chosen SSID
-	phaseWifiManualSSID           // enter SSID manually
-	phaseReadyToInstall           // summary before install
-	phaseInstalling               // tea.ExecProcess running wendy os install
-	phaseBootInstructions         // how to boot the device
-	phaseDiscovering              // poll mDNS for target device name
-	phaseDeviceFound              // device came online
-	phaseCreateProject            // write Python project files
-	phaseRunProject               // tea.ExecProcess running wendy run
-	phaseAICheck                  // check claude/codex installation
-	phaseCloud                    // cloud ready message
-	phaseDone                     // quit
-	phaseError                    // error with restart hint
+	phaseWelcome              tourPhase = iota
+	phaseLoadDevices                    // spinner while fetching manifest
+	phaseDeviceList                     // arrow-key device picker
+	phaseOSInstalled                    // "Is WendyOS installed?" (supported devices)
+	phaseExistingDeviceScan             // spinner while scanning for already-running devices
+	phaseExistingDevicePicker           // pick a discovered device from the list
+	phaseEnterHostname                  // ask hostname for "Other Linux" apt path
+	phaseAptInstall                     // apt install instructions
+	phaseStorageGuide                   // NVMe vs SD guide
+	phaseDriveWait                      // refreshing drive table
+	phaseDeviceName                     // text input for device name
+	phaseWifiDetect                     // async: detect current SSID
+	phaseWifiQuestion                   // "Use [SSID]?" or options menu
+	phaseWifiScanLoading                // spinner while scanning nearby networks
+	phaseWifiNetworkPicker              // pick from scanned networks
+	phaseWifiPassword                   // enter password for detected/chosen SSID
+	phaseWifiManualSSID                 // enter SSID manually
+	phaseReadyToInstall                 // summary before install
+	phaseInstalling                     // tea.ExecProcess running wendy os install
+	phaseBootInstructions               // how to boot the device
+	phaseDiscovering                    // poll mDNS for target device name
+	phaseDeviceFound                    // device came online
+	phaseCreateProject                  // write Python project files
+	phaseRunProject                     // tea.ExecProcess running wendy run
+	phaseAICheck                        // check claude/codex installation
+	phaseCloud                          // cloud ready message
+	phaseDone                           // quit
+	phaseError                          // error with restart hint
 )
 
 // ─── messages ────────────────────────────────────────────────────────────────
 
 type (
-	tourDevicesLoadedMsg  struct{ devices []deviceInfo; err error }
-	tourLANScanDoneMsg    struct{ devices []models.LANDevice; err error }
+	tourDevicesLoadedMsg struct {
+		devices []deviceInfo
+		err     error
+	}
+	tourLANScanDoneMsg struct {
+		devices []models.LANDevice
+		err     error
+	}
 	tourWifiDetectedMsg   struct{ ssid, password string }
 	tourWifiScanDoneMsg   struct{ networks []localWifiNetwork }
 	tourDriveRescanMsg    struct{}
@@ -173,7 +179,7 @@ type tourWizardModel struct {
 	detectedPass string
 	wifiSSID     string
 	wifiPass     string
-	wifiCursor   int              // options menu cursor
+	wifiCursor   int                // options menu cursor
 	scanNetworks []localWifiNetwork // results from scanLocalWifiNetworks
 	scanCursor   int
 
@@ -775,10 +781,10 @@ func (m tourWizardModel) viewWelcome(w int) string {
 	sb.WriteString(wizTitleStyle.Render("Welcome to Wendy") + "\n")
 	sb.WriteString(wizSubStyle.Render("Let's get you set up from scratch — takes about 5 minutes.") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
-		"This wizard will:\n" +
-			"  1. Flash WendyOS onto your device\n" +
-			"  2. Boot it and connect over the network\n" +
-			"  3. Deploy a sample Python app\n\n" +
+		"This wizard will:\n"+
+			"  1. Flash WendyOS onto your device\n"+
+			"  2. Boot it and connect over the network\n"+
+			"  3. Deploy a sample Python app\n\n"+
 			"If anything goes wrong you can restart at any time with:\n") + "\n")
 	sb.WriteString("  " + wizCodeStyle.Render("wendy tour") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Press Enter to begin"))
@@ -1392,9 +1398,9 @@ func (m *tourWizardModel) createPythonProject() error {
 	}
 
 	files := map[string]string{
-		"wendy.json":   fmt.Sprintf(tourWendyJSONTemplate, appID),
-		"app.py":       tourAppPy,
-		"Dockerfile":   tourDockerfile,
+		"wendy.json":       fmt.Sprintf(tourWendyJSONTemplate, appID),
+		"app.py":           tourAppPy,
+		"Dockerfile":       tourDockerfile,
 		"requirements.txt": tourRequirements,
 	}
 	for name, content := range files {
