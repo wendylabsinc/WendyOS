@@ -23,11 +23,6 @@ on:
         required: false
         default: ""
 
-# Required repo configuration (see docs/build-cache.md):
-#   secret  AWS_BUILD_CACHE_ROLE_ARN     IAM role with rw access to the cache bucket, trusts GitHub OIDC
-#   var     WENDYOS_BUILD_CACHE_BUCKET   S3 bucket name for sstate / downloads / hashserv
-#   var     WENDYOS_BUILD_CACHE_REGION   AWS region of the bucket (e.g. us-east-1)
-
 jobs:
   # ---------------------------------------------------------------------------
   # detect-changes: compute the build matrix.
@@ -46,8 +41,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Empty inputs.version (push, PR, or dispatch with no version) falls
-          # back to GITHUB_REF — the natural ref for the triggering event.
           ref: ${{ inputs.version }}
 
       - id: set
@@ -143,10 +136,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # build: per-device Yocto image build.
-  # Runner uses c7id.8xlarge (32 vCPU Sapphire Rapids, 64 GiB, 1.9 TB local
-  # NVMe) — Yocto is heavily I/O-bound and gp3 EBS caps out under do_rootfs.
-  # sstate-cache, downloads, and the per-device hashserv DB are primed from
-  # and saved back to S3 around the build.
+  # Runner uses c8id.8xlarge (32 vCPU,64 GiB, 1.9 TB local nvme so we don't 
+  # bump into EBS storage throughput caps.
   # ---------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.device }}
@@ -175,19 +166,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: wendyos
-          # workflow_dispatch with a 'version' input pins the build to that
-          # ref; otherwise falls back to the triggering event's ref.
           ref: ${{ inputs.version }}
 
       # ---------- Build cache: two-layer ----------
       # L1 (per-runner snapshot): runs-on/snapshot mounts an EBS volume at
       #     sstate-cache/ and downloads/ and snapshots it on workflow end.
-      #     Fast path — survives across runs on the same runner family
+      #     Fast path, survives across runs on the same runner family
       #     without copying anything.
       # L2 (S3 mirror):  shared across every matrix entry / runner family,
       #     and acts as the fallback when the snapshot misses (cold runner).
       # We deliberately snapshot ONLY sstate-cache/ and downloads/, never
-      # build/ — build/ contains mender per-run state that previously made
+      # build/, build/ contains mender per-run state that previously made
       # workspace-wide snapshots flaky. sstate is content-hashed so it is
       # always safe to reuse.
 
@@ -241,7 +230,7 @@ jobs:
 
       # Note: SSTATE_DIR / DL_DIR are pinned to ${TOPDIR}/../{sstate-cache,downloads}
       # by conf/template/include/local/common.inc, which matches the S3 sync paths
-      # below — no auto.conf override needed.
+      # below, no auto.conf override needed.
 
       - name: Fix workspace permissions for Docker
         run: chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
@@ -255,7 +244,7 @@ jobs:
       - name: Fix deploy directory permissions
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
 
-      # ---------- Build cache: save to S3 (always, even on failure) ----------
+      # ---------- Build cache: save to S3 ----------------------------------
       # L1 snapshots are saved automatically by runs-on/snapshot at workflow
       # end. L2 (S3) we push explicitly so other matrix entries / future
       # runners can prime from it.
