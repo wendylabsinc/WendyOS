@@ -322,6 +322,7 @@ func TestErrorClass_Mapping(t *testing.T) {
 		{"grpc_deadline_status", status.Error(codes.DeadlineExceeded, "ctx done"), "grpc_deadline"},
 		{"grpc_unimplemented_status", status.Error(codes.Unimplemented, "nope"), "grpc_unimplemented"},
 		{"grpc_internal", status.Error(codes.Internal, "boom"), "grpc_other"},
+		{"grpc_unknown_explicit", status.Error(codes.Unknown, "vague"), "grpc_other"},
 		{"non_grpc", errors.New("some plain failure"), "other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

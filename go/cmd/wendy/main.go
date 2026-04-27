@@ -94,7 +94,13 @@ func errorClass(err error) string {
 	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) {
 		return "user_cancelled"
 	}
-	if st, ok := status.FromError(err); ok && st.Code() != codes.OK && st.Code() != codes.Unknown {
+	// status.FromError returns ok=true only for real gRPC errors (those
+	// produced by the grpc package or implementing GRPCStatus()). For
+	// non-gRPC errors it returns ok=false with a synthesized Unknown code,
+	// which we don't want to claim as a gRPC failure. An explicit
+	// Unknown code from a real gRPC error, however, should still bucket
+	// under grpc_other.
+	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
 		switch st.Code() {
 		case codes.Canceled:
 			return "context_canceled"

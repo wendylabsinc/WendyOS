@@ -32,9 +32,9 @@ func Analytics() bool {
 	}
 }
 
-// CIEnvVars are env vars whose presence (with any non-empty value) indicates
-// the process is running inside a CI system. Exported so tests in other
-// packages can clear them without redefining the list.
+// CIEnvVars are env vars whose presence (with any non-empty, non-whitespace
+// value) indicates the process is running inside a CI system. Exported so
+// tests in other packages can clear them without redefining the list.
 var CIEnvVars = []string{
 	"CI",
 	"GITHUB_ACTIONS",

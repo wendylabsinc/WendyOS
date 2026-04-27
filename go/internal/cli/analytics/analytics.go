@@ -45,16 +45,20 @@ func SetTrackHookForTesting(fn func(event string, properties map[string]string))
 // CI environments are hard-disabled here regardless of WENDY_ANALYTICS or the
 // stored config — there is no opt-in escape hatch. Real product signal must
 // come from human users, not automated runs.
+//
+// Each disabled-bailout path goes through Disable() so any state from a
+// prior Init call (client, distinctID) is cleared. In production Init runs
+// once per process, but tests reuse the package-level state across cases.
 func Init(cfg *config.Config) (firstRun bool) {
 	// Hard kill switch for CI: don't even consider WENDY_ANALYTICS.
 	if env.IsCI() {
-		enabled = false
+		Disable()
 		return false
 	}
 
 	// Env var overrides everything else.
 	if !env.Analytics() {
-		enabled = false
+		Disable()
 		return false
 	}
 
@@ -67,13 +71,14 @@ func Init(cfg *config.Config) (firstRun bool) {
 	}
 
 	if !enabled {
+		Disable()
 		return firstRun
 	}
 
 	var err error
 	distinctID, err = loadOrCreateID()
 	if err != nil {
-		enabled = false
+		Disable()
 		return firstRun
 	}
 
@@ -82,7 +87,7 @@ func Init(cfg *config.Config) (firstRun bool) {
 		Logger:   posthog.StdLogger(log.New(io.Discard, "", 0), false),
 	})
 	if err != nil {
-		enabled = false
+		Disable()
 		return firstRun
 	}
 
