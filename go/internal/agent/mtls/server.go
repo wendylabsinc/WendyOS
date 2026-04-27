@@ -34,6 +34,9 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing chain PEM: %w", err)
 		}
+		if len(caCerts) == 0 {
+			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
+		}
 	}
 	caPool.AppendCertsFromPEM([]byte(certPEM))
 

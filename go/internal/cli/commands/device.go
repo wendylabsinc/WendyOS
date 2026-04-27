@@ -429,7 +429,14 @@ func newDeviceEnrollCmd() *cobra.Command {
 // calls StartProvisioning on the connected device agent. name is optional; the
 // user is prompted interactively when it is empty.
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string) error {
+	if len(auth.Certificates) == 0 {
+		return fmt.Errorf("selected auth entry has no certificates; re-run 'wendy auth login'")
+	}
+
 	if name == "" {
+		if !isInteractiveTerminal() {
+			return fmt.Errorf("device name is required; pass --name when not running interactively")
+		}
 		fmt.Print("Device name: ")
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
@@ -503,8 +510,9 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 }
 
 // pickAuthEntry returns the auth config entry to use for enrollment.
-// If cloudGRPC is specified it must match an existing entry; otherwise the
-// first entry is used. Returns an error when no auth entries exist.
+// If cloudGRPC is specified it must match an existing entry. When no cloudGRPC
+// is given and multiple sessions exist, an error is returned requiring the user
+// to specify --cloud-grpc explicitly.
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -513,15 +521,21 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if len(cfg.Auth) == 0 {
 		return nil, fmt.Errorf("not logged in; run 'wendy auth login' first")
 	}
-	if cloudGRPC == "" {
-		return &cfg.Auth[0], nil
-	}
-	for i := range cfg.Auth {
-		if cfg.Auth[i].CloudGRPC == cloudGRPC {
-			return &cfg.Auth[i], nil
+	if cloudGRPC != "" {
+		for i := range cfg.Auth {
+			if cfg.Auth[i].CloudGRPC == cloudGRPC {
+				return &cfg.Auth[i], nil
+			}
 		}
+		return nil, fmt.Errorf("no auth session for %s; run 'wendy auth login --cloud-grpc %s' first", cloudGRPC, cloudGRPC)
 	}
-	return nil, fmt.Errorf("no auth session for %s; run 'wendy auth login --cloud-grpc %s' first", cloudGRPC, cloudGRPC)
+	if len(cfg.Auth) > 1 {
+		return nil, fmt.Errorf("multiple auth sessions exist; pass --cloud-grpc to select one")
+	}
+	if len(cfg.Auth[0].Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
+	return &cfg.Auth[0], nil
 }
 
 // scanWiFiNetworks queries the agent for available WiFi networks.

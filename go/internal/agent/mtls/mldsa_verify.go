@@ -124,16 +124,35 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 			return fmt.Errorf("parsing client certificate: %w", err)
 		}
 
+		// Build an intermediates pool from the rest of the chain presented by the client.
+		intermediates := x509.NewCertPool()
+		for _, rawCert := range rawCerts[1:] {
+			if intermediate, parseErr := x509.ParseCertificate(rawCert); parseErr == nil {
+				intermediates.AddCert(intermediate)
+			}
+		}
+
 		// Try standard Go verification first (handles RSA/ECDSA chains).
 		opts := x509.VerifyOptions{
-			Roots:     caPool,
-			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			Roots:         caPool,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
-		if _, err := leaf.Verify(opts); err == nil {
+		stdErr := func() error { _, e := leaf.Verify(opts); return e }()
+		if stdErr == nil {
 			return nil
 		}
 
-		// Fall back to manual ML-DSA chain verification.
+		// Only fall back to ML-DSA verification when the leaf cert uses an ML-DSA
+		// signature algorithm; for all other failures return the standard error.
+		sigOID, oidErr := certSigAlgOID(leaf)
+		if oidErr != nil {
+			return stdErr
+		}
+		if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
+			return stdErr
+		}
+
 		return verifyMLDSAClientCert(leaf, caCerts)
 	}
 }
@@ -147,6 +166,21 @@ func verifyMLDSAClientCert(leaf *x509.Certificate, trustedCAs []*x509.Certificat
 		return fmt.Errorf("certificate not valid at current time (NotBefore=%v NotAfter=%v)", leaf.NotBefore, leaf.NotAfter)
 	}
 
+	// Mirror the standard verifier's EKU check: the cert must allow clientAuth
+	// (or be unrestricted, i.e. have no ExtKeyUsage set).
+	if len(leaf.ExtKeyUsage) > 0 {
+		hasClientAuth := false
+		for _, eku := range leaf.ExtKeyUsage {
+			if eku == x509.ExtKeyUsageClientAuth || eku == x509.ExtKeyUsageAny {
+				hasClientAuth = true
+				break
+			}
+		}
+		if !hasClientAuth {
+			return fmt.Errorf("certificate is not valid for client authentication")
+		}
+	}
+
 	for _, ca := range trustedCAs {
 		if !bytes.Equal(ca.RawSubject, leaf.RawIssuer) {
 			continue
@@ -156,6 +190,9 @@ func verifyMLDSAClientCert(leaf *x509.Certificate, trustedCAs []*x509.Certificat
 		}
 		if !ca.BasicConstraintsValid || !ca.IsCA {
 			return fmt.Errorf("certificate %q is not a CA", ca.Subject.CommonName)
+		}
+		if ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return fmt.Errorf("certificate %q is not permitted to sign certificates", ca.Subject.CommonName)
 		}
 		if err := verifyMLDSASignature(ca, leaf); err != nil {
 			return fmt.Errorf("invalid signature from CA %q: %w", ca.Subject.CommonName, err)
