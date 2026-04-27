@@ -1,36 +1,17 @@
 [Unit]
-Description=WendyOS Agent
-Documentation=https://github.com/wendylabsinc/wendy-agent
-After=network.target gadget-setup.service
-Wants=network.target
+Description=Wendy Agent
+After=network-online.target dbus.service containerd.service
+Wants=network-online.target
+Requires=containerd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/wendy-agent
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=wendy-agent
-
-# Security settings
-# NoNewPrivileges=true
-# PrivateTmp=true
-# ProtectHome=true
-# ProtectSystem=strict
-# ReadWritePaths=/var/lib/wendy-agent /var/log /etc/wendy-agent /run
-
-# Runtime directories
-RuntimeDirectory=wendy-agent
-RuntimeDirectoryMode=0755
-
-# Resource limits
-LimitNOFILE=65536
-LimitNPROC=4096
-
-# Environment
 EnvironmentFile=-/etc/default/wendy-agent
-EnvironmentFile=-/etc/default/wendyos-cuda
+WorkingDirectory=/var/lib/wendy-agent
+ExecStart=/usr/bin/wendy-agent
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

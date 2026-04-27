@@ -1,45 +1,43 @@
 [Unit]
 Description=WendyOS Development Container Registry
-Documentation=https://github.com/mihai-chiorean/containerd-registry
-After=containerd.service
+Documentation=https://github.com/wendylabsinc/containerd-registry
+After=containerd.service network-online.target wendyos-dev-registry-import.service
 Requires=containerd.service
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 Environment=REGISTRY_NAMESPACE=default
 Environment=REGISTRY_NAME=wendyos-dev-registry
-Environment=REGISTRY_IMAGE=wendyos/containerd-registry:v1.0.7
+Environment=REGISTRY_IMAGE=wendyos/containerd-registry:v1.2.0
 Environment=LISTEN_ADDRESS=0.0.0.0:5000
 
 # Pre-flight checks: Verify image exists, import if missing (self-healing)
 ExecStartPre=/bin/sh -c '\
   if ! /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images ls | /bin/grep -q ${REGISTRY_IMAGE}; then \
     echo "Registry image not found, importing from archive..."; \
-    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry-arm64.tar; \
-    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images tag wendyos/containerd-registry:v1.0.7 wendyos/containerd-registry:latest || true; \
+    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry.tar; \
+    /usr/bin/ctr -n ${REGISTRY_NAMESPACE} images tag wendyos/containerd-registry:v1.2.0 wendyos/containerd-registry:latest || true; \
     echo "Registry image imported successfully"; \
   fi'
 # Cleanup any existing container
-ExecStartPre=-/usr/bin/nerdctl rm -f ${REGISTRY_NAME}
+ExecStartPre=-/bin/sh -c '/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks kill ${REGISTRY_NAME} 2>/dev/null; /usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks delete ${REGISTRY_NAME} 2>/dev/null; /usr/bin/ctr -n ${REGISTRY_NAMESPACE} containers delete ${REGISTRY_NAME} 2>/dev/null; true'
 
-# Start the registry container with nerdctl for journald logging
-ExecStart=/usr/bin/nerdctl run -d \
-    --name=${REGISTRY_NAME} \
-    --namespace=${REGISTRY_NAMESPACE} \
-    --network=host \
-    --mount type=bind,src=/run/containerd/containerd.sock,dst=/run/containerd/containerd.sock \
+# Start the registry container
+ExecStart=/usr/bin/ctr -n ${REGISTRY_NAMESPACE} run \
+    --detach \
+    --net-host \
+    --mount type=bind,src=/run/containerd/containerd.sock,dst=/run/containerd/containerd.sock,options=rbind:rw \
     --env LISTEN_ADDRESS=${LISTEN_ADDRESS} \
     --env CONTAINERD_NAMESPACE=${REGISTRY_NAMESPACE} \
     --env LOG_FORMAT=json \
-    --log-driver=journald \
-    --log-opt=tag=${REGISTRY_NAME} \
-    --restart=no \
-    ${REGISTRY_IMAGE}
+    ${REGISTRY_IMAGE} \
+    ${REGISTRY_NAME}
 
 # Graceful shutdown
-ExecStop=/usr/bin/nerdctl stop -t 30 ${REGISTRY_NAME}
-ExecStopPost=-/usr/bin/nerdctl rm -f ${REGISTRY_NAME}
+ExecStop=/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks kill ${REGISTRY_NAME}
+ExecStopPost=-/bin/sh -c '/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks delete ${REGISTRY_NAME} 2>/dev/null; /usr/bin/ctr -n ${REGISTRY_NAMESPACE} containers delete ${REGISTRY_NAME} 2>/dev/null; true'
 
 # No automatic restart for oneshot services - handled by wendy-agent if needed
 TimeoutStartSec=60s
@@ -55,5 +53,4 @@ NoNewPrivileges=true
 
 [Install]
 # Disabled by default - started on-demand by wendy-agent
-# To enable auto-start on boot: systemctl enable wendyos-dev-registry
 WantedBy=multi-user.target
