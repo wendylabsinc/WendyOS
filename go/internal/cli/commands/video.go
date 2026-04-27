@@ -133,22 +133,46 @@ func pipeVideoToStdout(stream interface {
 	}
 }
 
-// playVideoWithGStreamer spawns gst-launch-1.0 and feeds it the H.264 stream via stdin.
+// playVideoWithGStreamer spawns gst-launch-1.0 and feeds it the video stream via stdin.
+// It peeks the first frame to determine the codec, then starts the matching decoder pipeline.
 func playVideoWithGStreamer(ctx context.Context, stream interface {
 	Recv() (*agentpb.VideoFrame, error)
 }) error {
 	gstPath, err := exec.LookPath("gst-launch-1.0")
 	if err != nil {
-		return fmt.Errorf("gst-launch-1.0 not found; install GStreamer or use --stdout to pipe raw H.264")
+		return fmt.Errorf("gst-launch-1.0 not found; install GStreamer or use --stdout to pipe raw video")
 	}
 
-	gst := exec.CommandContext(ctx, gstPath,
-		"fdsrc", "fd=0",
-		"!", "h264parse",
-		"!", "avdec_h264",
-		"!", "queue", "max-size-buffers=1", "leaky=downstream",
-		"!", "autovideosink", "sync=false",
-	)
+	// Peek first frame to learn the codec.
+	first, err := stream.Recv()
+	if err == io.EOF {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("receiving video: %w", err)
+	}
+
+	var gstArgs []string
+	switch first.GetCodec() {
+	case agentpb.VideoCodec_VIDEO_CODEC_VP8:
+		gstArgs = []string{
+			"fdsrc", "fd=0",
+			"!", "ivfparse",
+			"!", "vp8dec",
+			"!", "queue", "max-size-buffers=1", "leaky=downstream",
+			"!", "autovideosink", "sync=false",
+		}
+	default: // H264
+		gstArgs = []string{
+			"fdsrc", "fd=0",
+			"!", "h264parse",
+			"!", "avdec_h264",
+			"!", "queue", "max-size-buffers=1", "leaky=downstream",
+			"!", "autovideosink", "sync=false",
+		}
+	}
+
+	gst := exec.CommandContext(ctx, gstPath, gstArgs...)
 	gst.Stderr = os.Stderr
 
 	stdin, err := gst.StdinPipe()
@@ -167,6 +191,11 @@ func playVideoWithGStreamer(ctx context.Context, stream interface {
 
 	recvErr := make(chan error, 1)
 	go func() {
+		// Write the already-received first frame before entering the loop.
+		if _, writeErr := stdin.Write(first.GetData()); writeErr != nil {
+			recvErr <- fmt.Errorf("writing to GStreamer: %w", writeErr)
+			return
+		}
 		for {
 			frame, err := stream.Recv()
 			if err != nil {

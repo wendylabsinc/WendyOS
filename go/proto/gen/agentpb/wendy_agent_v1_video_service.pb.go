@@ -21,11 +21,57 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type VideoCodec int32
+
+const (
+	VideoCodec_VIDEO_CODEC_H264 VideoCodec = 0 // raw H.264 annexb NAL units (default)
+	VideoCodec_VIDEO_CODEC_VP8  VideoCodec = 1 // VP8 inside an IVF container
+)
+
+// Enum value maps for VideoCodec.
+var (
+	VideoCodec_name = map[int32]string{
+		0: "VIDEO_CODEC_H264",
+		1: "VIDEO_CODEC_VP8",
+	}
+	VideoCodec_value = map[string]int32{
+		"VIDEO_CODEC_H264": 0,
+		"VIDEO_CODEC_VP8":  1,
+	}
+)
+
+func (x VideoCodec) Enum() *VideoCodec {
+	p := new(VideoCodec)
+	*p = x
+	return p
+}
+
+func (x VideoCodec) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (VideoCodec) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_enumTypes[0].Descriptor()
+}
+
+func (VideoCodec) Type() protoreflect.EnumType {
+	return &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_enumTypes[0]
+}
+
+func (x VideoCodec) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use VideoCodec.Descriptor instead.
+func (VideoCodec) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{0}
+}
+
 type VideoDevice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`    // numeric suffix of /dev/videoN
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // human-readable name from sysfs
+	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"` // e.g. "/dev/video0"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -163,10 +209,10 @@ func (x *ListVideoDevicesResponse) GetDevices() []*VideoDevice {
 
 type StreamVideoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`
-	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
-	Framerate     uint32                 `protobuf:"varint,4,opt,name=framerate,proto3" json:"framerate,omitempty"`
+	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"` // 0 = first available device
+	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`                       // pixels; 0 = device default
+	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`                     // pixels; 0 = device default
+	Framerate     uint32                 `protobuf:"varint,4,opt,name=framerate,proto3" json:"framerate,omitempty"`               // fps; 0 = device default
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -231,8 +277,9 @@ func (x *StreamVideoRequest) GetFramerate() uint32 {
 
 type VideoFrame struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	TimestampNs   uint64                 `protobuf:"varint,2,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`                                            // encoded video data; format described by codec
+	TimestampNs   uint64                 `protobuf:"varint,2,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`          // wall-clock timestamp in nanoseconds
+	Codec         VideoCodec             `protobuf:"varint,3,opt,name=codec,proto3,enum=wendy.agent.services.v1.VideoCodec" json:"codec,omitempty"` // codec used; default 0 = H264
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -281,6 +328,13 @@ func (x *VideoFrame) GetTimestampNs() uint64 {
 	return 0
 }
 
+func (x *VideoFrame) GetCodec() VideoCodec {
+	if x != nil {
+		return x.Codec
+	}
+	return VideoCodec_VIDEO_CODEC_H264
+}
+
 var File_wendy_agent_services_v1_wendy_agent_v1_video_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = "" +
@@ -297,11 +351,16 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x1c\n" +
-	"\tframerate\x18\x04 \x01(\rR\tframerate\"C\n" +
+	"\tframerate\x18\x04 \x01(\rR\tframerate\"~\n" +
 	"\n" +
 	"VideoFrame\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12!\n" +
-	"\ftimestamp_ns\x18\x02 \x01(\x04R\vtimestampNs2\xef\x01\n" +
+	"\ftimestamp_ns\x18\x02 \x01(\x04R\vtimestampNs\x129\n" +
+	"\x05codec\x18\x03 \x01(\x0e2#.wendy.agent.services.v1.VideoCodecR\x05codec*7\n" +
+	"\n" +
+	"VideoCodec\x12\x14\n" +
+	"\x10VIDEO_CODEC_H264\x10\x00\x12\x13\n" +
+	"\x0fVIDEO_CODEC_VP8\x10\x012\xef\x01\n" +
 	"\x11WendyVideoService\x12w\n" +
 	"\x10ListVideoDevices\x120.wendy.agent.services.v1.ListVideoDevicesRequest\x1a1.wendy.agent.services.v1.ListVideoDevicesResponse\x12a\n" +
 	"\vStreamVideo\x12+.wendy.agent.services.v1.StreamVideoRequest\x1a#.wendy.agent.services.v1.VideoFrame0\x01b\x06proto3"
@@ -318,25 +377,28 @@ func file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP
 	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescData
 }
 
+var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_goTypes = []any{
-	(*VideoDevice)(nil),              // 0: wendy.agent.services.v1.VideoDevice
-	(*ListVideoDevicesRequest)(nil),  // 1: wendy.agent.services.v1.ListVideoDevicesRequest
-	(*ListVideoDevicesResponse)(nil), // 2: wendy.agent.services.v1.ListVideoDevicesResponse
-	(*StreamVideoRequest)(nil),       // 3: wendy.agent.services.v1.StreamVideoRequest
-	(*VideoFrame)(nil),               // 4: wendy.agent.services.v1.VideoFrame
+	(VideoCodec)(0),                  // 0: wendy.agent.services.v1.VideoCodec
+	(*VideoDevice)(nil),              // 1: wendy.agent.services.v1.VideoDevice
+	(*ListVideoDevicesRequest)(nil),  // 2: wendy.agent.services.v1.ListVideoDevicesRequest
+	(*ListVideoDevicesResponse)(nil), // 3: wendy.agent.services.v1.ListVideoDevicesResponse
+	(*StreamVideoRequest)(nil),       // 4: wendy.agent.services.v1.StreamVideoRequest
+	(*VideoFrame)(nil),               // 5: wendy.agent.services.v1.VideoFrame
 }
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_depIdxs = []int32{
-	0, // 0: wendy.agent.services.v1.ListVideoDevicesResponse.devices:type_name -> wendy.agent.services.v1.VideoDevice
-	1, // 1: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:input_type -> wendy.agent.services.v1.ListVideoDevicesRequest
-	3, // 2: wendy.agent.services.v1.WendyVideoService.StreamVideo:input_type -> wendy.agent.services.v1.StreamVideoRequest
-	2, // 3: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:output_type -> wendy.agent.services.v1.ListVideoDevicesResponse
-	4, // 4: wendy.agent.services.v1.WendyVideoService.StreamVideo:output_type -> wendy.agent.services.v1.VideoFrame
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: wendy.agent.services.v1.ListVideoDevicesResponse.devices:type_name -> wendy.agent.services.v1.VideoDevice
+	0, // 1: wendy.agent.services.v1.VideoFrame.codec:type_name -> wendy.agent.services.v1.VideoCodec
+	2, // 2: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:input_type -> wendy.agent.services.v1.ListVideoDevicesRequest
+	4, // 3: wendy.agent.services.v1.WendyVideoService.StreamVideo:input_type -> wendy.agent.services.v1.StreamVideoRequest
+	3, // 4: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:output_type -> wendy.agent.services.v1.ListVideoDevicesResponse
+	5, // 5: wendy.agent.services.v1.WendyVideoService.StreamVideo:output_type -> wendy.agent.services.v1.VideoFrame
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_init() }
@@ -349,13 +411,14 @@ func file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc), len(file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_goTypes,
 		DependencyIndexes: file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_depIdxs,
+		EnumInfos:         file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_enumTypes,
 		MessageInfos:      file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes,
 	}.Build()
 	File_wendy_agent_services_v1_wendy_agent_v1_video_service_proto = out.File

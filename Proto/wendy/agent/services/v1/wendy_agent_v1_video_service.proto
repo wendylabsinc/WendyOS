@@ -26,7 +26,13 @@ message StreamVideoRequest {
     uint32 framerate  = 4; // fps; 0 = device default
 }
 
+enum VideoCodec {
+    VIDEO_CODEC_H264 = 0; // raw H.264 annexb NAL units (default)
+    VIDEO_CODEC_VP8  = 1; // VP8 inside an IVF container
+}
+
 message VideoFrame {
-    bytes  data         = 1; // raw H.264 NAL units
-    uint64 timestamp_ns = 2; // wall-clock timestamp in nanoseconds
+    bytes      data         = 1; // encoded video data; format described by codec
+    uint64     timestamp_ns = 2; // wall-clock timestamp in nanoseconds
+    VideoCodec codec        = 3; // codec used; default 0 = H264
 }

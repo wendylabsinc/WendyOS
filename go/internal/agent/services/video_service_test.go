@@ -167,6 +167,18 @@ func TestBuildGStreamerArgs_V4L2HardwareEncoder(t *testing.T) {
 	}
 }
 
+func TestBuildGStreamerArgs_VP8Encoder(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "vp8enc")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "vp8enc") || !strings.Contains(joined, "ivfmux") {
+		t.Errorf("expected vp8enc+ivfmux pipeline segment: %v", args)
+	}
+	if strings.Contains(joined, "h264") {
+		t.Errorf("VP8 pipeline should not mention h264: %v", args)
+	}
+}
+
 func TestStreamGStreamer_MissingGStreamer(t *testing.T) {
 	t.Setenv("PATH", "") // ensure gst-launch-1.0 is not found regardless of host installation
 	svc := NewVideoService(zap.NewNop())

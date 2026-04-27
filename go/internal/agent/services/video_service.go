@@ -287,19 +287,24 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 }
 
 // streamGStreamer spawns gst-launch-1.0 on the device to encode via the best available
-// H.264 encoder and pipes the resulting stream back as VideoFrame chunks.
+// encoder and pipes the resulting stream back as VideoFrame chunks.
 func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerStreamingServer[agentpb.VideoFrame], path string, req *agentpb.StreamVideoRequest) (runErr error) {
 	gstPath, err := exec.LookPath("gst-launch-1.0")
 	if err != nil {
 		return status.Errorf(codes.FailedPrecondition, "gst-launch-1.0 not found; install GStreamer on the device")
 	}
+	inspectPath, err := exec.LookPath("gst-inspect-1.0")
+	if err != nil {
+		return status.Errorf(codes.FailedPrecondition, "gst-inspect-1.0 not found; install GStreamer on the device")
+	}
 
-	encoder, err := findGStreamerH264Encoder()
+	enc, err := findGStreamerEncoder(inspectPath)
 	if err != nil {
 		return status.Errorf(codes.FailedPrecondition, "%v", err)
 	}
+	s.logger.Info("GStreamer encoder selected", zap.String("encoder", enc.element), zap.String("codec", enc.codec.String()))
 
-	args := buildGStreamerArgs(gstPath, path, req, encoder)
+	args := buildGStreamerArgs(gstPath, path, req, enc.element)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
@@ -340,6 +345,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 			if sendErr := stream.Send(&agentpb.VideoFrame{
 				Data:        data,
 				TimestampNs: uint64(time.Now().UnixNano()),
+				Codec:       enc.codec,
 			}); sendErr != nil {
 				return sendErr
 			}
@@ -350,24 +356,65 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 	}
 }
 
-// findGStreamerH264Encoder probes available H.264 encoders via gst-inspect-1.0.
-// Prefers hardware (v4l2h264enc) over software (x264enc, openh264enc).
-// If gst-inspect-1.0 is unavailable, returns x264enc as a best-effort default.
-func findGStreamerH264Encoder() (string, error) {
-	inspectPath, err := exec.LookPath("gst-inspect-1.0")
-	if err != nil {
-		return "x264enc", nil
+// gstEncoderResult describes a found GStreamer encoder and the codec it produces.
+type gstEncoderResult struct {
+	element string
+	codec   agentpb.VideoCodec
+}
+
+// findGStreamerEncoder probes available encoders via gst-inspect-1.0.
+// Prefers hardware H.264 → software H.264 → VP8, returning the first available.
+func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
+	hasElem := func(name string) bool {
+		return exec.Command(inspectPath, name).Run() == nil
 	}
-	for _, enc := range []string{"v4l2h264enc", "x264enc", "openh264enc"} {
-		if exec.Command(inspectPath, enc).Run() == nil {
-			return enc, nil
+
+	// H.264 encoders in preference order; only use if h264parse is also available
+	// (h264parse is required for stream framing and is in gst-plugins-bad).
+	h264ParseOK := hasElem("h264parse")
+	if h264ParseOK {
+		for _, enc := range []string{
+			"v4l2h264enc",  // V4L2 M2M hardware (gst-plugins-good)
+			"omxh264enc",   // OpenMAX hardware (Broadcom, Qualcomm)
+			"avenc_h264",   // libavcodec bridge (gst-libav)
+			"x264enc",      // software (gst-plugins-ugly)
+			"openh264enc",  // software (gst-plugins-bad)
+			"vaapih264enc", // Intel VA-API
+			"nvh264enc",    // NVIDIA
+			"msdkh264enc",  // Intel Media SDK
+		} {
+			if hasElem(enc) {
+				return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
+			}
+		}
+
+		// Dynamic discovery: scan all elements for any H.264 encoder.
+		if out, err := exec.Command(inspectPath).Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				parts := strings.SplitN(line, ":", 3)
+				if len(parts) < 2 {
+					continue
+				}
+				name := strings.TrimSpace(parts[1])
+				lower := strings.ToLower(name)
+				if strings.Contains(lower, "h264") && strings.Contains(lower, "enc") && hasElem(name) {
+					return gstEncoderResult{element: name, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
+				}
+			}
 		}
 	}
-	return "", fmt.Errorf("no H.264 GStreamer encoder found; install gst-plugins-good (v4l2h264enc) or gst-plugins-ugly (x264enc)")
+
+	// VP8 fallback: vp8enc + ivfmux are both in gst-plugins-good.
+	if hasElem("vp8enc") && hasElem("ivfmux") {
+		return gstEncoderResult{element: "vp8enc", codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, nil
+	}
+
+	return gstEncoderResult{}, fmt.Errorf(
+		"no supported GStreamer encoder found; install gst-plugins-good (vp8enc), gst-plugins-ugly (x264enc), or gst-libav (avenc_h264)",
+	)
 }
 
 // buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 encode.
-// The encoder string selects the pipeline variant (v4l2h264enc, x264enc, openh264enc).
 func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string) []string {
 	src := fmt.Sprintf("v4l2src device=%s", devicePath)
 
@@ -386,7 +433,6 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 	} else {
 		pipeline = fmt.Sprintf("%s ! %s ! fdsink fd=1", src, encoderSegment(encoder))
 	}
-	// Split into individual arguments for exec.CommandContext (no shell).
 	return append([]string{gstPath}, strings.Fields(pipeline)...)
 }
 
@@ -399,6 +445,8 @@ func encoderSegment(encoder string) string {
 		return "x264enc tune=zerolatency ! h264parse"
 	case "openh264enc":
 		return "openh264enc ! h264parse"
+	case "vp8enc":
+		return "videoconvert ! vp8enc deadline=1 ! ivfmux"
 	default:
 		return encoder + " ! h264parse"
 	}
