@@ -448,7 +448,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	fmt.Printf("\nWriting provisioning data to config partition...\n")
-	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName); err != nil {
+	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName, nil); err != nil {
 		fmt.Printf("Warning: could not write config partition: %v\n", err)
 		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
 	}
@@ -1020,7 +1020,7 @@ func resolveDeviceName(flagName string) (string, error) {
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
 // and writes it (along with zero or more WiFi credentials and an optional
 // device name) to the config partition on d.
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string) error {
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	release, err := fetchAgentRelease(false)
 	if err != nil {
 		return fmt.Errorf("fetching latest agent release: %w", err)
@@ -1045,7 +1045,7 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 		return fmt.Errorf("downloading agent binary: %w", err)
 	}
 
-	return writeConfigPartition(d, agentBinary, creds, deviceName)
+	return writeConfigPartition(d, agentBinary, creds, deviceName, provisioningJSON)
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.

@@ -125,43 +125,47 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	return json.Marshal(state)
 }
 
-// writeConfigFiles writes the agent binary and optional wendy.conf to
-// mountPoint. agentBinary is the raw binary content. Each credential in creds
-// becomes a `[wifi]` / `[wifi.N]` section; deviceName (if non-empty) is written
-// under `[device]`. wendy.conf is omitted entirely when both are empty.
-func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string) error {
+// writeConfigFiles writes the agent binary, optional wendy.conf, and optional
+// provisioning.json to mountPoint.
+func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	binPath := filepath.Join(mountPoint, "wendy-agent")
 	if err := os.WriteFile(binPath, agentBinary, 0o755); err != nil {
 		return fmt.Errorf("writing wendy-agent to config partition: %w", err)
 	}
 
-	if len(creds) == 0 && deviceName == "" {
-		return nil
-	}
+	if len(creds) > 0 || deviceName != "" {
+		for _, c := range creds {
+			if strings.ContainsAny(c.SSID, "\n\r") || strings.ContainsAny(c.Password, "\n\r") {
+				return fmt.Errorf("WiFi SSID and password must not contain newline characters")
+			}
+		}
+		if strings.ContainsAny(deviceName, "\n\r") {
+			return fmt.Errorf("device name must not contain newline characters")
+		}
 
-	for _, c := range creds {
-		if strings.ContainsAny(c.SSID, "\n\r") || strings.ContainsAny(c.Password, "\n\r") {
-			return fmt.Errorf("WiFi SSID and password must not contain newline characters")
+		var conf []byte
+		if len(creds) > 0 {
+			conf = wendyconf.Marshal(creds)
+		}
+		if deviceName != "" {
+			if len(conf) > 0 {
+				conf = append(conf, '\n')
+			}
+			conf = append(conf, []byte(fmt.Sprintf("[device]\nname = %s\n", deviceName))...)
+		}
+
+		confPath := filepath.Join(mountPoint, "wendy.conf")
+		if err := os.WriteFile(confPath, conf, 0o644); err != nil {
+			return fmt.Errorf("writing wendy.conf to config partition: %w", err)
 		}
 	}
-	if strings.ContainsAny(deviceName, "\n\r") {
-		return fmt.Errorf("device name must not contain newline characters")
-	}
 
-	var conf []byte
-	if len(creds) > 0 {
-		conf = wendyconf.Marshal(creds)
-	}
-	if deviceName != "" {
-		if len(conf) > 0 {
-			conf = append(conf, '\n')
+	if len(provisioningJSON) > 0 {
+		provPath := filepath.Join(mountPoint, "provisioning.json")
+		if err := os.WriteFile(provPath, provisioningJSON, 0o600); err != nil {
+			return fmt.Errorf("writing provisioning.json to config partition: %w", err)
 		}
-		conf = append(conf, []byte(fmt.Sprintf("[device]\nname = %s\n", deviceName))...)
 	}
 
-	confPath := filepath.Join(mountPoint, "wendy.conf")
-	if err := os.WriteFile(confPath, conf, 0o644); err != nil {
-		return fmt.Errorf("writing wendy.conf to config partition: %w", err)
-	}
 	return nil
 }
