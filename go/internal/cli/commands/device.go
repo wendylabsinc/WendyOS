@@ -63,8 +63,9 @@ func newDeviceVersionCmd() *cobra.Command {
 	var prerelease bool
 
 	cmd := &cobra.Command{
-		Use:   "version",
-		Short: "Get the agent version on the target device",
+		Use:     "version",
+		Aliases: []string{"info"},
+		Short:   "Show agent version, OS, architecture, GPU, and hardware info for the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
