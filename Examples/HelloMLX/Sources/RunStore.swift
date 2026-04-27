@@ -13,8 +13,8 @@ struct PersistedRun: Codable, Sendable {
     let response: String
     let cameraName: String?
     let modelName: String?
-    let interval: Int
-    let fps: Int
+    let interval: Double
+    let fps: Double
     let resolution: Int?
     let frameCount: Int
     let frames: [PersistedFrame]
@@ -73,8 +73,8 @@ struct RunStore {
         frames: [FrameCapture],
         cameraName: String?,
         modelName: String?,
-        interval: Int,
-        fps: Int,
+        interval: Double,
+        fps: Double,
         resolution: Int
     ) throws -> PersistedRun {
         let id = RunID.make()

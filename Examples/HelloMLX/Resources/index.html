@@ -476,6 +476,11 @@
       return date.toLocaleString();
     }
 
+    function formatNumber(value) {
+      if (Number.isInteger(value)) return `${value}`;
+      return value.toFixed(3).replace(/\.0+$|0+$/g, '').replace(/\.$/, '');
+    }
+
     function formatSquareResolution(value) {
       return `${value}x${value}`;
     }
@@ -527,7 +532,7 @@
       elements.modelStatus.textContent = payload.model.name
         ? `${payload.model.status} · ${payload.model.name}`
         : payload.model.status;
-      elements.runConfig.textContent = `${payload.run.interval}s window · ${payload.run.fps} fps · ${formatSquareResolution(payload.run.resolution)}`;
+      elements.runConfig.textContent = `${formatNumber(payload.run.interval)}s window · ${formatNumber(payload.run.fps)} fps · ${formatSquareResolution(payload.run.resolution)}`;
       elements.latestRun.textContent = payload.run.latestRunID
         ? `${payload.run.latestRunID} · ${payload.run.isRunningInference ? 'running' : 'idle'}`
         : (payload.run.isRunningInference ? 'Running…' : 'None yet');
@@ -579,7 +584,7 @@
       card.dataset.runId = run.id;
       fragment.querySelector('.run-time').textContent = formatDate(run.timestamp);
       const resolution = run.resolution ?? 256;
-      fragment.querySelector('.run-frame-count').textContent = `${run.frameCount} frame${run.frameCount === 1 ? '' : 's'} · ${run.interval}s · ${run.fps} fps · ${formatSquareResolution(resolution)}`;
+      fragment.querySelector('.run-frame-count').textContent = `${run.frameCount} frame${run.frameCount === 1 ? '' : 's'} · ${formatNumber(run.interval)}s · ${formatNumber(run.fps)} fps · ${formatSquareResolution(resolution)}`;
       fragment.querySelector('.run-prompt').textContent = run.prompt;
       fragment.querySelector('.run-response').textContent = run.response;
 

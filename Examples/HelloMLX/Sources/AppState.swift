@@ -36,8 +36,8 @@ struct PromptInfo: Codable {
 }
 
 struct RunInfo: Codable {
-    let interval: Int
-    let fps: Int
+    let interval: Double
+    let fps: Double
     let resolution: Int
     let isRunningInference: Bool
     let latestRunID: String?
@@ -65,8 +65,8 @@ struct PromptUpdateResponse: Codable {
 actor AppState {
     private let startedAt = Date()
     private let baseURL: String
-    private let interval: Int
-    private let fps: Int
+    private let interval: Double
+    private let fps: Double
     private let resolution: Int
 
     private var cameraStatus: CameraStatus = .starting

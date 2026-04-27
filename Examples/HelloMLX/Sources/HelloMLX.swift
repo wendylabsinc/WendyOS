@@ -13,8 +13,8 @@ struct AppConfig: Encodable {
     var modelPath: String?
     var prompt: String
     var camera: String?
-    var interval: Int
-    var fps: Int
+    var interval: Double
+    var fps: Double
     var resolution: Int
     var port: Int
 }
@@ -49,10 +49,10 @@ struct CLIArguments: ParsableCommand {
     var prompt: String = ""
 
     @Option(name: .long, help: "Seconds of camera history to include in each inference pass.")
-    var interval: Int = 2
+    var interval: Double = 2
 
     @Option(name: .long, help: "Frames per second to sample into the buffer.")
-    var fps: Int = 1
+    var fps: Double = 1
 
     @Option(name: .long, help: "Square frame resolution. A value of Y produces YxY frames.")
     var resolution: Int = 512
@@ -279,7 +279,7 @@ final class Camera: NSObject {
     private func runInferenceLoop() async {
         guard let container = model else { return }
 
-        let interval = TimeInterval(config.interval)
+        let interval = config.interval
         print(
             "Sampling at \(config.fps) fps, evaluating last \(config.interval)s of frames at \(config.resolution)x\(config.resolution)."
         )
@@ -411,7 +411,7 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
 
         let now = Date()
-        let minGap = 1.0 / TimeInterval(config.fps)
+        let minGap = 1.0 / config.fps
 
         frameBufferLock.lock()
         let shouldSample = lastSampledAt == nil || now.timeIntervalSince(lastSampledAt!) >= minGap
