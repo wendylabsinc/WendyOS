@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
 // ─── phases ──────────────────────────────────────────────────────────────────
@@ -29,7 +30,9 @@ const (
 	phaseLoadDevices              // spinner while fetching manifest
 	phaseDeviceList               // arrow-key device picker
 	phaseOSInstalled              // "Is WendyOS installed?" (supported devices)
-	phaseEnterHostname            // ask hostname for "already installed" or "Other Linux"
+	phaseExistingDeviceScan       // spinner while scanning for already-running devices
+	phaseExistingDevicePicker     // pick a discovered device from the list
+	phaseEnterHostname            // ask hostname for "Other Linux" apt path
 	phaseAptInstall               // apt install instructions
 	phaseStorageGuide             // NVMe vs SD guide
 	phaseDriveWait                // refreshing drive table
@@ -57,6 +60,7 @@ const (
 
 type (
 	tourDevicesLoadedMsg  struct{ devices []deviceInfo; err error }
+	tourLANScanDoneMsg    struct{ devices []models.LANDevice; err error }
 	tourWifiDetectedMsg   struct{ ssid, password string }
 	tourWifiScanDoneMsg   struct{ networks []localWifiNetwork }
 	tourDriveRescanMsg    struct{}
@@ -160,6 +164,10 @@ type tourWizardModel struct {
 	input    textinput.Model
 	inputVal string
 
+	// existing-device scan (pre-installed path)
+	lanDevices []models.LANDevice
+	lanCursor  int
+
 	// WiFi
 	detectedSSID string
 	detectedPass string
@@ -238,6 +246,12 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 		}
 		m.devices = msg.devices
 		m.phase = phaseDeviceList
+		return m, nil
+
+	case tourLANScanDoneMsg:
+		m.lanDevices = msg.devices
+		m.lanCursor = 0
+		m.phase = phaseExistingDevicePicker
 		return m, nil
 
 	case tourWifiDetectedMsg:
@@ -360,14 +374,49 @@ func (m tourWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "enter", " ":
 			if m.wifiCursor == 0 {
-				// WendyOS already installed
+				// WendyOS already installed — scan the network
+				m.phase = phaseExistingDeviceScan
+				return m, scanLANDevicesCmd()
+			} else {
+				// Need to install
+				m.phase = phaseStorageGuide
+			}
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		}
+
+	case phaseExistingDeviceScan:
+		if key == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+	case phaseExistingDevicePicker:
+		switch key {
+		case "up", "k":
+			if m.lanCursor > 0 {
+				m.lanCursor--
+			}
+		case "down", "j":
+			if m.lanCursor < len(m.lanDevices) {
+				m.lanCursor++
+			}
+		case "r":
+			// re-scan
+			m.phase = phaseExistingDeviceScan
+			return m, scanLANDevicesCmd()
+		case "enter", " ":
+			if m.lanCursor < len(m.lanDevices) {
+				dev := m.lanDevices[m.lanCursor]
+				m.foundAddr = preferredLANAddress(dev)
+				m.foundName = dev.DisplayName
+				m.targetName = strings.TrimSuffix(dev.Hostname, ".local")
+				m.phase = phaseDeviceFound
+			} else {
+				// "Enter manually" option at bottom of list
 				m.phase = phaseEnterHostname
 				m.input.Placeholder = "e.g. my-pi or 192.168.1.100"
 				m.input.SetValue("")
 				m.input.Focus()
-			} else {
-				// Need to install
-				m.phase = phaseStorageGuide
 			}
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -666,6 +715,10 @@ func (m tourWizardModel) View() string {
 		body = m.viewDeviceList(inner)
 	case phaseOSInstalled:
 		body = m.viewOSInstalled(inner)
+	case phaseExistingDeviceScan:
+		body = m.viewExistingDeviceScan(inner)
+	case phaseExistingDevicePicker:
+		body = m.viewExistingDevicePicker(inner)
 	case phaseEnterHostname:
 		body = m.viewEnterHostname(inner)
 	case phaseAptInstall:
@@ -782,6 +835,50 @@ func (m tourWizardModel) viewOSInstalled(w int) string {
 		}
 	}
 	sb.WriteString("\n" + wizHintStyle.Render("↑/↓ navigate  ·  Enter select"))
+	return sb.String()
+}
+
+func (m tourWizardModel) viewExistingDeviceScan(w int) string {
+	return wizSubStyle.Render("Scanning the network for WendyOS devices…")
+}
+
+func (m tourWizardModel) viewExistingDevicePicker(w int) string {
+	var sb strings.Builder
+	sb.WriteString(wizTitleStyle.Render("Step 2 — Select your device") + "\n")
+	sb.WriteString(wizSubStyle.Render("Choose the device that already has WendyOS installed.") + "\n\n")
+
+	if len(m.lanDevices) == 0 {
+		sb.WriteString(wizNoticeStyle.Render("No WendyOS devices found on the network.") + "\n\n")
+		sb.WriteString(wizBodyStyle.Width(w).Render(
+			"Make sure your device is powered on and connected to the same network.") + "\n\n")
+	} else {
+		for i, dev := range m.lanDevices {
+			label := dev.DisplayName
+			if dev.AgentVersion != "" {
+				label += fmt.Sprintf("  v%s", dev.AgentVersion)
+			}
+			addr := preferredLANAddress(dev)
+			if addr != "" {
+				label += fmt.Sprintf("  (%s)", addr)
+			}
+			if i == m.lanCursor {
+				sb.WriteString(wizSelectedStyle.Render("▶ "+label) + "\n")
+			} else {
+				sb.WriteString(wizNormalStyle.Render("  "+label) + "\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// "Enter manually" option always at the bottom
+	manualLabel := "Enter hostname / IP manually"
+	if m.lanCursor == len(m.lanDevices) {
+		sb.WriteString(wizSelectedStyle.Render("▶ "+manualLabel) + "\n")
+	} else {
+		sb.WriteString(wizNormalStyle.Render("  "+manualLabel) + "\n")
+	}
+
+	sb.WriteString("\n" + wizHintStyle.Render("↑/↓ navigate  ·  Enter select  ·  r rescan  ·  q quit"))
 	return sb.String()
 }
 
@@ -1142,6 +1239,15 @@ func loadDevicesCmd() tea.Cmd {
 	return func() tea.Msg {
 		devices, err := getAvailableDevices()
 		return tourDevicesLoadedMsg{devices: devices, err: err}
+	}
+}
+
+func scanLANDevicesCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		devices, err := discovery.DiscoverLAN(ctx, 8*time.Second)
+		return tourLANScanDoneMsg{devices: devices, err: err}
 	}
 }
 
