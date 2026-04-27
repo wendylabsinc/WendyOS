@@ -362,6 +362,7 @@ func TestApplyPreProvisioning_Success(t *testing.T) {
 		t.Errorf("ca.pem mode = %o; want 0644", info.Mode().Perm())
 	}
 
+
 	if _, err := os.Stat(filepath.Join(configPath, ".provisioned")); err != nil {
 		t.Error(".provisioned marker not written")
 	}
