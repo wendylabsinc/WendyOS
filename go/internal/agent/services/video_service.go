@@ -111,9 +111,15 @@ func buildFFmpegArgs(path string, req *agentpb.StreamVideoRequest, hardware bool
 
 // StreamVideo streams H.264 frames from a V4L2 camera.
 // Tries the hardware encoder first; falls back to libx264 software encoding.
+// Note: the HW fallback only triggers when ffmpeg exits within 2 s with no frames
+// sent. Devices that fail after 2 s will not fall back to software encoding.
 func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.ServerStreamingServer[agentpb.VideoFrame]) error {
 	ctx := stream.Context()
 	path := fmt.Sprintf("/dev/video%d", req.GetDeviceId())
+
+	if _, err := os.Stat(path); err != nil {
+		return status.Errorf(codes.NotFound, "video device %s not found", path)
+	}
 
 	err := s.runFFmpeg(ctx, stream, buildFFmpegArgs(path, req, true), true)
 	if _, ok := err.(hwUnavailableError); ok {
