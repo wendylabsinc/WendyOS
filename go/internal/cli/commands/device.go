@@ -99,6 +99,9 @@ func newDeviceVersionCmd() *cobra.Command {
 					"cliVersion":      version.Version,
 					"hasGpu":          resp.GetHasGpu(),
 				}
+				if b := resp.GetBoard(); b != "" {
+					out["board"] = b
+				}
 				if v := resp.GetGpuVendor(); v != "" {
 					out["gpuVendor"] = v
 				}
@@ -125,6 +128,9 @@ func newDeviceVersionCmd() *cobra.Command {
 			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
 			if dt := resp.GetDeviceType(); dt != "" {
 				fmt.Printf("Device Type: %s\n", dt)
+			}
+			if b := resp.GetBoard(); b != "" {
+				fmt.Printf("Board: %s\n", b)
 			}
 			if resp.GetHasGpu() {
 				vendor := resp.GetGpuVendor()

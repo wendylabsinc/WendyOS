@@ -70,8 +70,13 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 
 	// Read hardware platform identifier if available.
 	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		v := strings.TrimSpace(string(data))
-		resp.DeviceType = &v
+		machine, board := parseDeviceType(string(data))
+		if machine != "" {
+			resp.DeviceType = &machine
+		}
+		if board != "" {
+			resp.Board = &board
+		}
 	}
 
 	// Detect GPU presence and details.
@@ -250,6 +255,30 @@ func detectFeatureset() []string {
 	}
 
 	return features
+}
+
+// parseDeviceType parses /etc/wendyos/device-type, which may be either a plain
+// string (legacy) or a KEY=VALUE file (new format with BOARD and MACHINE keys).
+// Returns (machine, board); either may be empty.
+func parseDeviceType(content string) (machine, board string) {
+	content = strings.TrimSpace(content)
+	if !strings.Contains(content, "=") {
+		return content, ""
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "MACHINE":
+			machine = strings.TrimSpace(v)
+		case "BOARD":
+			board = strings.TrimSpace(v)
+		}
+	}
+	return machine, board
 }
 
 // RunContainer is deprecated. Clients should use WendyContainerService.RunContainer
