@@ -197,6 +197,9 @@ jobs:
           path: ${{ github.workspace }}/sstate-cache
           volume_size: 100
 
+      - name: Make L1 EBS mount writable
+        run: sudo chmod -R a+rwX "$GITHUB_WORKSPACE/sstate-cache"
+
       - name: Configure AWS credentials for build cache
         uses: aws-actions/configure-aws-credentials@v4
         with:
