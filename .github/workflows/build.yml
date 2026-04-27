@@ -5,6 +5,23 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      device:
+        description: "Target device. 'all' builds every device."
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - rpi3
+          - rpi4
+          - rpi5
+          - jetson
+      version:
+        description: "Git ref (commit SHA, tag, or branch) to build. Empty = latest main."
+        type: string
+        required: false
+        default: ""
 
 # Required repo configuration (see docs/build-cache.md):
 #   secret  AWS_BUILD_CACHE_ROLE_ARN     IAM role with rw access to the cache bucket, trusts GitHub OIDC
@@ -29,12 +46,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Empty inputs.version (push, PR, or dispatch with no version) falls
+          # back to GITHUB_REF — the natural ref for the triggering event.
+          ref: ${{ inputs.version }}
 
       - id: set
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_DEVICE: ${{ inputs.device }}
         run: |
           set -euo pipefail
 
@@ -50,10 +71,29 @@ jobs:
             echo "devices=rpi3 rpi4 rpi5 jetson"      >> "$GITHUB_OUTPUT"
           }
 
-          # Non-PR triggers: always build everything.
+          emit_one() {
+            local dev="$1"
+            local entry
+            entry=$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")
+            if [[ -z "${entry}" ]]; then
+              echo "ERROR: Unknown device '${dev}'." >&2
+              exit 1
+            fi
+            echo "matrix={\"include\":[${entry}]}" >> "$GITHUB_OUTPUT"
+            echo "devices=${dev}"                  >> "$GITHUB_OUTPUT"
+          }
+
+          # Non-PR triggers: build everything by default. workflow_dispatch can
+          # narrow to a single device via the 'device' input ('' or 'all' = all).
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "Trigger=${EVENT_NAME}: building all devices."
-            emit_all
+            DEV="${INPUT_DEVICE:-all}"
+            if [[ -z "${DEV}" || "${DEV}" == "all" ]]; then
+              echo "Trigger=${EVENT_NAME} device=all: building all devices."
+              emit_all
+            else
+              echo "Trigger=${EVENT_NAME} device=${DEV}: building one device."
+              emit_one "${DEV}"
+            fi
             exit 0
           fi
 
@@ -135,6 +175,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: wendyos
+          # workflow_dispatch with a 'version' input pins the build to that
+          # ref; otherwise falls back to the triggering event's ref.
+          ref: ${{ inputs.version }}
 
       # ---------- Build cache: AWS auth + S3 prime ----------
       # TODO: Re-enable once the S3 bucket and IAM role described in
@@ -326,6 +369,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: wendyos
+          ref: ${{ inputs.version }}
 
       - name: Checkout publisher
         uses: actions/checkout@v4
