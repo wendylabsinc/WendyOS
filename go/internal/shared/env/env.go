@@ -32,6 +32,32 @@ func Analytics() bool {
 	}
 }
 
+// ciEnvVars are env vars whose presence (with any non-empty value) indicates
+// the process is running inside a CI system.
+var ciEnvVars = []string{
+	"CI",
+	"GITHUB_ACTIONS",
+	"GITLAB_CI",
+	"BUILDKITE",
+	"CIRCLECI",
+	"JENKINS_HOME",
+	"TF_BUILD",
+	"TEAMCITY_VERSION",
+}
+
+// IsCI reports whether the process is running inside a CI environment.
+// Wendy uses this as a hard analytics kill switch — CI runs are never useful
+// product signal and have historically inflated event volume by orders of
+// magnitude. There is no opt-in flag that re-enables analytics in CI.
+func IsCI() bool {
+	for _, key := range ciEnvVars {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func SystemdServiceName() string {
 	return stringOrDefault("WENDY_SYSTEMD_SERVICE_NAME", "edge-agent")
 }

@@ -26,13 +26,33 @@ var (
 	client     posthog.Client
 	enabled    bool
 	distinctID string
+
+	// trackHook is set by tests to intercept events before they would be
+	// enqueued to PostHog. It is never set in production code.
+	trackHook func(event string, properties map[string]string)
 )
+
+// SetTrackHookForTesting installs a hook that receives every Track call.
+// Pass nil to clear. Intended for tests only.
+func SetTrackHookForTesting(fn func(event string, properties map[string]string)) {
+	trackHook = fn
+}
 
 // Init initializes analytics. If disabled by env var, config, or missing API key,
 // tracking is a no-op. Returns true if this is the first run (config.Analytics
 // was nil) AND the env var does not override, so the caller can display a notice.
+//
+// CI environments are hard-disabled here regardless of WENDY_ANALYTICS or the
+// stored config — there is no opt-in escape hatch. Real product signal must
+// come from human users, not automated runs.
 func Init(cfg *config.Config) (firstRun bool) {
-	// Env var overrides everything
+	// Hard kill switch for CI: don't even consider WENDY_ANALYTICS.
+	if env.IsCI() {
+		enabled = false
+		return false
+	}
+
+	// Env var overrides everything else.
 	if !env.Analytics() {
 		enabled = false
 		return false
@@ -70,7 +90,17 @@ func Init(cfg *config.Config) (firstRun bool) {
 }
 
 // Track sends an analytics event. No-op if analytics is disabled.
+//
+// Privacy invariant: every value in `properties` must be anonymous. Allowed:
+// canonical command paths (e.g. "wendy device wifi connect"), the top-level
+// command token, success booleans, bounded error-class enums, build flags
+// (cli_version, is_dev_build), and platform metadata (os, arch). Forbidden:
+// flag values, positional arguments, file paths, hostnames, error message
+// text, or anything else derived from user input.
 func Track(event string, properties map[string]string) {
+	if trackHook != nil {
+		trackHook(event, properties)
+	}
 	if !enabled || client == nil {
 		return
 	}
