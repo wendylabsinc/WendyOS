@@ -11,11 +11,11 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/internal/agent/network"
+	"github.com/wendylabsinc/wendy/internal/agent/services"
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
@@ -485,9 +485,9 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 		return
 	}
 
-	if err := os.MkdirAll(configPath, 0o700); err != nil {
-		logger.Error("Failed to create config directory for pre-provisioning",
-			zap.String("path", configPath), zap.Error(err))
+	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
+		logger.Error("Failed to write PEM files from config partition",
+			zap.String("configPath", configPath), zap.Error(err))
 		return
 	}
 
@@ -495,29 +495,6 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 		logger.Error("Failed to write provisioning.json from config partition", zap.Error(err))
 		return
 	}
-
-	pemFiles := []struct {
-		name string
-		data string
-		mode os.FileMode
-	}{
-		{"device-key.pem", state.KeyPEM, 0o600},
-		{"device.pem", state.CertPEM, 0o644},
-		{"ca.pem", state.ChainPEM, 0o644},
-	}
-	for _, f := range pemFiles {
-		if f.data == "" {
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(configPath, f.name), []byte(f.data), f.mode); err != nil {
-			logger.Error("Failed to write PEM file from config partition",
-				zap.String("name", f.name), zap.Error(err))
-			return
-		}
-	}
-
-	_ = os.WriteFile(filepath.Join(configPath, ".provisioned"),
-		[]byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 
 	if err := os.Remove(srcPath); err != nil {
 		logger.Warn("Failed to remove pre-provisioning state from config partition",

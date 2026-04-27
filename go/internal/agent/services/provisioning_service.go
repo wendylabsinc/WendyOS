@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -276,34 +275,7 @@ func (s *ProvisioningService) loadOrGenerateKey() (string, error) {
 // writePEMFiles writes individual PEM files for the container registry and
 // other services that read certs from the filesystem.
 func (s *ProvisioningService) writePEMFiles(keyPEM, certPEM, chainPEM string) error {
-	if err := os.MkdirAll(s.configPath, 0o700); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-
-	files := map[string]struct {
-		data string
-		mode os.FileMode
-	}{
-		"device-key.pem": {data: keyPEM, mode: 0o600},
-		"device.pem":     {data: certPEM, mode: 0o644},
-		"ca.pem":         {data: chainPEM, mode: 0o644},
-	}
-
-	for name, f := range files {
-		if f.data == "" {
-			continue
-		}
-		path := filepath.Join(s.configPath, name)
-		if err := os.WriteFile(path, []byte(f.data), f.mode); err != nil {
-			return fmt.Errorf("writing %s: %w", name, err)
-		}
-	}
-
-	// Write provisioned marker.
-	markerPath := filepath.Join(s.configPath, ".provisioned")
-	_ = os.WriteFile(markerPath, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
-
-	return nil
+	return WritePEMFiles(s.configPath, keyPEM, certPEM, chainPEM)
 }
 
 // saveState writes provisioning state to disk.
