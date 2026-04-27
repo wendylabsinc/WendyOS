@@ -573,7 +573,7 @@ type GetAgentVersionResponse struct {
 	CpuArchitecture string   `protobuf:"bytes,4,opt,name=cpu_architecture,json=cpuArchitecture,proto3" json:"cpu_architecture,omitempty"`
 	PublicKey       *string  `protobuf:"bytes,5,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
 	Featureset      []string `protobuf:"bytes,6,rep,name=featureset,proto3" json:"featureset,omitempty"`
-	// MACHINE value from /etc/wendyos/device-type (only present on WendyOS)
+	// MACHINE/BOARD value from /etc/wendyos/device-type (only present on WendyOS)
 	DeviceType *string `protobuf:"bytes,7,opt,name=device_type,json=deviceType,proto3,oneof" json:"device_type,omitempty"`
 	// Whether the device has a GPU.
 	HasGpu *bool `protobuf:"varint,8,opt,name=has_gpu,json=hasGpu,proto3,oneof" json:"has_gpu,omitempty"`
@@ -583,8 +583,8 @@ type GetAgentVersionResponse struct {
 	JetpackVersion *string `protobuf:"bytes,10,opt,name=jetpack_version,json=jetpackVersion,proto3,oneof" json:"jetpack_version,omitempty"`
 	// CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
 	CudaVersion *string `protobuf:"bytes,11,opt,name=cuda_version,json=cudaVersion,proto3,oneof" json:"cuda_version,omitempty"`
-	// BOARD value from /etc/wendyos/device-type (only present on WendyOS)
-	Board         *string `protobuf:"bytes,12,opt,name=board,proto3,oneof" json:"board,omitempty"`
+	// STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+	StorageMedium *string `protobuf:"bytes,12,opt,name=storage_medium,json=storageMedium,proto3,oneof" json:"storage_medium,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -696,9 +696,9 @@ func (x *GetAgentVersionResponse) GetCudaVersion() string {
 	return ""
 }
 
-func (x *GetAgentVersionResponse) GetBoard() string {
-	if x != nil && x.Board != nil {
-		return *x.Board
+func (x *GetAgentVersionResponse) GetStorageMedium() string {
+	if x != nil && x.StorageMedium != nil {
+		return *x.StorageMedium
 	}
 	return ""
 }
@@ -3119,7 +3119,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\xa7\x04\n" +
+	"\x16GetAgentVersionRequest\"\xc1\x04\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -3138,8 +3138,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"gpu_vendor\x18\t \x01(\tH\x04R\tgpuVendor\x88\x01\x01\x12,\n" +
 	"\x0fjetpack_version\x18\n" +
 	" \x01(\tH\x05R\x0ejetpackVersion\x88\x01\x01\x12&\n" +
-	"\fcuda_version\x18\v \x01(\tH\x06R\vcudaVersion\x88\x01\x01\x12\x19\n" +
-	"\x05board\x18\f \x01(\tH\aR\x05board\x88\x01\x01B\r\n" +
+	"\fcuda_version\x18\v \x01(\tH\x06R\vcudaVersion\x88\x01\x01\x12*\n" +
+	"\x0estorage_medium\x18\f \x01(\tH\aR\rstorageMedium\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -3147,8 +3147,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\b_has_gpuB\r\n" +
 	"\v_gpu_vendorB\x12\n" +
 	"\x10_jetpack_versionB\x0f\n" +
-	"\r_cuda_versionB\b\n" +
-	"\x06_board\"\x19\n" +
+	"\r_cuda_versionB\x11\n" +
+	"\x0f_storage_medium\"\x19\n" +
 	"\x17ListWiFiNetworksRequest\"\xbb\x03\n" +
 	"\x18ListWiFiNetworksResponse\x12Y\n" +
 	"\bnetworks\x18\x01 \x03(\v2=.wendy.agent.services.v1.ListWiFiNetworksResponse.WiFiNetworkR\bnetworks\x1a\xc3\x02\n" +
