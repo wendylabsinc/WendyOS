@@ -1,9 +1,21 @@
-# CI build cache (S3-backed sstate, downloads, hashserv)
+# CI build cache (snapshot + S3 sstate, downloads, hashserv)
 
-The `Build WendyOS Images` workflow primes BitBake's `sstate-cache`,
-`downloads`, and per-device `hashserv` DB from S3 before each build and
-saves them back afterward. This turns a cold ~1 h Yocto build into a warm
-incremental build on subsequent runs.
+The `Build WendyOS Images` workflow runs a two-layer cache to turn a cold
+~1 h Yocto build into a warm incremental build:
+
+- **L1 — runs-on EBS snapshot** (`runs-on/snapshot@v1`). Mounts an EBS
+  volume at `sstate-cache/` and `downloads/` and snapshots it on workflow
+  end. No copy at start; survives across runs on the same runner family.
+- **L2 — S3 mirror.** Shared across every matrix entry (rpi3/4/5/jetson)
+  and every runner family. Acts as the cold-start seed when L1 misses, and
+  as the durable backup when a snapshot is GC'd or you change runner
+  configuration.
+
+Only `sstate-cache/` and `downloads/` are snapshotted at L1 — never
+`build/`. `build/` contains mender per-run state and was the source of
+the original "snapshots are flaky for mender" issue. sstate is content-
+hashed and is always safe to reuse. The per-device `hashserv.db` lives
+inside `build/`, so it bypasses L1 and is stored in S3 only.
 
 ## What the workflow expects
 
@@ -39,8 +51,9 @@ BUCKET=wendyos-build-cache
 REGION=us-east-1
 
 # 1. Create the bucket (block public access, enable encryption).
-aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
-  --create-bucket-configuration "LocationConstraint=$REGION"
+# Note: us-east-1 is the one region that REJECTS --create-bucket-configuration.
+# For any other region you must add: --create-bucket-configuration "LocationConstraint=$REGION"
+aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"
 aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-configuration \
   "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
 aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration \

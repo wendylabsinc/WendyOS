@@ -179,36 +179,57 @@ jobs:
           # ref; otherwise falls back to the triggering event's ref.
           ref: ${{ inputs.version }}
 
-      # ---------- Build cache: AWS auth + S3 prime ----------
-      # TODO: Re-enable once the S3 bucket and IAM role described in
-      # docs/build-cache.md are provisioned. While disabled, every build
-      # runs cold (no warm-cache speedup) but the workflow still works.
-      #
-      # - name: Configure AWS credentials for build cache
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     role-to-assume: ${{ secrets.AWS_BUILD_CACHE_ROLE_ARN }}
-      #     aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
-      #
-      # - name: Restore sstate-cache, downloads, and hashserv DB from S3
-      #   env:
-      #     DEVICE: ${{ matrix.device }}
-      #   run: |
-      #     set -euo pipefail
-      #     mkdir -p \
-      #       "$GITHUB_WORKSPACE/sstate-cache" \
-      #       "$GITHUB_WORKSPACE/downloads" \
-      #       "$GITHUB_WORKSPACE/build"
-      #
-      #     # First run on a fresh bucket has nothing to pull — that's fine, the
-      #     # build proceeds cold and seeds the cache on the way out.
-      #     aws s3 sync --no-progress \
-      #       "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
-      #     aws s3 sync --no-progress \
-      #       "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
-      #     aws s3 cp --no-progress \
-      #       "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" \
-      #       "$GITHUB_WORKSPACE/build/hashserv.db" || true
+      # ---------- Build cache: two-layer ----------
+      # L1 (per-runner snapshot): runs-on/snapshot mounts an EBS volume at
+      #     sstate-cache/ and downloads/ and snapshots it on workflow end.
+      #     Fast path — survives across runs on the same runner family
+      #     without copying anything.
+      # L2 (S3 mirror):  shared across every matrix entry / runner family,
+      #     and acts as the fallback when the snapshot misses (cold runner).
+      # We deliberately snapshot ONLY sstate-cache/ and downloads/, never
+      # build/ — build/ contains mender per-run state that previously made
+      # workspace-wide snapshots flaky. sstate is content-hashed so it is
+      # always safe to reuse.
+
+      - name: Restore sstate-cache snapshot (L1)
+        uses: runs-on/snapshot@v1
+        with:
+          path: ${{ github.workspace }}/sstate-cache
+          volume_size: 100
+
+      - name: Restore downloads snapshot (L1)
+        uses: runs-on/snapshot@v1
+        with:
+          path: ${{ github.workspace }}/downloads
+          volume_size: 50
+
+      - name: Configure AWS credentials for build cache
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BUILD_CACHE_ROLE_ARN }}
+          aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+
+      - name: Restore sstate-cache, downloads, and hashserv DB from S3 (L2)
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "$GITHUB_WORKSPACE/sstate-cache" \
+            "$GITHUB_WORKSPACE/downloads" \
+            "$GITHUB_WORKSPACE/build"
+
+          # aws s3 sync is incremental: anything the L1 snapshot already has
+          # is skipped. On a fresh bucket / fresh runner this is a cold seed.
+          aws s3 sync --no-progress \
+            "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
+          aws s3 sync --no-progress \
+            "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
+          # hashserv.db lives in build/ — can't be snapshotted via L1 (per-run
+          # state collocated). S3-only, per device.
+          aws s3 cp --no-progress \
+            "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" \
+            "$GITHUB_WORKSPACE/build/hashserv.db" || true
 
       # ---------- Build ----------
 
@@ -235,30 +256,32 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
 
       # ---------- Build cache: save to S3 (always, even on failure) ----------
-      # TODO: Re-enable alongside the prime step above once S3 is provisioned.
-      #
-      # - name: Save sstate-cache, downloads, and hashserv DB to S3
-      #   if: always()
-      #   env:
-      #     DEVICE: ${{ matrix.device }}
-      #   run: |
-      #     set -euo pipefail
-      #     # --size-only avoids re-uploading sstate siblings whose mtime drifted
-      #     # but content matches. Sstate filenames are content-hashed, so file
-      #     # size is a reliable freshness check.
-      #     if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
-      #       aws s3 sync --no-progress --size-only \
-      #         "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
-      #     fi
-      #     if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
-      #       aws s3 sync --no-progress --size-only \
-      #         "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
-      #     fi
-      #     if [[ -f "$GITHUB_WORKSPACE/build/hashserv.db" ]]; then
-      #       aws s3 cp --no-progress \
-      #         "$GITHUB_WORKSPACE/build/hashserv.db" \
-      #         "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" || true
-      #     fi
+      # L1 snapshots are saved automatically by runs-on/snapshot at workflow
+      # end. L2 (S3) we push explicitly so other matrix entries / future
+      # runners can prime from it.
+
+      - name: Save sstate-cache, downloads, and hashserv DB to S3 (L2)
+        if: always()
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          set -euo pipefail
+          # --size-only avoids re-uploading sstate siblings whose mtime drifted
+          # but content matches. Sstate filenames are content-hashed, so file
+          # size is a reliable freshness check.
+          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
+            aws s3 sync --no-progress --size-only \
+              "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
+          fi
+          if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
+            aws s3 sync --no-progress --size-only \
+              "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
+          fi
+          if [[ -f "$GITHUB_WORKSPACE/build/hashserv.db" ]]; then
+            aws s3 cp --no-progress \
+              "$GITHUB_WORKSPACE/build/hashserv.db" \
+              "s3://${CACHE_BUCKET}/hashserv/${DEVICE}/hashserv.db" || true
+          fi
 
       # --- Upload image and update device manifest (master manifest is handled by the publish job) ---
 
