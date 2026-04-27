@@ -186,6 +186,7 @@ func provisioningRequired(creds []wendyconf.WifiCredential, deviceName string, p
 	return len(creds) > 0 || deviceName != "" || len(provisioningJSON) > 0
 }
 
+
 // writeConfigFiles writes the agent binary, optional wendy.conf, and optional
 // provisioning.json to mountPoint.
 func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
