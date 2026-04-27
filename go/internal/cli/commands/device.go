@@ -395,6 +395,9 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		}
 	}
 
+	if auth == nil || len(auth.Certificates) == 0 {
+		return fmt.Errorf("missing authentication certificate in selected auth entry")
+	}
 	cert := auth.Certificates[0]
 
 	tlsCfg, err := certs.LoadTLSConfig(
