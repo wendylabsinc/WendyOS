@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -72,7 +73,12 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 
 	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
 
-	tokenResp, err := certClient.CreateAssetEnrollmentToken(ctx, &cloudpb.CreateAssetEnrollmentTokenRequest{
+	tokenCtx := ctx
+	if auth.APIKey != "" {
+		tokenCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
+	}
+
+	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
 		OrganizationId: int32(cert.OrganizationID),
 		Name:           deviceName,
 	})
@@ -93,7 +99,7 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return nil, fmt.Errorf("generating CSR: %w", err)
 	}
 
-	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
+	issueResp, err := certClient.IssueCertificate(tokenCtx, &cloudpb.IssueCertificateRequest{
 		PemCsr:          csrPEM,
 		EnrollmentToken: tokenResp.GetEnrollmentToken(),
 	})
