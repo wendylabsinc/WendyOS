@@ -8,7 +8,7 @@
             "mode": "host"
         },
         {
-            "type": "video"
+            "type": "camera"
         }
     ]
 }

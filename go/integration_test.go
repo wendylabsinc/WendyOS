@@ -34,13 +34,25 @@ func (m *integrationNetworkManager) ListWiFiNetworks(_ context.Context) ([]*agen
 		{Ssid: "IntegrationNet"},
 	}, nil
 }
-func (m *integrationNetworkManager) ConnectToWiFi(_ context.Context, _, _ string) error {
+func (m *integrationNetworkManager) ConnectToWiFi(_ context.Context, _ *agentpb.ConnectToWiFiRequest) error {
 	return nil
 }
 func (m *integrationNetworkManager) GetWiFiStatus(_ context.Context) (bool, string, error) {
 	return true, "IntegrationNet", nil
 }
 func (m *integrationNetworkManager) DisconnectWiFi(_ context.Context) error {
+	return nil
+}
+func (m *integrationNetworkManager) ListKnownWiFiNetworks(_ context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error) {
+	return nil, nil
+}
+func (m *integrationNetworkManager) SetWiFiNetworkPriority(_ context.Context, _ string, _ int32) error {
+	return nil
+}
+func (m *integrationNetworkManager) ReorderKnownWiFiNetworks(_ context.Context, _ []string) error {
+	return nil
+}
+func (m *integrationNetworkManager) ForgetWiFiNetwork(_ context.Context, _ string) error {
 	return nil
 }
 

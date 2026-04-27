@@ -4,6 +4,7 @@ package commands
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +22,21 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/internal/shared/version"
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
+	var deviceType string
+	var versionFlag string
+	var driveFlag string
+	var wifiSSID string
+	var wifiPassword string
+	var wifiEntries []string
+	var noWifi bool
+	var deviceName string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -31,18 +44,61 @@ func newOSInstallCmd() *cobra.Command {
 		Long: `Interactively select a supported device, download the latest OS image or firmware, and write it to the target.
 
 When called with positional arguments, skips interactive prompts:
-  wendy os install <image-path> <drive-id> --force`,
-		Args: cobra.MaximumNArgs(2),
+  wendy os install <image-path> <drive-id> --force
+
+When called with manifest-backed flags, installs a specific version:
+  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+
+Pre-seed multiple WiFi networks (repeatable, highest-priority first):
+  wendy os install --device-type raspberry-pi-5 --drive /dev/disk4 --force \
+    --wifi "ssid=Home,password=hunter2,priority=100" \
+    --wifi "ssid=Office,password=corp,priority=50" \
+    --wifi "ssid=Cafe,hidden=true"
+
+Flags can be provided progressively — omitted values trigger interactive pickers.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch len(args) {
+			case 0, 2:
+				return nil
+			case 1:
+				return fmt.Errorf("positional arguments must be provided as [image] [drive]; got 1 argument")
+			default:
+				return cobra.MaximumNArgs(2)(cmd, args)
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Positional direct-install mode is incompatible with manifest-backed flags.
+			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "" || wifiSSID != "" || wifiPassword != "" || len(wifiEntries) > 0 || noWifi || deviceName != "") {
+				return fmt.Errorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name")
+			}
+			if nightly && versionFlag != "" {
+				return fmt.Errorf("--nightly and --version are mutually exclusive")
+			}
+
+			opts := wifiCLIOptions{
+				SSID:     wifiSSID,
+				Password: wifiPassword,
+				Entries:  wifiEntries,
+				NoWifi:   noWifi,
+			}
+
 			if len(args) == 2 {
 				return runOSInstallDirect(args[0], args[1], force)
 			}
-			return runOSInstall(cmd.Context(), nightly)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, opts, deviceName)
 		},
 	}
 
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
+	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
+	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
+	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
+	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
+	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
+	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Skip WiFi setup entirely (no interactive prompt, no pre-seeded networks)")
+	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
 
 	return cmd
 }
@@ -140,7 +196,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string) error {
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -180,36 +236,58 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 		})
 	}
 
-	// Add ESP32 entries.
-	espVersion := "(latest)"
-	for _, esp := range []struct {
-		key, name, chip string
-	}{
-		{"esp32-c6", "ESP32-C6", "esp32c6"},
-		{"esp32-c5", "ESP32-C5", "esp32c5"},
-	} {
-		deviceMap[esp.key] = pickerDevice{
-			Name:      esp.name,
-			Version:   espVersion,
-			Category:  "Wendy Lite",
-			IsESP32:   true,
-			ESP32Chip: esp.chip,
+	// When --device-type is not provided, also offer ESP32 entries in the picker.
+	if flagDeviceType == "" {
+		espVersion := "(latest)"
+		for _, esp := range []struct {
+			key, name, chip string
+		}{
+			{"esp32-c6", "ESP32-C6", "esp32c6"},
+			{"esp32-c5", "ESP32-C5", "esp32c5"},
+		} {
+			deviceMap[esp.key] = pickerDevice{
+				Name:      esp.name,
+				Version:   espVersion,
+				Category:  "Wendy Lite",
+				IsESP32:   true,
+				ESP32Chip: esp.chip,
+			}
+			items = append(items, tui.PickerItem{
+				Name:        esp.name,
+				Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
+				Value:       esp.key,
+			})
 		}
-		items = append(items, tui.PickerItem{
-			Name:        esp.name,
-			Description: fmt.Sprintf("%s    %s", espVersion, "Wendy Lite"),
-			Value:       esp.key,
-		})
 	}
 
-	if len(items) == 0 {
-		return fmt.Errorf("no devices available")
-	}
+	// Resolve device — use flag or interactive picker.
+	var selected string
+	if flagDeviceType != "" {
+		// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
+		if flagDeviceType == "esp32-c6" || flagDeviceType == "esp32-c5" {
+			return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+		}
+		if _, ok := deviceMap[flagDeviceType]; !ok {
+			var available []string
+			for k, d := range deviceMap {
+				if !d.IsESP32 {
+					available = append(available, k)
+				}
+			}
+			sort.Strings(available)
+			return fmt.Errorf("device type %q not found in manifest; available: %s", flagDeviceType, strings.Join(available, ", "))
+		}
+		selected = flagDeviceType
+	} else {
+		if len(items) == 0 {
+			return fmt.Errorf("no devices available")
+		}
 
-	fmt.Println()
-	selected, err := pickFromItems("Select a device", items)
-	if err != nil {
-		return err
+		fmt.Println()
+		selected, err = pickFromItems("Select a device", items)
+		if err != nil {
+			return err
+		}
 	}
 
 	device := deviceMap[selected]
@@ -217,57 +295,108 @@ func runOSInstall(ctx context.Context, nightly bool) error {
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifi, deviceName)
 }
 
-// installLinuxImage handles the Linux device path: pick drive → download → write.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice) error {
-	// List external drives.
-	drives, err := listExternalDrives()
-	if err != nil {
-		return fmt.Errorf("listing drives: %w", err)
-	}
-	if len(drives) == 0 {
-		return fmt.Errorf("no external drives found — insert an SD card or USB drive and try again")
-	}
-
-	// Drive picker.
-	var driveItems []tui.PickerItem
-	driveMap := make(map[string]drive)
-	for _, d := range drives {
-		desc := d.DevicePath
-		if d.Size != "" {
-			desc += "  " + d.Size
+// installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
+// nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string) error {
+	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
+	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
+	if flagVersion != "" {
+		// Validate the requested version exists in the manifest.
+		if _, err := getImageInfo(device.Manifest, flagVersion); err != nil {
+			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
-		driveItems = append(driveItems, tui.PickerItem{
-			Name:        d.Name,
-			Description: desc,
-			Value:       d.DevicePath,
-		})
-		driveMap[d.DevicePath] = d
+		selectedVersion = flagVersion
+	} else if nightly {
+		// --nightly: use the nightly version directly, skip the version picker.
+		selectedVersion = device.RawVersion
+	} else {
+		// Show version picker.
+		picked, err := pickManifestVersion("Select a version", device.Manifest)
+		if err != nil {
+			return err
+		}
+		selectedVersion = picked
 	}
 
-	fmt.Println()
-	sel, err := pickFromItems("Select target drive", driveItems)
+	// Step 2: Resolve target drive — use flag or interactive picker.
+	var targetDrive drive
+	if flagDrive != "" {
+		drives, err := listAllDrives()
+		if err != nil {
+			return fmt.Errorf("listing drives: %w", err)
+		}
+		var found bool
+		for _, d := range drives {
+			if d.DevicePath == flagDrive {
+				targetDrive = d
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("drive %s not found", flagDrive)
+		}
+	} else {
+		drives, err := listExternalDrives()
+		if err != nil {
+			return fmt.Errorf("listing drives: %w", err)
+		}
+		if len(drives) == 0 {
+			return fmt.Errorf("no external drives found — insert an SD card or USB drive and try again")
+		}
+
+		var driveItems []tui.PickerItem
+		driveMap := make(map[string]drive)
+		for _, d := range drives {
+			desc := d.DevicePath
+			if d.Size != "" {
+				desc += "  " + d.Size
+			}
+			driveItems = append(driveItems, tui.PickerItem{
+				Name:        d.Name,
+				Description: desc,
+				Value:       d.DevicePath,
+			})
+			driveMap[d.DevicePath] = d
+		}
+
+		fmt.Println()
+		sel, err := pickFromItems("Select target drive", driveItems)
+		if err != nil {
+			return err
+		}
+		targetDrive = driveMap[sel]
+	}
+
+	// Step 3: Confirm destructive write (unless --force).
+	if !force {
+		fmt.Println()
+		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	provCreds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
 	}
-	targetDrive := driveMap[sel]
 
-	// Confirm destructive write.
-	fmt.Println()
-	confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
+	provDeviceName, err := resolveDeviceName(deviceName)
 	if err != nil {
 		return err
 	}
-	if !confirmed {
-		fmt.Println("Cancelled.")
-		return nil
-	}
 
-	// Resolve image (cached or download).
-	fmt.Printf("\nPreparing %s image...\n", device.Name)
-	imgInfo, err := getImageInfo(device.Manifest, device.RawVersion)
+	// Step 4: Resolve image (cached or download).
+	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
+	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
@@ -290,7 +419,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
-	// Write image to drive with progress bar.
+	// Step 5: Write image to drive with progress bar.
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	wp := tea.NewProgram(writeProg)
@@ -318,9 +447,54 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
+	fmt.Printf("\nWriting provisioning data to config partition...\n")
+	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName); err != nil {
+		fmt.Printf("Warning: could not write config partition: %v\n", err)
+		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+	}
+
+	ejectDisk(targetDrive.DevicePath)
+
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
 	fmt.Println("You can now insert the drive into your device and power it on.")
 	return nil
+}
+
+// pickManifestVersion presents an interactive picker for available versions in a
+// device manifest, sorted newest-first using semantic version comparison. It
+// marks "latest" and "nightly" versions in the picker description.
+// This is shared by both os install and os download flows.
+func pickManifestVersion(title string, manifest *deviceManifest) (string, error) {
+	if manifest == nil || len(manifest.Versions) == 0 {
+		return "", fmt.Errorf("no versions available")
+	}
+
+	var versionKeys []string
+	for v := range manifest.Versions {
+		versionKeys = append(versionKeys, v)
+	}
+	sort.Slice(versionKeys, func(i, j int) bool {
+		return version.CompareVersions(versionKeys[i], versionKeys[j]) > 0
+	})
+
+	var items []tui.PickerItem
+	for _, v := range versionKeys {
+		ver := manifest.Versions[v]
+		desc := ""
+		if ver.IsLatest {
+			desc = "latest"
+		} else if ver.IsNightly {
+			desc = "nightly"
+		}
+		items = append(items, tui.PickerItem{
+			Name:        v,
+			Description: desc,
+			Value:       v,
+		})
+	}
+
+	fmt.Println()
+	return pickFromItems(title, items)
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.
@@ -575,6 +749,303 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	}
 
 	return cached, nil
+}
+
+// wifiCLIOptions captures the WiFi-related flags coming from cobra so they
+// can be threaded through as a single value.
+type wifiCLIOptions struct {
+	SSID     string   // --wifi-ssid shortcut
+	Password string   // --wifi-password (only valid with --wifi-ssid)
+	Entries  []string // --wifi, repeatable
+	NoWifi   bool     // --no-wifi
+}
+
+// resolveWiFiCredentialsList builds the ordered list of WiFi credentials to
+// write to the config partition. It consults flags first (non-interactive),
+// and only falls back to the Bubble Tea prompts when no flag was set and
+// stdin is a TTY.
+func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
+	if opts.NoWifi {
+		if opts.SSID != "" || len(opts.Entries) > 0 {
+			return nil, fmt.Errorf("--no-wifi is incompatible with --wifi / --wifi-ssid")
+		}
+		return nil, nil
+	}
+	if opts.Password != "" && opts.SSID == "" {
+		return nil, fmt.Errorf("--wifi-password requires --wifi-ssid")
+	}
+
+	var creds []wendyconf.WifiCredential
+
+	// --wifi (repeatable) first so priorities stay in the order the user typed.
+	for _, raw := range opts.Entries {
+		c, err := parseWiFiEntry(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --wifi %q: %w", raw, err)
+		}
+		creds = append(creds, c)
+	}
+
+	// --wifi-ssid shortcut folds into a single trailing entry.
+	if opts.SSID != "" {
+		c := wendyconf.WifiCredential{SSID: opts.SSID, Password: opts.Password}
+		if c.Password == "" {
+			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
+				c.Password = pw
+			} else if isInteractiveTerminal() {
+				pw, perr := tui.PromptText(fmt.Sprintf("WiFi password for %s", c.SSID), "(leave empty for open network)", nil)
+				if perr != nil {
+					return nil, fmt.Errorf("reading WiFi password: %w", perr)
+				}
+				c.Password = pw
+			}
+		}
+		creds = append(creds, c)
+	}
+
+	// If any flag supplied creds OR stdin is not a TTY, we're done.
+	if len(creds) > 0 || !isInteractiveTerminal() {
+		return creds, nil
+	}
+
+	// Interactive path: Y/N → loop until the user declines another network.
+	enable, err := tui.ConfirmDefaultYes("Set up WiFi on first boot?")
+	if err != nil {
+		return nil, err
+	}
+	if !enable {
+		return nil, nil
+	}
+
+	for {
+		c, added, err := promptAddOneCredential(len(creds))
+		if err != nil {
+			return nil, err
+		}
+		if !added {
+			break
+		}
+		creds = append(creds, c)
+
+		more, err := tui.Confirm("Add another WiFi network?")
+		if err != nil {
+			return nil, err
+		}
+		if !more {
+			break
+		}
+	}
+
+	return creds, nil
+}
+
+// parseWiFiEntry parses `ssid=X,password=Y,priority=N,hidden=true,security=wpa2`.
+// Only `ssid=` is required; commas inside values can be escaped with `\,`.
+func parseWiFiEntry(raw string) (wendyconf.WifiCredential, error) {
+	var c wendyconf.WifiCredential
+	for _, kv := range splitEscaped(raw, ',') {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			return c, fmt.Errorf("expected key=value, got %q", kv)
+		}
+		k := strings.ToLower(strings.TrimSpace(kv[:eq]))
+		v := strings.TrimSpace(kv[eq+1:])
+		switch k {
+		case "ssid":
+			c.SSID = v
+		case "password", "pass", "psk":
+			c.Password = v
+		case "priority":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return c, fmt.Errorf("priority must be an integer: %w", err)
+			}
+			c.Priority = int32(n)
+		case "hidden":
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return c, fmt.Errorf("hidden must be true/false: %w", err)
+			}
+			c.Hidden = b
+		case "security":
+			c.Security = strings.ToLower(v)
+		default:
+			return c, fmt.Errorf("unknown key %q", k)
+		}
+	}
+	if c.SSID == "" {
+		return c, fmt.Errorf("ssid is required")
+	}
+	return c, nil
+}
+
+// splitEscaped splits s on sep, honouring `\sep` as a literal separator char.
+func splitEscaped(s string, sep byte) []string {
+	var out []string
+	var cur strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && s[i+1] == sep {
+			cur.WriteByte(sep)
+			i++
+			continue
+		}
+		if s[i] == sep {
+			out = append(out, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(s[i])
+	}
+	out = append(out, cur.String())
+	return out
+}
+
+// promptAddOneCredential runs the local scan + picker + password prompt to
+// collect a single WiFi credential. index is the zero-based count of entries
+// already collected (used to suggest a descending priority).
+func promptAddOneCredential(index int) (wendyconf.WifiCredential, bool, error) {
+	var c wendyconf.WifiCredential
+
+	networks, scanErr := scanLocalWifiNetworks()
+	if scanErr == nil && len(networks) > 0 {
+		var items []tui.PickerItem
+		for _, n := range networks {
+			signal := ""
+			if n.SignalStrength > 0 {
+				signal = fmt.Sprintf("%d%%", n.SignalStrength)
+			}
+			items = append(items, tui.PickerItem{Name: n.SSID, Type: signal, Value: n.SSID})
+		}
+		fmt.Println()
+		picked, pickErr := pickFromItems("Select WiFi network (or Ctrl+C to type manually)", items)
+		if pickErr == nil {
+			c.SSID = picked
+		}
+	}
+
+	if c.SSID == "" {
+		ssid, err := tui.PromptText("WiFi SSID", "", nonEmptyValidator)
+		if err != nil {
+			return c, false, err
+		}
+		c.SSID = ssid
+	}
+
+	if supportsKeychainLookup {
+		useKeychain, err := tui.ConfirmDefaultYes(fmt.Sprintf("Look up password for '%s' from keychain? (macOS will ask for permission)", c.SSID))
+		if err != nil {
+			return c, false, err
+		}
+		if useKeychain {
+			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
+				fmt.Println("Using saved password from keychain.")
+				c.Password = pw
+			} else {
+				fmt.Println("Password not available from keychain.")
+			}
+		}
+	}
+
+	if c.Password == "" {
+		pw, err := tui.PromptText(fmt.Sprintf("Password for %s", c.SSID), "(leave empty for open network)", nil)
+		if err != nil {
+			return c, false, err
+		}
+		c.Password = pw
+	}
+
+	// First network gets the highest implicit priority; each subsequent one
+	// steps down. Users can still override via the non-interactive flags.
+	c.Priority = int32(100 - index)
+	return c, true, nil
+}
+
+func nonEmptyValidator(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("required")
+	}
+	return nil
+}
+
+// resolveDeviceName returns the device name to pre-configure on first boot.
+// If flagName is set it is validated and returned directly. In interactive mode
+// the user is prompted; an empty response skips naming (auto-generated on device).
+func resolveDeviceName(flagName string) (string, error) {
+	validate := func(name string) error {
+		if len(name) < 3 || len(name) > 64 {
+			return fmt.Errorf("device name must be 3–64 characters")
+		}
+		for i, c := range name {
+			switch {
+			case c >= 'a' && c <= 'z':
+			case (c >= '0' && c <= '9') || c == '-':
+				if i == 0 {
+					return fmt.Errorf("device name must start with a lowercase letter")
+				}
+			default:
+				return fmt.Errorf("device name may only contain lowercase letters, digits, and hyphens")
+			}
+		}
+		return nil
+	}
+
+	if flagName != "" {
+		if err := validate(flagName); err != nil {
+			return "", fmt.Errorf("--device-name: %w", err)
+		}
+		return flagName, nil
+	}
+
+	if !isInteractiveTerminal() {
+		return "", nil
+	}
+
+	fmt.Print("\nDevice name (leave empty to auto-generate): ")
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	name := strings.TrimSpace(line)
+	if name == "" {
+		return "", nil
+	}
+	if err := validate(name); err != nil {
+		return "", fmt.Errorf("invalid device name: %w", err)
+	}
+	return name, nil
+}
+
+// provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
+// and writes it (along with zero or more WiFi credentials and an optional
+// device name) to the config partition on d.
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string) error {
+	release, err := fetchAgentRelease(false)
+	if err != nil {
+		return fmt.Errorf("fetching latest agent release: %w", err)
+	}
+
+	const assetPrefix = "wendy-agent-linux-arm64-"
+	var matched *githubReleaseAsset
+	for i := range release.Assets {
+		a := &release.Assets[i]
+		if strings.HasPrefix(a.Name, assetPrefix) && strings.HasSuffix(a.Name, ".tar.gz") {
+			matched = a
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Errorf("no arm64 asset found in release %s", release.TagName)
+	}
+
+	fmt.Printf("Downloading wendy-agent %s for device...\n", release.TagName)
+	agentBinary, err := downloadAgentBinary(*matched)
+	if err != nil {
+		return fmt.Errorf("downloading agent binary: %w", err)
+	}
+
+	return writeConfigPartition(d, agentBinary, creds, deviceName)
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.

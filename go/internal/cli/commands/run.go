@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,14 +15,15 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -30,6 +32,9 @@ import (
 
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
+var execCommandContext = exec.CommandContext
+
+const linuxContainersOnMacsUnsupportedMessage = "Linux containers aren't supported on Macs yet. Support is planned for a future release. For now, deploy a native macOS app (platform: darwin) or target a Linux/WendyOS device."
 
 // dimWriter writes each line rendered through cliStyle (dim/background).
 // Incomplete lines are buffered until a newline or Flush is called.
@@ -121,23 +126,48 @@ func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
-// createContainerWithProgress calls CreateContainerWithProgress and prints
-// phase updates so the user sees feedback during long image pulls/unpacks.
-func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
-	stream, err := svc.CreateContainerWithProgress(ctx, req)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
+	total := progress.GetTotalLayers()
+	if total <= 0 {
+		return "Pulling image on device..."
 	}
 
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	clearLine := func() {
-		if isTTY {
-			fmt.Print("\033[2K\r")
-		} else {
-			fmt.Println()
-		}
+	completed := progress.GetLayerIndex()
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER {
+		completed++
+	}
+	if completed > total {
+		completed = total
 	}
 
+	title := fmt.Sprintf("Unpacking image on device... (%d/%d layers", completed, total)
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER && progress.GetReusedSnapshot() {
+		title += ", reused snapshot"
+	}
+	return title + ")"
+}
+
+func unpackProgressPercent(progress *agentpb.CreateContainerProgress) float64 {
+	total := progress.GetTotalLayers()
+	if total <= 0 {
+		return 0
+	}
+
+	completed := progress.GetLayerIndex()
+	if progress.GetPhase() == agentpb.CreateContainerProgress_APPLYING_LAYER {
+		completed++
+	}
+	if completed < 0 {
+		completed = 0
+	}
+	if completed > total {
+		completed = total
+	}
+
+	return float64(completed) / float64(total)
+}
+
+func createContainerWithProgressPlain(stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
 	completed := false
 	for {
 		resp, recvErr := stream.Recv()
@@ -152,12 +182,11 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		case *agentpb.CreateContainerProgressResponse_Progress:
 			switch r.Progress.GetPhase() {
 			case agentpb.CreateContainerProgress_UNPACKING:
-				cliLog("Pulling and unpacking image on device...")
+				cliLogln("%s", unpackProgressTitle(r.Progress))
+			case agentpb.CreateContainerProgress_APPLYING_LAYER:
+				cliLogln("%s", unpackProgressTitle(r.Progress))
 			case agentpb.CreateContainerProgress_CREATING_CONTAINER:
-				clearLine()
-				cliLog("Creating container...")
-			case agentpb.CreateContainerProgress_COMPLETE:
-				clearLine()
+				cliLogln("Creating container...")
 			}
 		case *agentpb.CreateContainerProgressResponse_Completed:
 			completed = true
@@ -174,8 +203,164 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 	return nil
 }
 
+func isUnimplementedRPCError(err error) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if status.Code(current) == codes.Unimplemented {
+			return true
+		}
+	}
+	return false
+}
+
+func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	if _, err := svc.CreateContainer(ctx, req); err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	return nil
+}
+
+func fallbackCreateContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	cliLogln("Info: progress reporting is currently not available on this agent; continuing without progress")
+	return createContainerWithoutProgress(ctx, svc, req)
+}
+
+func progressModelUserCancelled(model tea.Model) bool {
+	pm, ok := model.(tui.ProgressModel)
+	return ok && pm.Err() == context.Canceled
+}
+
+func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
+	prog := tea.NewProgram(tui.NewProgress("Pulling image on device...").WithoutErrorView())
+
+	var (
+		createErr error
+		done      = make(chan struct{})
+		creating  = make(chan struct{}, 1)
+		completed bool
+	)
+
+	go func() {
+		defer close(done)
+		progressDone := false
+		for {
+			resp, recvErr := stream.Recv()
+			if recvErr == io.EOF {
+				if !completed && createErr == nil {
+					createErr = fmt.Errorf("creating container: progress stream ended without completion")
+				}
+				if !progressDone {
+					prog.Send(tui.ProgressDoneMsg{Err: createErr})
+				}
+				return
+			}
+			if recvErr != nil {
+				createErr = fmt.Errorf("creating container: %w", recvErr)
+				if !progressDone {
+					prog.Send(tui.ProgressDoneMsg{Err: createErr})
+				}
+				return
+			}
+
+			switch r := resp.GetResponseType().(type) {
+			case *agentpb.CreateContainerProgressResponse_Progress:
+				switch r.Progress.GetPhase() {
+				case agentpb.CreateContainerProgress_UNPACKING, agentpb.CreateContainerProgress_APPLYING_LAYER:
+					prog.Send(tui.ProgressUpdateMsg{
+						Percent: unpackProgressPercent(r.Progress),
+						Title:   unpackProgressTitle(r.Progress),
+					})
+				case agentpb.CreateContainerProgress_CREATING_CONTAINER:
+					if !progressDone {
+						progressDone = true
+						select {
+						case creating <- struct{}{}:
+						default:
+						}
+						prog.Send(tui.ProgressDoneMsg{})
+					}
+				case agentpb.CreateContainerProgress_COMPLETE:
+					completed = true
+					if !progressDone {
+						progressDone = true
+						prog.Send(tui.ProgressDoneMsg{})
+					}
+				}
+			case *agentpb.CreateContainerProgressResponse_Completed:
+				completed = true
+				if !progressDone {
+					progressDone = true
+					prog.Send(tui.ProgressDoneMsg{})
+				}
+				return
+			}
+		}
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return fmt.Errorf("progress TUI: %w", err)
+	}
+
+	if progressModelUserCancelled(finalModel) {
+		cancel()
+		<-done
+		return ErrUserCancelled
+	}
+
+	select {
+	case <-creating:
+		cliLogln("Creating container...")
+	default:
+	}
+
+	<-done
+	return createErr
+}
+
+// createContainerWithProgress calls CreateContainerWithProgress and prints
+// phase updates so the user sees feedback during long image pulls/unpacks.
+// Older agents may not implement the streaming RPC yet, so fall back to the
+// legacy unary CreateContainer call when the server reports Unimplemented.
+func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	if !isInteractiveTerminal() {
+		stream, err := svc.CreateContainerWithProgress(ctx, req)
+		if err != nil {
+			if isUnimplementedRPCError(err) {
+				return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+			}
+			return fmt.Errorf("creating container: %w", err)
+		}
+		err = createContainerWithProgressPlain(stream)
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
+	}
+
+	progressCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := svc.CreateContainerWithProgress(progressCtx, req)
+	if err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return fmt.Errorf("creating container: %w", err)
+	}
+	if err := createContainerWithProgressTUI(cancel, stream); err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
+	}
+	return nil
+}
+
 // runOptions holds the parsed flags for the run command.
 type runOptions struct {
+	buildType            string
 	debug                bool
 	deploy               bool
 	detach               bool
@@ -184,6 +369,7 @@ type runOptions struct {
 	restartOnFailure     bool
 	noRestart            bool
 	prefix               string
+	product              string
 	userArgs             []string
 }
 
@@ -199,6 +385,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when Dockerfile is present alongside Package.swift or Python project markers: docker, swift, or python")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
@@ -207,6 +394,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
 	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to run from instead of the current working directory")
+	cmd.Flags().StringVar(&opts.product, "product", "", "Swift Package Manager product to build and run")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 
 	return cmd
@@ -219,6 +407,18 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
+	// Compose projects don't use wendy.json — each service carries its own config.
+	// Detect this early so we don't prompt to create an unneeded file. Surfacing
+	// resolveRunProjectType errors here also catches invalid --build-type values
+	// before we try to load wendy.json.
+	projectType, err := resolveRunProjectType(cwd, opts.buildType)
+	if err != nil {
+		return err
+	}
+	if projectType == "compose" {
+		return runComposeCommand(ctx, cwd, opts)
+	}
+
 	cfgPath := filepath.Join(cwd, "wendy.json")
 	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
@@ -227,6 +427,9 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	if err := appCfg.Validate(); err != nil {
 		return fmt.Errorf("invalid wendy.json: %w", err)
+	}
+	if err := warnAppConfigFile(cfgPath); err != nil {
+		return fmt.Errorf("reading wendy.json warnings: %w", err)
 	}
 
 	// Debug mode requires host networking for remote debugger access
@@ -288,6 +491,37 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
 }
 
+// runComposeCommand handles the full device-selection + execution flow for
+// docker-compose projects, bypassing the wendy.json requirement.
+func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
+	var resolveOpts []resolveOption
+	if opts.yes {
+		resolveOpts = append(resolveOpts, NonInteractive())
+	}
+	target, err := resolveTarget(ctx, resolveOpts...)
+	if err != nil {
+		return err
+	}
+
+	if target.External != nil && target.Provider != nil {
+		// Docker Desktop provider: use docker compose directly.
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), opts)
+	}
+
+	if target.Agent == nil {
+		if target.Bluetooth != nil {
+			if target.Bluetooth.IsWendyAgent() {
+				return fmt.Errorf("selected device is currently reachable only over Bluetooth. Connect it to WiFi and retry 'wendy run'")
+			}
+			return fmt.Errorf("selected device is a Wendy Lite device, which does not support 'wendy run'")
+		}
+		return fmt.Errorf("selected device does not have a reachable WendyOS agent and cannot run 'wendy run'")
+	}
+
+	defer target.Agent.Close()
+	return runComposeWithAgent(ctx, target.Agent, cwd, opts)
+}
+
 func resolveRunWorkingDir(opts runOptions) (string, error) {
 	prefix := strings.TrimSpace(opts.prefix)
 	if prefix == "" {
@@ -313,6 +547,83 @@ func resolveRunWorkingDir(opts runOptions) (string, error) {
 	return abs, nil
 }
 
+// runMacOSNativeContainer creates, optionally starts, and optionally streams
+// from a container that was deployed via file sync (not an OCI image pull).
+// It is shared by both the SwiftPM and Xcode macOS run paths.
+func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
+	if opts.deploy {
+		if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
+			return fmt.Errorf("creating container: %w", err)
+		}
+		cliLogln("Container %s created (not started).", appCfg.AppID)
+		return nil
+	}
+
+	if _, err := conn.ContainerService.CreateContainer(ctx, createReq); err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	cliLogln("Container %s created.", appCfg.AppID)
+
+	if opts.detach {
+		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		if err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+		if _, err := stream.Recv(); err != nil && err != io.EOF {
+			return fmt.Errorf("waiting for container start: %w", err)
+		}
+		cliLogln("Application %s running in detached mode.", appCfg.AppID)
+		return nil
+	}
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+		AppName: appCfg.AppID,
+	})
+	if err != nil {
+		return fmt.Errorf("starting container: %w", err)
+	}
+
+	cliLogln("Application %s started.", appCfg.AppID)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		cliLogln("\nStopping container...")
+		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+			AppName: appCfg.AppID,
+		})
+		runCancel()
+	}()
+
+	for {
+		resp, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			if runCtx.Err() != nil {
+				break
+			}
+			return fmt.Errorf("receiving container output: %w", recvErr)
+		}
+		if out := resp.GetStdoutOutput(); out != nil {
+			_, _ = os.Stdout.Write(out.GetData())
+		}
+		if out := resp.GetStderrOutput(); out != nil {
+			_, _ = os.Stderr.Write(out.GetData())
+		}
+	}
+
+	cliLogln("\nApplication %s stopped.", appCfg.AppID)
+	return nil
+}
+
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
 // pushes the image directly to the device's registry. Then it creates and
 // starts the container on the agent.
@@ -322,40 +633,46 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	// Query the device architecture.
+	// Query the device OS and architecture.
 	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
 		return fmt.Errorf("querying device version: %w", err)
 	}
+	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
 		architecture = "arm64"
 	}
 
-	if err := ensureSwiftVersion(ctx); err != nil {
+	regPort := registryPort(agentOS)
+
+	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return err
 	}
 
-	product, err := findSwiftProduct(cwd)
+	product, err := swifttoolchain.FindSwiftProductWithOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
 	if err != nil {
+		if errors.Is(err, swifttoolchain.ErrUserCancelled) {
+			return ErrUserCancelled
+		}
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, 5000)
+	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, regPort)
 	if err != nil {
 		return err
 	}
 	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
 
 	// The image is now in the device's registry. The agent will pull it
-	// from localhost:5000 when creating the container.
-	deviceImage := fmt.Sprintf("localhost:5000/%s:latest", strings.ToLower(product))
+	// from localhost:<regPort> when creating the container.
+	deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, strings.ToLower(product))
 
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
@@ -375,35 +692,170 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
 }
 
+// runMacOSSwiftPMWithAgent builds a Swift package locally via `swift build`,
+// syncs the binary (and optional sandbox.sb / wendy.json files) to the device
+// via SyncFiles gRPC, and creates/starts the container.
+func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	// Verify CPU architecture matches.
+	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		return fmt.Errorf("querying device version: %w", err)
+	}
+	deviceArch := versionResp.GetCpuArchitecture()
+	if deviceArch == "" {
+		deviceArch = "arm64"
+	}
+	if deviceArch != runtime.GOARCH {
+		return fmt.Errorf("architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+
+	product, err := swifttoolchain.FindSwiftProductWithOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
+	if err != nil {
+		return err
+	}
+
+	// Build locally.
+	cliLogln("Building Swift project locally...")
+	buildCmd := exec.CommandContext(ctx, "swift", "build")
+	buildCmd.Dir = cwd
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("swift build failed: %w", err)
+	}
+	cliLogln("Build completed.")
+
+	// Locate the binary.
+	binaryPath := filepath.Join(cwd, ".build", "debug", product)
+	if _, err := os.Stat(binaryPath); err != nil {
+		return fmt.Errorf("binary not found at %s: %w", binaryPath, err)
+	}
+
+	// Assemble file sync entries.
+	syncEntries := []fileSyncEntry{
+		{localPath: binaryPath, remotePath: product},
+	}
+
+	// Include sandbox.sb if present.
+	sandboxPath := filepath.Join(cwd, "sandbox.sb")
+	if _, err := os.Stat(sandboxPath); err == nil {
+		syncEntries = append(syncEntries, fileSyncEntry{
+			localPath:  sandboxPath,
+			remotePath: "sandbox.sb",
+		})
+	}
+
+	// Append user-declared files from wendy.json.
+	for _, f := range appCfg.Files {
+		localAbs := filepath.Join(cwd, f.Path)
+		syncEntries = append(syncEntries, fileSyncEntry{
+			localPath:  localAbs,
+			remotePath: effectiveRemotePath(f.Path, f.To),
+		})
+	}
+
+	// Sync files to the device.
+	if err := syncFiles(ctx, conn, appCfg.AppID, syncEntries); err != nil {
+		return fmt.Errorf("syncing files: %w", err)
+	}
+
+	var runArgs []string
+	if appCfg.Run != nil {
+		runArgs = appCfg.Run.Args
+	}
+	createReq := &agentpb.CreateContainerRequest{
+		AppName:  appCfg.AppID,
+		Cmd:      product,
+		UserArgs: runArgs,
+	}
+	return runMacOSNativeContainer(ctx, conn, appCfg, createReq, opts)
+}
+
+func resolveRunProjectType(dir, requestedType string) (string, error) {
+	if strings.TrimSpace(requestedType) == "" {
+		return detectProjectType(dir)
+	}
+
+	buildType := normalizeBuildType(requestedType)
+	if buildType != "docker" && buildType != "swift" && buildType != "python" && buildType != "compose" {
+		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, python, or compose", requestedType)
+	}
+
+	switch buildType {
+	case "compose":
+		for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return "compose", nil
+			}
+		}
+	case "docker":
+		marker := filepath.Join(dir, "Dockerfile")
+		if _, err := os.Stat(marker); err == nil {
+			return "docker", nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		}
+	case "swift":
+		marker := filepath.Join(dir, "Package.swift")
+		if _, err := os.Stat(marker); err == nil {
+			return "swift", nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		}
+	case "python":
+		for _, marker := range []string{"requirements.txt", "pyproject.toml", "setup.py"} {
+			path := filepath.Join(dir, marker)
+			if _, err := os.Stat(path); err == nil {
+				return "python", nil
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("checking for %s: %w", path, err)
+			}
+		}
+	}
+
+	return "", fmt.Errorf("build type %q is not available in %s", requestedType, dir)
+}
+
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
-	projectType := detectProjectType(projectPath)
+	projectType, err := resolveRunProjectType(projectPath, opts.buildType)
+	if err != nil {
+		return err
+	}
 
 	// Resolve Swift product name from Package.swift.
 	if projectType == "swift" {
-		if err := ensureSwiftVersion(ctx); err != nil {
+		if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 			return err
 		}
-		swiftProduct, err := findSwiftProduct(projectPath)
+		swiftProduct, err := swifttoolchain.FindSwiftProductWithOptions(projectPath, opts.product, !opts.yes && isInteractiveTerminal())
 		if err != nil {
+			if errors.Is(err, swifttoolchain.ErrUserCancelled) {
+				return ErrUserCancelled
+			}
 			return fmt.Errorf("could not determine Swift product: %w", err)
 		}
 		product = swiftProduct
 	} else if p.CanBuild(projectPath) {
 		// Dockerfile exists — try to use Swift product name if Package.swift is also present.
-		if swiftProduct, err := findSwiftProduct(projectPath); err == nil {
+		if swiftProduct, err := swifttoolchain.FindSwiftProductWithOptions(projectPath, opts.product, false); err == nil {
 			product = swiftProduct
 		}
 	}
 
 	var app *providers.BuiltApp
 
+	// Xcode projects cannot be deployed via provider (requires darwin + file sync).
+	if projectType == "xcode" {
+		return fmt.Errorf("Xcode projects are not supported by the %s provider; use 'wendy run' with a macOS target instead", p.DisplayName())
+	}
+
 	// Swift projects without a Dockerfile: cross-compile on the host and
 	// build a Docker image, bypassing the provider's normal Build method.
 	if projectType == "swift" {
 		if ib, ok := p.(providers.ImageBuilder); ok {
 			cliLogln("Building Swift project for %s...", p.DisplayName())
-			imageName, err := buildSwiftDockerImage(ctx, projectPath, product)
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product, &dimWriter{}, os.Stderr)
 			if err != nil {
 				return fmt.Errorf("building Swift Docker image: %w", err)
 			}
@@ -414,7 +866,13 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if app == nil {
 		cliLogln("Building with %s provider...", p.DisplayName())
 		var err error
-		app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		// Pass the resolved project type to providers that can disambiguate
+		// between buildable markers (e.g. Docker vs Compose).
+		if tb, ok := p.(providers.TypedBuilder); ok {
+			app, err = tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
+		} else {
+			app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		}
 		if err != nil {
 			return fmt.Errorf("provider build: %w", err)
 		}
@@ -475,12 +933,50 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	// Detect project type and ensure a Dockerfile exists.
-	projectType := detectProjectType(cwd)
+	projectType, err := resolveRunProjectType(cwd, opts.buildType)
+	if err != nil {
+		return err
+	}
 
-	// Swift projects without a Dockerfile use swift-container-plugin to push
-	// directly to the device's registry, bypassing the Docker build pipeline.
+	// Resolve the target platform. Query the agent for its OS and architecture,
+	// then determine the effective platform from wendy.json or defaults.
+	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		return fmt.Errorf("querying device version: %w", err)
+	}
+	agentOS := versionResp.GetOs()
+	architecture := versionResp.GetCpuArchitecture()
+	if architecture == "" {
+		architecture = "arm64"
+	}
+
+	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	if agentOS == "darwin" && platformOS(platform) == "linux" {
+		return errors.New(linuxContainersOnMacsUnsupportedMessage)
+	}
+
+	// Xcode projects: always use the local-build + file-sync path (darwin only).
+	if projectType == "xcode" {
+		if platformOS(platform) == "darwin" {
+			return runMacOSXcodeWithAgent(ctx, conn, cwd, appCfg, opts)
+		}
+		return fmt.Errorf("Xcode projects require a darwin target (got %s)", platform)
+	}
+
+	// Swift projects use a native darwin path for macOS targets and
+	// swift-container-plugin for Linux targets when --build-type=swift
+	// explicitly selects that path or when no Dockerfile is present.
 	if projectType == "swift" {
+		if normalizeBuildType(opts.buildType) == "swift" {
+			if platformOS(platform) == "darwin" {
+				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
+			}
+			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
+		}
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
+			if platformOS(platform) == "darwin" {
+				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
+			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 	}
@@ -488,6 +984,8 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	switch projectType {
 	case "docker":
 		// Dockerfile already exists.
+	case "compose":
+		return runComposeWithAgent(ctx, conn, cwd, opts)
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			cliLogln("No Dockerfile found. Generating one for Python project...")
@@ -502,16 +1000,31 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("unable to detect project type; ensure a Dockerfile, requirements.txt, or Package.swift is present")
 	}
 
-	// Query the device architecture.
-	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-	if err != nil {
-		return fmt.Errorf("querying device version: %w", err)
+	deviceType := versionResp.GetDeviceType()
+	buildArgs := map[string]string{
+		"WENDY_PLATFORM": wendyPlatform(deviceType),
+		"WENDY_DEBUG":    fmt.Sprintf("%t", opts.debug),
 	}
-	architecture := versionResp.GetCpuArchitecture()
-	if architecture == "" {
-		architecture = "arm64"
+	// Only set WENDY_DEVICE_TYPE / GPU args when the agent reports them so
+	// Dockerfiles can apply their own defaults on older agents.
+	if deviceType != "" {
+		buildArgs["WENDY_DEVICE_TYPE"] = deviceType
 	}
-	platform := "linux/" + architecture
+	// WENDY_HAS_GPU is only set when the optional field is present; omitting it
+	// on older agents preserves any Dockerfile ARG default.
+	if versionResp.HasGpu != nil {
+		buildArgs["WENDY_HAS_GPU"] = fmt.Sprintf("%t", versionResp.GetHasGpu())
+	}
+	// Remaining GPU build args — only set when the agent reports them.
+	if vendor := versionResp.GetGpuVendor(); vendor != "" {
+		buildArgs["WENDY_GPU_VENDOR"] = vendor
+	}
+	if jv := versionResp.GetJetpackVersion(); jv != "" {
+		buildArgs["WENDY_JETPACK_VERSION"] = jv
+	}
+	if cv := versionResp.GetCudaVersion(); cv != "" {
+		buildArgs["WENDY_CUDA_VERSION"] = cv
+	}
 
 	// Verify auth certs are available if the device's registry requires mTLS.
 	if err := requireRegistryAuth(ctx, conn); err != nil {
@@ -519,9 +1032,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	// Build and push the Docker image directly to the device's registry.
+	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
 	// to the host so buildx can reach the device.
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, 5000)
+	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
 	if err != nil {
 		return err
 	}
@@ -531,7 +1045,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -539,13 +1053,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, os.Stdout, conn.IsMTLS); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}
 
-	// The agent pulls from localhost:5000.
-	deviceImage := fmt.Sprintf("localhost:5000/%s:latest", repo)
+	// The agent pulls from localhost:<regPort>.
+	deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, repo)
 
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
@@ -763,6 +1277,19 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	}
 	cliLogln("Hook postStart: %s", expanded)
 	return cmd
+}
+
+// wendyPlatform maps a WendyOS device type to a platform tier used for
+// Dockerfile base stage selection. Adding a new device only requires adding
+// a case here; templates need no changes until a new platform tier is introduced.
+// Unknown device types fall back to "generic" (CPU-only).
+func wendyPlatform(deviceType string) string {
+	switch deviceType {
+	case "jetson-agx-orin", "jetson-orin-nano":
+		return "nvidia-jetson"
+	default:
+		return "generic"
+	}
 }
 
 // resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.

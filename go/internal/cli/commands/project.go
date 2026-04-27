@@ -19,7 +19,7 @@ import (
 var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNetwork:   "Access network interfaces",
 	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
-	appconfig.EntitlementVideo:     "Access video cameras",
+	appconfig.EntitlementVideo:     "Deprecated: use camera instead",
 	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
 	appconfig.EntitlementPersist:   "Persist data across restarts",
 	appconfig.EntitlementAudio:     "Access audio input/output devices",

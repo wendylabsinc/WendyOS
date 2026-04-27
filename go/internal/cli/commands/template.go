@@ -2,16 +2,21 @@ package commands
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -22,6 +27,20 @@ const (
 	templateRepoName   = "templates"
 	templateRepoBranch = "main"
 )
+
+var (
+	templateArchiveAttemptTimeout = 2 * time.Minute
+	templateArchiveMaxAttempts    = 3
+	templateArchiveRetryDelay     = 750 * time.Millisecond
+)
+
+// resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
+func resolveTemplateBranch(branch string) string {
+	if branch == "" {
+		return templateRepoBranch
+	}
+	return branch
+}
 
 // repoMeta is the parsed meta.json from the templates repo root.
 type repoMeta struct {
@@ -59,19 +78,30 @@ type templateVariable struct {
 }
 
 // fetchRepoMeta downloads and parses meta.json from the templates repo.
-func fetchRepoMeta() (*repoMeta, error) {
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If ctx is cancelled, the in-flight request is aborted.
+func fetchRepoMeta(ctx context.Context, branch string) (*repoMeta, error) {
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/meta.json",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+		templateRepoOwner, templateRepoName, branch)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetching template registry: %w", err)
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("template registry not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching template registry: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetching template registry (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
 	var meta repoMeta
@@ -91,25 +121,144 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 	return false
 }
 
+// progressCallback reports download progress. total is the expected content
+// length in bytes (0 if unknown); written is the cumulative number of bytes
+// read from the response body so far.
+type progressCallback func(written, total int64)
+
+// progressReader wraps an io.Reader and invokes onProgress after each Read.
+type progressReader struct {
+	r          io.Reader
+	total      int64
+	written    int64
+	onProgress progressCallback
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	if n > 0 {
+		pr.written += int64(n)
+		if pr.onProgress != nil {
+			pr.onProgress(pr.written, pr.total)
+		}
+	}
+	return n, err
+}
+
 // downloadTemplateArchive fetches the templates repo tarball and extracts
 // the files for {language}/{templateName}/ into a map of relative path -> content.
 // It also returns the parsed template.json manifest.
-func downloadTemplateArchive(language, templateName string) (map[string][]byte, *templateManifest, error) {
-	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If onProgress is non-nil, it is invoked as the response body is read.
+// If ctx is cancelled, the in-flight request is aborted.
+func downloadTemplateArchive(ctx context.Context, language, templateName, branch string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	branch = resolveTemplateBranch(branch)
+	// Use codeload directly to avoid an extra redirect through github.com for the
+	// repository archive download.
+	url := fmt.Sprintf("https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s",
+		templateRepoOwner, templateRepoName, branch)
+	return downloadTemplateArchiveFromURL(ctx, url, branch, language, templateName, onProgress)
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+// downloadTemplateArchiveFromURL is the testable core of downloadTemplateArchive:
+// it performs the HTTP GET against the caller-supplied URL and delegates
+// tarball parsing to extractTemplateArchive.
+func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	var lastErr error
+	for attempt := 1; attempt <= templateArchiveMaxAttempts; attempt++ {
+		files, manifest, err := downloadTemplateArchiveAttempt(ctx, url, branch, language, templateName, onProgress)
+		if err == nil {
+			return files, manifest, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil || attempt == templateArchiveMaxAttempts || !shouldRetryTemplateArchiveError(err) {
+			return nil, nil, err
+		}
+
+		if err := waitForTemplateArchiveRetry(ctx, templateArchiveRetryDelay); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return nil, nil, lastErr
+}
+
+func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, templateArchiveAttemptTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("downloading template: %w", err)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil, fmt.Errorf("template archive not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("downloading template: HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("downloading template (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	var reader io.Reader = resp.Body
+	if onProgress != nil {
+		// Normalize ContentLength to the progressCallback contract:
+		// http.Response.ContentLength is -1 when unknown, but callers expect 0.
+		total := resp.ContentLength
+		if total < 0 {
+			total = 0
+		}
+		reader = &progressReader{
+			r:          resp.Body,
+			total:      total,
+			onProgress: onProgress,
+		}
+	}
+
+	return extractTemplateArchive(reader, language, templateName)
+}
+
+func shouldRetryTemplateArchiveError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "Client.Timeout") || strings.Contains(msg, "while reading body")
+}
+
+func waitForTemplateArchiveRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// extractTemplateArchive reads a gzipped tarball from r and extracts files
+// matching {language}/{templateName}/ into a map of relative path -> content.
+// It also returns the parsed template.json manifest.
+func extractTemplateArchive(r io.Reader, language, templateName string) (map[string][]byte, *templateManifest, error) {
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decompressing template archive: %w", err)
 	}
@@ -388,9 +537,9 @@ func validateVariable(v templateVariable, val interface{}) error {
 	return nil
 }
 
-// renderAndWriteTemplate takes the raw file map, replaces {{.VAR}} tokens
-// with collected values, and writes to destDir.
-// It renames directories named after the template to the app ID.
+// renderAndWriteTemplate takes the raw file map, evaluates each text file as a
+// Go text/template (so {{.VAR}}, {{if}}, {{range}}, etc. all work), and writes
+// to destDir. It renames directories named after the template to the app ID.
 func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}) error {
 	for relPath, content := range files {
 		// Rename template-named directories to app ID.
@@ -402,16 +551,14 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			return fmt.Errorf("creating directory for %s: %w", relPath, err)
 		}
 
-		// Only apply token replacement to text files. Binary files
-		// (images, fonts, wasm) are written as-is.
+		// Only render text files. Binary files (images, fonts, wasm) are written as-is.
 		output := content
 		if isTextFile(relPath) {
-			rendered := string(content)
-			for key, val := range vals {
-				token := fmt.Sprintf("{{.%s}}", key)
-				rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+			rendered, err := renderTemplateContent(relPath, content, vals)
+			if err != nil {
+				return err
 			}
-			output = []byte(rendered)
+			output = rendered
 		}
 
 		if err := os.WriteFile(destPath, output, 0o644); err != nil {
@@ -420,6 +567,24 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 	}
 
 	return nil
+}
+
+// renderTemplateContent evaluates content as a Go text/template against vals.
+// Parse errors are surfaced (scoped to path) so template-authoring mistakes
+// like a broken {{if}} don't silently produce files with unrendered actions.
+// missingkey=error causes references to undeclared variables to fail rather
+// than render as "<no value>".
+func renderTemplateContent(path string, content []byte, vals map[string]interface{}) ([]byte, error) {
+	tmpl, err := template.New(path).Option("missingkey=error").Parse(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, vals); err != nil {
+		return nil, fmt.Errorf("rendering %s: %w", path, err)
+	}
+	return buf.Bytes(), nil
 }
 
 // renameTemplatePath replaces occurrences of the template name in path
@@ -435,12 +600,15 @@ func renameTemplatePath(relPath, templateName, appID string) string {
 }
 
 // isTextFile returns true if a file path looks like a text file that should
-// have template tokens replaced. Binary files are left as-is.
+// have template tokens replaced. Binary files are left as-is. JSX/TSX files
+// are excluded because they routinely contain `{{ … }}` object expressions
+// (e.g. `icons={{ success: ... }}`) that collide with Go template syntax;
+// they don't need variable interpolation in practice.
 func isTextFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".html", ".css",
-		".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".swift", ".go",
+		".js", ".ts", ".py", ".rs", ".swift", ".go",
 		".cpp", ".c", ".h", ".hpp", ".cmake", ".sh", ".bash", ".zsh",
 		".dockerfile", ".gitignore", ".env", ".cfg", ".ini", ".xml",
 		".svg", ".lock":

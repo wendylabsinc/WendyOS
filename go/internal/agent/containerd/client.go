@@ -320,13 +320,36 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
 }
 
+func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainerProgress {
+	switch progress.Phase {
+	case "start":
+		return &agentpb.CreateContainerProgress{
+			Phase:       agentpb.CreateContainerProgress_UNPACKING,
+			TotalLayers: int32(progress.TotalLayers),
+		}
+	case "layer":
+		return &agentpb.CreateContainerProgress{
+			Phase:          agentpb.CreateContainerProgress_APPLYING_LAYER,
+			LayerIndex:     int32(progress.LayerIndex),
+			TotalLayers:    int32(progress.TotalLayers),
+			LayerSize:      progress.LayerSize,
+			ReusedSnapshot: progress.Reused,
+		}
+	default:
+		return nil
+	}
+}
+
 func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	ctx = c.withNamespace(ctx)
 	appName := req.GetAppName()
-	imageName := req.GetImageName()
+	// Canonicalise the image reference so older CLIs sending Docker short
+	// names like "python:3.11-slim" still resolve correctly under containerd's
+	// strict parser, which would otherwise read "3.11-slim" as a port.
+	imageName := normalizeImageName(req.GetImageName())
 
 	report := func(p *agentpb.CreateContainerProgress) {
 		if onProgress != nil {
@@ -365,37 +388,41 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Start D-Bus proxy if bluetooth entitlement is present.
+	var dbusProxyStarted bool
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
 			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
 		}
+		dbusProxyStarted = true
+		defer func() {
+			if dbusProxyStarted {
+				_ = c.proxyManager.Stop(appName)
+			}
+		}()
 	}
 
-	// For local-registry images, always pull from the embedded HTTP registry
-	// so containerd properly resolves manifest lists and unpacks layers.
-	// For remote images, try the local store first, then pull.
+	// Try the local image store first. The device-local registry shares
+	// containerd's content store, so anything just pushed to it is already
+	// available via GetImage — pulling would just round-trip bytes over
+	// loopback. Fall back to a pull only on miss; use PlainHTTP for the
+	// local-registry case.
 	var image containerd.Image
 	var err error
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	if shouldRefreshImageFromRegistry(imageName) {
-		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
-		image, err = c.client.Pull(ctx, imageName,
-			containerd.WithPullUnpack,
-			containerd.WithResolver(resolver),
+	image, err = c.client.GetImage(ctx, imageName)
+	if err != nil {
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
 		)
+		pullOpts := []containerd.RemoteOpt{containerd.WithPullUnpack}
+		if isLocalRegistryImage(imageName) {
+			pullOpts = append(pullOpts,
+				containerd.WithResolver(docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})),
+			)
+		}
+		image, err = c.client.Pull(ctx, imageName, pullOpts...)
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-		}
-	} else {
-		image, err = c.client.GetImage(ctx, imageName)
-		if err != nil {
-			c.logger.Info("Image not in local store, attempting pull from registry",
-				zap.String("image", imageName),
-			)
-			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
-			if err != nil {
-				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-			}
 		}
 	}
 
@@ -406,7 +433,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if err := image.Unpack(ctx, ""); err != nil {
+		if _, err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+			if mapped := toCreateContainerProgress(progress); mapped != nil {
+				report(mapped)
+			}
+		}); err != nil {
 			return fmt.Errorf("unpacking image %q: %w", imageName, err)
 		}
 	}
@@ -466,17 +497,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:wendy-agent:%s", appName)
 
+	// Apply the NVIDIA CDI spec before entitlements so that entitlements can
+	// override CDI-injected env vars (e.g. NVIDIA_VISIBLE_DEVICES=void → =all).
+	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
+		c.applyCDIGPU(spec)
+	}
+
 	opts := localoci.ApplyOptions{
 		DBusProxyAvailable: c.proxyManager != nil,
 	}
 	if err := localoci.ApplyEntitlements(spec, appCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
-	}
-
-	// If the app has a GPU entitlement, apply the NVIDIA CDI spec to get
-	// platform-correct library mounts (paths vary across Jetson models).
-	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
-		c.applyCDIGPU(spec)
 	}
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
@@ -503,6 +534,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", appName, err)
 	}
+
+	// Container created successfully; keep the D-Bus proxy running.
+	dbusProxyStarted = false
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_COMPLETE})
 

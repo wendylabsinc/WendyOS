@@ -91,6 +91,7 @@ https://github.com/wendylabsinc/wendy-agent/releases/download/v0.2.0/wendy-agent
 All platform builds are included:
 - `wendy-agent-linux-arm64-${VERSION}.tar.gz`
 - `wendy-agent-linux-amd64-${VERSION}.tar.gz`
+- `wendy-agent-macos-arm64-${VERSION}.zip` (Developer ID signed and notarized)
 - `wendy-cli-linux-arm64-${VERSION}.tar.gz`
 - `wendy-cli-linux-amd64-${VERSION}.tar.gz`
 - `wendy-cli-darwin-arm64-${VERSION}.tar.gz`
@@ -102,7 +103,9 @@ All platform builds are included:
 
 - **Pre-releases**: Fully automated on every `main` push
 - **Homebrew nightly formula**: Auto-updated (direct push) for every pre-release
+- **Homebrew nightly cask**: Auto-updated (direct push) for every pre-release
 - **Homebrew stable formula**: Auto-updated via PR for semver releases
+- **Homebrew stable cask**: Auto-updated via PR for semver releases
 - **Winget**: Auto-updated for semver releases
 - **Semver releases**: Manual promotion via workflow dispatch
 - **Latest tag**: Auto-updated to point to the most recent pre-release
@@ -118,5 +121,5 @@ A: Push to `main` to create a new pre-release, then promote it using the workflo
 **Q: Can I delete old pre-releases?**
 A: Yes, but keep at least the last few in case you need to reference or promote them.
 
-**Q: How do I update the Homebrew formula for a semver release?**
-A: Manually create a PR in [homebrew-tap](https://github.com/wendylabsinc/homebrew-tap) or wait for the next pre-release to auto-update it, then manually adjust the version.
+**Q: How do I update Homebrew for a stable release?**
+A: You don't need to update it manually. The release workflow opens a PR in [homebrew-tap](https://github.com/wendylabsinc/homebrew-tap) automatically for the stable CLI formula and macOS agent cask. Review that PR, wait for the tap checks to pass, and merge it.

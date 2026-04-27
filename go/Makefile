@@ -4,7 +4,8 @@
        build-cli-linux-amd64 build-cli-linux-arm64 \
        build-cli-darwin-amd64 build-cli-darwin-arm64 \
        build-cli-windows-amd64 build-cli-windows-arm64 \
-       msi-windows-amd64 msi-windows-arm64
+       msi-windows-amd64 msi-windows-arm64 \
+       licenses licenses-update
 
 VERSION ?= dev
 MSI_VERSION ?= 0.0.1
@@ -94,3 +95,11 @@ fmt:
 # Lint (requires golangci-lint)
 lint:
 	golangci-lint run ./...
+
+# Check that dependency licenses match the committed baseline (licenses.csv)
+licenses:
+	bash scripts/check-licenses.sh
+
+# Regenerate licenses.csv from current dependencies
+licenses-update:
+	bash scripts/check-licenses.sh --update

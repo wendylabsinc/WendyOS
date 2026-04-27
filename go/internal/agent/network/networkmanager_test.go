@@ -2,7 +2,52 @@ package network
 
 import (
 	"testing"
+
+	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
+
+func TestSplitNMCLI(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want []string
+	}{
+		{"HomeNet:80:WPA2:*", 4, []string{"HomeNet", "80", "WPA2", "*"}},
+		{"My\\:Net:50:WPA2:", 4, []string{"My:Net", "50", "WPA2", ""}},
+		{"a:b:c", 3, []string{"a", "b", "c"}},
+		{"trailing::", 3, []string{"trailing", "", ""}},
+	}
+	for _, c := range cases {
+		got := splitNMCLI(c.in, c.n)
+		if len(got) != len(c.want) {
+			t.Errorf("splitNMCLI(%q, %d) len=%d; want %d (got=%v)", c.in, c.n, len(got), len(c.want), got)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitNMCLI(%q, %d)[%d] = %q; want %q", c.in, c.n, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+func TestClassifySecurity(t *testing.T) {
+	cases := map[string]agentpb.WiFiSecurityType{
+		"":            agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN,
+		"--":          agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN,
+		"WPA2":        agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK,
+		"WPA1 WPA2":   agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK,
+		"WPA3":        agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE,
+		"WPA2 802.1X": agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_ENTERPRISE,
+		"WEP":         agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WEP,
+		"WPA":         agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA_PSK,
+	}
+	for in, want := range cases {
+		if got := classifySecurity(in); got != want {
+			t.Errorf("classifySecurity(%q) = %v; want %v", in, got, want)
+		}
+	}
+}
 
 func TestParseWiFiList(t *testing.T) {
 	// Simulate nmcli -t output format: SSID:SIGNAL:SECURITY:IN-USE

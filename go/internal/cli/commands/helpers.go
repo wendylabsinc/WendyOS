@@ -45,6 +45,51 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	return conn.IsMTLS, resp, err
 }
 
+var isInteractiveTerminalFn = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner(label))
+
+	var (
+		conn   *grpcclient.AgentConnection
+		runErr error
+		doneCh = make(chan struct{})
+	)
+	go func() {
+		defer close(doneCh)
+		conn, runErr = fn(ctx)
+		// Keep spinner teardown quiet; callers handle the returned error.
+		prog.Send(tui.SpinnerDoneMsg{})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-doneCh
+		if conn != nil {
+			conn.Close()
+		}
+		return nil, ErrUserCancelled
+	}
+
+	<-doneCh
+	return conn, runErr
+}
+
 // ErrUserCancelled is returned when the user cancels an interactive prompt (e.g. Ctrl+C).
 var ErrUserCancelled = errors.New("cancelled")
 
@@ -61,6 +106,38 @@ func hostPort(host string, port int) string {
 		return fmt.Sprintf("[%s]:%d", host, port)
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// resolveHostPreferIPv4 resolves a hostname to a concrete IP address,
+// preferring IPv4 over global IPv6. If the input is already an IP address
+// or resolution fails, it returns the input unchanged.
+func resolveHostPreferIPv4(host string) string {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return host // already an IP
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return host
+	}
+
+	var globalIPv6 string
+	for _, a := range addrs {
+		addr, parseErr := netip.ParseAddr(a)
+		if parseErr != nil {
+			continue
+		}
+		if addr.Is4() {
+			return a
+		}
+		if !addr.IsLinkLocalUnicast() && globalIPv6 == "" {
+			globalIPv6 = addr.WithZone("").String()
+		}
+	}
+	if globalIPv6 != "" {
+		return globalIPv6
+	}
+	return host // only link-local IPv6 found — keep hostname for zone-aware dial
 }
 
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
@@ -296,19 +373,61 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 // isInteractiveTerminal returns true when both stdin and stdout are TTYs,
 // meaning it is safe to show interactive Bubble Tea prompts.
 func isInteractiveTerminal() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	return isInteractiveTerminalFn()
 }
 
 // handleDefaultDeviceRecovery runs the recovery flow after a default device
 // connection failure. Shows a warning and immediately opens the device picker
 // where the user can select a new device and optionally set/unset default
 // via 'd'/'x' shortcuts.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
 	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable.", hostname)))
+	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable after %s.", hostname, formatElapsedSeconds(elapsed))))
 	fmt.Println()
 
 	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
+}
+
+func defaultDeviceSearchLabel(hostname string) string {
+	return fmt.Sprintf("Searching for default device %q...", hostname)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	roundedElapsed := elapsed.Round(10 * time.Millisecond)
+	seconds := roundedElapsed.Seconds()
+	unit := "seconds"
+	if roundedElapsed == time.Second {
+		unit = "second"
+	}
+	return fmt.Sprintf("%.2f %s", seconds, unit)
+}
+
+func connectAgentAtAddress(ctx context.Context, addr string, probePlaintext bool) (*grpcclient.AgentConnection, error) {
+	conn, err := connectWithAutoTLS(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if probePlaintext && !conn.IsMTLS {
+		// gRPC plaintext connections are lazy — probe to detect unreachable
+		// default devices early so recovery can be offered immediately.
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr != nil {
+			conn.Close()
+			return nil, probeErr
+		}
+	}
+	return conn, nil
+}
+
+func connectResolvedAgent(ctx context.Context, hostname, addr string, isDefault bool) (*grpcclient.AgentConnection, error) {
+	if isDefault && !jsonOutput && isInteractiveTerminal() {
+		return runAgentConnectionSpinner(ctx, defaultDeviceSearchLabel(hostname), func(spinCtx context.Context) (*grpcclient.AgentConnection, error) {
+			return connectAgentAtAddress(spinCtx, addr, true)
+		})
+	}
+	return connectAgentAtAddress(ctx, addr, isDefault)
 }
 
 // connectToAgent establishes a gRPC connection to the target device.
@@ -324,26 +443,20 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
-		conn, connErr := connectWithAutoTLS(ctx, addr)
-		if connErr == nil && isDefault && !conn.IsMTLS {
-			// gRPC plaintext connections are lazy — probe to detect
-			// unreachable default devices early so the recovery menu
-			// can be shown instead of a cryptic error later.
-			// mTLS connections are already probed inside connectWithAutoTLS.
-			// 8s allows time for mDNS (.local) resolution + TCP + gRPC handshake.
-			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				connErr = probeErr
-			}
+		startedAt := time.Now()
+		hostname := addr
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			hostname = host
 		}
+		conn, connErr := connectResolvedAgent(ctx, hostname, addr, isDefault)
 		if connErr != nil {
+			if errors.Is(connErr, ErrUserCancelled) {
+				return nil, connErr
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
-				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 				if recErr != nil {
 					return nil, recErr
 				}
@@ -486,7 +599,7 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	arch := resp.GetCpuArchitecture()
 	addr := hostPort(conn.Host, defaultAgentPort)
 
-	if err := performAgentUpdate(ctx, conn, arch); err != nil {
+	if err := performAgentUpdate(ctx, conn, arch, false); err != nil {
 		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
@@ -503,14 +616,15 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	return newConn, nil
 }
 
-// performAgentUpdate downloads the latest stable release for the given arch and
-// uploads it to conn. The agent will restart after this returns successfully.
-func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string) error {
+// performAgentUpdate downloads the latest release for the given arch and uploads
+// it to conn. Pass nightly=true to fetch the latest prerelease instead of stable.
+// The agent will restart after this returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, arch string, nightly bool) error {
 	if arch == "" {
 		return fmt.Errorf("device did not report CPU architecture")
 	}
 	fmt.Fprintf(os.Stderr, "Fetching latest release...\n")
-	release, err := fetchAgentRelease(false)
+	release, err := fetchAgentRelease(nightly)
 	if err != nil {
 		return fmt.Errorf("fetching release: %w", err)
 	}
@@ -694,20 +808,15 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	// If a device hostname was given, connect via gRPC (with mTLS if authenticated).
 	if device != "" {
 		addr := hostPort(device, defaultAgentPort)
-		conn, err := connectWithAutoTLS(ctx, addr)
-		if err == nil && isDefault && !conn.IsMTLS {
-			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr != nil {
-				conn.Close()
-				err = probeErr
-			}
-		}
+		startedAt := time.Now()
+		conn, err := connectResolvedAgent(ctx, device, addr, isDefault)
 		if err != nil {
+			if errors.Is(err, ErrUserCancelled) {
+				return nil, err
+			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
-				return handleDefaultDeviceRecovery(ctx, device, err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
 			}
 			return nil, err
 		}
@@ -788,11 +897,13 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 
 	// Detect language from the project files on disk.
 	language := ""
-	projectType := detectProjectType(dir)
+	projectType, _ := detectProjectType(dir) // ignore multiple-xcodeproj error for config init
 	switch projectType {
 	case "python":
 		language = "python"
 	case "swift":
+		language = "swift"
+	case "xcode":
 		language = "swift"
 	}
 
@@ -1158,4 +1269,40 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	}
 
 	return nil, fmt.Errorf("selected device type is not yet supported")
+}
+
+// resolveAgentPlatform determines the target platform string from the user's
+// wendy.json platform field, the agent's OS, and the agent's CPU architecture.
+//
+// Rules:
+//   - If cfgPlatform is a full "os/arch" string, use it as-is.
+//   - If cfgPlatform is OS-only (e.g., "linux" or "darwin"), append the agent arch.
+//   - If cfgPlatform is empty, default to the agent's OS and architecture.
+func resolveAgentPlatform(cfgPlatform, agentOS, agentArch string) string {
+	if cfgPlatform == "" {
+		return agentOS + "/" + agentArch
+	}
+	if strings.Contains(cfgPlatform, "/") {
+		return cfgPlatform
+	}
+	// OS-only: append agent architecture.
+	return cfgPlatform + "/" + agentArch
+}
+
+// registryPort returns the OCI registry port for the given agent OS.
+// macOS uses 5555 to avoid conflicts with AirPlay Receiver which binds *:5000.
+// All other platforms use the standard 5000.
+func registryPort(agentOS string) int {
+	if agentOS == "darwin" {
+		return 5555
+	}
+	return 5000
+}
+
+// platformOS extracts the OS component from a platform string like "linux/arm64".
+func platformOS(platform string) string {
+	if i := strings.IndexByte(platform, '/'); i >= 0 {
+		return platform[:i]
+	}
+	return platform
 }

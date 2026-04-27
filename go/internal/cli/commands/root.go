@@ -3,6 +3,7 @@ package commands
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/analytics"
@@ -62,7 +63,16 @@ func NewRootCmd() *cobra.Command {
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			select {
 			case latest := <-cliUpdateNoticeCh:
-				cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: brew upgrade wendy\n", latest, version.Version)
+				var updateCmd string
+				switch runtime.GOOS {
+				case "windows":
+					updateCmd = "winget upgrade WendyLabs.Wendy"
+				case "darwin":
+					updateCmd = "brew upgrade wendy"
+				default:
+					updateCmd = "curl -fsSL https://install.wendy.sh/cli.sh | bash"
+				}
+				cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n", latest, version.Version, updateCmd)
 			default:
 			}
 			return nil

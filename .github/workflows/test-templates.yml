@@ -18,7 +18,7 @@ on:
       deploy:
         description: 'Deploy generated projects to hardware device'
         type: boolean
-        default: false
+        default: true
       hostname:
         description: 'Device hostname for deploy phase (empty = auto-discover)'
         required: false
@@ -37,7 +37,7 @@ on:
         default: ''
       deploy:
         type: boolean
-        default: false
+        default: true
       hostname:
         type: string
         default: ''
@@ -58,10 +58,10 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -96,18 +96,22 @@ jobs:
         run: make clean
 
   deploy-to-device:
-    name: Deploy (${{ matrix.os }})
+    name: Deploy (${{ matrix.runner.name }})
     if: inputs.deploy == true
     needs: [generate-validate]
-    runs-on: [self-hosted, wendy-hw, '${{ matrix.os }}']
+    runs-on:
+      group: wendy-developer
+      labels: ${{ matrix.runner.labels }}
     concurrency:
-      group: template-deploy-${{ matrix.os }}
+      group: template-deploy-${{ matrix.runner.name }}
       cancel-in-progress: false
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [macOS, Linux]
+        runner:
+          - { name: macOS, labels: [self-hosted, macOS, ARM64] }
+          - { name: Linux, labels: [self-hosted, Linux, X64] }
     defaults:
       run:
         working-directory: go
@@ -117,10 +121,10 @@ jobs:
       INPUT_TEMPLATE: ${{ inputs.template }}
       INPUT_LANGUAGE: ${{ inputs.language }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum

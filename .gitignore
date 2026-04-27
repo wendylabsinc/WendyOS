@@ -1,7 +1,9 @@
 .DS_Store
+build
 .build
 .wendy-build
 .edge-build
+.xcode
 /Packages
 xcuserdata/
 DerivedData/
@@ -28,3 +30,6 @@ go/wendy
 
 # Local settings
 *.local.*
+
+# Git worktrees
+.worktrees/

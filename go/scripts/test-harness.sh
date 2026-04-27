@@ -199,6 +199,8 @@ validate_wendy_binary() {
             echo -e "${RED}ERROR: wendy binary not found or not executable at $WENDY${RESET}"
             return 1
         fi
+        # Resolve to absolute path so it works after cd to temp dirs
+        WENDY="$(cd "$(dirname "$WENDY")" && pwd)/$(basename "$WENDY")"
     else
         # Default — check wendy is on PATH
         if ! command -v wendy &>/dev/null; then
