@@ -69,7 +69,12 @@ func main() {
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
-	configpartition.Apply(logger)
+	configPath := "/etc/wendy-agent"
+	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
+		configPath = envPath
+	}
+
+	configpartition.Apply(logger, configPath)
 	services.CommitMenderUpdate(logger)
 
 	// Clean up old agent binary backups from previous updates.
@@ -114,10 +119,6 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 	videoSvc := services.NewVideoService(logger)
 
-	configPath := "/etc/wendy-agent"
-	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
 	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
 

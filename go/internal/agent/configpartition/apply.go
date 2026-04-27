@@ -2,6 +2,7 @@ package configpartition
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -440,10 +442,100 @@ func avahiDisplayName(name string) string {
 	return strings.Join(words, " ")
 }
 
-// Apply checks the config partition for a pending agent binary and WiFi config,
-// applying them in order. If a binary update is installed, the process exits
-// so systemd can restart it with the new binary.
-func Apply(logger *zap.Logger) {
+// preProvisionedState is the provisioning state written by the CLI during imaging.
+// JSON tags must match provisioningState in internal/agent/services.
+type preProvisionedState struct {
+	Enrolled  bool   `json:"enrolled"`
+	CloudHost string `json:"cloudHost,omitempty"`
+	OrgID     int32  `json:"orgId,omitempty"`
+	AssetID   int32  `json:"assetId,omitempty"`
+	KeyPEM    string `json:"keyPem,omitempty"`
+	CertPEM   string `json:"certPem,omitempty"`
+	ChainPEM  string `json:"chainPem,omitempty"`
+}
+
+// applyPreProvisioning checks cfgDir for a provisioning.json written by the CLI
+// at imaging time. If present and valid, it copies the state to configPath so
+// ProvisioningService.loadState() picks it up on first boot, then deletes the source.
+func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
+	srcPath := filepath.Join(cfgDir, "provisioning.json")
+	data, err := os.ReadFile(srcPath)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		logger.Error("Failed to read pre-provisioning state from config partition",
+			zap.String("path", srcPath), zap.Error(err))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	var state preProvisionedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		logger.Error("Failed to parse pre-provisioning state, removing",
+			zap.String("path", srcPath), zap.Error(err))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	if !state.Enrolled || state.KeyPEM == "" || state.CertPEM == "" || state.CloudHost == "" {
+		logger.Error("Pre-provisioning state is incomplete, removing",
+			zap.String("path", srcPath))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		logger.Error("Failed to create config directory for pre-provisioning",
+			zap.String("path", configPath), zap.Error(err))
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(configPath, "provisioning.json"), data, 0o600); err != nil {
+		logger.Error("Failed to write provisioning.json from config partition", zap.Error(err))
+		return
+	}
+
+	pemFiles := []struct {
+		name string
+		data string
+		mode os.FileMode
+	}{
+		{"device-key.pem", state.KeyPEM, 0o600},
+		{"device.pem", state.CertPEM, 0o644},
+		{"ca.pem", state.ChainPEM, 0o644},
+	}
+	for _, f := range pemFiles {
+		if f.data == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(configPath, f.name), []byte(f.data), f.mode); err != nil {
+			logger.Error("Failed to write PEM file from config partition",
+				zap.String("name", f.name), zap.Error(err))
+			return
+		}
+	}
+
+	_ = os.WriteFile(filepath.Join(configPath, ".provisioned"),
+		[]byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+
+	if err := os.Remove(srcPath); err != nil {
+		logger.Warn("Failed to remove pre-provisioning state from config partition",
+			zap.String("path", srcPath), zap.Error(err))
+	}
+
+	logger.Info("Applied pre-provisioned state from config partition",
+		zap.String("cloudHost", state.CloudHost),
+		zap.Int32("orgId", state.OrgID),
+		zap.Int32("assetId", state.AssetID),
+	)
+}
+
+// Apply checks the config partition for a pending agent binary, WiFi config, and
+// pre-provisioning state, applying them in order. If a binary update is installed,
+// the process exits so systemd can restart it with the new binary.
+// configPath is the agent's configuration directory (e.g. /etc/wendy-agent).
+func Apply(logger *zap.Logger, configPath string) {
 	installPath := defaultInstallPath
 	if exe, err := os.Executable(); err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
@@ -454,4 +546,5 @@ func Apply(logger *zap.Logger) {
 		os.Exit(0)
 	}
 	applyWendyConf(logger, configDir)
+	applyPreProvisioning(logger, configDir, configPath)
 }
