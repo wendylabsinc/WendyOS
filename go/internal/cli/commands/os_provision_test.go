@@ -2,12 +2,20 @@ package commands
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -73,14 +81,43 @@ func startPreEnrollFakeServer(t *testing.T, svc *fakePreEnrollCertService) PreEn
 	}
 }
 
-func fakeAuth() *config.AuthConfig {
+// generateSelfSignedCert returns a minimal valid PEM cert and key for testing.
+func generateSelfSignedCert(t *testing.T) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}))
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certBytes}))
+	return
+}
+
+func fakeAuth(t *testing.T) *config.AuthConfig {
+	certPEM, keyPEM := generateSelfSignedCert(t)
 	return &config.AuthConfig{
 		CloudGRPC: "localhost:9999",
 		Certificates: []config.CertificateInfo{
 			{
-				PemCertificate:      "fake-cert",
-				PemCertificateChain: "fake-chain",
-				PemPrivateKey:       "fake-key",
+				PemCertificate:      certPEM,
+				PemCertificateChain: certPEM,
+				PemPrivateKey:       keyPEM,
 				OrganizationID:      7,
 			},
 		},
@@ -96,7 +133,7 @@ func TestPreEnrollDevice_Success(t *testing.T) {
 		chainPEM: "ca-chain",
 	})
 
-	data, err := preEnrollDevice(context.Background(), fakeAuth(), "my-device", dialer)
+	data, err := preEnrollDevice(context.Background(), fakeAuth(t), "my-device", dialer)
 	if err != nil {
 		t.Fatalf("preEnrollDevice: %v", err)
 	}
@@ -133,7 +170,7 @@ func TestPreEnrollDevice_WritesFile(t *testing.T) {
 		orgID: 1, assetID: 1, token: "t", certPEM: "c", chainPEM: "ch",
 	})
 
-	data, err := preEnrollDevice(context.Background(), fakeAuth(), "", dialer)
+	data, err := preEnrollDevice(context.Background(), fakeAuth(t), "", dialer)
 	if err != nil {
 		t.Fatalf("preEnrollDevice: %v", err)
 	}
@@ -161,7 +198,7 @@ func TestPreEnrollDevice_TokenError(t *testing.T) {
 	dialer := startPreEnrollFakeServer(t, &fakePreEnrollCertService{
 		tokenErr: fmt.Errorf("token denied"),
 	})
-	_, err := preEnrollDevice(context.Background(), fakeAuth(), "", dialer)
+	_, err := preEnrollDevice(context.Background(), fakeAuth(t), "", dialer)
 	if err == nil {
 		t.Fatal("expected error when token creation fails")
 	}
@@ -172,7 +209,7 @@ func TestPreEnrollDevice_IssueError(t *testing.T) {
 		orgID: 1, assetID: 1, token: "t",
 		issueErr: fmt.Errorf("issuance rejected"),
 	})
-	_, err := preEnrollDevice(context.Background(), fakeAuth(), "", dialer)
+	_, err := preEnrollDevice(context.Background(), fakeAuth(t), "", dialer)
 	if err == nil {
 		t.Fatal("expected error when certificate issuance fails")
 	}
@@ -183,7 +220,7 @@ func TestPreEnrollDevice_EmptyCert(t *testing.T) {
 		orgID: 1, assetID: 1, token: "t",
 		emptyCert: true,
 	})
-	_, err := preEnrollDevice(context.Background(), fakeAuth(), "", dialer)
+	_, err := preEnrollDevice(context.Background(), fakeAuth(t), "", dialer)
 	if err == nil {
 		t.Fatal("expected error when cloud returns empty certificate")
 	}

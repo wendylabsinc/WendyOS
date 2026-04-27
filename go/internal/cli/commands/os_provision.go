@@ -11,7 +11,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -54,16 +53,11 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	}
 	cert := auth.Certificates[0]
 
-	var transportOpt grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		tlsCfg, err := certs.LoadTLSConfig(cert.PemCertificate, cert.PemCertificateChain, cert.PemPrivateKey, "")
-		if err != nil {
-			return nil, fmt.Errorf("loading TLS config: %w", err)
-		}
-		transportOpt = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		transportOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
+	tlsCfg, err := certs.LoadTLSConfig(cert.PemCertificate, cert.PemCertificateChain, cert.PemPrivateKey, "")
+	if err != nil {
+		return nil, fmt.Errorf("loading TLS config: %w", err)
 	}
+	transportOpt := grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 
 	cloudConn, err := dialer(ctx, auth.CloudGRPC, transportOpt)
 	if err != nil {
