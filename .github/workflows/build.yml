@@ -13,10 +13,10 @@ on:
         default: all
         options:
           - all
-          - rpi3
-          - rpi4
-          - rpi5
-          - jetson
+          - raspberry-pi-3
+          - raspberry-pi-4
+          - raspberry-pi-5
+          - jetson-orin-nano
       version:
         description: "Git ref (commit SHA, tag, or branch) to build. Empty = latest main."
         type: string
@@ -53,10 +53,10 @@ jobs:
           set -euo pipefail
 
           ALL_MATRIX='[
-            {"device":"rpi3","board":"rpi3-sd","machine":"raspberrypi3-64-wendyos","publisher_device":"raspberry-pi-3"},
-            {"device":"rpi4","board":"rpi4-sd","machine":"raspberrypi4-64-wendyos","publisher_device":"raspberry-pi-4"},
-            {"device":"rpi5","board":"rpi5-sd","machine":"raspberrypi5-wendyos","publisher_device":"raspberry-pi-5"},
-            {"device":"jetson","board":"jetson-orin-nano-nvme","machine":"jetson-orin-nano-devkit-nvme-wendyos","publisher_device":"jetson-orin-nano"}
+            {"device":"raspberry-pi-3","storage":"sd"},
+            {"device":"raspberry-pi-4","storage":"sd"},
+            {"device":"raspberry-pi-5","storage":"sd"},
+            {"device":"jetson-orin-nano","storage":"nvme"}
           ]'
           # Collapse to one line so it can be written to $GITHUB_OUTPUT, which
           # requires single-line key=value pairs (no implicit multiline support).
@@ -64,7 +64,7 @@ jobs:
 
           emit_all() {
             echo "matrix={\"include\":${ALL_MATRIX}}" >> "$GITHUB_OUTPUT"
-            echo "devices=rpi3 rpi4 rpi5 jetson"      >> "$GITHUB_OUTPUT"
+            echo "devices=raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano" >> "$GITHUB_OUTPUT"
           }
 
           emit_one() {
@@ -110,15 +110,15 @@ jobs:
           # Per-device path patterns. meta-rpi-extensions affects every Pi;
           # meta-tegra-extensions affects Jetson only.
           declare -A DEV_RE=(
-            [rpi3]='(^conf/template/boards/rpi3-sd/|^conf/machine/raspberrypi3-64-wendyos\.conf$|^meta-rpi-extensions/)'
-            [rpi4]='(^conf/template/boards/rpi4-sd/|^conf/machine/raspberrypi4-64-wendyos\.conf$|^meta-rpi-extensions/)'
-            [rpi5]='(^conf/template/boards/rpi5-sd/|^conf/machine/raspberrypi5-wendyos\.conf$|^meta-rpi-extensions/)'
-            [jetson]='(^conf/template/boards/jetson-orin-nano-nvme/|^conf/machine/jetson-orin-nano-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
+            [raspberry-pi-3]='(^conf/template/boards/rpi3-sd/|^conf/machine/raspberrypi3-64-wendyos\.conf$|^meta-rpi-extensions/)'
+            [raspberry-pi-4]='(^conf/template/boards/rpi4-sd/|^conf/machine/raspberrypi4-64-wendyos\.conf$|^meta-rpi-extensions/)'
+            [raspberry-pi-5]='(^conf/template/boards/rpi5-sd/|^conf/machine/raspberrypi5-wendyos\.conf$|^meta-rpi-extensions/)'
+            [jetson-orin-nano]='(^conf/template/boards/jetson-orin-nano-nvme/|^conf/machine/jetson-orin-nano-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
           )
 
           INCLUDED=()
           DEVICES=()
-          for dev in rpi3 rpi4 rpi5 jetson; do
+          for dev in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano; do
             if echo "${CHANGED}" | grep -Eq "${DEV_RE[$dev]}"; then
               INCLUDED+=("$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")")
               DEVICES+=("${dev}")
@@ -143,7 +143,7 @@ jobs:
   # bump into EBS storage throughput caps.
   # ---------------------------------------------------------------------------
   build:
-    name: Build ${{ matrix.device }}
+    name: Build ${{ matrix.device }} (${{ matrix.storage }})
     needs: detect-changes
     if: needs.detect-changes.outputs.devices != ''
     permissions:
@@ -153,7 +153,7 @@ jobs:
       - runs-on
       - family=c8id.8xlarge
       - spot=false
-      - run-id=${{ github.run_id }}-${{ matrix.device }}
+      - run-id=${{ github.run_id }}-${{ matrix.device }}-${{ matrix.storage }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
@@ -218,10 +218,29 @@ jobs:
 
       # ---------- Build ----------
 
+      - name: Derive build variables
+        id: vars
+        env:
+          DEVICE: ${{ matrix.device }}
+          STORAGE: ${{ matrix.storage }}
+        run: |
+          case "$DEVICE:$STORAGE" in
+            raspberry-pi-3:sd)    BOARD=rpi3-sd;               MACHINE=raspberrypi3-64-wendyos ;;
+            raspberry-pi-4:sd)    BOARD=rpi4-sd;               MACHINE=raspberrypi4-64-wendyos ;;
+            raspberry-pi-5:sd)    BOARD=rpi5-sd;               MACHINE=raspberrypi5-wendyos ;;
+            raspberry-pi-5:nvme)  BOARD=rpi5-nvme;             MACHINE=raspberrypi5-nvme-wendyos ;;
+            jetson-agx-orin:nvme) BOARD=jetson-agx-orin;       MACHINE=jetson-agx-orin-devkit-nvme-wendyos ;;
+            jetson-orin-nano:nvme) BOARD=jetson-orin-nano-nvme; MACHINE=jetson-orin-nano-devkit-nvme-wendyos ;;
+            jetson-orin-nano:sd)  BOARD=jetson-orin-nano-sd;   MACHINE=jetson-orin-nano-devkit-wendyos ;;
+            *) echo "Unknown device/storage: $DEVICE/$STORAGE"; exit 1 ;;
+          esac
+          echo "board=$BOARD" >> "$GITHUB_OUTPUT"
+          echo "machine=$MACHINE" >> "$GITHUB_OUTPUT"
+
       - name: Bootstrap build environment
         working-directory: ${{ github.workspace }}
         env:
-          BOARD: ${{ matrix.board }}
+          BOARD: ${{ steps.vars.outputs.board }}
         run: BOARD="$BOARD" ./wendyos/bootstrap.sh
 
       # Note: SSTATE_DIR / DL_DIR are pinned to ${TOPDIR}/../{sstate-cache,downloads}
@@ -234,7 +253,7 @@ jobs:
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
         env:
-          MACHINE: ${{ matrix.machine }}
+          MACHINE: ${{ steps.vars.outputs.machine }}
         run: make build MACHINE="$MACHINE"
 
       - name: Fix deploy directory permissions
@@ -288,14 +307,14 @@ jobs:
           go-version-file: wendy-os-publisher/go.mod
 
       - name: Install flashable image dependencies (Jetson only)
-        if: github.event_name != 'pull_request' && matrix.device == 'jetson'
+        if: github.event_name != 'pull_request' && matrix.device == 'jetson-orin-nano'
         run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
 
       - name: Generate flashable image (Jetson only)
-        if: github.event_name != 'pull_request' && matrix.device == 'jetson'
+        if: github.event_name != 'pull_request' && matrix.device == 'jetson-orin-nano'
         env:
-          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
-          MACHINE: ${{ matrix.machine }}
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
+          MACHINE: ${{ steps.vars.outputs.machine }}
         run: |
           TEGRAFLASH_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
           FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
@@ -307,9 +326,9 @@ jobs:
       - name: Upload image and update device manifest
         if: github.event_name != 'pull_request'
         env:
-          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
-          MACHINE: ${{ matrix.machine }}
-          PUBLISHER_DEVICE: ${{ matrix.publisher_device }}
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
+          MACHINE: ${{ steps.vars.outputs.machine }}
+          DEVICE: ${{ matrix.device }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
         run: |
           VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -322,7 +341,7 @@ jobs:
           fi
 
           ARGS=(
-            --device "$PUBLISHER_DEVICE"
+            --device "$DEVICE"
             --version "${VERSION}-nightly"
             --file "$IMAGE_FILE"
             --nightly

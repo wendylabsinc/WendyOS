@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.device }}
+    name: Build ${{ matrix.device }} (${{ matrix.storage }})
     permissions:
       contents: read
       id-token: write
@@ -16,27 +16,19 @@ jobs:
       - family=c7i-flex.8xlarge
       - spot=false
       - volume=400gb:gp3
-      - run-id=${{ github.run_id }}-${{ matrix.device }}
+      - run-id=${{ github.run_id }}-${{ matrix.device }}-${{ matrix.storage }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - device: rpi3
-            board: rpi3-sd
-            machine: raspberrypi3-64-wendyos
-            publisher_device: raspberry-pi-3
-          - device: rpi4
-            board: rpi4-sd
-            machine: raspberrypi4-64-wendyos
-            publisher_device: raspberry-pi-4
-          - device: rpi5
-            board: rpi5-sd
-            machine: raspberrypi5-wendyos
-            publisher_device: raspberry-pi-5
-          - device: jetson
-            board: jetson-orin-nano-nvme
-            machine: jetson-orin-nano-devkit-nvme-wendyos
-            publisher_device: jetson-orin-nano
+          - device: raspberry-pi-3
+            storage: sd
+          - device: raspberry-pi-4
+            storage: sd
+          - device: raspberry-pi-5
+            storage: sd
+          - device: jetson-orin-nano
+            storage: nvme
 
     steps:
       # Disabled: build caching is flaky for mender builds
@@ -54,16 +46,39 @@ jobs:
         with:
           path: wendyos
 
+      - name: Derive build variables
+        id: vars
+        env:
+          DEVICE: ${{ matrix.device }}
+          STORAGE: ${{ matrix.storage }}
+        run: |
+          case "$DEVICE:$STORAGE" in
+            raspberry-pi-3:sd)    BOARD=rpi3-sd;               MACHINE=raspberrypi3-64-wendyos ;;
+            raspberry-pi-4:sd)    BOARD=rpi4-sd;               MACHINE=raspberrypi4-64-wendyos ;;
+            raspberry-pi-5:sd)    BOARD=rpi5-sd;               MACHINE=raspberrypi5-wendyos ;;
+            raspberry-pi-5:nvme)  BOARD=rpi5-nvme;             MACHINE=raspberrypi5-nvme-wendyos ;;
+            jetson-agx-orin:nvme) BOARD=jetson-agx-orin;       MACHINE=jetson-agx-orin-devkit-nvme-wendyos ;;
+            jetson-orin-nano:nvme) BOARD=jetson-orin-nano-nvme; MACHINE=jetson-orin-nano-devkit-nvme-wendyos ;;
+            jetson-orin-nano:sd)  BOARD=jetson-orin-nano-sd;   MACHINE=jetson-orin-nano-devkit-wendyos ;;
+            *) echo "Unknown device/storage: $DEVICE/$STORAGE"; exit 1 ;;
+          esac
+          echo "board=$BOARD" >> "$GITHUB_OUTPUT"
+          echo "machine=$MACHINE" >> "$GITHUB_OUTPUT"
+
       - name: Bootstrap build environment
         working-directory: ${{ github.workspace }}
-        run: BOARD=${{ matrix.board }} ./wendyos/bootstrap.sh
+        env:
+          BOARD: ${{ steps.vars.outputs.board }}
+        run: BOARD=$BOARD ./wendyos/bootstrap.sh
 
       - name: Fix workspace permissions for Docker
         run: chmod -R a+rwX ${{ github.workspace }} 2>/dev/null || true
 
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
-        run: make build MACHINE=${{ matrix.machine }}
+        env:
+          MACHINE: ${{ steps.vars.outputs.machine }}
+        run: make build MACHINE=$MACHINE
 
       - name: Fix deploy directory permissions
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/build/tmp/deploy" 2>/dev/null || true
@@ -91,10 +106,10 @@ jobs:
           go-version-file: wendy-os-publisher/go.mod
 
       - name: Generate flashable image (Jetson only)
-        if: matrix.device == 'jetson'
+        if: matrix.device == 'jetson-orin-nano'
         env:
-          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
-          MACHINE: ${{ matrix.machine }}
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
+          MACHINE: ${{ steps.vars.outputs.machine }}
         run: |
           TEGRAFLASH_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
           FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
@@ -105,9 +120,9 @@ jobs:
 
       - name: Publish release to GCS
         env:
-          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ matrix.machine }}
-          MACHINE: ${{ matrix.machine }}
-          PUBLISHER_DEVICE: ${{ matrix.publisher_device }}
+          DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
+          MACHINE: ${{ steps.vars.outputs.machine }}
+          DEVICE: ${{ matrix.device }}
           RELEASE_VERSION: ${{ github.ref_name }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
         run: |
@@ -120,7 +135,7 @@ jobs:
           fi
 
           ARGS=(
-            --device "$PUBLISHER_DEVICE"
+            --device "$DEVICE"
             --version "$RELEASE_VERSION"
             --file "$IMAGE_FILE"
             --access-token "$TOKEN"
