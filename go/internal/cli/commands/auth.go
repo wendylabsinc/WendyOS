@@ -37,7 +37,6 @@ func newAuthCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newAuthLoginCmd(),
-		newAuthLoginLocalCmd(),
 		newAuthLogoutCmd(),
 		newAuthRefreshCertsCmd(),
 		newAuthStatusCmd(),
@@ -335,8 +334,9 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		TtlSeconds:     120,
 	})
 	if err != nil {
-		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
+		return fmt.Errorf("creating enrollment token: %w", err)
 	}
+	// Reconstruct the device_id that pki-core stored in the token.
 	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 
 	privateKeyPEM, err := certs.GenerateKeyPair()
@@ -380,7 +380,9 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		Certificates: []config.CertificateInfo{certInfo},
 	}
 
+	// Prepend so local cert is tried first by connectWithAutoTLS.
 	cfg.Auth = append([]config.AuthConfig{authEntry}, cfg.Auth...)
+	// Deduplicate: remove older entry for the same cloudGRPC if any.
 	seen := make(map[string]bool)
 	filtered := cfg.Auth[:0]
 	for _, a := range cfg.Auth {
@@ -418,12 +420,11 @@ func newAuthLoginLocalCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&cloudGRPC, "cloud", "", "Local pki-core gRPC address (host:port)")
-	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for the local pki-core")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Local pki-core gRPC address (host:port)")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key")
 	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID")
-	_ = cmd.MarkFlagRequired("cloud")
+	_ = cmd.MarkFlagRequired("cloud-grpc")
 	_ = cmd.MarkFlagRequired("api-key")
-
 	return cmd
 }
 

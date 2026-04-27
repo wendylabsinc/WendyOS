@@ -354,7 +354,7 @@ func newDeviceSetupCmd() *cobra.Command {
 				}
 
 				if auth := loadCLIAuth(); auth != nil {
-				// Collect the device name before enrolling (name cannot be changed after).
+					// Collect the device name before enrolling (name cannot be changed after).
 					fmt.Print("Device name: ")
 					line, _ := reader.ReadString('\n')
 					deviceName := strings.TrimSpace(line)
@@ -435,8 +435,6 @@ func newDeviceEnrollCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
-			promptWifiIfNeeded(ctx, conn)
-
 			auth, err := pickAuthEntry(cloudGRPC)
 			if err != nil {
 				return err
@@ -449,61 +447,6 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (required when multiple auth sessions exist)")
 	return cmd
-}
-
-// promptWifiIfNeeded checks whether the device is connected to WiFi, and if
-// not, offers an interactive flow to connect before enrollment. Errors from the
-// status check are silently ignored so the function degrades gracefully on
-// devices that don't support WiFi (e.g. local, docker).
-func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) {
-	if !isInteractiveTerminal() {
-		return
-	}
-
-	statusResp, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
-	if err != nil || statusResp.GetConnected() {
-		return
-	}
-
-	fmt.Println("No WiFi connection detected on the device.")
-	fmt.Print("Set up WiFi before enrolling? [Y/n] ")
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	answer := strings.TrimSpace(strings.ToLower(line))
-	if answer != "" && answer != "y" && answer != "yes" {
-		return
-	}
-
-	target := &SelectedDevice{Agent: conn}
-	ssid, pickErr := pickWifiNetwork(ctx, target)
-	if pickErr != nil {
-		if !errors.Is(pickErr, ErrUserCancelled) {
-			fmt.Printf("WiFi setup failed: %v\n", pickErr)
-		}
-		return
-	}
-
-	fmt.Print("Password (leave empty for open networks): ")
-	passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if readErr != nil {
-		fmt.Printf("Failed to read password: %v\n", readErr)
-		return
-	}
-	password := strings.TrimSpace(string(passwordBytes))
-
-	fmt.Printf("Connecting to %s...\n", ssid)
-	wifiResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
-		Ssid:     ssid,
-		Password: password,
-	})
-	if connectErr != nil {
-		fmt.Printf("WiFi connection failed: %v\n", connectErr)
-	} else if !wifiResp.GetSuccess() {
-		fmt.Printf("WiFi connection failed: %s\n", wifiResp.GetErrorMessage())
-	} else {
-		fmt.Printf("Connected to %s.\n", ssid)
-	}
 }
 
 // runEnrollDevice creates an enrollment token via the stored auth session and
