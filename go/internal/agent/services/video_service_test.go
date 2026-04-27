@@ -145,8 +145,8 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	if !strings.Contains(joined, "v4l2src") || !strings.Contains(joined, "x264enc") || !strings.Contains(joined, "fdsink") {
 		t.Errorf("pipeline missing expected elements: %v", args)
 	}
-	if strings.Contains(joined, "video/x-raw") {
-		t.Errorf("unexpected caps filter in args: %v", args)
+	if strings.Contains(joined, "h264parse") {
+		t.Errorf("server-side pipeline should not include h264parse: %v", args)
 	}
 }
 
@@ -205,10 +205,10 @@ bad:  h264parse: H.264 parser
 	}
 }
 
-func TestFindGStreamerEncoder_PrefersX264WhenH264ParseAvailable(t *testing.T) {
+func TestFindGStreamerEncoder_PrefersX264(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := tmpDir + "/gst-inspect-1.0"
-	listing := "bad:  h264parse: H.264 parser\nx264:  x264enc: H264 video encoder\n"
+	listing := "x264:  x264enc: H264 video encoder\nvpx:  vp8enc: VP8 encoder\n"
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -224,10 +224,10 @@ func TestFindGStreamerEncoder_PrefersX264WhenH264ParseAvailable(t *testing.T) {
 	}
 }
 
-func TestFindGStreamerEncoder_FallsBackToVP8WhenNoH264Parse(t *testing.T) {
+func TestFindGStreamerEncoder_FallsBackToVP8WhenNoH264Encoder(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := tmpDir + "/gst-inspect-1.0"
-	listing := "x264:  x264enc: H264 video encoder\nvpx:  vp8enc: VP8 encoder\nmatroska:  webmmux: WebM muxer\n"
+	listing := "vpx:  vp8enc: VP8 encoder\nmatroska:  webmmux: WebM muxer\n"
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
