@@ -146,7 +146,8 @@ func playVideoWithGStreamer(ctx context.Context, stream interface {
 		"fdsrc", "fd=0",
 		"!", "h264parse",
 		"!", "avdec_h264",
-		"!", "autovideosink",
+		"!", "queue", "max-size-buffers=1", "leaky=downstream",
+		"!", "autovideosink", "sync=false",
 	)
 	gst.Stderr = os.Stderr
 

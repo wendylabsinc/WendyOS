@@ -188,8 +188,9 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 		return nativeH264NotSupported{msg: "device switched pixel format away from H264"}
 	}
 
-	// Request mmap buffers.
-	const numBuffers = 4
+	// Two buffers: one dequeued/in-flight, one queued for the camera to fill.
+	// More buffers increase kernel-side lag when the gRPC send lags the camera.
+	const numBuffers = 2
 	var req4 v4l2ReqBuffers
 	req4.Count = numBuffers
 	req4.Type = v4l2BufTypeVideoCapture
