@@ -9,8 +9,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
+
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
+
+// normalizeImageName canonicalises a Docker short reference (e.g.
+// "python:3.11-slim", "nginx") to a fully-qualified form
+// ("docker.io/library/python:3.11-slim") that containerd's reference parser
+// accepts. References that already include a registry, tag, or digest pass
+// through unchanged. When the input cannot be parsed as a valid Docker
+// reference, the original string is returned so existing error paths still
+// surface a meaningful diagnostic.
+func normalizeImageName(image string) string {
+	trimmed := strings.TrimSpace(image)
+	if trimmed == "" {
+		return image
+	}
+	named, err := reference.ParseNormalizedNamed(trimmed)
+	if err != nil {
+		return image
+	}
+	return reference.TagNameOnly(named).String()
+}
 
 // labelKeyAppVersion is the containerd label key that marks Wendy-managed containers.
 const labelKeyAppVersion = "sh.wendy/app.version"
@@ -52,9 +73,11 @@ func parseRestartPolicyLabel(label string) (string, int) {
 	return policy, maxRetries
 }
 
-// shouldRefreshImageFromRegistry reports whether CreateContainer should refresh
-// the image from the device-local registry before using any cached manifest.
-func shouldRefreshImageFromRegistry(imageName string) bool {
+// isLocalRegistryImage reports whether the image reference points at the
+// device-local HTTP registry. Such pulls must use a PlainHTTP resolver, but
+// they should be a fallback only — the registry shares containerd's content
+// store, so a successful GetImage avoids round-tripping bytes over loopback.
+func isLocalRegistryImage(imageName string) bool {
 	return strings.HasPrefix(imageName, "localhost:5000/") ||
 		strings.HasPrefix(imageName, "127.0.0.1:5000/") ||
 		strings.HasPrefix(imageName, "[::1]:5000/") ||

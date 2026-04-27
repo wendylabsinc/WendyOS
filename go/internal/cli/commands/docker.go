@@ -45,11 +45,15 @@ func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) 
 }
 
 // detectProjectType determines the project type from the directory contents.
-// It checks for Dockerfile first, then language-specific markers.
 //
-// Precedence: Dockerfile > Package.swift (swift) > *.xcodeproj (xcode) > Python markers.
+// Precedence: compose > Dockerfile > Package.swift > *.xcodeproj > Python markers.
 // Returns an error only when multiple .xcodeproj directories are found.
 func detectProjectType(dir string) (string, error) {
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return "compose", nil
+		}
+	}
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
 		return "docker", nil
 	}
@@ -87,6 +91,18 @@ type BuildOption struct {
 // including multiple Dockerfiles (Dockerfile, Dockerfile.*, Dockerfile-*).
 func detectBuildOptions(dir string) []BuildOption {
 	var options []BuildOption
+
+	// Find compose files.
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			options = append(options, BuildOption{
+				Label: name + " (Compose)",
+				Type:  "compose",
+				File:  name,
+			})
+			break
+		}
+	}
 
 	// Find all Dockerfiles.
 	entries, err := os.ReadDir(dir)

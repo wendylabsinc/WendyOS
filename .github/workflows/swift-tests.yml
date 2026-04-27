@@ -23,7 +23,7 @@ jobs:
     name: Run WendyAgentCore Tests
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
@@ -38,7 +38,7 @@ jobs:
           echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM package resolution
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             swift/Build/SwiftPM/checkouts
@@ -59,7 +59,7 @@ jobs:
     name: Build WendyAgentMac app
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
@@ -74,7 +74,7 @@ jobs:
           echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
 
       - name: Cache Xcode package resolution
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             swift/Build/CI/PackageCache
@@ -131,7 +131,7 @@ jobs:
     container: swift:6.2.3
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 

@@ -346,7 +346,10 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	ctx = c.withNamespace(ctx)
 	appName := req.GetAppName()
-	imageName := req.GetImageName()
+	// Canonicalise the image reference so older CLIs sending Docker short
+	// names like "python:3.11-slim" still resolve correctly under containerd's
+	// strict parser, which would otherwise read "3.11-slim" as a port.
+	imageName := normalizeImageName(req.GetImageName())
 
 	report := func(p *agentpb.CreateContainerProgress) {
 		if onProgress != nil {
@@ -398,31 +401,28 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}()
 	}
 
-	// For local-registry images, always pull from the embedded HTTP registry
-	// so containerd properly resolves manifest lists and unpacks layers.
-	// For remote images, try the local store first, then pull.
+	// Try the local image store first. The device-local registry shares
+	// containerd's content store, so anything just pushed to it is already
+	// available via GetImage — pulling would just round-trip bytes over
+	// loopback. Fall back to a pull only on miss; use PlainHTTP for the
+	// local-registry case.
 	var image containerd.Image
 	var err error
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	if shouldRefreshImageFromRegistry(imageName) {
-		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
-		image, err = c.client.Pull(ctx, imageName,
-			containerd.WithPullUnpack,
-			containerd.WithResolver(resolver),
+	image, err = c.client.GetImage(ctx, imageName)
+	if err != nil {
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
 		)
+		pullOpts := []containerd.RemoteOpt{containerd.WithPullUnpack}
+		if isLocalRegistryImage(imageName) {
+			pullOpts = append(pullOpts,
+				containerd.WithResolver(docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})),
+			)
+		}
+		image, err = c.client.Pull(ctx, imageName, pullOpts...)
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-		}
-	} else {
-		image, err = c.client.GetImage(ctx, imageName)
-		if err != nil {
-			c.logger.Info("Image not in local store, attempting pull from registry",
-				zap.String("image", imageName),
-			)
-			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
-			if err != nil {
-				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-			}
 		}
 	}
 

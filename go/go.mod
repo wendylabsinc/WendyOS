@@ -18,7 +18,7 @@ require (
 	github.com/hashicorp/mdns v1.0.6
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
-	github.com/posthog/posthog-go v1.11.3
+	github.com/posthog/posthog-go v1.12.1
 	github.com/spf13/cobra v1.10.2
 	go.bug.st/serial v1.6.4
 	go.uber.org/zap v1.27.1

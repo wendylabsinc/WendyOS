@@ -1,0 +1,10 @@
+services:
+  api:
+    build: ./api
+    network_mode: host
+
+  client:
+    build: ./client
+    network_mode: host
+    depends_on:
+      - api
