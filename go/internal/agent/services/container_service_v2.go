@@ -298,6 +298,6 @@ func (a *containerStreamV1Adapter) Send(resp *agentpb.RunContainerLayersResponse
 func (a *containerStreamV1Adapter) SetHeader(md metadata.MD) error  { return a.v2stream.SetHeader(md) }
 func (a *containerStreamV1Adapter) SendHeader(md metadata.MD) error { return a.v2stream.SendHeader(md) }
 func (a *containerStreamV1Adapter) SetTrailer(md metadata.MD)       { a.v2stream.SetTrailer(md) }
-func (a *containerStreamV1Adapter) Context() context.Context         { return a.v2stream.Context() }
-func (a *containerStreamV1Adapter) SendMsg(m any) error              { return a.v2stream.SendMsg(m) }
-func (a *containerStreamV1Adapter) RecvMsg(m any) error              { return a.v2stream.RecvMsg(m) }
+func (a *containerStreamV1Adapter) Context() context.Context        { return a.v2stream.Context() }
+func (a *containerStreamV1Adapter) SendMsg(m any) error             { return a.v2stream.SendMsg(m) }
+func (a *containerStreamV1Adapter) RecvMsg(m any) error             { return a.v2stream.RecvMsg(m) }
