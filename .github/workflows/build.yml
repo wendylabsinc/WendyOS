@@ -205,7 +205,7 @@ jobs:
     timeout-minutes: 45
     needs: [determine-version]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
