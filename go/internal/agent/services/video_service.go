@@ -286,15 +286,20 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 	}
 }
 
-// streamGStreamer spawns gst-launch-1.0 on the device to software-encode via x264enc
-// and pipes the resulting H.264 stream back as VideoFrame chunks.
+// streamGStreamer spawns gst-launch-1.0 on the device to encode via the best available
+// H.264 encoder and pipes the resulting stream back as VideoFrame chunks.
 func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerStreamingServer[agentpb.VideoFrame], path string, req *agentpb.StreamVideoRequest) (runErr error) {
 	gstPath, err := exec.LookPath("gst-launch-1.0")
 	if err != nil {
 		return status.Errorf(codes.FailedPrecondition, "gst-launch-1.0 not found; install GStreamer on the device")
 	}
 
-	args := buildGStreamerArgs(gstPath, path, req)
+	encoder, err := findGStreamerH264Encoder()
+	if err != nil {
+		return status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+
+	args := buildGStreamerArgs(gstPath, path, req, encoder)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
@@ -345,19 +350,56 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 	}
 }
 
-// buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 software encode.
-func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequest) []string {
-	src := fmt.Sprintf("v4l2src device=%s", devicePath)
-	var caps string
-	if req.GetWidth() > 0 && req.GetHeight() > 0 && req.GetFramerate() > 0 {
-		caps = fmt.Sprintf(" ! video/x-raw,width=%d,height=%d,framerate=%d/1", req.GetWidth(), req.GetHeight(), req.GetFramerate())
-	} else if req.GetWidth() > 0 && req.GetHeight() > 0 {
-		caps = fmt.Sprintf(" ! video/x-raw,width=%d,height=%d", req.GetWidth(), req.GetHeight())
-	} else if req.GetFramerate() > 0 {
-		caps = fmt.Sprintf(" ! video/x-raw,framerate=%d/1", req.GetFramerate())
+// findGStreamerH264Encoder probes available H.264 encoders via gst-inspect-1.0.
+// Prefers hardware (v4l2h264enc) over software (x264enc, openh264enc).
+// If gst-inspect-1.0 is unavailable, returns x264enc as a best-effort default.
+func findGStreamerH264Encoder() (string, error) {
+	inspectPath, err := exec.LookPath("gst-inspect-1.0")
+	if err != nil {
+		return "x264enc", nil
 	}
-	pipeline := src + caps + " ! x264enc tune=zerolatency ! h264parse ! fdsink fd=1"
-	// Split pipeline into individual arguments for exec (no shell).
-	parts := strings.Fields(pipeline)
-	return append([]string{gstPath}, parts...)
+	for _, enc := range []string{"v4l2h264enc", "x264enc", "openh264enc"} {
+		if exec.Command(inspectPath, enc).Run() == nil {
+			return enc, nil
+		}
+	}
+	return "", fmt.Errorf("no H.264 GStreamer encoder found; install gst-plugins-good (v4l2h264enc) or gst-plugins-ugly (x264enc)")
+}
+
+// buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 encode.
+// The encoder string selects the pipeline variant (v4l2h264enc, x264enc, openh264enc).
+func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string) []string {
+	src := fmt.Sprintf("v4l2src device=%s", devicePath)
+
+	var capsParts []string
+	if req.GetWidth() > 0 && req.GetHeight() > 0 {
+		capsParts = append(capsParts, fmt.Sprintf("width=%d,height=%d", req.GetWidth(), req.GetHeight()))
+	}
+	if req.GetFramerate() > 0 {
+		capsParts = append(capsParts, fmt.Sprintf("framerate=%d/1", req.GetFramerate()))
+	}
+
+	var pipeline string
+	if len(capsParts) > 0 {
+		caps := "video/x-raw," + strings.Join(capsParts, ",")
+		pipeline = fmt.Sprintf("%s ! %s ! %s ! fdsink fd=1", src, caps, encoderSegment(encoder))
+	} else {
+		pipeline = fmt.Sprintf("%s ! %s ! fdsink fd=1", src, encoderSegment(encoder))
+	}
+	// Split into individual arguments for exec.CommandContext (no shell).
+	return append([]string{gstPath}, strings.Fields(pipeline)...)
+}
+
+// encoderSegment returns the GStreamer pipeline segment for the given encoder element.
+func encoderSegment(encoder string) string {
+	switch encoder {
+	case "v4l2h264enc":
+		return "v4l2h264enc ! video/x-h264,profile=baseline ! h264parse"
+	case "x264enc":
+		return "x264enc tune=zerolatency ! h264parse"
+	case "openh264enc":
+		return "openh264enc ! h264parse"
+	default:
+		return encoder + " ! h264parse"
+	}
 }

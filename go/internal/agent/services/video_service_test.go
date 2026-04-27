@@ -136,7 +136,7 @@ func TestVideoService_ListVideoDevices_GlobError(t *testing.T) {
 
 func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req)
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
 	if len(args) == 0 || args[0] != "/usr/bin/gst-launch-1.0" {
 		t.Errorf("expected first arg to be gst-launch-1.0 path, got %v", args)
 	}
@@ -151,10 +151,19 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 
 func TestBuildGStreamerArgs_WithDimensionsAndFramerate(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 30}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req)
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "width=1280") || !strings.Contains(joined, "height=720") || !strings.Contains(joined, "framerate=30/1") {
 		t.Errorf("expected dimension caps in args: %v", args)
+	}
+}
+
+func TestBuildGStreamerArgs_V4L2HardwareEncoder(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "v4l2h264enc") || !strings.Contains(joined, "video/x-h264") {
+		t.Errorf("expected v4l2h264enc pipeline segment: %v", args)
 	}
 }
 
