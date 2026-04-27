@@ -197,12 +197,6 @@ jobs:
           path: ${{ github.workspace }}/sstate-cache
           volume_size: 100
 
-      - name: Restore downloads snapshot (L1)
-        uses: runs-on/snapshot@v1
-        with:
-          path: ${{ github.workspace }}/downloads
-          volume_size: 50
-
       - name: Configure AWS credentials for build cache
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -232,7 +226,7 @@ jobs:
       # below, no auto.conf override needed.
 
       - name: Fix workspace permissions for Docker
-        run: chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
+        run: sudo chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
 
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
