@@ -1001,8 +1001,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	deviceType := versionResp.GetDeviceType()
+	gpuVendor := versionResp.GetGpuVendor()
+	jetpackVersion := versionResp.GetJetpackVersion()
 	buildArgs := map[string]string{
-		"WENDY_PLATFORM": wendyPlatform(deviceType),
+		"WENDY_PLATFORM": wendyPlatform(deviceType, gpuVendor, jetpackVersion),
 		"WENDY_DEBUG":    fmt.Sprintf("%t", opts.debug),
 	}
 	// Only set WENDY_DEVICE_TYPE / GPU args when the agent reports them so
@@ -1016,11 +1018,11 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		buildArgs["WENDY_HAS_GPU"] = fmt.Sprintf("%t", versionResp.GetHasGpu())
 	}
 	// Remaining GPU build args — only set when the agent reports them.
-	if vendor := versionResp.GetGpuVendor(); vendor != "" {
-		buildArgs["WENDY_GPU_VENDOR"] = vendor
+	if gpuVendor != "" {
+		buildArgs["WENDY_GPU_VENDOR"] = gpuVendor
 	}
-	if jv := versionResp.GetJetpackVersion(); jv != "" {
-		buildArgs["WENDY_JETPACK_VERSION"] = jv
+	if jetpackVersion != "" {
+		buildArgs["WENDY_JETPACK_VERSION"] = jetpackVersion
 	}
 	if cv := versionResp.GetCudaVersion(); cv != "" {
 		buildArgs["WENDY_CUDA_VERSION"] = cv
@@ -1279,17 +1281,45 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	return cmd
 }
 
-// wendyPlatform maps a WendyOS device type to a platform tier used for
-// Dockerfile base stage selection. Adding a new device only requires adding
-// a case here; templates need no changes until a new platform tier is introduced.
-// Unknown device types fall back to "generic" (CPU-only).
-func wendyPlatform(deviceType string) string {
-	switch deviceType {
-	case "jetson-agx-orin", "jetson-orin-nano":
+// wendyPlatform classifies the host into a Dockerfile base-stage tier so
+// templates can pick the right runtime libraries (e.g. NVIDIA CUDA bases vs
+// CPU-only). Tiers, in priority order:
+//
+//  1. "nvidia-jetson" — Tegra/Jetson devices. Recognized either by a
+//     "jetson-" board prefix (so future Jetson SKUs work without code
+//     changes) or by the agent reporting a JetPack version (covers
+//     non-WendyOS Jetson hosts and any board-name format we haven't seen).
+//  2. "nvidia-cuda" — any other host with an NVIDIA GPU. Covers DGX Spark,
+//     x86_64 workstations, and any plain-Ubuntu host running wendy-agent
+//     where /etc/wendyos/device-type is missing.
+//  3. "generic" — no recognizable GPU; CPU-only base.
+func wendyPlatform(deviceType, gpuVendor, jetpackVersion string) string {
+	board := parseDeviceBoard(deviceType)
+	if strings.HasPrefix(board, "jetson-") || jetpackVersion != "" {
 		return "nvidia-jetson"
-	default:
-		return "generic"
 	}
+	if strings.EqualFold(gpuVendor, "nvidia") {
+		return "nvidia-cuda"
+	}
+	return "generic"
+}
+
+// parseDeviceBoard normalizes the device-type string the agent reports.
+// On WendyOS the file is multi-line ("BOARD=foo\nMACHINE=bar"); off-WendyOS
+// (DGX Spark on plain Ubuntu, dev boxes, etc.) it may be empty or a plain
+// identifier. Returns the lower-cased BOARD value when present, otherwise
+// the trimmed-and-lowered raw input.
+func parseDeviceBoard(deviceType string) string {
+	if deviceType == "" {
+		return ""
+	}
+	for _, line := range strings.Split(deviceType, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "BOARD="); ok {
+			return strings.ToLower(strings.TrimSpace(rest))
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(deviceType))
 }
 
 // resolveRestartPolicy converts the flag options into a protobuf RestartPolicy.

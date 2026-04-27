@@ -426,23 +426,26 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		}
 
 		imageName := fmt.Sprintf("%s/%s-%s:latest", registryAddr, projectName, name)
+		deviceType := versionResp.GetDeviceType()
+		gpuVendor := versionResp.GetGpuVendor()
+		jetpackVersion := versionResp.GetJetpackVersion()
 		allBuildArgs := map[string]string{
-			"WENDY_PLATFORM": wendyPlatform(versionResp.GetDeviceType()),
+			"WENDY_PLATFORM": wendyPlatform(deviceType, gpuVendor, jetpackVersion),
 			"WENDY_DEBUG":    fmt.Sprintf("%t", opts.debug),
 		}
 		// Mirror the single-container build path so compose-built Dockerfiles
 		// see the same WendyOS device hints (e.g. for GPU base-image selection).
-		if deviceType := versionResp.GetDeviceType(); deviceType != "" {
+		if deviceType != "" {
 			allBuildArgs["WENDY_DEVICE_TYPE"] = deviceType
 		}
 		if versionResp.HasGpu != nil {
 			allBuildArgs["WENDY_HAS_GPU"] = fmt.Sprintf("%t", versionResp.GetHasGpu())
 		}
-		if vendor := versionResp.GetGpuVendor(); vendor != "" {
-			allBuildArgs["WENDY_GPU_VENDOR"] = vendor
+		if gpuVendor != "" {
+			allBuildArgs["WENDY_GPU_VENDOR"] = gpuVendor
 		}
-		if jv := versionResp.GetJetpackVersion(); jv != "" {
-			allBuildArgs["WENDY_JETPACK_VERSION"] = jv
+		if jetpackVersion != "" {
+			allBuildArgs["WENDY_JETPACK_VERSION"] = jetpackVersion
 		}
 		if cv := versionResp.GetCudaVersion(); cv != "" {
 			allBuildArgs["WENDY_CUDA_VERSION"] = cv
