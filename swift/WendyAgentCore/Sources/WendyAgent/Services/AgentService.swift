@@ -29,7 +29,7 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetAgentVersionResponse> {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
-        response.version = AgentVersion.current
+        response.version = "0.0.0-dev"
         response.os = "darwin"
         response.osVersion =
             "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -37,8 +37,6 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
             response.cpuArchitecture = "arm64"
         #elseif arch(x86_64)
             response.cpuArchitecture = "amd64"
-        #else
-            response.cpuArchitecture = "unknown"
         #endif
         return ServerResponse(message: response)
     }
