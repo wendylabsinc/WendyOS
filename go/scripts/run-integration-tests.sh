@@ -4,13 +4,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$REPO_DIR/.." && pwd)"
-TESTS_DIR="$REPO_ROOT/.github/ci-tests"
+TESTS_DIR="$REPO_ROOT/.github/integration-tests"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Run CI integration tests against a real WendyOS device. Each test deploys a
+Run integration tests against a real WendyOS device. Each test deploys a
 minimal app that exercises a specific entitlement and verifies it works.
 
 Tests:
@@ -167,7 +167,7 @@ echo ""
 # ── Validate tests directory ─────────────────────────────────────────
 
 if [[ ! -d "$TESTS_DIR" ]]; then
-    echo -e "${RED}ERROR: CI tests directory not found at $TESTS_DIR${RESET}"
+    echo -e "${RED}ERROR: integration tests directory not found at $TESTS_DIR${RESET}"
     exit 1
 fi
 

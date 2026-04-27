@@ -201,7 +201,7 @@ jobs:
             BUILDER="wendy-$i"
             echo "==> Starting tests on $device (builder: $BUILDER)"
             (
-              $SSH "export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}' WENDY_BUILDX_BUILDER='$BUILDER' && cd '$WORKDIR' && scripts/test-ci.sh $TEST_ARGS -h '$device'"
+              $SSH "export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}' WENDY_BUILDX_BUILDER='$BUILDER' && cd '$WORKDIR' && scripts/run-integration-tests.sh $TEST_ARGS -h '$device'"
               rc=$?
               docker buildx rm "$BUILDER" --force 2>/dev/null || true
               exit $rc
@@ -313,7 +313,7 @@ jobs:
               fi
               echo "nc port 50051: OK"
               nc -zw 5 "$device" 5000  2>&1 && echo "nc port 5000: OK"  || echo "nc port 5000: FAILED"
-              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
+              WENDY_BUILDX_BUILDER="$BUILDER" scripts/run-integration-tests.sh $TEST_ARGS -h "$device"
               rc=$?
               docker buildx rm "$BUILDER" --force 2>/dev/null || true
               exit $rc
