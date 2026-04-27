@@ -747,34 +747,46 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         return ServerResponse(message: response)
     }
 
-    // MARK: - Unimplemented
+    // MARK: - Unsupported on macOS
 
     func attachContainer(
         request: StreamingServerRequest<Wendy_Agent_Services_V1_AttachContainerRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
-        throw RPCError(code: .unimplemented, message: "AttachContainer is not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Linux container attach is currently not supported on macOS."
+        )
     }
 
     func listVolumes(
         request: ServerRequest<Wendy_Agent_Services_V1_ListVolumesRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ListVolumesResponse> {
-        throw RPCError(code: .unimplemented, message: "ListVolumes is not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Container volume management is currently not supported on macOS."
+        )
     }
 
     func removeVolume(
         request: ServerRequest<Wendy_Agent_Services_V1_RemoveVolumeRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_RemoveVolumeResponse> {
-        throw RPCError(code: .unimplemented, message: "RemoveVolume is not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Removing container volumes is currently not supported on macOS."
+        )
     }
 
     func listLayers(
         request: ServerRequest<Wendy_Agent_Services_V1_ListLayersRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_LayerHeader> {
-        throw RPCError(code: .unimplemented, message: "ListLayers is not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Container layer listing is currently not supported on macOS."
+        )
     }
 
     func writeLayer(
@@ -882,7 +894,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     > {
         throw RPCError(
             code: .unimplemented,
-            message: "CreateContainerWithProgress is not implemented"
+            message: "Container creation progress streaming is currently not supported on macOS."
         )
     }
 
@@ -890,7 +902,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         request: ServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerLayersResponse> {
-        throw RPCError(code: .unimplemented, message: "RunContainer is not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message:
+                "Legacy container streaming execution is currently not supported on macOS. Use the native app lifecycle RPCs instead when applicable."
+        )
     }
 
     // MARK: - Helpers

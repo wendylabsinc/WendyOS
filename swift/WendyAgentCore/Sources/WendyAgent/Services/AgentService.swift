@@ -7,14 +7,20 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         request: StreamingServerRequest<Wendy_Agent_Services_V1_RunContainerRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_RunContainerResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Streaming container upload and execution is currently not supported on macOS."
+        )
     }
 
     func updateAgent(
         request: StreamingServerRequest<Wendy_Agent_Services_V1_UpdateAgentRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_UpdateAgentResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Updating the agent is currently not supported on macOS."
+        )
     }
 
     func getAgentVersion(
@@ -39,35 +45,90 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         request: ServerRequest<Wendy_Agent_Services_V1_ListWiFiNetworksRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ListWiFiNetworksResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Wi-Fi network scanning is currently not supported on macOS."
+        )
     }
 
     func connectToWiFi(
         request: ServerRequest<Wendy_Agent_Services_V1_ConnectToWiFiRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ConnectToWiFiResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Connecting to Wi-Fi networks is currently not supported on macOS."
+        )
     }
 
     func getWiFiStatus(
         request: ServerRequest<Wendy_Agent_Services_V1_GetWiFiStatusRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetWiFiStatusResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Wi-Fi status reporting is currently not supported on macOS."
+        )
     }
 
     func disconnectWiFi(
         request: ServerRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Disconnecting from Wi-Fi networks is currently not supported on macOS."
+        )
+    }
+
+    func listKnownWiFiNetworks(
+        request: ServerRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "Listing saved Wi-Fi networks is currently not supported on macOS."
+        )
+    }
+
+    func setWiFiNetworkPriority(
+        request: ServerRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "Wi-Fi network priority management is currently not supported on macOS."
+        )
+    }
+
+    func reorderKnownWiFiNetworks(
+        request: ServerRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "Reordering saved Wi-Fi networks is currently not supported on macOS."
+        )
+    }
+
+    func forgetWiFiNetwork(
+        request: ServerRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "Removing saved Wi-Fi networks is currently not supported on macOS."
+        )
     }
 
     func listHardwareCapabilities(
         request: ServerRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Hardware capability discovery is currently not supported on macOS."
+        )
     }
 
     func scanBluetoothPeripherals(
@@ -76,14 +137,20 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     ) async throws -> StreamingServerResponse<
         Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse
     > {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Bluetooth scanning is currently not supported on macOS."
+        )
     }
 
     func connectBluetoothPeripheral(
         request: ServerRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Connecting Bluetooth peripherals is currently not supported on macOS."
+        )
     }
 
     func disconnectBluetoothPeripheral(
@@ -91,20 +158,29 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse>
     {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Disconnecting Bluetooth peripherals is currently not supported on macOS."
+        )
     }
 
     func forgetBluetoothPeripheral(
         request: ServerRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Forgetting Bluetooth peripherals is currently not supported on macOS."
+        )
     }
 
     func updateOS(
         request: ServerRequest<Wendy_Agent_Services_V1_UpdateOSRequest>,
         context: ServerContext
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_UpdateOSResponse> {
-        fatalError("not implemented")
+        throw RPCError(
+            code: .unimplemented,
+            message: "Operating system updates are currently not supported on macOS."
+        )
     }
 }

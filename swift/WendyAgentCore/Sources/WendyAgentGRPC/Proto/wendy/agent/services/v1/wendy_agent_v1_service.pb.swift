@@ -25,6 +25,61 @@ fileprivate struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAP
   typealias Version = _2
 }
 
+/// Security type advertised by or used for a WiFi network.
+public enum Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unspecified // = 0
+  case `open` // = 1
+  case wep // = 2
+  case wpaPsk // = 3
+  case wpa2Psk // = 4
+  case wpa3Sae // = 5
+  case wpa2Enterprise // = 6
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .open
+    case 2: self = .wep
+    case 3: self = .wpaPsk
+    case 4: self = .wpa2Psk
+    case 5: self = .wpa3Sae
+    case 6: self = .wpa2Enterprise
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .open: return 1
+    case .wep: return 2
+    case .wpaPsk: return 3
+    case .wpa2Psk: return 4
+    case .wpa3Sae: return 5
+    case .wpa2Enterprise: return 6
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_WiFiSecurityType] = [
+    .unspecified,
+    .open,
+    .wep,
+    .wpaPsk,
+    .wpa2Psk,
+    .wpa3Sae,
+    .wpa2Enterprise,
+  ]
+
+}
+
 public struct Wendy_Agent_Services_V1_RunContainerRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -438,6 +493,46 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
   /// Clears the value of `deviceType`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceType() {self._deviceType = nil}
 
+  /// Whether the device has a GPU.
+  public var hasGpu_p: Bool {
+    get {_hasGpu_p ?? false}
+    set {_hasGpu_p = newValue}
+  }
+  /// Returns true if `hasGpu_p` has been explicitly set.
+  public var hasHasGpu_p: Bool {self._hasGpu_p != nil}
+  /// Clears the value of `hasGpu_p`. Subsequent reads from it will return its default value.
+  public mutating func clearHasGpu_p() {self._hasGpu_p = nil}
+
+  /// GPU vendor identifier (e.g. "nvidia"). Only present when has_gpu is true.
+  public var gpuVendor: String {
+    get {_gpuVendor ?? String()}
+    set {_gpuVendor = newValue}
+  }
+  /// Returns true if `gpuVendor` has been explicitly set.
+  public var hasGpuVendor: Bool {self._gpuVendor != nil}
+  /// Clears the value of `gpuVendor`. Subsequent reads from it will return its default value.
+  public mutating func clearGpuVendor() {self._gpuVendor = nil}
+
+  /// JetPack version (e.g. "6.2"). Only present on NVIDIA Jetson devices.
+  public var jetpackVersion: String {
+    get {_jetpackVersion ?? String()}
+    set {_jetpackVersion = newValue}
+  }
+  /// Returns true if `jetpackVersion` has been explicitly set.
+  public var hasJetpackVersion: Bool {self._jetpackVersion != nil}
+  /// Clears the value of `jetpackVersion`. Subsequent reads from it will return its default value.
+  public mutating func clearJetpackVersion() {self._jetpackVersion = nil}
+
+  /// CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
+  public var cudaVersion: String {
+    get {_cudaVersion ?? String()}
+    set {_cudaVersion = newValue}
+  }
+  /// Returns true if `cudaVersion` has been explicitly set.
+  public var hasCudaVersion: Bool {self._cudaVersion != nil}
+  /// Clears the value of `cudaVersion`. Subsequent reads from it will return its default value.
+  public mutating func clearCudaVersion() {self._cudaVersion = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -445,6 +540,10 @@ public struct Wendy_Agent_Services_V1_GetAgentVersionResponse: Sendable {
   fileprivate var _osVersion: String? = nil
   fileprivate var _publicKey: String? = nil
   fileprivate var _deviceType: String? = nil
+  fileprivate var _hasGpu_p: Bool? = nil
+  fileprivate var _gpuVendor: String? = nil
+  fileprivate var _jetpackVersion: String? = nil
+  fileprivate var _cudaVersion: String? = nil
 }
 
 /// Request message for listing WiFi networks
@@ -478,7 +577,7 @@ public struct Wendy_Agent_Services_V1_ListWiFiNetworksResponse: Sendable {
     /// SSID (name) of the WiFi network
     public var ssid: String = String()
 
-    /// Signal strength indicator (if available)
+    /// Signal strength indicator (0-100, if available)
     public var signalStrength: Int32 {
       get {_signalStrength ?? 0}
       set {_signalStrength = newValue}
@@ -488,11 +587,44 @@ public struct Wendy_Agent_Services_V1_ListWiFiNetworksResponse: Sendable {
     /// Clears the value of `signalStrength`. Subsequent reads from it will return its default value.
     public mutating func clearSignalStrength() {self._signalStrength = nil}
 
+    /// Best-effort security type detected from the scan / saved profile.
+    public var security: Wendy_Agent_Services_V1_WiFiSecurityType = .unspecified
+
+    /// True if the device already has a saved connection profile for this SSID.
+    public var isKnown: Bool = false
+
+    /// True if this network is currently the active/connected WiFi network.
+    public var isConnected: Bool = false
+
+    /// Autoconnect priority for the stored profile. Unset if not a known network.
+    /// NetworkManager uses higher integers as higher priority; lower == tie-break
+    /// by most-recently-used. We echo NM's raw value here.
+    public var priority: Int32 {
+      get {_priority ?? 0}
+      set {_priority = newValue}
+    }
+    /// Returns true if `priority` has been explicitly set.
+    public var hasPriority: Bool {self._priority != nil}
+    /// Clears the value of `priority`. Subsequent reads from it will return its default value.
+    public mutating func clearPriority() {self._priority = nil}
+
+    /// Raw RSSI in dBm if available from the scanner.
+    public var rssiDbm: Int32 {
+      get {_rssiDbm ?? 0}
+      set {_rssiDbm = newValue}
+    }
+    /// Returns true if `rssiDbm` has been explicitly set.
+    public var hasRssiDbm: Bool {self._rssiDbm != nil}
+    /// Clears the value of `rssiDbm`. Subsequent reads from it will return its default value.
+    public mutating func clearRssiDbm() {self._rssiDbm = nil}
+
     public var unknownFields = SwiftProtobuf.UnknownStorage()
 
     public init() {}
 
     fileprivate var _signalStrength: Int32? = nil
+    fileprivate var _priority: Int32? = nil
+    fileprivate var _rssiDbm: Int32? = nil
   }
 
   public init() {}
@@ -510,9 +642,33 @@ public struct Wendy_Agent_Services_V1_ConnectToWiFiRequest: Sendable {
   /// Password for the WiFi network
   public var password: String = String()
 
+  /// Security type hint — used when connecting to unlisted (hidden) networks
+  /// where autodetection is not possible.
+  public var security: Wendy_Agent_Services_V1_WiFiSecurityType {
+    get {_security ?? .unspecified}
+    set {_security = newValue}
+  }
+  /// Returns true if `security` has been explicitly set.
+  public var hasSecurity: Bool {self._security != nil}
+  /// Clears the value of `security`. Subsequent reads from it will return its default value.
+  public mutating func clearSecurity() {self._security = nil}
+
+  /// When true, treat the SSID as hidden / non-broadcasting.
+  public var hidden: Bool {
+    get {_hidden ?? false}
+    set {_hidden = newValue}
+  }
+  /// Returns true if `hidden` has been explicitly set.
+  public var hasHidden: Bool {self._hidden != nil}
+  /// Clears the value of `hidden`. Subsequent reads from it will return its default value.
+  public mutating func clearHidden() {self._hidden = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _security: Wendy_Agent_Services_V1_WiFiSecurityType? = nil
+  fileprivate var _hidden: Bool? = nil
 }
 
 /// Response message for connecting to a WiFi network
@@ -610,6 +766,166 @@ public struct Wendy_Agent_Services_V1_DisconnectWiFiResponse: Sendable {
   public var success: Bool = false
 
   /// Optional error message if disconnection failed
+  public var errorMessage: String {
+    get {_errorMessage ?? String()}
+    set {_errorMessage = newValue}
+  }
+  /// Returns true if `errorMessage` has been explicitly set.
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
+  /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
+  public mutating func clearErrorMessage() {self._errorMessage = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _errorMessage: String? = nil
+}
+
+/// Request message for listing known (saved) WiFi networks.
+public struct Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Response message for listing known (saved) WiFi networks.
+public struct Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var networks: [Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse.KnownWiFiNetwork] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public struct KnownWiFiNetwork: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// SSID (name) of the saved WiFi network.
+    public var ssid: String = String()
+
+    /// NetworkManager connection UUID (agent-internal identifier).
+    public var uuid: String = String()
+
+    /// Autoconnect priority. Higher = prefer to auto-connect first.
+    public var priority: Int32 = 0
+
+    /// Best-effort security type of the saved profile.
+    public var security: Wendy_Agent_Services_V1_WiFiSecurityType = .unspecified
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
+
+  public init() {}
+}
+
+/// Request to set the priority of a single saved network.
+public struct Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// SSID of the saved network.
+  public var ssid: String = String()
+
+  /// New autoconnect priority value.
+  public var priority: Int32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var success: Bool = false
+
+  public var errorMessage: String {
+    get {_errorMessage ?? String()}
+    set {_errorMessage = newValue}
+  }
+  /// Returns true if `errorMessage` has been explicitly set.
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
+  /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
+  public mutating func clearErrorMessage() {self._errorMessage = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _errorMessage: String? = nil
+}
+
+/// Request to bulk-reorder saved networks. The first SSID in `order_ssids`
+/// gets the highest priority, the last gets the lowest. SSIDs not listed
+/// are left untouched.
+public struct Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var orderSsids: [String] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var success: Bool = false
+
+  public var errorMessage: String {
+    get {_errorMessage ?? String()}
+    set {_errorMessage = newValue}
+  }
+  /// Returns true if `errorMessage` has been explicitly set.
+  public var hasErrorMessage: Bool {self._errorMessage != nil}
+  /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
+  public mutating func clearErrorMessage() {self._errorMessage = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _errorMessage: String? = nil
+}
+
+/// Request to remove a saved network profile.
+public struct Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var ssid: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var success: Bool = false
+
   public var errorMessage: String {
     get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
@@ -905,6 +1221,10 @@ public struct Wendy_Agent_Services_V1_UpdateOSResponse: Sendable {
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "wendy.agent.services.v1"
+
+extension Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0WIFI_SECURITY_TYPE_UNSPECIFIED\0\u{1}WIFI_SECURITY_TYPE_OPEN\0\u{1}WIFI_SECURITY_TYPE_WEP\0\u{1}WIFI_SECURITY_TYPE_WPA_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA2_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA3_SAE\0\u{1}WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\0")
+}
 
 extension Wendy_Agent_Services_V1_RunContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunContainerRequest"
@@ -1624,7 +1944,7 @@ extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProtobuf.Message,
 
 extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1639,6 +1959,10 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
       case 5: try { try decoder.decodeSingularStringField(value: &self._publicKey) }()
       case 6: try { try decoder.decodeRepeatedStringField(value: &self.featureset) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self._deviceType) }()
+      case 8: try { try decoder.decodeSingularBoolField(value: &self._hasGpu_p) }()
+      case 9: try { try decoder.decodeSingularStringField(value: &self._gpuVendor) }()
+      case 10: try { try decoder.decodeSingularStringField(value: &self._jetpackVersion) }()
+      case 11: try { try decoder.decodeSingularStringField(value: &self._cudaVersion) }()
       default: break
       }
     }
@@ -1670,6 +1994,18 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
     try { if let v = self._deviceType {
       try visitor.visitSingularStringField(value: v, fieldNumber: 7)
     } }()
+    try { if let v = self._hasGpu_p {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 8)
+    } }()
+    try { if let v = self._gpuVendor {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 9)
+    } }()
+    try { if let v = self._jetpackVersion {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 10)
+    } }()
+    try { if let v = self._cudaVersion {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 11)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1681,6 +2017,10 @@ extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message
     if lhs._publicKey != rhs._publicKey {return false}
     if lhs.featureset != rhs.featureset {return false}
     if lhs._deviceType != rhs._deviceType {return false}
+    if lhs._hasGpu_p != rhs._hasGpu_p {return false}
+    if lhs._gpuVendor != rhs._gpuVendor {return false}
+    if lhs._jetpackVersion != rhs._jetpackVersion {return false}
+    if lhs._cudaVersion != rhs._cudaVersion {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1737,7 +2077,7 @@ extension Wendy_Agent_Services_V1_ListWiFiNetworksResponse: SwiftProtobuf.Messag
 
 extension Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = Wendy_Agent_Services_V1_ListWiFiNetworksResponse.protoMessageName + ".WiFiNetwork"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{3}signal_strength\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{3}signal_strength\0\u{1}security\0\u{3}is_known\0\u{3}is_connected\0\u{1}priority\0\u{3}rssi_dbm\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1747,6 +2087,11 @@ extension Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork: SwiftPro
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.ssid) }()
       case 2: try { try decoder.decodeSingularInt32Field(value: &self._signalStrength) }()
+      case 3: try { try decoder.decodeSingularEnumField(value: &self.security) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self.isKnown) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.isConnected) }()
+      case 6: try { try decoder.decodeSingularInt32Field(value: &self._priority) }()
+      case 7: try { try decoder.decodeSingularInt32Field(value: &self._rssiDbm) }()
       default: break
       }
     }
@@ -1763,12 +2108,32 @@ extension Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork: SwiftPro
     try { if let v = self._signalStrength {
       try visitor.visitSingularInt32Field(value: v, fieldNumber: 2)
     } }()
+    if self.security != .unspecified {
+      try visitor.visitSingularEnumField(value: self.security, fieldNumber: 3)
+    }
+    if self.isKnown != false {
+      try visitor.visitSingularBoolField(value: self.isKnown, fieldNumber: 4)
+    }
+    if self.isConnected != false {
+      try visitor.visitSingularBoolField(value: self.isConnected, fieldNumber: 5)
+    }
+    try { if let v = self._priority {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._rssiDbm {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork, rhs: Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork) -> Bool {
     if lhs.ssid != rhs.ssid {return false}
     if lhs._signalStrength != rhs._signalStrength {return false}
+    if lhs.security != rhs.security {return false}
+    if lhs.isKnown != rhs.isKnown {return false}
+    if lhs.isConnected != rhs.isConnected {return false}
+    if lhs._priority != rhs._priority {return false}
+    if lhs._rssiDbm != rhs._rssiDbm {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1776,7 +2141,7 @@ extension Wendy_Agent_Services_V1_ListWiFiNetworksResponse.WiFiNetwork: SwiftPro
 
 extension Wendy_Agent_Services_V1_ConnectToWiFiRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ConnectToWiFiRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{1}password\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{1}password\0\u{1}security\0\u{1}hidden\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1786,24 +2151,38 @@ extension Wendy_Agent_Services_V1_ConnectToWiFiRequest: SwiftProtobuf.Message, S
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.ssid) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.password) }()
+      case 3: try { try decoder.decodeSingularEnumField(value: &self._security) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._hidden) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.ssid.isEmpty {
       try visitor.visitSingularStringField(value: self.ssid, fieldNumber: 1)
     }
     if !self.password.isEmpty {
       try visitor.visitSingularStringField(value: self.password, fieldNumber: 2)
     }
+    try { if let v = self._security {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._hidden {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_ConnectToWiFiRequest, rhs: Wendy_Agent_Services_V1_ConnectToWiFiRequest) -> Bool {
     if lhs.ssid != rhs.ssid {return false}
     if lhs.password != rhs.password {return false}
+    if lhs._security != rhs._security {return false}
+    if lhs._hidden != rhs._hidden {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1962,6 +2341,312 @@ extension Wendy_Agent_Services_V1_DisconnectWiFiResponse: SwiftProtobuf.Message,
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_DisconnectWiFiResponse, rhs: Wendy_Agent_Services_V1_DisconnectWiFiResponse) -> Bool {
+    if lhs.success != rhs.success {return false}
+    if lhs._errorMessage != rhs._errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ListKnownWiFiNetworksRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest, rhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ListKnownWiFiNetworksResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}networks\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.networks) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.networks.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.networks, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse, rhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse) -> Bool {
+    if lhs.networks != rhs.networks {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse.KnownWiFiNetwork: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse.protoMessageName + ".KnownWiFiNetwork"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{1}uuid\0\u{1}priority\0\u{1}security\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.ssid) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.uuid) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self.priority) }()
+      case 4: try { try decoder.decodeSingularEnumField(value: &self.security) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.ssid.isEmpty {
+      try visitor.visitSingularStringField(value: self.ssid, fieldNumber: 1)
+    }
+    if !self.uuid.isEmpty {
+      try visitor.visitSingularStringField(value: self.uuid, fieldNumber: 2)
+    }
+    if self.priority != 0 {
+      try visitor.visitSingularInt32Field(value: self.priority, fieldNumber: 3)
+    }
+    if self.security != .unspecified {
+      try visitor.visitSingularEnumField(value: self.security, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse.KnownWiFiNetwork, rhs: Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse.KnownWiFiNetwork) -> Bool {
+    if lhs.ssid != rhs.ssid {return false}
+    if lhs.uuid != rhs.uuid {return false}
+    if lhs.priority != rhs.priority {return false}
+    if lhs.security != rhs.security {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetWiFiNetworkPriorityRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0\u{1}priority\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.ssid) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.priority) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.ssid.isEmpty {
+      try visitor.visitSingularStringField(value: self.ssid, fieldNumber: 1)
+    }
+    if self.priority != 0 {
+      try visitor.visitSingularInt32Field(value: self.priority, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest, rhs: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest) -> Bool {
+    if lhs.ssid != rhs.ssid {return false}
+    if lhs.priority != rhs.priority {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetWiFiNetworkPriorityResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
+    }
+    try { if let v = self._errorMessage {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse, rhs: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse) -> Bool {
+    if lhs.success != rhs.success {return false}
+    if lhs._errorMessage != rhs._errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ReorderKnownWiFiNetworksRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}order_ssids\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedStringField(value: &self.orderSsids) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.orderSsids.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.orderSsids, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest, rhs: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest) -> Bool {
+    if lhs.orderSsids != rhs.orderSsids {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ReorderKnownWiFiNetworksResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
+    }
+    try { if let v = self._errorMessage {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse, rhs: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse) -> Bool {
+    if lhs.success != rhs.success {return false}
+    if lhs._errorMessage != rhs._errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ForgetWiFiNetworkRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}ssid\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.ssid) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.ssid.isEmpty {
+      try visitor.visitSingularStringField(value: self.ssid, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest, rhs: Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest) -> Bool {
+    if lhs.ssid != rhs.ssid {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ForgetWiFiNetworkResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
+    }
+    try { if let v = self._errorMessage {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse, rhs: Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse) -> Bool {
     if lhs.success != rhs.success {return false}
     if lhs._errorMessage != rhs._errorMessage {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
