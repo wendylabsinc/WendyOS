@@ -1,9 +1,6 @@
 name: E2E Tests
 
 on:
-  # Temporary: let the E2E rename PR exercise the real-device lane on every push.
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       hostname:
@@ -41,16 +38,10 @@ on:
         required: false
         default: 'all'
 
-env:
-  E2E_HOSTNAME: ${{ github.event_name != 'pull_request' && inputs.hostname || '' }}
-  E2E_TESTS: ${{ github.event_name != 'pull_request' && inputs.tests || '' }}
-  E2E_JOBS: ${{ github.event_name == 'pull_request' && 'all' || inputs.jobs }}
-  E2E_PLATFORM: ${{ github.event_name == 'pull_request' && 'all' || inputs.platform }}
-
 jobs:
   device-discovery:
     name: Device discovery (macOS CLI)
-    if: (github.event_name != 'pull_request' || github.head_ref == 'kb.mac-integration-tests') && (github.event_name == 'pull_request' || inputs.jobs == 'all' || inputs.jobs == 'discover' || inputs.jobs == 'e2e' || inputs.jobs == 'integration')
+    if: inputs.jobs == 'all' || inputs.jobs == 'discover' || inputs.jobs == 'e2e' || inputs.jobs == 'integration'
     runs-on:
       group: wendy-developer
       labels: [self-hosted, macOS, ARM64]
@@ -78,7 +69,7 @@ jobs:
       - name: Discover devices
         id: discover
         run: |
-          INPUT_HOSTNAME='${{ env.E2E_HOSTNAME }}'
+          INPUT_HOSTNAME='${{ inputs.hostname }}'
 
           if [[ -n "$INPUT_HOSTNAME" ]]; then
             if [[ "$INPUT_HOSTNAME" != *.local ]] && [[ "$INPUT_HOSTNAME" != *.* ]] && [[ "$INPUT_HOSTNAME" != *:* ]]; then
@@ -141,7 +132,7 @@ jobs:
   e2e-tests-macos-cli:
     name: E2E tests (macOS CLI -> ${{ matrix.device.displayName }} device)
     needs: device-discovery
-    if: (github.event_name != 'pull_request' || github.head_ref == 'kb.mac-integration-tests') && (github.event_name == 'pull_request' || inputs.jobs == 'all' || inputs.jobs == 'e2e' || inputs.jobs == 'integration') && (github.event_name == 'pull_request' || inputs.platform == 'all' || inputs.platform == 'macos') && needs.device-discovery.outputs.matrix != '[]'
+    if: (inputs.jobs == 'all' || inputs.jobs == 'e2e' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'macos') && needs.device-discovery.outputs.matrix != '[]'
     runs-on:
       group: wendy-developer
       labels: [self-hosted, macOS, ARM64]
@@ -158,7 +149,7 @@ jobs:
         working-directory: go
     env:
       DEVICE_HOSTNAME: ${{ matrix.device.hostname }}
-      INPUT_TESTS: ${{ env.E2E_TESTS }}
+      INPUT_TESTS: ${{ inputs.tests }}
     steps:
       - uses: actions/checkout@v6
 
@@ -229,7 +220,7 @@ jobs:
   e2e-tests-linux-cli:
     name: E2E tests (Linux CLI -> ${{ matrix.device.displayName }} device)
     needs: device-discovery
-    if: (github.event_name != 'pull_request' || github.head_ref == 'kb.mac-integration-tests') && (github.event_name == 'pull_request' || inputs.jobs == 'all' || inputs.jobs == 'e2e' || inputs.jobs == 'integration') && (github.event_name == 'pull_request' || inputs.platform == 'all' || inputs.platform == 'linux') && needs.device-discovery.outputs.matrix != '[]'
+    if: (inputs.jobs == 'all' || inputs.jobs == 'e2e' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'linux') && needs.device-discovery.outputs.matrix != '[]'
     runs-on:
       group: wendy-developer
       labels: [self-hosted, Linux]
@@ -246,7 +237,7 @@ jobs:
         working-directory: go
     env:
       DEVICE_HOSTNAME: ${{ matrix.device.hostname }}
-      INPUT_TESTS: ${{ env.E2E_TESTS }}
+      INPUT_TESTS: ${{ inputs.tests }}
     steps:
       - uses: actions/checkout@v6
 
@@ -308,7 +299,7 @@ jobs:
     name: E2E test summary
     runs-on: ubuntu-latest
     needs: [device-discovery, e2e-tests-macos-cli, e2e-tests-linux-cli]
-    if: always() && (github.event_name != 'pull_request' || github.head_ref == 'kb.mac-integration-tests')
+    if: always()
     steps:
       - name: Check results
         run: |
