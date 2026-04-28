@@ -60,9 +60,12 @@ type deviceVersion struct {
 	SDCardPath      string `json:"sd_path,omitempty"`
 	SDCardSizeBytes int64  `json:"sd_size_bytes,omitempty"`
 	SDCardChecksum  string `json:"sd_checksum,omitempty"`
-	EMMCPath        string `json:"emmc_path,omitempty"`
-	EMMCSizeBytes   int64  `json:"emmc_size_bytes,omitempty"`
-	EMMCChecksum    string `json:"emmc_checksum,omitempty"`
+	EMMCPath          string `json:"emmc_path,omitempty"`
+	EMMCSizeBytes     int64  `json:"emmc_size_bytes,omitempty"`
+	EMMCChecksum      string `json:"emmc_checksum,omitempty"`
+	RecoveryPath      string `json:"recovery_path,omitempty"`
+	RecoveryChecksum  string `json:"recovery_checksum,omitempty"`
+	RecoverySizeBytes int64  `json:"recovery_size_bytes,omitempty"`
 }
 
 // deviceInfo is the aggregated info shown in the picker for one device.
@@ -346,6 +349,35 @@ func getFirmwareInfo(fm *firmwareManifest, ver string) (*imageInfo, error) {
 	return &imageInfo{
 		DownloadURL: gcsBaseURL + "/" + v.Path,
 		ImageSize:   v.SizeBytes,
+		Version:     ver,
+	}, nil
+}
+
+func getTegraflashInfo(dm *deviceManifest, ver, target string) (*imageInfo, error) {
+	v, ok := dm.Versions[ver]
+	if !ok {
+		return nil, fmt.Errorf("version %s not found in device manifest", ver)
+	}
+
+	var path string
+	var size int64
+	switch target {
+	case "emmc":
+		path = v.EMMCPath
+		size = v.EMMCSizeBytes
+	case "recovery":
+		path = v.RecoveryPath
+		size = v.RecoverySizeBytes
+	default:
+		return nil, fmt.Errorf("unknown tegraflash target %q", target)
+	}
+	if path == "" {
+		return nil, fmt.Errorf("version %s has no %s tegraflash artifact", ver, target)
+	}
+
+	return &imageInfo{
+		DownloadURL: gcsBaseURL + "/" + path,
+		ImageSize:   size,
 		Version:     ver,
 	}, nil
 }

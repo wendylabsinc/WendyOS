@@ -166,10 +166,12 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	cliLogln("Opening browser for authentication: %s", loginURL)
+	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
+	fmt.Printf("  %s\n", loginURL)
 
 	if err := openBrowser(loginURL); err != nil {
-		cliNotice("Could not open browser automatically. Please visit:\n  %s", loginURL)
+		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+		fmt.Printf("  %s\n", loginURL)
 	}
 
 	// Show a QR code the user can scan with the Wendy iOS app to log in on their phone.
@@ -186,7 +188,7 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	var enrollmentToken string
 	select {
 	case enrollmentToken = <-tokenCh:
-		cliLogln("Received enrollment token.")
+		fmt.Println(tui.SuccessMessage("Received enrollment token."))
 	case loginErr := <-errCh:
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
@@ -267,10 +269,10 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	cliSuccess("Authentication successful. Certificates saved.")
+	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
 
 	if len(issueResp.GetWarnings()) > 0 {
-		cliNotice("Warnings:")
+		fmt.Println(tui.WarningMessage("Warnings:"))
 		for _, w := range issueResp.GetWarnings() {
 			cliNotice("  - %s", w)
 		}
@@ -334,7 +336,7 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		TtlSeconds:     120,
 	})
 	if err != nil {
-		return fmt.Errorf("creating enrollment token: %w", err)
+		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
 	}
 	// Reconstruct the device_id that pki-core stored in the token.
 	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
@@ -443,7 +445,7 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			cliSuccess("Logged out. All authentication credentials removed.")
+			fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
 			return nil
 		},
 	}
@@ -473,14 +475,14 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 					continue
 				}
 
-				cliLogln("Refreshing certificates for %s...", auth.CloudDashboard)
+				fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", auth.CloudDashboard)))
 
 				if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-					cliNotice("Failed to refresh for %s: %v", auth.CloudDashboard, err)
+					fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", auth.CloudDashboard, err)))
 					continue
 				}
 
-				cliSuccess("Certificates refreshed for %s.", auth.CloudDashboard)
+				fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", auth.CloudDashboard)))
 			}
 
 			if err := config.Save(cfg); err != nil {
