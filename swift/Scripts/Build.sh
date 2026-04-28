@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$DEV_BUILD" -eq 1 ]]; then
-  VERSION="$(date -u '+%Y.%m.%d-%H%M%S-dev')"
+  VERSION="${VERSION:-0000.00.00-000000-dev}"
 else
   : "${VERSION:?VERSION is required}"
 fi
