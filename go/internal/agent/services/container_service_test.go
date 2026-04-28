@@ -90,6 +90,10 @@ func (m *mockContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.
 	return m.statsResult, m.statsErr
 }
 
+func (m *mockContainerdClient) GetContainerMetrics(_ context.Context, _ string) (ContainerMetrics, error) {
+	return ContainerMetrics{}, nil
+}
+
 // attachTestMock embeds mockContainerdClient and overrides StartContainerWithStdin
 // so tests can capture the appName and stdin reader passed by AttachContainer.
 type attachTestMock struct {

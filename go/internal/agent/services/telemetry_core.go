@@ -3,12 +3,34 @@ package services
 import (
 	"fmt"
 	"math"
+	"os"
+	"sync"
 	"time"
 
 	"go.uber.org/zap/zapcore"
 
+	"github.com/wendylabsinc/wendy/internal/shared/version"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
+
+// resolveHostname returns the machine hostname, resolved once at startup.
+var resolveHostname = sync.OnceValue(func() string {
+	h, _ := os.Hostname()
+	return h
+})
+
+// newAgentResource builds the OTel resource for the wendy-agent process.
+func newAgentResource() *otelpb.Resource {
+	attrs := []*otelpb.KeyValue{
+		stringKV("service.name", "wendy-agent"),
+		stringKV("service.namespace", "wendy"),
+		stringKV("service.version", version.Version),
+	}
+	if h := resolveHostname(); h != "" {
+		attrs = append(attrs, stringKV("service.instance.id", h))
+	}
+	return &otelpb.Resource{Attributes: attrs}
+}
 
 // TelemetryCore is a zapcore.Core that publishes log entries to a
 // TelemetryBroadcaster as OTEL log records. This bridges the agent's
@@ -18,6 +40,7 @@ type TelemetryCore struct {
 	broadcaster *TelemetryBroadcaster
 	level       zapcore.Level
 	fields      []zapcore.Field
+	resource    *otelpb.Resource
 }
 
 // NewTelemetryCore creates a new TelemetryCore that publishes to the given broadcaster.
@@ -25,6 +48,14 @@ func NewTelemetryCore(broadcaster *TelemetryBroadcaster, level zapcore.Level) *T
 	return &TelemetryCore{
 		broadcaster: broadcaster,
 		level:       level,
+		resource:    newAgentResource(),
+	}
+}
+
+func stringKV(key, val string) *otelpb.KeyValue {
+	return &otelpb.KeyValue{
+		Key:   key,
+		Value: &otelpb.AnyValue{Value: &otelpb.AnyValue_StringValue{StringValue: val}},
 	}
 }
 
@@ -40,6 +71,7 @@ func (c *TelemetryCore) With(fields []zapcore.Field) zapcore.Core {
 		broadcaster: c.broadcaster,
 		level:       c.level,
 		fields:      combined,
+		resource:    c.resource,
 	}
 }
 
@@ -87,14 +119,7 @@ func (c *TelemetryCore) Write(entry zapcore.Entry, fields []zapcore.Field) error
 	c.broadcaster.PublishLogs(&otelpb.ExportLogsServiceRequest{
 		ResourceLogs: []*otelpb.ResourceLogs{
 			{
-				Resource: &otelpb.Resource{
-					Attributes: []*otelpb.KeyValue{
-						{
-							Key:   "service.name",
-							Value: &otelpb.AnyValue{Value: &otelpb.AnyValue_StringValue{StringValue: "wendy-agent"}},
-						},
-					},
-				},
+				Resource: c.resource,
 				ScopeLogs: []*otelpb.ScopeLogs{
 					{
 						Scope:      &otelpb.InstrumentationScope{Name: "wendy.agent"},
