@@ -17,7 +17,7 @@ VERSION="${WENDYOS_AGENT_VERSION:-latest}"
 ARCH="aarch64"  # Hardcoded for RPi
 
 # Paths
-INSTALL_DIR="/usr/bin"
+INSTALL_DIR="/usr/local/bin"
 BACKUP_DIR="/opt/wendy/bin"
 BINARY_NAME="wendy-agent"
 TEMP_DIR="/tmp/wendy-agent-download-$$"
