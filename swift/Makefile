@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources
 
-.PHONY: help format lint test proto build build-dev reset-mac-app-settings reset-mac-app-tcc reset-mac-app clean
+.PHONY: help format lint test proto build build-dev reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -41,3 +41,14 @@ reset-mac-app-tcc: ## Reset WendyAgentMac TCC permissions
 	./Scripts/ResetMacAppTCC.sh
 
 reset-mac-app: reset-mac-app-settings reset-mac-app-tcc ## Reset WendyAgentMac settings and TCC permissions
+
+quit: ## Quit WendyAgentMac and fail if it is still running after 3 seconds
+	@bundle_id="sh.wendy.WendyAgentMac"; \
+	if [[ "$$(osascript -e "application id \"$$bundle_id\" is running")" == "true" ]]; then \
+		osascript -e "tell application id \"$$bundle_id\" to quit"; \
+	fi; \
+	sleep 3; \
+	if [[ "$$(osascript -e "application id \"$$bundle_id\" is running")" == "true" ]]; then \
+		echo "Error: $$bundle_id is still running after quit request." >&2; \
+		exit 1; \
+	fi
