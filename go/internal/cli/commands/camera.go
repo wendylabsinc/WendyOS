@@ -13,22 +13,22 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
-func newVideoCmd() *cobra.Command {
+func newCameraCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "video",
-		Short: "Manage video devices on the target device",
+		Use:   "camera",
+		Short: "Manage cameras on the target device",
 	}
 	cmd.AddCommand(
-		newVideoListCmd(),
-		newVideoStreamCmd(),
+		newCameraListCmd(),
+		newCameraViewCmd(),
 	)
 	return cmd
 }
 
-func newVideoListCmd() *cobra.Command {
+func newCameraListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List video devices",
+		Short: "List cameras",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
@@ -39,7 +39,7 @@ func newVideoListCmd() *cobra.Command {
 
 			resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
 			if err != nil {
-				return fmt.Errorf("listing video devices: %w", err)
+				return fmt.Errorf("listing cameras: %w", err)
 			}
 
 			devices := resp.GetDevices()
@@ -53,7 +53,7 @@ func newVideoListCmd() *cobra.Command {
 			}
 
 			if len(devices) == 0 {
-				fmt.Println("No video devices found.")
+				fmt.Println("No cameras found.")
 				return nil
 			}
 
@@ -72,12 +72,12 @@ func newVideoListCmd() *cobra.Command {
 	}
 }
 
-func newVideoStreamCmd() *cobra.Command {
+func newCameraViewCmd() *cobra.Command {
 	var deviceID, width, height, fps uint32
 	var toStdout bool
 
 	cmd := &cobra.Command{
-		Use:   "stream",
+		Use:   "view",
 		Short: "Stream H.264 video from a device camera",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -106,7 +106,7 @@ func newVideoStreamCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Video device ID")
+	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Camera device ID")
 	cmd.Flags().Uint32Var(&width, "width", 0, "Frame width (0 = device default)")
 	cmd.Flags().Uint32Var(&height, "height", 0, "Frame height (0 = device default)")
 	cmd.Flags().Uint32Var(&fps, "fps", 0, "Framerate (0 = device default)")
