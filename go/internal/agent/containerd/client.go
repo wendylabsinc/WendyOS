@@ -433,7 +433,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if _, err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+		if err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
 			if mapped := toCreateContainerProgress(progress); mapped != nil {
 				report(mapped)
 			}

@@ -70,12 +70,12 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 
 	// Read hardware platform identifier if available.
 	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		machine, board := parseDeviceType(string(data))
-		if machine != "" {
-			resp.DeviceType = &machine
+		deviceType, storageMedium := parseDeviceType(string(data))
+		if deviceType != "" {
+			resp.DeviceType = &deviceType
 		}
-		if board != "" {
-			resp.Board = &board
+		if storageMedium != "" {
+			resp.StorageMedium = &storageMedium
 		}
 	}
 
@@ -258,9 +258,10 @@ func detectFeatureset() []string {
 }
 
 // parseDeviceType parses /etc/wendyos/device-type, which may be either a plain
-// string (legacy) or a KEY=VALUE file (new format with BOARD and MACHINE keys).
-// Returns (machine, board); either may be empty.
-func parseDeviceType(content string) (machine, board string) {
+// string (legacy) or a KEY=VALUE file (new format).
+// Returns (deviceType, storageMedium); either may be empty.
+// MACHINE and BOARD are treated as the same thing (board identifier).
+func parseDeviceType(content string) (deviceType, storageMedium string) {
 	content = strings.TrimSpace(content)
 	if !strings.Contains(content, "=") {
 		return content, ""
@@ -272,13 +273,13 @@ func parseDeviceType(content string) (machine, board string) {
 			continue
 		}
 		switch strings.TrimSpace(k) {
-		case "MACHINE":
-			machine = strings.TrimSpace(v)
-		case "BOARD":
-			board = strings.TrimSpace(v)
+		case "MACHINE", "BOARD":
+			deviceType = strings.TrimSpace(v)
+		case "STORAGE":
+			storageMedium = strings.TrimSpace(v)
 		}
 	}
-	return machine, board
+	return deviceType, storageMedium
 }
 
 // RunContainer is deprecated. Clients should use WendyContainerService.RunContainer

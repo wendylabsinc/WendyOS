@@ -102,13 +102,20 @@ func TestWaitForReadiness_PortBecomesAvailable(t *testing.T) {
 }
 
 func TestWaitForReadiness_Timeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := testPort(t, ln)
+	ln.Close()
+
 	cfg := &appconfig.ReadinessConfig{
-		TCPSocket:      &appconfig.TCPSocketProbe{Port: 19999},
+		TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
 		TimeoutSeconds: 2,
 	}
 
 	start := time.Now()
-	err := waitForReadiness(context.Background(), cfg, "127.0.0.1")
+	err = waitForReadiness(context.Background(), cfg, "127.0.0.1")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -120,8 +127,15 @@ func TestWaitForReadiness_Timeout(t *testing.T) {
 }
 
 func TestWaitForReadiness_ContextCancelled(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := testPort(t, ln)
+	ln.Close()
+
 	cfg := &appconfig.ReadinessConfig{
-		TCPSocket:      &appconfig.TCPSocketProbe{Port: 19999},
+		TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
 		TimeoutSeconds: 30,
 	}
 
@@ -132,7 +146,7 @@ func TestWaitForReadiness_ContextCancelled(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := waitForReadiness(ctx, cfg, "127.0.0.1")
+	err = waitForReadiness(ctx, cfg, "127.0.0.1")
 	elapsed := time.Since(start)
 
 	if err == nil {

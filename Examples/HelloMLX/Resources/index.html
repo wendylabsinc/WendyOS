@@ -48,7 +48,7 @@
     .page-header {
       display: flex;
       justify-content: space-between;
-      align-items: baseline;
+      align-items: flex-start;
       gap: 16px;
     }
 
@@ -62,6 +62,38 @@
     .page-url {
       margin: 0;
       color: var(--muted);
+    }
+
+    .page-header-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .summary-metric {
+      min-width: 220px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(121, 168, 255, 0.28);
+      background: rgba(121, 168, 255, 0.09);
+      box-shadow: var(--shadow);
+    }
+
+    .summary-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .summary-value {
+      display: block;
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--accent);
     }
 
     .top-grid {
@@ -259,15 +291,41 @@
     .run-meta {
       display: flex;
       justify-content: space-between;
-      gap: 12px;
-      align-items: baseline;
+      gap: 16px;
+      align-items: flex-start;
       flex-wrap: wrap;
+    }
+
+    .run-meta-main {
+      display: grid;
+      gap: 4px;
     }
 
     .run-time,
     .run-frame-count {
       color: var(--muted);
       font-size: 12px;
+    }
+
+    .run-duration-block {
+      text-align: right;
+    }
+
+    .run-duration-label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 2px;
+    }
+
+    .run-duration {
+      display: block;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--accent);
     }
 
     .run-section {
@@ -326,6 +384,15 @@
         padding: 16px;
       }
 
+      .page-header {
+        flex-direction: column;
+      }
+
+      .page-header-side {
+        width: 100%;
+        justify-items: stretch;
+      }
+
       .top-grid {
         grid-template-columns: 1fr;
       }
@@ -343,7 +410,13 @@
         <h1 class="page-title">HelloMLX</h1>
         <p class="page-subtitle">Live camera input, editable prompt, and persisted run history.</p>
       </div>
-      <p class="page-url" id="page-url">Waiting for server state…</p>
+      <div class="page-header-side">
+        <div class="summary-metric">
+          <span class="summary-label">Last run duration</span>
+          <span class="summary-value" id="last-run-duration">—</span>
+        </div>
+        <p class="page-url" id="page-url">Waiting for server state…</p>
+      </div>
     </header>
 
     <section class="top-grid" aria-label="Live view and prompt">
@@ -419,8 +492,14 @@
   <template id="run-template">
     <article class="run-card">
       <header class="run-meta">
-        <time class="run-time"></time>
-        <span class="run-frame-count"></span>
+        <div class="run-meta-main">
+          <time class="run-time"></time>
+          <span class="run-frame-count"></span>
+        </div>
+        <div class="run-duration-block">
+          <span class="run-duration-label">Duration</span>
+          <span class="run-duration"></span>
+        </div>
       </header>
       <section class="run-section">
         <span class="run-label">Prompt</span>
@@ -451,6 +530,7 @@
 
     const elements = {
       pageURL: document.getElementById('page-url'),
+      lastRunDuration: document.getElementById('last-run-duration'),
       liveFrame: document.getElementById('live-frame'),
       liveFramePlaceholder: document.getElementById('live-frame-placeholder'),
       liveFrameNote: document.getElementById('live-frame-note'),
@@ -474,6 +554,31 @@
       if (!value) return '—';
       const date = new Date(value);
       return date.toLocaleString();
+    }
+
+    function formatNumber(value) {
+      if (Number.isInteger(value)) return `${value}`;
+      return value.toFixed(3).replace(/\.0+$|0+$/g, '').replace(/\.$/, '');
+    }
+
+    function formatSquareResolution(value) {
+      return `${value}x${value}`;
+    }
+
+    function formatDuration(value) {
+      if (value == null || !Number.isFinite(value)) return '—';
+      if (value >= 3600) {
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const seconds = value % 60;
+        return `${hours}h ${minutes}m ${formatNumber(seconds)}s`;
+      }
+      if (value >= 60) {
+        const minutes = Math.floor(value / 60);
+        const seconds = value % 60;
+        return `${minutes}m ${formatNumber(seconds)}s`;
+      }
+      return `${formatNumber(value)}s`;
     }
 
     function updatePromptControls() {
@@ -523,7 +628,8 @@
       elements.modelStatus.textContent = payload.model.name
         ? `${payload.model.status} · ${payload.model.name}`
         : payload.model.status;
-      elements.runConfig.textContent = `${payload.run.interval}s window · ${payload.run.fps} fps`;
+      elements.runConfig.textContent = `${formatNumber(payload.run.interval)}s window · ${formatNumber(payload.run.fps)} fps · ${formatSquareResolution(payload.run.resolution)}`;
+      elements.lastRunDuration.textContent = formatDuration(payload.run.latestRunDuration);
       elements.latestRun.textContent = payload.run.latestRunID
         ? `${payload.run.latestRunID} · ${payload.run.isRunningInference ? 'running' : 'idle'}`
         : (payload.run.isRunningInference ? 'Running…' : 'None yet');
@@ -574,7 +680,9 @@
       const card = fragment.querySelector('.run-card');
       card.dataset.runId = run.id;
       fragment.querySelector('.run-time').textContent = formatDate(run.timestamp);
-      fragment.querySelector('.run-frame-count').textContent = `${run.frameCount} frame${run.frameCount === 1 ? '' : 's'}`;
+      const resolution = run.resolution ?? 256;
+      fragment.querySelector('.run-frame-count').textContent = `${run.frameCount} frame${run.frameCount === 1 ? '' : 's'} · ${formatNumber(run.interval)}s · ${formatNumber(run.fps)} fps · ${formatSquareResolution(resolution)}`;
+      fragment.querySelector('.run-duration').textContent = formatDuration(run.duration);
       fragment.querySelector('.run-prompt').textContent = run.prompt;
       fragment.querySelector('.run-response').textContent = run.response;
 

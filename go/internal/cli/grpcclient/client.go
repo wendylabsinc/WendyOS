@@ -32,6 +32,7 @@ type AgentConnection struct {
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
+	VideoService        agentpb.WendyVideoServiceClient
 	ProvisioningService agentpb.WendyProvisioningServiceClient
 	TelemetryService    agentpb.WendyTelemetryServiceClient
 	FileSyncService     agentpb.WendyFileSyncServiceClient
@@ -145,6 +146,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		AgentService:        agentpb.NewWendyAgentServiceClient(conn),
 		ContainerService:    agentpb.NewWendyContainerServiceClient(conn),
 		AudioService:        agentpb.NewWendyAudioServiceClient(conn),
+		VideoService:        agentpb.NewWendyVideoServiceClient(conn),
 		ProvisioningService: agentpb.NewWendyProvisioningServiceClient(conn),
 		TelemetryService:    agentpb.NewWendyTelemetryServiceClient(conn),
 		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),

@@ -36,10 +36,12 @@ struct PromptInfo: Codable {
 }
 
 struct RunInfo: Codable {
-    let interval: Int
-    let fps: Int
+    let interval: Double
+    let fps: Double
+    let resolution: Int
     let isRunningInference: Bool
     let latestRunID: String?
+    let latestRunDuration: TimeInterval?
     let lastInferenceAt: Date?
 }
 
@@ -64,8 +66,9 @@ struct PromptUpdateResponse: Codable {
 actor AppState {
     private let startedAt = Date()
     private let baseURL: String
-    private let interval: Int
-    private let fps: Int
+    private let interval: Double
+    private let fps: Double
+    private let resolution: Int
 
     private var cameraStatus: CameraStatus = .starting
     private var cameraName: String?
@@ -80,17 +83,21 @@ actor AppState {
 
     private var isRunningInference = false
     private var latestRunID: String?
+    private var latestRunDuration: TimeInterval?
     private var lastInferenceAt: Date?
     private var lastError: String?
 
-    init(config: AppConfig, baseURL: String, latestRunID: String?) {
+    init(config: AppConfig, baseURL: String, latestRun: PersistedRun?) {
         self.baseURL = baseURL
         self.interval = config.interval
         self.fps = config.fps
+        self.resolution = config.resolution
         self.modelStatus = config.modelPath == nil ? .notConfigured : .loading
         self.modelName = config.modelPath.map { URL(fileURLWithPath: $0).lastPathComponent }
         self.promptText = config.prompt
-        self.latestRunID = latestRunID
+        self.latestRunID = latestRun?.id
+        self.latestRunDuration = latestRun?.duration
+        self.lastInferenceAt = latestRun?.timestamp
     }
 
     func snapshot() -> StateResponse {
@@ -110,8 +117,10 @@ actor AppState {
             run: RunInfo(
                 interval: interval,
                 fps: fps,
+                resolution: resolution,
                 isRunningInference: isRunningInference,
                 latestRunID: latestRunID,
+                latestRunDuration: latestRunDuration,
                 lastInferenceAt: lastInferenceAt
             ),
             error: lastError
@@ -176,8 +185,9 @@ actor AppState {
         isRunningInference = isRunning
     }
 
-    func recordRun(id: String, at date: Date) {
+    func recordRun(id: String, at date: Date, duration: TimeInterval) {
         latestRunID = id
+        latestRunDuration = duration
         lastInferenceAt = date
     }
 

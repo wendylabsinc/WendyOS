@@ -13,8 +13,9 @@ struct AppConfig: Encodable {
     var modelPath: String?
     var prompt: String
     var camera: String?
-    var interval: Int
-    var fps: Int
+    var interval: Double
+    var fps: Double
+    var resolution: Int
     var port: Int
 }
 
@@ -31,7 +32,7 @@ private func printFinalConfig(_ config: AppConfig) {
     }
 
     print(
-        "Final app config: modelPath=\(config.modelPath ?? "nil"), prompt=\(config.prompt), camera=\(config.camera ?? "nil"), interval=\(config.interval), fps=\(config.fps), port=\(config.port)"
+        "Final app config: modelPath=\(config.modelPath ?? "nil"), prompt=\(config.prompt), camera=\(config.camera ?? "nil"), interval=\(config.interval), fps=\(config.fps), resolution=\(config.resolution), port=\(config.port)"
     )
 }
 
@@ -48,10 +49,13 @@ struct CLIArguments: ParsableCommand {
     var prompt: String = ""
 
     @Option(name: .long, help: "Seconds of camera history to include in each inference pass.")
-    var interval: Int = 5
+    var interval: Double = 5
 
     @Option(name: .long, help: "Frames per second to sample into the buffer.")
-    var fps: Int = 2
+    var fps: Double = 1
+
+    @Option(name: .long, help: "Square frame resolution. A value of Y produces YxY frames.")
+    var resolution: Int = 256
 
     @Option(name: .long, help: "Local port to serve the web UI on.")
     var port: Int = 8080
@@ -67,6 +71,10 @@ struct CLIArguments: ParsableCommand {
 
         guard fps > 0 else {
             throw ValidationError("--fps must be greater than 0.")
+        }
+
+        guard resolution > 0 else {
+            throw ValidationError("--resolution must be greater than 0.")
         }
     }
 }
@@ -98,6 +106,7 @@ let appConfig: AppConfig = {
             camera: parsed.camera,
             interval: parsed.interval,
             fps: parsed.fps,
+            resolution: parsed.resolution,
             port: parsed.port
         )
         printFinalConfig(config)
@@ -114,7 +123,7 @@ struct HelloMLX {
             let dataDirectory = try AppDirectories.makeDataDirectory()
             let runStore = try RunStore(rootURL: dataDirectory)
             let baseURL = makeAdvertisedBaseURL(port: appConfig.port)
-            let state = AppState(config: appConfig, baseURL: baseURL, latestRunID: runStore.latestRunID())
+            let state = AppState(config: appConfig, baseURL: baseURL, latestRun: runStore.latestRun())
             let indexHTML = try loadIndexHTML()
             let webServer = try WebServer(
                 port: UInt16(appConfig.port),
@@ -270,8 +279,10 @@ final class Camera: NSObject {
     private func runInferenceLoop() async {
         guard let container = model else { return }
 
-        let interval = TimeInterval(config.interval)
-        print("Sampling at \(config.fps) fps, evaluating last \(config.interval)s of frames.")
+        let interval = config.interval
+        print(
+            "Sampling at \(config.fps) fps, evaluating last \(config.interval)s of frames at \(config.resolution)x\(config.resolution)."
+        )
 
         while !Task.isCancelled {
             let prompt = await state.currentPrompt().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -280,7 +291,7 @@ final class Camera: NSObject {
                 continue
             }
 
-            while !Task.isCancelled && windowFrames(within: interval).count < 2 {
+            while !Task.isCancelled && windowFrames(within: interval).count < 1 {
                 try? await Task.sleep(for: .seconds(1))
             }
             if Task.isCancelled { return }
@@ -295,8 +306,10 @@ final class Camera: NSObject {
             var userInput = UserInput(
                 chat: [.user(prompt, images: frames.map { .ciImage(CIImage(cgImage: $0.image)) })]
             )
-            userInput.processing.resize = CGSize(width: 256, height: 256)
+            let resolution = CGFloat(config.resolution)
+            userInput.processing.resize = CGSize(width: resolution, height: resolution)
 
+            let inferenceStartedAt = Date()
             var response = ""
             do {
                 let lmInput = try await container.prepare(input: userInput)
@@ -320,6 +333,7 @@ final class Camera: NSObject {
             }
             await state.setInferenceRunning(false)
 
+            let duration = Date().timeIntervalSince(inferenceStartedAt)
             let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleanedResponse.isEmpty else { continue }
 
@@ -331,9 +345,11 @@ final class Camera: NSObject {
                     cameraName: cameraName,
                     modelName: modelName,
                     interval: config.interval,
-                    fps: config.fps
+                    fps: config.fps,
+                    resolution: config.resolution,
+                    duration: duration
                 )
-                await state.recordRun(id: run.id, at: run.timestamp)
+                await state.recordRun(id: run.id, at: run.timestamp, duration: duration)
                 await state.setError(nil)
             } catch {
                 await state.setError("Failed to persist run: \(error.localizedDescription)")
@@ -359,6 +375,34 @@ final class Camera: NSObject {
             await state.setLiveFrame(jpeg: jpeg, at: frame.capturedAt)
         }
     }
+
+    private func makeSquareFrameImage(from ciImage: CIImage) -> CGImage? {
+        let extent = ciImage.extent.integral
+        let cropLength = min(extent.width, extent.height)
+        guard cropLength > 0 else { return nil }
+
+        let cropped = ciImage.cropped(
+            to: CGRect(
+                x: extent.origin.x + (extent.width - cropLength) / 2,
+                y: extent.origin.y + (extent.height - cropLength) / 2,
+                width: cropLength,
+                height: cropLength
+            )
+        )
+
+        let normalized = cropped.transformed(
+            by: CGAffineTransform(
+                translationX: -cropped.extent.origin.x,
+                y: -cropped.extent.origin.y
+            )
+        )
+
+        let resolution = CGFloat(config.resolution)
+        let scale = resolution / cropLength
+        let resized = normalized.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let outputRect = CGRect(origin: .zero, size: CGSize(width: resolution, height: resolution))
+        return ciContext.createCGImage(resized, from: outputRect)
+    }
 }
 
 extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -370,7 +414,7 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
 
         let now = Date()
-        let minGap = 1.0 / TimeInterval(config.fps)
+        let minGap = 1.0 / config.fps
 
         frameBufferLock.lock()
         let shouldSample = lastSampledAt == nil || now.timeIntervalSince(lastSampledAt!) >= minGap
@@ -382,11 +426,8 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard shouldSample else { return }
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let targetSize = CGSize(width: 256, height: 256)
-        let scale = min(targetSize.width / ciImage.extent.width, targetSize.height / ciImage.extent.height)
-        let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
 
-        guard let image = ciContext.createCGImage(scaled, from: scaled.extent),
+        guard let image = makeSquareFrameImage(from: ciImage),
               let jpeg = jpegData(from: image)
         else {
             return

@@ -78,6 +78,7 @@ This demo runs a vision-language model on the target Mac and evaluates a prompt 
 By default, the app configuration includes:
 
 - a local model path: `gemma-3-27b-it-qat-4bit`
+- a square frame resolution of `256x256` (override with `--resolution Y`)
 - a web server on port `8080`
 - a prompt that asks the model to comment on the captured frames
 
@@ -92,7 +93,8 @@ Final app config:
   "interval" : 5,
   "modelPath" : "gemma-3-27b-it-qat-4bit",
   "port" : 8080,
-  "prompt" : "These frames were captured at a fixed interval from a webcam. You are a comedian using dark humor below the waist line. Ridicule what is shown by the frames."
+  "prompt" : "These frames were captured at a fixed interval from a webcam. You are a comedian using dark humor below the waist line. Ridicule what is shown by the frames.",
+  "resolution" : 256
 }
 HELLO_MLX_URL=http://konstantins-macbook-pro-m5.local:8080/
 HELLO_MLX_DATA_DIR=/Users/konstantinbe/Library/Application Support/sh.wendy.WendyAgentMac/apps/sh.wendy.examples.HelloMLX/Runs

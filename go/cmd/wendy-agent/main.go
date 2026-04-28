@@ -111,6 +111,7 @@ func main() {
 	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager)
 	containerSvc := services.NewContainerService(logger, containerdClient, services.WithLogManager(logManager))
 	audioSvc := services.NewAudioService(logger)
+	videoSvc := services.NewVideoService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
@@ -202,6 +203,7 @@ func main() {
 		agentpb.RegisterWendyAgentServiceServer(srv, agentSvc)
 		agentpb.RegisterWendyContainerServiceServer(srv, containerSvc)
 		agentpb.RegisterWendyAudioServiceServer(srv, audioSvc)
+		agentpb.RegisterWendyVideoServiceServer(srv, videoSvc)
 		agentpb.RegisterWendyProvisioningServiceServer(srv, provisioningSvc)
 		agentpb.RegisterWendyTelemetryServiceServer(srv, telemetrySvc)
 	}

@@ -607,6 +607,21 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
+	// Pre-populate vals with any --var overrides not consumed by template
+	// variables, so they can answer schema questions.
+	for k, v := range varOverrides {
+		if _, exists := vals[k]; !exists {
+			vals[k] = v
+		}
+	}
+
+	// Collect schema-driven answers (multi-phase conditional questions).
+	if manifest.Schema != nil {
+		if err := collectSchemaAnswers(manifest.Schema, vals); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}
