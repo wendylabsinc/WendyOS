@@ -166,7 +166,7 @@ message GetAgentVersionResponse {
     string cpu_architecture = 4;
     optional string public_key = 5;
     repeated string featureset = 6;
-    // Hardware platform identifier read from /etc/wendyos/device-type (only present on WendyOS)
+    // MACHINE/BOARD value from /etc/wendyos/device-type (only present on WendyOS)
     optional string device_type = 7;
     // Whether the device has a GPU.
     optional bool has_gpu = 8;
@@ -176,6 +176,8 @@ message GetAgentVersionResponse {
     optional string jetpack_version = 10;
     // CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
     optional string cuda_version = 11;
+    // STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+    optional string storage_medium = 12;
 }
 
 // Request message for listing WiFi networks
