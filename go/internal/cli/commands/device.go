@@ -72,7 +72,6 @@ func newDeviceCmd() *cobra.Command {
 		newWifiCmd(),
 		newBluetoothCmd(),
 		newAudioCmd(),
-		newCameraCmd(),
 		newVideoCmd(),
 		newHardwareCmd(),
 	)
