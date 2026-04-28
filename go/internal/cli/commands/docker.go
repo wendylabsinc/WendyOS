@@ -302,10 +302,27 @@ func ensureDockerDaemon(ctx context.Context) error {
 	}
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		if runtime.GOOS == "darwin" {
+		if runtime.GOOS == "darwin" && isInteractiveTerminalFn() {
+			fmt.Print("Docker is not installed. Install it now with 'brew install --cask docker'? [Y/n] ")
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "" && answer != "y" && answer != "yes" {
+				return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+			}
+			fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
+			installCmd := exec.CommandContext(ctx, "brew", "install", "--cask", "docker")
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				return fmt.Errorf("failed to install Docker: %w", err)
+			}
+			// Fall through to detect and launch the newly installed runtime.
+		} else if runtime.GOOS == "darwin" {
 			return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+		} else {
+			return fmt.Errorf("docker is not installed — please install Docker Desktop or OrbStack")
 		}
-		return fmt.Errorf("docker is not installed — please install Docker Desktop or OrbStack")
 	}
 
 	if runtime.GOOS == "darwin" {
