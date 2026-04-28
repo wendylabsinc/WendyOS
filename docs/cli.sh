@@ -283,3 +283,15 @@ else
   echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}."
   echo "Make sure ${INSTALL_DIR} is in your PATH."
 fi
+
+# --- Offer tour ---
+if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]] && [[ -r /dev/tty ]]; then
+  printf "\nWould you like a quick guided tour of the Wendy CLI? [Y/n] "
+  read -r tour_answer </dev/tty
+  case "$tour_answer" in
+    ""|[yY]|[yY][eE][sS]) "$BINARY_NAME" tour ;;
+  esac
+else
+  echo ""
+  echo "Run '${INSTALL_DIR}/${BINARY_NAME} tour' at any time for a guided walkthrough."
+fi
