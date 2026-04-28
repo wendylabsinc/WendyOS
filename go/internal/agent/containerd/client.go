@@ -740,45 +740,54 @@ func expandAgentHook(command, appName string) string {
 	})
 }
 
-func (c *Client) startPostStartAgentHook(ctx context.Context, container containerd.Container, appName string) {
+var startPostStartHookCommand = func(shell, flag, command string) (func() error, error) {
+	cmd := exec.Command(shell, flag, command)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd.Wait, nil
+}
+
+func (c *Client) startPostStartAgentHook(ctx context.Context, container containerd.Container, appName string) bool {
 	labels, err := container.Labels(ctx)
 	if err != nil {
 		c.logger.Warn("Failed to read container labels for postStart agent hook",
 			zap.String("app_name", appName),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
+	return c.startPostStartAgentHookFromLabels(labels, appName)
+}
 
+func (c *Client) startPostStartAgentHookFromLabels(labels map[string]string, appName string) bool {
 	command := labels[labelKeyPostStartAgent]
 	if command == "" {
-		return
+		return false
 	}
 
 	expanded := expandAgentHook(command, appName)
 	shell, flag := shellCommand()
-	cmd := exec.Command(shell, flag, expanded)
-	if err := cmd.Start(); err != nil {
+	wait, err := startPostStartHookCommand(shell, flag, expanded)
+	if err != nil {
 		c.logger.Warn("Failed to start postStart agent hook",
 			zap.String("app_name", appName),
-			zap.String("command", expanded),
 			zap.Error(err),
 		)
-		return
+		return false
 	}
 	go func() {
-		if err := cmd.Wait(); err != nil {
+		if err := wait(); err != nil {
 			c.logger.Warn("postStart agent hook exited with error",
 				zap.String("app_name", appName),
-				zap.String("command", expanded),
 				zap.Error(err),
 			)
 		}
 	}()
 	c.logger.Info("Started postStart agent hook",
 		zap.String("app_name", appName),
-		zap.String("command", expanded),
 	)
+	return true
 }
 
 // deleteStaleTask attempts to load and force-delete any existing task for the
