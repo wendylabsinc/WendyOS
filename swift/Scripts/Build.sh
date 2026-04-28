@@ -118,10 +118,18 @@ xcbeautify_or_cat() {
   fi
 }
 
-mkdir -p "$OUTPUT_DIR" "$DERIVED_DATA_PATH"
-rm -rf "$ARCHIVE_PATH" "$DERIVED_DATA_PATH" "$APP_PATH" "$NOTARY_ZIP"
-mkdir -p "$DERIVED_DATA_PATH"
+mkdir -p "$OUTPUT_DIR"
+
+rm -rf "$ARCHIVE_PATH"
+rm -rf "$APP_PATH"
+rm -rf "$NOTARY_ZIP"
 rm -f "$ARTIFACT_PATH"
+
+if [[ "$DEV_BUILD" -eq 1 ]]; then
+  echo "Preserving derived data for incremental dev build: $DERIVED_DATA_PATH"
+else
+  rm -rf "$DERIVED_DATA_PATH"
+fi
 
 xcodebuild archive \
   -workspace WendyAgent.xcworkspace \
