@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -775,16 +776,10 @@ func (m tourWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case phaseCloud, phaseDone:
-		switch key {
-		case "enter", " ", "q", "ctrl+c":
-			return m, tea.Quit
-		}
+		return m, tea.Quit
 
 	case phaseError:
-		switch key {
-		case "enter", " ", "q", "ctrl+c":
-			return m, tea.Quit
-		}
+		return m, tea.Quit
 
 	default:
 		if key == "ctrl+c" {
@@ -1375,15 +1370,23 @@ func (m tourWizardModel) viewCreateProject(w int) string {
 		sb.WriteString("  " + wizCodeStyle.Render(m.projectPath) + "\n\n")
 		sb.WriteString(wizBodyStyle.Width(w).Render("It's a simple HTTP server. Once deployed, visit:") + "\n")
 		deviceHost := strings.TrimSpace(m.foundAddr)
+		if h, _, err := net.SplitHostPort(deviceHost); err == nil {
+			deviceHost = h
+		}
 		if deviceHost == "" {
 			deviceHost = strings.TrimSpace(m.hostname)
 		}
 		if deviceHost == "" {
-			deviceHost = strings.TrimSpace(m.targetName) + ".local"
+			target := strings.TrimSpace(m.targetName)
+			if net.ParseIP(target) != nil {
+				deviceHost = target
+			} else {
+				deviceHost = target + ".local"
+			}
 		}
 		sb.WriteString("  " + wizCodeStyle.Render(fmt.Sprintf("http://%s:8000", deviceHost)) + "\n\n")
 		sb.WriteString(wizBodyStyle.Width(w).Render("Press Enter to build and deploy it now.") + "\n\n")
-		sb.WriteString(wizHintStyle.Render("Enter to deploy  ·  q to skip"))
+		sb.WriteString(wizHintStyle.Render("Enter to deploy  ·  q to quit"))
 	} else {
 		sb.WriteString(wizSubStyle.Render("Creating project…") + "\n")
 	}
@@ -1559,7 +1562,12 @@ func (m tourWizardModel) cmdRunProject() tea.Cmd {
 		deviceAddr = strings.TrimSpace(m.hostname)
 	}
 	if deviceAddr == "" {
-		deviceAddr = strings.TrimSpace(m.targetName) + ".local"
+		target := strings.TrimSpace(m.targetName)
+		if net.ParseIP(target) != nil {
+			deviceAddr = target
+		} else {
+			deviceAddr = target + ".local"
+		}
 	}
 
 	cmd := exec.Command(exePath, "run", "--device", deviceAddr)

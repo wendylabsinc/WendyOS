@@ -293,5 +293,5 @@ if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]] &
   esac
 else
   echo ""
-  echo "Run 'wendy tour' at any time for a guided walkthrough."
+  echo "Run '${INSTALL_DIR}/${BINARY_NAME} tour' at any time for a guided walkthrough."
 fi
