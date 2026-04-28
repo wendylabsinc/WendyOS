@@ -68,7 +68,10 @@ type (
 		err     error
 	}
 	tourWifiDetectedMsg   struct{ ssid, password string }
-	tourWifiScanDoneMsg   struct{ networks []localWifiNetwork }
+	tourWifiScanDoneMsg   struct {
+		networks []localWifiNetwork
+		err      error
+	}
 	tourDriveRescanMsg    struct{}
 	tourDiscoveryTickMsg  struct{}
 	tourDiscoveryFoundMsg struct{ addr, name string }
@@ -169,6 +172,7 @@ type tourWizardModel struct {
 	// embedded text input (reused across input phases)
 	input    textinput.Model
 	inputVal string
+	inputErr error
 
 	// existing-device scan (pre-installed path)
 	lanDevices []models.LANDevice
@@ -255,6 +259,11 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 		return m, nil
 
 	case tourLANScanDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.phase = phaseError
+			return m, nil
+		}
 		m.lanDevices = msg.devices
 		m.lanCursor = 0
 		m.phase = phaseExistingDevicePicker
@@ -268,6 +277,11 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 		return m, nil
 
 	case tourWifiScanDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.phase = phaseError
+			return m, nil
+		}
 		m.scanNetworks = msg.networks
 		m.scanCursor = 0
 		m.phase = phaseWifiNetworkPicker
@@ -275,7 +289,12 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 
 	case tourDriveRescanMsg:
 		if m.phase == phaseDriveWait {
-			drives, _ := listExternalDrives()
+			drives, err := listExternalDrives()
+			if err != nil {
+				m.err = err
+				m.phase = phaseError
+				return m, nil
+			}
 			m.drives = drives
 			return m, rescanDrivesAfter(2 * time.Second)
 		}
@@ -303,6 +322,11 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 		return m, nil
 
 	case tourRunDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.phase = phaseError
+			return m, nil
+		}
 		m.phase = phaseAICheck
 		return m, m.cmdCheckAITools()
 
@@ -442,8 +466,13 @@ func (m tourWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case phaseStorageGuide:
 		switch key {
 		case "enter", " ":
+			drives, err := listExternalDrives()
+			if err != nil {
+				m.err = err
+				m.phase = phaseError
+				return m, nil
+			}
 			m.phase = phaseDriveWait
-			drives, _ := listExternalDrives()
 			m.drives = drives
 			m.driveCursor = 0
 			return m, rescanDrivesAfter(2 * time.Second)
@@ -659,10 +688,13 @@ func (m tourWizardModel) handleTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.phase {
 		case phaseDeviceName:
 			if err := validateDeviceNameTour(val); err == nil {
+				m.inputErr = nil
 				m.deviceName = val
 				m.targetName = val
 				m.phase = phaseWifiDetect
 				return m, detectWifiCmd()
+			} else {
+				m.inputErr = err
 			}
 		case phaseEnterHostname:
 			if val != "" {
@@ -973,7 +1005,11 @@ func (m tourWizardModel) viewDeviceName(w int) string {
 	sb.WriteString(wizTitleStyle.Render("Step 4 — Name your device") + "\n")
 	sb.WriteString(wizSubStyle.Render("Give your device a short, memorable hostname.") + "\n\n")
 	sb.WriteString(m.input.View() + "\n\n")
-	sb.WriteString(wizBodyStyle.Width(w).Render("Lowercase letters, digits, and hyphens only. Min 3 characters.") + "\n\n")
+	if m.inputErr != nil {
+		sb.WriteString(wizErrorStyle.Render("✗ "+m.inputErr.Error()) + "\n\n")
+	} else {
+		sb.WriteString(wizBodyStyle.Width(w).Render("Lowercase letters, digits, and hyphens only. Min 3 characters.") + "\n\n")
+	}
 	sb.WriteString(wizHintStyle.Render("Enter to confirm"))
 	return sb.String()
 }
@@ -1002,7 +1038,7 @@ func (m tourWizardModel) viewWifiQuestion(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Step 5 — WiFi setup") + "\n")
 	if m.detectedSSID != "" {
-		sb.WriteString(wizSubStyle.Render(fmt.Sprintf("Your Mac is connected to \"%s\".", m.detectedSSID)) + "\n")
+		sb.WriteString(wizSubStyle.Render(fmt.Sprintf("This computer is connected to \"%s\".", m.detectedSSID)) + "\n")
 		sb.WriteString(wizBodyStyle.Width(w).Render("Pre-configure the device with the same network?") + "\n\n")
 	} else {
 		sb.WriteString(wizBodyStyle.Width(w).Render("Pre-configure WiFi so your device connects on first boot.") + "\n\n")
@@ -1031,7 +1067,7 @@ func (m tourWizardModel) viewWifiNetworkPicker(w int) string {
 
 	if len(m.scanNetworks) == 0 {
 		sb.WriteString(wizNoticeStyle.Render("No networks found nearby.") + "\n\n")
-		sb.WriteString(wizHintStyle.Render("Press q to go back"))
+		sb.WriteString(wizHintStyle.Render("Press q to quit"))
 	} else {
 		for i, net := range m.scanNetworks {
 			label := net.SSID
@@ -1167,9 +1203,12 @@ func (m tourWizardModel) viewCreateProject(w int) string {
 		sb.WriteString(wizSuccessStyle.Render("Project created at:") + "\n")
 		sb.WriteString("  " + wizCodeStyle.Render(m.projectPath) + "\n\n")
 		sb.WriteString(wizBodyStyle.Width(w).Render("It's a simple HTTP server. Once deployed, visit:") + "\n")
-		deviceHost := m.foundAddr
+		deviceHost := strings.TrimSpace(m.foundAddr)
 		if deviceHost == "" {
-			deviceHost = m.targetName + ".local"
+			deviceHost = strings.TrimSpace(m.hostname)
+		}
+		if deviceHost == "" {
+			deviceHost = strings.TrimSpace(m.targetName) + ".local"
 		}
 		sb.WriteString("  " + wizCodeStyle.Render(fmt.Sprintf("http://%s:8000", deviceHost)) + "\n\n")
 		sb.WriteString(wizBodyStyle.Width(w).Render("Press Enter to build and deploy it now.") + "\n\n")
@@ -1259,8 +1298,8 @@ func scanLANDevicesCmd() tea.Cmd {
 
 func scanWifiCmd() tea.Cmd {
 	return func() tea.Msg {
-		networks, _ := scanLocalWifiNetworks()
-		return tourWifiScanDoneMsg{networks: networks}
+		networks, err := scanLocalWifiNetworks()
+		return tourWifiScanDoneMsg{networks: networks, err: err}
 	}
 }
 
@@ -1295,7 +1334,8 @@ func (m tourWizardModel) cmdDiscoveryCheck() tea.Cmd {
 		for _, d := range devices {
 			name := strings.ToLower(d.DisplayName)
 			hostname := strings.ToLower(strings.TrimSuffix(d.Hostname, ".local"))
-			if name == target || hostname == target {
+			ipAddress := strings.ToLower(d.IPAddress)
+			if name == target || hostname == target || ipAddress == target {
 				return tourDiscoveryFoundMsg{
 					addr: preferredLANAddress(d),
 					name: d.DisplayName,
@@ -1323,11 +1363,10 @@ func (m tourWizardModel) cmdRunOSInstall() tea.Cmd {
 		args = append(args, "--drive", m.selDrive.DevicePath)
 	}
 	if m.wifiSSID != "" {
-		entry := fmt.Sprintf("ssid=%s", m.wifiSSID)
+		args = append(args, "--wifi-ssid", m.wifiSSID)
 		if m.wifiPass != "" {
-			entry += fmt.Sprintf(",password=%s", m.wifiPass)
+			args = append(args, "--wifi-password", m.wifiPass)
 		}
-		args = append(args, "--wifi", entry)
 	} else {
 		args = append(args, "--no-wifi")
 	}
@@ -1344,17 +1383,16 @@ func (m tourWizardModel) cmdRunProject() tea.Cmd {
 		return func() tea.Msg { return tourRunDoneMsg{err: err} }
 	}
 
-	deviceAddr := m.foundAddr
+	deviceAddr := strings.TrimSpace(m.foundAddr)
 	if deviceAddr == "" {
-		deviceAddr = m.targetName + ".local"
+		deviceAddr = strings.TrimSpace(m.hostname)
 	}
 	if deviceAddr == "" {
-		deviceAddr = m.hostname
+		deviceAddr = strings.TrimSpace(m.targetName) + ".local"
 	}
 
 	cmd := exec.Command(exePath, "run", "--device", deviceAddr)
 	cmd.Dir = m.projectPath
-	m.phase = phaseRunProject
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tourRunDoneMsg{err: err}
 	})
@@ -1484,6 +1522,9 @@ func newTourCmd() *cobra.Command {
 		Short: "Interactive guided setup tour for new users",
 		Long:  "Walk through device setup, OS install, sample project deployment, and first steps.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !isInteractiveTerminal() {
+				return fmt.Errorf("wendy tour requires an interactive terminal")
+			}
 			m := newTourWizardModel()
 			_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 			return err

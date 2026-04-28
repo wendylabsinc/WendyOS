@@ -285,7 +285,7 @@ else
 fi
 
 # --- Offer tour ---
-if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]]; then
+if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]] && [[ -r /dev/tty ]]; then
   printf "\nWould you like a quick guided tour of the Wendy CLI? [Y/n] "
   read -r tour_answer </dev/tty
   case "$tour_answer" in
