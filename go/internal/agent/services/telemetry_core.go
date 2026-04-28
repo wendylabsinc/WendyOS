@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sync"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -11,6 +12,25 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
+
+// resolveHostname returns the machine hostname, resolved once at startup.
+var resolveHostname = sync.OnceValue(func() string {
+	h, _ := os.Hostname()
+	return h
+})
+
+// newAgentResource builds the OTel resource for the wendy-agent process.
+func newAgentResource() *otelpb.Resource {
+	attrs := []*otelpb.KeyValue{
+		stringKV("service.name", "wendy-agent"),
+		stringKV("service.namespace", "wendy"),
+		stringKV("service.version", version.Version),
+	}
+	if h := resolveHostname(); h != "" {
+		attrs = append(attrs, stringKV("service.instance.id", h))
+	}
+	return &otelpb.Resource{Attributes: attrs}
+}
 
 // TelemetryCore is a zapcore.Core that publishes log entries to a
 // TelemetryBroadcaster as OTEL log records. This bridges the agent's
@@ -25,19 +45,10 @@ type TelemetryCore struct {
 
 // NewTelemetryCore creates a new TelemetryCore that publishes to the given broadcaster.
 func NewTelemetryCore(broadcaster *TelemetryBroadcaster, level zapcore.Level) *TelemetryCore {
-	hostname, _ := os.Hostname()
-	attrs := []*otelpb.KeyValue{
-		stringKV("service.name", "wendy-agent"),
-		stringKV("service.namespace", "wendy"),
-		stringKV("service.version", version.Version),
-	}
-	if hostname != "" {
-		attrs = append(attrs, stringKV("service.instance.id", hostname))
-	}
 	return &TelemetryCore{
 		broadcaster: broadcaster,
 		level:       level,
-		resource:    &otelpb.Resource{Attributes: attrs},
+		resource:    newAgentResource(),
 	}
 }
 

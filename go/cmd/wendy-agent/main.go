@@ -136,8 +136,6 @@ func main() {
 		}
 	}
 
-	hostname, _ := os.Hostname()
-
 	var wg sync.WaitGroup
 
 	// Start container monitor in background.
@@ -152,7 +150,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			services.CollectContainerMetrics(ctx, containerdClient, broadcaster, logManager, hostname)
+			services.CollectContainerMetrics(ctx, containerdClient, broadcaster, logManager)
 		}()
 	}
 
@@ -160,7 +158,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		services.CollectAgentMetrics(ctx, broadcaster, hostname)
+		services.CollectAgentMetrics(ctx, broadcaster)
 	}()
 
 	// Main agent gRPC server port.

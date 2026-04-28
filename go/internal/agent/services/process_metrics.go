@@ -18,11 +18,10 @@ func CollectContainerMetrics(
 	client ContainerdClient,
 	broadcaster *TelemetryBroadcaster,
 	logManager *ContainerLogManager,
-	hostname string,
 ) {
 	// cache per app so we don't rebuild on every tick
 	resources := make(map[string]*otelpb.Resource)
-	registered := make(map[string]bool)
+	startTimes := make(map[string]time.Time)
 
 	collect := func(t time.Time) {
 		containers, err := client.ListContainers(ctx)
@@ -34,10 +33,10 @@ func CollectContainerMetrics(
 			appName := c.GetAppName()
 			active[appName] = true
 
-			if !registered[appName] {
-				registered[appName] = true
+			if _, seen := startTimes[appName]; !seen {
+				startTimes[appName] = t
 				version := c.GetAppVersion()
-				resources[appName] = containerResource(appName, version, hostname)
+				resources[appName] = containerResource(appName, version)
 				if logManager != nil {
 					logManager.RegisterApp(appName, version)
 				}
@@ -51,13 +50,13 @@ func CollectContainerMetrics(
 				continue
 			}
 			publishProcessMetrics(broadcaster, resources[appName], "wendy.container",
-				"container.cpu.time", "container.memory.usage",
-				m.UserCPUNanos, m.SysCPUNanos, m.MemBytes, t)
+				"container.cpu.usage", "container.memory.usage",
+				m.UserCPUNanos, m.SysCPUNanos, m.MemBytes, startTimes[appName], t)
 		}
 		// Evict caches for containers that no longer exist.
-		for name := range registered {
+		for name := range startTimes {
 			if !active[name] {
-				delete(registered, name)
+				delete(startTimes, name)
 				delete(resources, name)
 			}
 		}
@@ -77,7 +76,7 @@ func CollectContainerMetrics(
 }
 
 // containerResource builds the standard OTel resource for a Wendy container app.
-func containerResource(appName, version, hostname string) *otelpb.Resource {
+func containerResource(appName, version string) *otelpb.Resource {
 	attrs := []*otelpb.KeyValue{
 		stringKV("service.name", appName),
 		stringKV("service.namespace", "wendy"),
@@ -85,8 +84,8 @@ func containerResource(appName, version, hostname string) *otelpb.Resource {
 	if version != "" {
 		attrs = append(attrs, stringKV("service.version", version))
 	}
-	if hostname != "" {
-		attrs = append(attrs, stringKV("service.instance.id", hostname))
+	if h := resolveHostname(); h != "" {
+		attrs = append(attrs, stringKV("service.instance.id", h))
 	}
 	return &otelpb.Resource{Attributes: attrs}
 }
@@ -94,14 +93,16 @@ func containerResource(appName, version, hostname string) *otelpb.Resource {
 // publishProcessMetrics emits one OTel metrics export with cpu.time (user+system)
 // and memory.usage for the given resource and instrumentation scope.
 // cpuMetric must be a Sum/monotonic metric name; memMetric a Gauge.
+// startTime is the start of the cumulative measurement window (required by OTel for Sum metrics).
 func publishProcessMetrics(
 	broadcaster *TelemetryBroadcaster,
 	resource *otelpb.Resource,
 	scope, cpuMetric, memMetric string,
 	userCPUNanos, sysCPUNanos, memBytes int64,
-	t time.Time,
+	startTime, t time.Time,
 ) {
 	nowNano := uint64(t.UnixNano())
+	startNano := uint64(startTime.UnixNano())
 	broadcaster.PublishMetrics(&otelpb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*otelpb.ResourceMetrics{
 			{
@@ -119,14 +120,16 @@ func publishProcessMetrics(
 										AggregationTemporality: otelpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
 										DataPoints: []*otelpb.NumberDataPoint{
 											{
-												Attributes:   []*otelpb.KeyValue{stringKV("cpu.mode", "user")},
-												TimeUnixNano: nowNano,
-												Value:        &otelpb.NumberDataPoint_AsDouble{AsDouble: float64(userCPUNanos) / 1e9},
+												Attributes:        []*otelpb.KeyValue{stringKV("cpu.mode", "user")},
+												StartTimeUnixNano: startNano,
+												TimeUnixNano:      nowNano,
+												Value:             &otelpb.NumberDataPoint_AsDouble{AsDouble: float64(userCPUNanos) / 1e9},
 											},
 											{
-												Attributes:   []*otelpb.KeyValue{stringKV("cpu.mode", "system")},
-												TimeUnixNano: nowNano,
-												Value:        &otelpb.NumberDataPoint_AsDouble{AsDouble: float64(sysCPUNanos) / 1e9},
+												Attributes:        []*otelpb.KeyValue{stringKV("cpu.mode", "system")},
+												StartTimeUnixNano: startNano,
+												TimeUnixNano:      nowNano,
+												Value:             &otelpb.NumberDataPoint_AsDouble{AsDouble: float64(sysCPUNanos) / 1e9},
 											},
 										},
 									},
