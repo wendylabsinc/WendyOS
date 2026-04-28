@@ -740,6 +740,9 @@ func applySchemaDefault(q templateSchemaQuestion, vals map[string]interface{}) e
 			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
 		}
 	case "checkbox":
+		if q.Required && q.Default == "" && len(q.Options) == 0 {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		}
 		selectedSet := map[string]bool{}
 		if q.Default != "" {
 			for _, p := range strings.Split(q.Default, ",") {

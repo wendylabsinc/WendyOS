@@ -1070,6 +1070,60 @@ func (c *Client) GetContainerStats(ctx context.Context) ([]*agentpb.ContainerSta
 	return result, nil
 }
 
+// GetContainerMetrics returns a point-in-time CPU and memory snapshot for a named container.
+// Returns an error if the container or its task cannot be found.
+func (c *Client) GetContainerMetrics(ctx context.Context, appName string) (services.ContainerMetrics, error) {
+	ctx = c.withNamespace(ctx)
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	metric, err := task.Metrics(ctx)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	return extractContainerMetrics(metric), nil
+}
+
+// extractContainerMetrics decodes cgroup v1 or v2 task metrics into a ContainerMetrics snapshot.
+func extractContainerMetrics(metric *types.Metric) services.ContainerMetrics {
+	switch {
+	case typeurl.Is(metric.Data, (*cgroupv1.Metrics)(nil)):
+		m := &cgroupv1.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return services.ContainerMetrics{}
+		}
+		var result services.ContainerMetrics
+		if m.CPU != nil && m.CPU.Usage != nil {
+			result.UserCPUNanos = int64(m.CPU.Usage.User)
+			result.SysCPUNanos = int64(m.CPU.Usage.Kernel)
+		}
+		if m.Memory != nil && m.Memory.Usage != nil {
+			result.MemBytes = int64(m.Memory.Usage.Usage)
+		}
+		return result
+	case typeurl.Is(metric.Data, (*cgroupv2.Metrics)(nil)):
+		m := &cgroupv2.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return services.ContainerMetrics{}
+		}
+		var result services.ContainerMetrics
+		if m.CPU != nil {
+			result.UserCPUNanos = int64(m.CPU.UserUsec) * 1000
+			result.SysCPUNanos = int64(m.CPU.SystemUsec) * 1000
+		}
+		if m.Memory != nil {
+			result.MemBytes = int64(m.Memory.Usage)
+		}
+		return result
+	}
+	return services.ContainerMetrics{}
+}
+
 // extractMemoryBytes decodes cgroup v1 or v2 task metrics and returns memory usage in bytes.
 func extractMemoryBytes(metric *types.Metric) int64 {
 	switch {

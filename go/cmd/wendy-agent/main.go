@@ -188,6 +188,22 @@ func main() {
 		monitor.Run(ctx)
 	}()
 
+	// Collect CPU/memory metrics for all running containers.
+	if containerdClient != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			services.CollectContainerMetrics(ctx, containerdClient, broadcaster, logManager)
+		}()
+	}
+
+	// Collect CPU/memory metrics for the agent process itself.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		services.CollectAgentMetrics(ctx, broadcaster)
+	}()
+
 	// Main agent gRPC server port.
 	agentPort := defaultAgentPort
 	if p := os.Getenv("WENDY_AGENT_PORT"); p != "" {
