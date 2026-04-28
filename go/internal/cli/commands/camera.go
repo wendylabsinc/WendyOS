@@ -13,7 +13,7 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
-func newCameraCmd() *cobra.Command {
+func newVideoCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "camera",
 		Short: "Manage cameras on the target device",

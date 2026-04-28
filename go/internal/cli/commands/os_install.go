@@ -21,6 +21,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/tegraflash"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
@@ -44,6 +45,9 @@ func newOSInstallCmd() *cobra.Command {
 	var deviceType string
 	var versionFlag string
 	var driveFlag string
+	var storageFlag string
+	var tegraflashXML string
+	var tegraflashSkipLarger int64
 	var wifiSSID string
 	var wifiPassword string
 	var wifiEntries []string
@@ -67,6 +71,9 @@ Pre-seed multiple WiFi networks (repeatable, highest-priority first):
     --wifi "ssid=Office,password=corp,priority=50" \
     --wifi "ssid=Cafe,hidden=true"
 
+Flash onboard Jetson eMMC over USB recovery mode:
+  wendy os install --device-type jetson-agx-orin --storage emmc --nightly --force
+
 Flags can be provided progressively — omitted values trigger interactive pickers.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			switch len(args) {
@@ -80,8 +87,8 @@ Flags can be provided progressively — omitted values trigger interactive picke
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Positional direct-install mode is incompatible with manifest-backed flags.
-			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "" || wifiSSID != "" || wifiPassword != "" || len(wifiEntries) > 0 || noWifi || deviceName != "") {
-				return fmt.Errorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name")
+			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "" || storageFlag != "" || tegraflashXML != "" || cmd.Flags().Changed("tegraflash-skip-larger") || wifiSSID != "" || wifiPassword != "" || len(wifiEntries) > 0 || noWifi || deviceName != "") {
+				return fmt.Errorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --storage, --tegraflash-xml, --tegraflash-skip-larger, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name")
 			}
 			if nightly && versionFlag != "" {
 				return fmt.Errorf("--nightly and --version are mutually exclusive")
@@ -105,7 +112,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 					mode = preEnrollSkip
 				}
 			}
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, opts, deviceName, mode)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, storageFlag, tegraflashXML, tegraflashSkipLarger, cmd.Flags().Changed("tegraflash-skip-larger"), force, yesOverwriteInternal, opts, deviceName, mode)
 		},
 	}
 
@@ -115,6 +122,9 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
+	cmd.Flags().StringVar(&storageFlag, "storage", "", "Install target: auto, removable, emmc, or recovery")
+	cmd.Flags().StringVar(&tegraflashXML, "tegraflash-xml", "", "Override tegraflash partition XML basename for Jetson USB recovery installs")
+	cmd.Flags().Int64Var(&tegraflashSkipLarger, "tegraflash-skip-larger", tegraflash.DefaultSkipLarger, "Skip tegraflash partition files larger than this many bytes for recovery/QSPI installs (0 = write all)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
 	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
@@ -235,7 +245,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive, flagStorage, tegraflashXML string, tegraflashSkipLarger int64, tegraflashSkipLargerChanged bool, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
 	cliLogln("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -334,21 +344,12 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, wifi, deviceName, mode)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, flagStorage, tegraflashXML, tegraflashSkipLarger, tegraflashSkipLargerChanged, force, yesOverwriteInternal, wifi, deviceName, mode)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
-	// Authenticate elevation up front so we don't pay for the multi-hundred-MB
-	// image download just to discover the user can't write to a raw disk. On
-	// Windows this offers a UAC re-launch when not elevated; on Unix it
-	// pre-caches the sudo timestamp.
-	if err := preAuthElevation(); err != nil {
-		return err
-	}
-
-
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive, flagStorage, tegraflashXML string, tegraflashSkipLarger int64, tegraflashSkipLargerChanged bool, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default: latest (or nightly if --nightly)
 	if flagVersion != "" {
@@ -357,6 +358,25 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
 		selectedVersion = flagVersion
+	}
+
+	storage, err := resolveInstallStorage(device.Manifest, selectedVersion, flagStorage, flagDrive)
+	if err != nil {
+		return err
+	}
+	if storage == installStorageEMMC || storage == installStorageRecovery {
+		return installLinuxTegraflash(ctx, deviceKey, device, selectedVersion, storage, tegraflashXML, tegraflashSkipLarger, tegraflashSkipLargerChanged, force, wifi, deviceName, mode)
+	}
+	if tegraflashXML != "" || tegraflashSkipLargerChanged {
+		return fmt.Errorf("--tegraflash-xml and --tegraflash-skip-larger require --storage emmc or --storage recovery")
+	}
+
+	// Authenticate elevation up front so we don't pay for the multi-hundred-MB
+	// image download just to discover the user can't write to a raw disk. On
+	// Windows this offers a UAC re-launch when not elevated; on Unix it
+	// pre-caches the sudo timestamp.
+	if err := preAuthElevation(); err != nil {
+		return err
 	}
 
 	// Step 2: Resolve target drive — use flag or interactive picker.
@@ -884,6 +904,182 @@ func osCacheDir() (string, error) {
 }
 
 // osCachedImagePath returns the expected cache path for a device+version image.
+type installStorage string
+
+const (
+	installStorageAuto      installStorage = "auto"
+	installStorageRemovable installStorage = "removable"
+	installStorageEMMC      installStorage = "emmc"
+	installStorageRecovery  installStorage = "recovery"
+)
+
+func resolveInstallStorage(manifest *deviceManifest, version, flagStorage, flagDrive string) (installStorage, error) {
+	storage, err := parseInstallStorage(flagStorage)
+	if err != nil {
+		return "", err
+	}
+
+	if flagDrive != "" {
+		if storage == installStorageEMMC || storage == installStorageRecovery {
+			return "", fmt.Errorf("--drive cannot be used with --storage %s; Jetson recovery flashing writes over USB", storage)
+		}
+		return installStorageRemovable, nil
+	}
+
+	if storage != installStorageAuto {
+		return storage, nil
+	}
+
+	v, ok := manifest.Versions[version]
+	if !ok {
+		return "", fmt.Errorf("version %s not found in device manifest", version)
+	}
+	if !isInteractiveTerminal() || (v.EMMCPath == "" && v.RecoveryPath == "") {
+		return installStorageRemovable, nil
+	}
+
+	var items []tui.PickerItem
+	items = append(items, tui.PickerItem{
+		Name:        "Removable drive",
+		Description: "Write a raw image to an SD card, USB drive, or external NVMe",
+		Value:       string(installStorageRemovable),
+	})
+	if v.EMMCPath != "" {
+		items = append(items, tui.PickerItem{
+			Name:        "Onboard eMMC",
+			Description: "Flash over Jetson USB recovery mode",
+			Value:       string(installStorageEMMC),
+		})
+	}
+	if v.RecoveryPath != "" {
+		items = append(items, tui.PickerItem{
+			Name:        "Jetson recovery / QSPI",
+			Description: "Flash boot firmware only over USB recovery mode",
+			Value:       string(installStorageRecovery),
+		})
+	}
+
+	fmt.Println()
+	picked, err := pickFromItems("Select install target", items)
+	if err != nil {
+		return "", err
+	}
+	return installStorage(picked), nil
+}
+
+func parseInstallStorage(raw string) (installStorage, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return installStorageAuto, nil
+	case "removable", "drive", "disk", "sd", "usb", "nvme", "external":
+		return installStorageRemovable, nil
+	case "emmc":
+		return installStorageEMMC, nil
+	case "recovery", "qspi", "tegraflash":
+		return installStorageRecovery, nil
+	default:
+		return "", fmt.Errorf("invalid --storage %q (expected auto, removable, emmc, or recovery)", raw)
+	}
+}
+
+func installLinuxTegraflash(ctx context.Context, deviceKey string, device pickerDevice, selectedVersion string, storage installStorage, tegraflashXML string, tegraflashSkipLarger int64, tegraflashSkipLargerChanged bool, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+	_ = ctx
+
+	if wifi.hasProvisioningFlags() || deviceName != "" || mode == preEnrollForced {
+		return fmt.Errorf("--storage %s uses Jetson USB recovery flashing and does not yet support --wifi, --wifi-ssid, --wifi-password, --device-name, or --pre-enroll", storage)
+	}
+
+	target := string(storage)
+	imgInfo, err := getTegraflashInfo(device.Manifest, selectedVersion, target)
+	if err != nil {
+		return fmt.Errorf("getting tegraflash info: %w", err)
+	}
+
+	if !force {
+		fmt.Println()
+		action := "write boot firmware"
+		if storage == installStorageEMMC {
+			action = "ERASE and write onboard eMMC"
+		}
+		confirmed, err := tui.Confirm(fmt.Sprintf("Jetson USB recovery flashing will %s on %s. Continue?", action, device.Name))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	fmt.Printf("\nPreparing %s %s %s tegraflash bundle...\n", device.Name, selectedVersion, storage)
+	bundlePath, err := resolveTegraflashBundle(deviceKey, target, imgInfo)
+	if err != nil {
+		return fmt.Errorf("resolving tegraflash bundle: %w", err)
+	}
+
+	skipLarger := tegraflashSkipLarger
+	fullEMMC := storage == installStorageEMMC
+	if fullEMMC && !tegraflashSkipLargerChanged {
+		skipLarger = 0
+	}
+
+	if err := tegraflash.Flash(tegraflash.FlashOptions{
+		BundlePath: bundlePath,
+		XMLName:    tegraflashXML,
+		FullEMMC:   fullEMMC,
+		SkipLarger: skipLarger,
+		Out:        os.Stdout,
+	}); err != nil {
+		return fmt.Errorf("tegraflash: %w", err)
+	}
+
+	fmt.Printf("\nSuccessfully flashed %s %s to %s.\n", device.Name, imgInfo.Version, storage)
+	if storage == installStorageEMMC {
+		fmt.Println("The device should reboot from onboard eMMC.")
+	} else {
+		fmt.Println("The device should reboot with updated Jetson recovery firmware.")
+	}
+	return nil
+}
+
+func osCachedTegraflashPath(deviceKey, target, version string) (string, error) {
+	safeDevice := filepath.Base(deviceKey)
+	safeTarget := filepath.Base(target)
+	safeVersion := filepath.Base(version)
+	if safeDevice != deviceKey || safeTarget != target || safeVersion != version ||
+		strings.Contains(deviceKey, "..") || strings.Contains(target, "..") || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid device key, target, or version: %q / %q / %q", deviceKey, target, version)
+	}
+
+	dir, err := osCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s-%s.tegraflash.tar.gz", safeDevice, safeVersion, safeTarget)), nil
+}
+
+func resolveTegraflashBundle(deviceKey, target string, img *imageInfo) (string, error) {
+	cached, err := osCachedTegraflashPath(deviceKey, target, img.Version)
+	if err != nil {
+		return "", err
+	}
+
+	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+		fmt.Printf("Using cached tegraflash bundle (%s)\n", cached)
+		return cached, nil
+	}
+
+	downloadPath, err := downloadImage(img)
+	if err != nil {
+		return "", fmt.Errorf("downloading tegraflash bundle: %w", err)
+	}
+	if err := os.Rename(downloadPath, cached); err != nil {
+		os.Remove(downloadPath)
+		return "", fmt.Errorf("caching tegraflash bundle: %w", err)
+	}
+	return cached, nil
+}
+
 // Format: <cache>/os-images/<device>-<version>[-<storage>].img
 // The storage suffix is omitted for single-storage devices (StorageUnknown).
 func osCachedImagePath(deviceKey, version string, storageType StorageType) (string, error) {
@@ -1060,6 +1256,10 @@ type wifiCLIOptions struct {
 	Password string   // --wifi-password (only valid with --wifi-ssid)
 	Entries  []string // --wifi, repeatable
 	NoWifi   bool     // --no-wifi
+}
+
+func (opts wifiCLIOptions) hasProvisioningFlags() bool {
+	return opts.SSID != "" || opts.Password != "" || len(opts.Entries) > 0
 }
 
 // resolveWiFiCredentialsList builds the ordered list of WiFi credentials to
