@@ -360,11 +360,12 @@ func handleUtilityCommand(args []string) (bool, int) {
 	openBrowserArgs := args
 	if args[0] == "utils" {
 		if len(args) < 2 {
-			return false, 0
+			fmt.Fprintln(os.Stderr, "usage: wendy-agent utils open-browser <url>")
+			return true, 2
 		}
 		openBrowserArgs = args[1:]
 	}
-	if openBrowserArgs[0] != "open-browser" {
+	if args[0] != "utils" || openBrowserArgs[0] != "open-browser" {
 		return false, 0
 	}
 

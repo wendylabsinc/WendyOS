@@ -1,7 +1,6 @@
 package containerd
 
 import (
-	"os"
 	"testing"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -65,7 +64,7 @@ func TestExpandAgentHook(t *testing.T) {
 }
 
 func TestExpandAgentHookMissingEnv(t *testing.T) {
-	os.Unsetenv("MISSING_VALUE")
+	t.Setenv("MISSING_VALUE", "")
 
 	got := expandAgentHook("echo ${MISSING_VALUE}", "app")
 	if got != "echo " {

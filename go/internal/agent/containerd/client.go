@@ -645,7 +645,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	}
 
 	c.logger.Info("Container started", zap.String("app_name", appName))
-	c.startPostStartAgentHook(container, appName)
+	c.startPostStartAgentHook(ctx, container, appName)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
@@ -712,7 +712,7 @@ func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, st
 	}
 
 	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
-	c.startPostStartAgentHook(container, appName)
+	c.startPostStartAgentHook(ctx, container, appName)
 
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
@@ -740,8 +740,8 @@ func expandAgentHook(command, appName string) string {
 	})
 }
 
-func (c *Client) startPostStartAgentHook(container containerd.Container, appName string) {
-	labels, err := container.Labels(context.Background())
+func (c *Client) startPostStartAgentHook(ctx context.Context, container containerd.Container, appName string) {
+	labels, err := container.Labels(ctx)
 	if err != nil {
 		c.logger.Warn("Failed to read container labels for postStart agent hook",
 			zap.String("app_name", appName),
@@ -766,9 +766,15 @@ func (c *Client) startPostStartAgentHook(container containerd.Container, appName
 		)
 		return
 	}
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			c.logger.Warn("postStart agent hook exited with error",
+				zap.String("app_name", appName),
+				zap.String("command", expanded),
+				zap.Error(err),
+			)
+		}
+	}()
 	c.logger.Info("Started postStart agent hook",
 		zap.String("app_name", appName),
 		zap.String("command", expanded),

@@ -23,8 +23,8 @@ func Open(url string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
+	go func() {
+		_ = cmd.Wait()
+	}()
 	return nil
 }
