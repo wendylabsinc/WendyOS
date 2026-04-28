@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -156,19 +158,21 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	cliLogln("Opening browser for authentication: %s", loginURL)
+	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
+	fmt.Printf("  %s\n", loginURL)
 
 	if err := openBrowser(loginURL); err != nil {
-		cliNotice("Could not open browser automatically. Please visit:\n  %s", loginURL)
+		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+		fmt.Printf("  %s\n", loginURL)
 	}
 
-	cliLogln("Waiting for authentication...")
+	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
 
 	// Wait for the token.
 	var enrollmentToken string
 	select {
 	case enrollmentToken = <-tokenCh:
-		cliLogln("Received enrollment token.")
+		fmt.Println(tui.SuccessMessage("Received enrollment token."))
 	case loginErr := <-errCh:
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
@@ -181,7 +185,11 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("generating key pair: %w", err)
 	}
 
-	csrPEM, err := certs.GenerateCSR(privateKeyPEM, "wendy-cli-user")
+	commonName, err := enrollmentTokenCommonName(enrollmentToken)
+	if err != nil {
+		return fmt.Errorf("reading enrollment token identity: %w", err)
+	}
+	csrPEM, err := certs.GenerateCSR(privateKeyPEM, commonName)
 	if err != nil {
 		return fmt.Errorf("generating CSR: %w", err)
 	}
@@ -242,16 +250,53 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	cliSuccess("Authentication successful. Certificates saved.")
+	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
 
 	if len(issueResp.GetWarnings()) > 0 {
-		cliNotice("Warnings:")
+		fmt.Println(tui.WarningMessage("Warnings:"))
 		for _, w := range issueResp.GetWarnings() {
 			cliNotice("  - %s", w)
 		}
 	}
 
 	return nil
+}
+
+func enrollmentTokenCommonName(token string) (string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid enrollment token")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decoding token payload: %w", err)
+	}
+
+	var claims struct {
+		OrganizationID int32  `json:"org_id"`
+		AssetID        int32  `json:"asset_id"`
+		UserID         string `json:"user_id"`
+		Type           string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("decoding token claims: %w", err)
+	}
+
+	switch claims.Type {
+	case "user_enrollment":
+		if claims.UserID == "" {
+			return "", fmt.Errorf("user enrollment token missing user_id")
+		}
+		return fmt.Sprintf("wendy/user/%s", claims.UserID), nil
+	case "asset_enrollment":
+		if claims.OrganizationID == 0 || claims.AssetID == 0 {
+			return "", fmt.Errorf("asset enrollment token missing org_id or asset_id")
+		}
+		return fmt.Sprintf("wendy/%d/%d", claims.OrganizationID, claims.AssetID), nil
+	default:
+		return "", fmt.Errorf("unsupported enrollment token type %q", claims.Type)
+	}
 }
 
 func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int32) error {
@@ -272,7 +317,7 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		TtlSeconds:     120,
 	})
 	if err != nil {
-		return fmt.Errorf("creating enrollment token: %w", err)
+		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
 	}
 	// Reconstruct the device_id that pki-core stored in the token.
 	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
@@ -336,8 +381,8 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	fmt.Printf("Local authentication successful (org=%d, device=%s). Certificates saved.\n",
-		issueResp.GetOrganizationId(), deviceID)
+	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (org=%d, device=%s). Certificates saved.",
+		issueResp.GetOrganizationId(), deviceID)))
 	return nil
 }
 
@@ -356,7 +401,7 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			cliSuccess("Logged out. All authentication credentials removed.")
+			fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
 			return nil
 		},
 	}
@@ -382,18 +427,18 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 			// Refresh certificates for each auth entry.
 			for i, auth := range cfg.Auth {
 				if len(auth.Certificates) == 0 {
-					cliLogln("Skipping %s: no certificates to refresh", auth.CloudDashboard)
+				fmt.Println(tui.WarningMessage(fmt.Sprintf("Skipping %s: no certificates to refresh", auth.CloudDashboard)))
 					continue
 				}
 
-				cliLogln("Refreshing certificates for %s...", auth.CloudDashboard)
+				fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", auth.CloudDashboard)))
 
 				if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-					cliNotice("Failed to refresh for %s: %v", auth.CloudDashboard, err)
+					fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", auth.CloudDashboard, err)))
 					continue
 				}
 
-				cliSuccess("Certificates refreshed for %s.", auth.CloudDashboard)
+				fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", auth.CloudDashboard)))
 			}
 
 			if err := config.Save(cfg); err != nil {
