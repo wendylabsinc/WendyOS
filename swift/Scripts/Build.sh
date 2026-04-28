@@ -40,7 +40,6 @@ BUILD_CONFIGURATION="Release"
 OUTPUT_DIR="${OUTPUT_DIR:-$SWIFT_DIR/Build}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$SWIFT_DIR/Build/Xcode}"
 TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-ARCHIVE_PATH="${ARCHIVE_PATH:-$SWIFT_DIR/Build/WendyAgentMac.xcarchive}"
 APP_PATH="${OUTPUT_DIR}/${APP_NAME}"
 NOTARY_ZIP="${TEMP_DIR}/WendyAgentMac-notary.zip"
 ARTIFACT_NAME="wendy-agent-macos-arm64-${VERSION}.zip"
@@ -51,6 +50,8 @@ ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
 if [[ "$DEV_BUILD" -eq 1 ]]; then
   BUILD_CONFIGURATION="Debug"
 fi
+
+BUILT_APP_PATH="${DERIVED_DATA_PATH}/Build/Products/${BUILD_CONFIGURATION}/${APP_NAME}"
 
 find_signing_identity() {
   if [ -n "${KEYCHAIN_PATH:-}" ]; then
@@ -125,7 +126,6 @@ xcbeautify_or_cat() {
 
 mkdir -p "$OUTPUT_DIR"
 
-rm -rf "$ARCHIVE_PATH"
 rm -rf "$APP_PATH"
 rm -rf "$NOTARY_ZIP"
 rm -f "$ARTIFACT_PATH"
@@ -136,12 +136,11 @@ else
   rm -rf "$DERIVED_DATA_PATH"
 fi
 
-xcodebuild archive \
+xcodebuild build \
   -workspace WendyAgent.xcworkspace \
   -scheme WendyAgentMac \
   -configuration "$BUILD_CONFIGURATION" \
   -destination 'generic/platform=macOS' \
-  -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   MARKETING_VERSION="$APPLE_MARKETING_VERSION" \
   CURRENT_PROJECT_VERSION="$APPLE_CURRENT_PROJECT_VERSION" \
@@ -150,7 +149,7 @@ xcodebuild archive \
   -skipMacroValidation \
   | xcbeautify_or_cat
 
-ditto "$ARCHIVE_PATH/Products/Applications/$APP_NAME" "$APP_PATH"
+ditto "$BUILT_APP_PATH" "$APP_PATH"
 
 while IFS= read -r nested_code; do
   sign_path "$nested_code"
