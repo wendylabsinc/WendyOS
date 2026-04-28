@@ -1,7 +1,7 @@
 [Unit]
 Description=Wendy Agent
-After=network-online.target dbus.service containerd.service
-Wants=network-online.target
+After=network.target dbus.service containerd.service gadget-setup.service
+Wants=network.target
 Requires=containerd.service
 
 [Service]

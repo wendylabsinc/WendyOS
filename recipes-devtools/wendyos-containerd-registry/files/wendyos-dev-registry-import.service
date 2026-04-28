@@ -17,7 +17,7 @@ ExecStart=/usr/bin/ctr -n default images import /usr/share/wendyos/offline-image
 ExecStartPost=/bin/sh -c '/usr/bin/ctr -n default images tag ghcr.io/wendylabsinc/containerd-registry:1.2.0 wendyos/containerd-registry:v1.2.0 || true'
 ExecStartPost=/bin/sh -c '/usr/bin/ctr -n default images tag wendyos/containerd-registry:v1.2.0 wendyos/containerd-registry:latest || true'
 # Protect image from garbage collection
-ExecStartPost=/usr/bin/ctr -n default images label wendyos/containerd-registry:v1.2.0 containerd.io/gc.root=true
+ExecStartPost=/bin/sh -c '/usr/bin/ctr -n default images label wendyos/containerd-registry:v1.2.0 containerd.io/gc.root=true || true'
 # Mark as imported so we don't run again
 ExecStartPost=/bin/touch /var/lib/wendyos/dev-registry-imported
 RemainAfterExit=yes

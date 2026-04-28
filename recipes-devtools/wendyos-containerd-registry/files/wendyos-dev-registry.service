@@ -36,7 +36,7 @@ ExecStart=/usr/bin/ctr -n ${REGISTRY_NAMESPACE} run \
     ${REGISTRY_NAME}
 
 # Graceful shutdown
-ExecStop=/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks kill ${REGISTRY_NAME}
+ExecStop=/bin/sh -c '/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks kill ${REGISTRY_NAME} 2>/dev/null || true; /usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks wait ${REGISTRY_NAME} 2>/dev/null || true'
 ExecStopPost=-/bin/sh -c '/usr/bin/ctr -n ${REGISTRY_NAMESPACE} tasks delete ${REGISTRY_NAME} 2>/dev/null; /usr/bin/ctr -n ${REGISTRY_NAMESPACE} containers delete ${REGISTRY_NAME} 2>/dev/null; true'
 
 # No automatic restart for oneshot services - handled by wendy-agent if needed

@@ -39,9 +39,9 @@ DEVICE_NAME=$(cat "$DEVICE_NAME_FILE" 2>/dev/null || echo "unknown-device")
 DISPLAY_NAME=$(echo "$DEVICE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2));}1')
 
 # Replace placeholders in service file
-sed -i "s/WENDY_DEVICE_ID/$UUID/g" "$SERVICE_FILE"
-sed -i "s/WENDY_DEVICE_NAME/$DEVICE_NAME/g" "$SERVICE_FILE"
-sed -i "s/WENDY_DISPLAY_NAME/$DISPLAY_NAME/g" "$SERVICE_FILE"
+sed -i "s|WENDY_DEVICE_ID|$UUID|g" "$SERVICE_FILE"
+sed -i "s|WENDY_DEVICE_NAME|$DEVICE_NAME|g" "$SERVICE_FILE"
+sed -i "s|WENDY_DISPLAY_NAME|$DISPLAY_NAME|g" "$SERVICE_FILE"
 
 echo "Updated mDNS service with device UUID: $UUID"
 echo "Updated mDNS service with device name: $DEVICE_NAME ($DISPLAY_NAME)"

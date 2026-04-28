@@ -27,11 +27,11 @@ OFFLINE_IMAGES_DIR = "${datadir}/wendyos/offline-images"
 do_install() {
     install -d ${D}${OFFLINE_IMAGES_DIR}
     # Since we used ;unpack=0, manually decompress .tar.gz to .tar (like non-Yocto build)
-    gunzip -c ${WORKDIR}/containerd-registry-arm64.tar.gz > ${D}${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar
-    chmod 0644 ${D}${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar
+    gunzip -c ${WORKDIR}/containerd-registry-arm64.tar.gz > ${D}${OFFLINE_IMAGES_DIR}/containerd-registry.tar
+    chmod 0644 ${D}${OFFLINE_IMAGES_DIR}/containerd-registry.tar
 }
 
-FILES:${PN} = "${OFFLINE_IMAGES_DIR}/containerd-registry-arm64.tar"
+FILES:${PN} = "${OFFLINE_IMAGES_DIR}/containerd-registry.tar"
 
 # This package only contains a container image archive
 ALLOW_EMPTY:${PN} = "0"

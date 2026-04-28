@@ -60,7 +60,7 @@ check_image_exists() {
     if ! $CTR -n "${NAMESPACE}" images ls | $GREP -q "${IMAGE_NAME}"; then
         echo "ERROR: Registry image '${IMAGE_NAME}' not found in namespace '${NAMESPACE}'"
         echo "Did the import service run? Check: systemctl status wendyos-dev-registry-import.service"
-        echo "Or manually import: sudo $CTR -n ${NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry-arm64.tar"
+        echo "Or manually import: sudo $CTR -n ${NAMESPACE} images import /usr/share/wendyos/offline-images/containerd-registry.tar"
         exit 1
     fi
 }
