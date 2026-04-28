@@ -27,6 +27,8 @@ jobs:
             storage: sd
           - device: raspberry-pi-5
             storage: sd
+          - device: jetson-agx-orin
+            storage: nvme
           - device: jetson-orin-nano
             storage: nvme
 
@@ -106,7 +108,7 @@ jobs:
           go-version-file: wendy-os-publisher/go.mod
 
       - name: Generate flashable image (Jetson only)
-        if: matrix.device == 'jetson-orin-nano'
+        if: startsWith(matrix.device, 'jetson-')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}

@@ -16,6 +16,7 @@ on:
           - raspberry-pi-3
           - raspberry-pi-4
           - raspberry-pi-5
+          - jetson-agx-orin
           - jetson-orin-nano
       version:
         description: "Git ref (commit SHA, tag, or branch) to build. Empty = latest main."
@@ -56,6 +57,7 @@ jobs:
             {"device":"raspberry-pi-3","storage":"sd"},
             {"device":"raspberry-pi-4","storage":"sd"},
             {"device":"raspberry-pi-5","storage":"sd"},
+            {"device":"jetson-agx-orin","storage":"nvme"},
             {"device":"jetson-orin-nano","storage":"nvme"}
           ]'
           # Collapse to one line so it can be written to $GITHUB_OUTPUT, which
@@ -64,7 +66,7 @@ jobs:
 
           emit_all() {
             echo "matrix={\"include\":${ALL_MATRIX}}" >> "$GITHUB_OUTPUT"
-            echo "devices=raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano" >> "$GITHUB_OUTPUT"
+            echo "devices=raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-agx-orin jetson-orin-nano" >> "$GITHUB_OUTPUT"
           }
 
           emit_one() {
@@ -113,12 +115,13 @@ jobs:
             [raspberry-pi-3]='(^conf/template/boards/rpi3-sd/|^conf/machine/raspberrypi3-64-wendyos\.conf$|^meta-rpi-extensions/)'
             [raspberry-pi-4]='(^conf/template/boards/rpi4-sd/|^conf/machine/raspberrypi4-64-wendyos\.conf$|^meta-rpi-extensions/)'
             [raspberry-pi-5]='(^conf/template/boards/rpi5-sd/|^conf/machine/raspberrypi5-wendyos\.conf$|^meta-rpi-extensions/)'
+            [jetson-agx-orin]='(^conf/template/boards/jetson-agx-orin/|^conf/machine/jetson-agx-orin-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
             [jetson-orin-nano]='(^conf/template/boards/jetson-orin-nano-nvme/|^conf/machine/jetson-orin-nano-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
           )
 
           INCLUDED=()
           DEVICES=()
-          for dev in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano; do
+          for dev in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-agx-orin jetson-orin-nano; do
             if echo "${CHANGED}" | grep -Eq "${DEV_RE[$dev]}"; then
               INCLUDED+=("$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")")
               DEVICES+=("${dev}")
@@ -307,11 +310,11 @@ jobs:
           go-version-file: wendy-os-publisher/go.mod
 
       - name: Install flashable image dependencies (Jetson only)
-        if: github.event_name != 'pull_request' && matrix.device == 'jetson-orin-nano'
+        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
         run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
 
       - name: Generate flashable image (Jetson only)
-        if: github.event_name != 'pull_request' && matrix.device == 'jetson-orin-nano'
+        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
@@ -413,7 +416,7 @@ jobs:
           TOKEN=$(gcloud auth print-access-token)
 
           cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
-          for DEVICE in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-orin-nano; do
+          for DEVICE in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-agx-orin jetson-orin-nano; do
             # Outer shell retry handles transient 412 bursts from concurrent writers
             # (e.g. Cloud Function draining a Pub/Sub backlog). The publisher already
             # retries internally 10x with exponential backoff; this adds 5 extra rounds.
