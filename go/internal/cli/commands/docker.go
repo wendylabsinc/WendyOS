@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -283,11 +284,104 @@ func ensureContainerPlugin(dir string) error {
 	return nil
 }
 
+// dockerRuntimes lists macOS Docker-compatible runtimes in detection order.
+// Each entry maps a human-readable name to its .app bundle path.
+var dockerRuntimes = []struct{ name, app string }{
+	{"OrbStack", "/Applications/OrbStack.app"},
+	{"Docker Desktop", "/Applications/Docker.app"},
+	{"Rancher Desktop", "/Applications/Rancher Desktop.app"},
+}
+
+// ensureDockerDaemon verifies the Docker daemon is running. On macOS, when
+// running interactively it prompts the user before launching the installed
+// Docker runtime; in non-interactive mode it launches it automatically.
+// Waits up to 60 s for the daemon to become ready before returning an error.
+func ensureDockerDaemon(ctx context.Context) error {
+	if exec.CommandContext(ctx, "docker", "version").Run() == nil {
+		return nil
+	}
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		if runtime.GOOS == "darwin" && isInteractiveTerminalFn() {
+			fmt.Print("Docker is not installed. Install it now with 'brew install --cask docker'? [Y/n] ")
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "" && answer != "y" && answer != "yes" {
+				return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+			}
+			fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
+			installCmd := exec.CommandContext(ctx, "brew", "install", "--cask", "docker")
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				return fmt.Errorf("failed to install Docker: %w", err)
+			}
+			// Fall through to detect and launch the newly installed runtime.
+		} else if runtime.GOOS == "darwin" {
+			return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+		} else {
+			return fmt.Errorf("docker is not installed — please install Docker Desktop or OrbStack")
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		runtimeName, appPath := detectDockerRuntime()
+		if appPath == "" {
+			return fmt.Errorf("no supported Docker runtime found — install Docker Desktop or OrbStack and try again")
+		}
+
+		if isInteractiveTerminalFn() {
+			fmt.Printf("%s is not running. Launch it now? [Y/n] ", runtimeName)
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "" && answer != "y" && answer != "yes" {
+				return fmt.Errorf("docker daemon is not running — please start %s and try again", runtimeName)
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "[docker] Launching %s...\n", runtimeName)
+		if err := exec.CommandContext(ctx, "open", "-a", appPath).Run(); err != nil {
+			return fmt.Errorf("docker daemon is not running: could not launch %s: %w", runtimeName, err)
+		}
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			if exec.CommandContext(ctx, "docker", "version").Run() == nil {
+				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", runtimeName)
+				return nil
+			}
+		}
+		return fmt.Errorf("docker daemon did not become ready within 60 seconds — please start %s manually", runtimeName)
+	}
+
+	return fmt.Errorf("docker daemon is not running — please start Docker before using wendy")
+}
+
+// detectDockerRuntime returns the name and .app path of the first installed
+// Docker-compatible runtime found on macOS, or empty strings if none is found.
+func detectDockerRuntime() (name, appPath string) {
+	for _, rt := range dockerRuntimes {
+		if _, err := os.Stat(rt.app); err == nil {
+			return rt.name, rt.app
+		}
+	}
+	return "", ""
+}
+
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
 // exists and returns its name plus the effective registry address to use in
 // image references. For IPv6 addresses, a hostname alias is configured inside
 // the builder container to avoid brackets that break the TOML parser.
 func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (builderName, effectiveAddr string, err error) {
+	if err := ensureDockerDaemon(ctx); err != nil {
+		return "", "", err
+	}
 	// Use separate builders for mTLS and plaintext so switching between
 	// provisioned and unprovisioned devices doesn't recreate builders.
 	const containerCertDir = "/etc/buildkit/certs"

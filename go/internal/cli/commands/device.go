@@ -41,16 +41,39 @@ func newDeviceCmd() *cobra.Command {
 		Short: "Manage WendyOS devices",
 	}
 
-	cmd.AddCommand(
+	cmd.AddGroup(
+		&cobra.Group{ID: "manage", Title: "Device Management:"},
+		&cobra.Group{ID: "monitor", Title: "Monitoring:"},
+		&cobra.Group{ID: "hardware", Title: "Hardware:"},
+		&cobra.Group{ID: "data", Title: "Apps & Storage:"},
+	)
+
+	addToGroup := func(groupID string, cmds ...*cobra.Command) {
+		for _, c := range cmds {
+			c.GroupID = groupID
+			cmd.AddCommand(c)
+		}
+	}
+
+	addToGroup("manage",
 		newDeviceVersionCmd(),
 		newDeviceSetDefaultCmd(),
 		newDeviceUnsetDefaultCmd(),
 		newDeviceSetupCmd(),
 		newDeviceUpdateCmd(),
+	)
+	addToGroup("monitor",
 		newDeviceLogsCmd(),
 		newDeviceDashboardCmd(),
 		newDeviceTelemetryStreamCmd(),
+	)
+	addToGroup("hardware",
 		newWifiCmd(),
+		newBluetoothCmd(),
+		newAudioCmd(),
+		newHardwareCmd(),
+	)
+	addToGroup("data",
 		newAppsCmd(),
 		newVolumesCmd(),
 		newVideoCmd(),

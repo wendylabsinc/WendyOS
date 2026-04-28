@@ -14,6 +14,7 @@ require (
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/distribution/reference v0.6.0
 	github.com/dustin/go-humanize v1.0.1
+	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/mdns v1.0.6
 	github.com/opencontainers/go-digest v1.0.0
@@ -52,6 +53,7 @@ require (
 	github.com/containerd/ttrpc v1.2.8 // indirect
 	github.com/creack/goselect v0.1.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/ebitengine/purego v0.9.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
