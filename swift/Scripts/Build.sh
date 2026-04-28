@@ -36,6 +36,7 @@ else
 fi
 
 APP_NAME="WendyAgentMac.app"
+BUILD_CONFIGURATION="Release"
 OUTPUT_DIR="${OUTPUT_DIR:-$SWIFT_DIR/Build}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$SWIFT_DIR/Build/Xcode}"
 TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
@@ -46,6 +47,10 @@ ARTIFACT_NAME="wendy-agent-macos-arm64-${VERSION}.zip"
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-wendy-notary-profile}"
 ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
+
+if [[ "$DEV_BUILD" -eq 1 ]]; then
+  BUILD_CONFIGURATION="Debug"
+fi
 
 find_signing_identity() {
   if [ -n "${KEYCHAIN_PATH:-}" ]; then
@@ -134,7 +139,7 @@ fi
 xcodebuild archive \
   -workspace WendyAgent.xcworkspace \
   -scheme WendyAgentMac \
-  -configuration Release \
+  -configuration "$BUILD_CONFIGURATION" \
   -destination 'generic/platform=macOS' \
   -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
