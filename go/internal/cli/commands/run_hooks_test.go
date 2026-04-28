@@ -102,6 +102,7 @@ func TestWaitForReadiness_PortBecomesAvailable(t *testing.T) {
 }
 
 func TestWaitForReadiness_Timeout(t *testing.T) {
+	// Grab a free port from the OS, then release it immediately so nothing listens on it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to find free port: %v", err)
@@ -127,6 +128,7 @@ func TestWaitForReadiness_Timeout(t *testing.T) {
 }
 
 func TestWaitForReadiness_ContextCancelled(t *testing.T) {
+	// Grab a free port from the OS, then release it immediately so nothing listens on it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to find free port: %v", err)

@@ -529,7 +529,8 @@ func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.
 			if tlsErr == nil {
 				// grpc.NewClient is lazy — verify the connection actually
 				// works with a fast probe before committing to mTLS.
-				probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				// 8s allows time for mDNS (.local) resolution + TCP + TLS handshake.
+				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 				cancel()
 				if probeErr == nil {
