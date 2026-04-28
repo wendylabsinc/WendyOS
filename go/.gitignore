@@ -13,3 +13,4 @@ bin/
 
 # Dependency directories
 vendor/
+.worktrees/
