@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -222,7 +223,7 @@ func TestApplyBinaryUpdate_NoBinary(t *testing.T) {
 	}
 }
 
-func TestApplyWiFiConfig_DeletesFileAfterApply(t *testing.T) {
+func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "wendy.conf")
 	// Empty ssid so nmcli is never called, but the file deletion path is exercised.
@@ -231,15 +232,52 @@ func TestApplyWiFiConfig_DeletesFileAfterApply(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	applyWiFiConfig(logger, dir)
+	applyWendyConf(logger, dir)
 
 	if _, err := os.Stat(conf); !os.IsNotExist(err) {
-		t.Error("wendy.conf should be deleted after applyWiFiConfig")
+		t.Error("wendy.conf should be deleted after applyWendyConf")
 	}
 }
 
-func TestApplyWiFiConfig_NoFile(t *testing.T) {
+func TestApplyWendyConf_NoFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Should return without panic when file doesn't exist.
-	applyWiFiConfig(logger, t.TempDir())
+	applyWendyConf(logger, t.TempDir())
+}
+
+func TestValidDeviceName(t *testing.T) {
+	valid := []string{
+		"abc",
+		"brave-dolphin",
+		"my-device-1",
+		"a23",
+	}
+	for _, name := range valid {
+		if !validDeviceName(name) {
+			t.Errorf("expected %q to be valid", name)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"ab",                    // too short
+		"1abc",                  // starts with digit
+		"-abc",                  // starts with hyphen
+		"ABC",                   // uppercase
+		"has space",             // space
+		strings.Repeat("a", 65), // too long
+		"valid_but_underscore",  // underscore not allowed
+	}
+	for _, name := range invalid {
+		if validDeviceName(name) {
+			t.Errorf("expected %q to be invalid", name)
+		}
+	}
+}
+
+func TestApplyDeviceName_InvalidName(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	if err := applyDeviceName(logger, "BAD NAME"); err == nil {
+		t.Error("expected error for invalid device name")
+	}
 }

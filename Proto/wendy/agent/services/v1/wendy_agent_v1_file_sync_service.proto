@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package wendy.agent.services.v1;
+
+service WendyFileSyncService {
+  // SyncFiles is a bidirectional stream. The CLI sends FileSyncStart, then
+  // FileSyncChunk/FileSyncCommit pairs for content transfers, then optional
+  // FileSyncChmod requests for metadata-only updates, then optional
+  // FileSyncDelete requests for stale files, then closes the send side.
+  // The agent responds with FileSyncManifest, FileSyncAck per finalized file,
+  // then FileSyncComplete after applying the requested file operations.
+  rpc SyncFiles(stream FileSyncRequest) returns (stream FileSyncResponse);
+}
+
+// FileSyncEntry describes a single file in a manifest.
+message FileSyncEntry {
+  string path   = 1; // relative to app working directory
+  int64  size   = 2;
+  bytes  sha256 = 3; // exactly 32 bytes
+  uint32 mode   = 4; // unix file permissions (e.g. 0755)
+}
+
+message FileSyncRequest {
+  oneof request_type {
+    FileSyncStart  start  = 1;
+    FileSyncChunk  chunk  = 2;
+    FileSyncCommit commit = 3;
+    FileSyncChmod  chmod  = 4;
+    FileSyncDelete delete = 5;
+  }
+}
+
+// FileSyncStart opens a sync session for the given app. The CLI sends its
+// local manifest so the agent can reply with what it already has.
+message FileSyncStart {
+  string           app_id   = 1;
+  FileSyncManifest manifest = 2;
+}
+
+// FileSyncChunk carries a slice of a file being transferred along with the
+// cumulative post-chunk state for immediate validation.
+message FileSyncChunk {
+  string path            = 1; // relative to app working directory
+  bytes  data            = 2;
+  uint64 sequence        = 3;
+  int64  cumulative_size = 4;
+  bytes  sha256          = 5; // exactly 32 bytes
+}
+
+// FileSyncCommit signals the end of a single file transfer.
+message FileSyncCommit {
+  string path   = 1;
+  bytes  sha256 = 2; // exactly 32 bytes
+  int64  size   = 3;
+}
+
+// FileSyncChmod applies a metadata-only mode change for an unchanged file.
+message FileSyncChmod {
+  string path   = 1;
+  uint32 mode   = 2;
+  int64  size   = 3;
+  bytes  sha256 = 4; // exactly 32 bytes
+}
+
+// FileSyncDelete removes the listed stale files from the app working directory.
+message FileSyncDelete {
+  repeated string paths = 1;
+}
+
+message FileSyncResponse {
+  oneof response_type {
+    FileSyncManifest manifest = 1;
+    FileSyncAck      ack      = 2;
+    FileSyncComplete complete = 3;
+  }
+}
+
+// FileSyncManifest is the agent's reply to FileSyncStart: what it already has.
+message FileSyncManifest {
+  repeated FileSyncEntry files = 1;
+}
+
+// FileSyncAck confirms a file was written successfully.
+message FileSyncAck {
+  string path = 1;
+}
+
+// FileSyncComplete signals that the agent has applied all requested file
+// operations and the session is done.
+message FileSyncComplete {}

@@ -1,10 +1,7 @@
 package commands
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -47,24 +45,38 @@ func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) 
 }
 
 // detectProjectType determines the project type from the directory contents.
-// It checks for Dockerfile first, then language-specific markers.
-func detectProjectType(dir string) string {
+//
+// Precedence: compose > Dockerfile > Package.swift > *.xcodeproj > Python markers.
+// Returns an error only when multiple .xcodeproj directories are found.
+func detectProjectType(dir string) (string, error) {
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return "compose", nil
+		}
+	}
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
-		return "docker"
+		return "docker", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Package.swift")); err == nil {
-		return "swift"
+		return "swift", nil
+	}
+	xp, err := findXcodeProj(dir)
+	if err != nil {
+		return "", err
+	}
+	if xp != "" {
+		return "xcode", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "requirements.txt")); err == nil {
-		return "python"
+		return "python", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "setup.py")); err == nil {
-		return "python"
+		return "python", nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
-		return "python"
+		return "python", nil
 	}
-	return "unknown"
+	return "unknown", nil
 }
 
 // BuildOption represents a detected build type in a project directory.
@@ -79,6 +91,18 @@ type BuildOption struct {
 // including multiple Dockerfiles (Dockerfile, Dockerfile.*, Dockerfile-*).
 func detectBuildOptions(dir string) []BuildOption {
 	var options []BuildOption
+
+	// Find compose files.
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			options = append(options, BuildOption{
+				Label: name + " (Compose)",
+				Type:  "compose",
+				File:  name,
+			})
+			break
+		}
+	}
 
 	// Find all Dockerfiles.
 	entries, err := os.ReadDir(dir)
@@ -104,6 +128,19 @@ func detectBuildOptions(dir string) []BuildOption {
 			Type:  "swift",
 			File:  "Package.swift",
 		})
+	}
+
+	// Xcode — one entry per .xcodeproj found (independent of Package.swift).
+	if err == nil { // entries was read above
+		for _, e := range entries {
+			if e.IsDir() && strings.HasSuffix(e.Name(), ".xcodeproj") {
+				options = append(options, BuildOption{
+					Label: e.Name() + " (Xcode)",
+					Type:  "xcode",
+					File:  e.Name(),
+				})
+			}
+		}
 	}
 
 	// Python — only add once even if multiple markers exist.
@@ -174,81 +211,16 @@ func generatePythonDockerfile(dir string) (string, error) {
 	return dockerfilePath, nil
 }
 
-const (
-	// defaultSwiftVersion is the Swift toolchain version used for container base images.
-	defaultSwiftVersion = "6.2.3"
-	// wendySDKRelease is the GitHub release tag for WendyOS Swift SDKs.
-	wendySDKRelease = "0.4.0"
-)
-
-// wendySDKChecksums maps architecture to the checksum for the WendyOS Swift SDK bundle.
-var wendySDKChecksums = map[string]string{
-	"x86_64":  "b5a4d08ad4d4841043727f6671c6aa004da3a2b7f12dc28101d6770c1dc57eb1",
-	"aarch64": "ef8fa5a2eda766e3b1df791dc175bbf87f570b9cc6f95ada1fe7643a327e087e",
-}
-
-// execCommandContext is the function used to create exec commands.
-// It can be overridden in tests.
-var execCommandContext = exec.CommandContext
-
-// ensureSwiftVersion makes sure the required Swift toolchain is installed via swiftly.
-// If the version is already present this is a no-op.
-func ensureSwiftVersion(ctx context.Context) error {
-	// Avoid starting any subprocesses if the context is already canceled.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	// First, check whether the requested Swift toolchain is already installed.
-	checkCmd := execCommandContext(ctx, "swiftly", "which", defaultSwiftVersion)
-	// Discard output for the existence check; this is only used as a probe.
-	checkCmd.Stdout = io.Discard
-	checkCmd.Stderr = io.Discard
-	if err := checkCmd.Run(); err == nil {
-		// Toolchain is already installed; nothing to do.
-		return nil
-	} else {
-		// If swiftly itself is missing, surface a helpful error.
-		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
-		}
-		// If the context was canceled or expired during the check, propagate that rather than starting an install.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		// For other errors (e.g., version not installed), fall through and attempt installation.
-	}
-
-	// Re-check the context before starting installation.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	out := &dimWriter{}
-	cmd := execCommandContext(ctx, "swiftly", "install", defaultSwiftVersion)
-	cmd.Stdout = out
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	out.Flush()
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
-		}
-		return fmt.Errorf("installing Swift %s via swiftly: %w", defaultSwiftVersion, err)
-	}
-	return nil
-}
-
 // buildSwiftContainerImage builds a Swift package and pushes the container image
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
 // "host.docker.internal:12345" when proxying).
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
 
-	sdk, err := findSwiftSDK(architecture)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, architecture, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return err
 	}
@@ -258,7 +230,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--swift-sdk=" + sdk,
 		"--allow-network-connections=all",
 		"build-container-image",
-		"--from=swift:" + defaultSwiftVersion + "-slim",
+		"--from=swift:" + swifttoolchain.DefaultVersion + "-slim",
 		"--product=" + product,
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
@@ -270,7 +242,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
 	}
 
-	cmd := exec.CommandContext(ctx, "swiftly", append([]string{"run", "+" + defaultSwiftVersion, "swift"}, swiftArgs...)...)
+	cmd := swifttoolchain.SwiftCommandContext(ctx, swiftArgs...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -287,7 +259,7 @@ const containerPluginMinVersion = "1.3.0"
 // package plugin in the given project directory. If not, it automatically adds
 // the dependency using `swift package add-dependency`.
 func ensureContainerPlugin(dir string) error {
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "plugin", "--list")
+	cmd := swifttoolchain.SwiftCommand("package", "plugin", "--list")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -299,7 +271,7 @@ func ensureContainerPlugin(dir string) error {
 	}
 
 	fmt.Println("Adding swift-container-plugin dependency...")
-	add := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "add-dependency",
+	add := swifttoolchain.SwiftCommand("package", "add-dependency",
 		"https://github.com/apple/swift-container-plugin", "--from", containerPluginMinVersion)
 	add.Dir = dir
 	add.Stdout = os.Stdout
@@ -309,197 +281,6 @@ func ensureContainerPlugin(dir string) error {
 	}
 
 	return nil
-}
-
-// findSwiftSDK looks for an installed Swift SDK for the given architecture.
-// It prefers WendyOS-specific SDKs, installing one automatically if not present.
-// For WASM targets (Wendy Lite), it installs the official Swift WASM SDK.
-func findSwiftSDK(architecture string) (string, error) {
-	// Normalize: swift-container-plugin uses "arm64"/"amd64" but SDKs use "aarch64"/"x86_64".
-	sdkArch := architecture
-	switch sdkArch {
-	case "arm64":
-		sdkArch = "aarch64"
-	case "amd64":
-		sdkArch = "x86_64"
-	}
-
-	isWasm := sdkArch == "wasm" || sdkArch == "wasm32"
-
-	sdk, err := lookupSwiftSDK(sdkArch, isWasm)
-	if err != nil {
-		return "", err
-	}
-	if sdk != "" {
-		return sdk, nil
-	}
-
-	// No suitable SDK found — install the appropriate one.
-	if isWasm {
-		if err := installWasmSwiftSDK(); err != nil {
-			return "", err
-		}
-	} else {
-		if err := installWendySwiftSDK(sdkArch); err != nil {
-			return "", err
-		}
-	}
-
-	// Look up again after install.
-	sdk, err = lookupSwiftSDK(sdkArch, isWasm)
-	if err != nil {
-		return "", err
-	}
-	if sdk == "" {
-		return "", fmt.Errorf("Swift SDK installed but not found; run 'swift sdk list' to verify")
-	}
-	return sdk, nil
-}
-
-// lookupSwiftSDK checks installed Swift SDKs for one matching the target architecture.
-func lookupSwiftSDK(sdkArch string, isWasm bool) (string, error) {
-	out, err := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "list").Output()
-	if err != nil {
-		return "", fmt.Errorf("running 'swift sdk list': %w (is swiftly installed?)", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-
-	if isWasm {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.Contains(line, "wasm") {
-				return line, nil
-			}
-		}
-		return "", nil
-	}
-
-	// Prefer a wendyos SDK matching the current Swift version.
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "wendyos") && strings.Contains(line, sdkArch) && strings.Contains(line, defaultSwiftVersion) {
-			return line, nil
-		}
-	}
-
-	// Fall back to any matching linux SDK for the current Swift version.
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, sdkArch) && strings.Contains(line, "linux") && strings.Contains(line, defaultSwiftVersion) {
-			return line, nil
-		}
-	}
-
-	return "", nil
-}
-
-// installWendySwiftSDK downloads and installs the WendyOS Swift SDK for the given architecture.
-func installWendySwiftSDK(sdkArch string) error {
-	sdkName := fmt.Sprintf("%s-RELEASE_wendyos_%s", defaultSwiftVersion, sdkArch)
-	url := fmt.Sprintf(
-		"https://github.com/wendylabsinc/wendy-swift-tools/releases/download/%s/%s.artifactbundle.zip",
-		wendySDKRelease, sdkName,
-	)
-
-	fmt.Printf("Installing WendyOS Swift SDK (%s)...\n", sdkName)
-
-	checksum, ok := wendySDKChecksums[sdkArch]
-	if !ok {
-		return fmt.Errorf("no checksum available for architecture %s", sdkArch)
-	}
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", checksum)
-	cmd.Stdout = os.Stdout
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
-
-	if err := cmd.Run(); err != nil {
-		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
-			return fmt.Errorf("installing Swift SDK from %s: %w\n%s", url, err, out)
-		}
-		return fmt.Errorf("installing Swift SDK from %s: %w", url, err)
-	}
-
-	fmt.Println("Swift SDK installed.")
-	return nil
-}
-
-// installWasmSwiftSDK downloads and installs the official Swift WASM SDK for Wendy Lite targets.
-func installWasmSwiftSDK() error {
-	sdkName := fmt.Sprintf("swift-%s-RELEASE", defaultSwiftVersion)
-	url := fmt.Sprintf(
-		"https://download.swift.org/swift-%s-release/wasm-sdk/%s/%s_wasm.artifactbundle.tar.gz",
-		defaultSwiftVersion, sdkName, sdkName,
-	)
-
-	fmt.Printf("Installing Swift WASM SDK (%s)...\n", sdkName)
-
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "sdk", "install", url, "--checksum", "394040ecd5260e68bb02f6c20aeede733b9b90702c2204e178f3e42413edad2a")
-	cmd.Stdout = os.Stdout
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
-
-	if err := cmd.Run(); err != nil {
-		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
-			return fmt.Errorf("installing Swift WASM SDK from %s: %w\n%s", url, err, out)
-		}
-		return fmt.Errorf("installing Swift WASM SDK from %s: %w", url, err)
-	}
-
-	fmt.Println("Swift WASM SDK installed.")
-	return nil
-}
-
-// findSwiftProduct determines the product name from Package.swift using
-// `swift package dump-package`. Returns an error with a suggestion when
-// no executable product can be determined.
-func findSwiftProduct(dir string) (string, error) {
-	cmd := exec.Command("swiftly", "run", "+"+defaultSwiftVersion, "swift", "package", "dump-package")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("swift package dump-package failed: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-
-	var manifest struct {
-		Products []struct {
-			Name string `json:"name"`
-		} `json:"products"`
-		Targets []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"targets"`
-	}
-	if err := json.Unmarshal(out, &manifest); err != nil {
-		return "", fmt.Errorf("could not parse Package.swift manifest: %w", err)
-	}
-
-	if len(manifest.Products) == 1 {
-		return manifest.Products[0].Name, nil
-	}
-	if len(manifest.Products) > 1 {
-		var productNames []string
-		for _, p := range manifest.Products {
-			productNames = append(productNames, p.Name)
-		}
-		return "", fmt.Errorf("Package.swift declares multiple products (%s); wendy run requires a single executable product", strings.Join(productNames, ", "))
-	}
-
-	// No products — look for executable targets.
-	var execTargets []string
-	for _, t := range manifest.Targets {
-		if t.Type == "executable" {
-			execTargets = append(execTargets, t.Name)
-		}
-	}
-	if len(execTargets) == 1 {
-		return execTargets[0], nil
-	}
-	if len(execTargets) > 1 {
-		return "", fmt.Errorf("Package.swift has multiple executable targets but no products; add an executable product for the target you want to run")
-	}
-	return "", fmt.Errorf("Package.swift has no executable targets or products")
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
@@ -589,9 +370,12 @@ func removeBuilder(ctx context.Context, name string) {
 // docker cp (not --buildkitd-config) to avoid the host-side TOML parser which
 // cannot handle IPv6 brackets in registry addresses.
 func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string) (string, error) {
-	const builderName = "wendy"
+	builderName := os.Getenv("WENDY_BUILDX_BUILDER")
+	if builderName == "" {
+		builderName = "wendy"
+	}
 
-	appliedPath := filepath.Join(configDir, "buildkitd.applied")
+	appliedPath := filepath.Join(configDir, builderName+".applied")
 
 	fullConfig := buildkitRegistryConfig(registryAddr, true, nil)
 
@@ -615,23 +399,47 @@ func ensurePlaintextBuilder(ctx context.Context, configDir, registryAddr string)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 		}
+		configChanged = true // always inject config into a newly created builder
 	}
 
-	// Inject the real config into the builder container and restart.
-	if err := updateBuilderConfig(ctx, builderName, fullConfig); err != nil {
-		return "", fmt.Errorf("updating builder config: %w", err)
+	// Inject the real config into the builder container and restart only when needed.
+	// Also re-inject if the container was destroyed (e.g. after colima restart) or
+	// was bootstrapped without config injection (default buildkitd.toml lacks http=true).
+	containerName := "buildx_buildkit_" + builderName + "0"
+
+	// Read the config currently applied inside the running container (if any).
+	var liveContainerConfig string
+	if out, err := exec.CommandContext(ctx, "docker", "exec", containerName,
+		"cat", "/etc/buildkit/buildkitd.toml").Output(); err == nil {
+		liveContainerConfig = string(out)
 	}
 
-	_ = os.WriteFile(appliedPath, []byte(fullConfig), 0o644)
+	if configChanged || liveContainerConfig != fullConfig {
+		if err := updateBuilderConfig(ctx, builderName, fullConfig); err != nil {
+			return "", fmt.Errorf("updating builder config: %w", err)
+		}
+		_ = os.WriteFile(appliedPath, []byte(fullConfig), 0o644)
+	} else {
+		// Builder exists with correct config — just ensure it's running.
+		bootstrapCmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
+		if out, err := bootstrapCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("bootstrapping builder: %s: %w", string(out), err)
+		}
+	}
+
 	return builderName, nil
 }
 
 // ensureMTLSBuilder ensures the "wendy-mtls" buildx builder exists with mTLS
 // client certs for the device registry.
 func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCertDir string) (string, error) {
-	const builderName = "wendy-mtls"
+	base := os.Getenv("WENDY_BUILDX_BUILDER")
+	if base == "" {
+		base = "wendy"
+	}
+	builderName := base + "-mtls"
 
-	appliedPath := filepath.Join(configDir, "buildkitd-mtls.applied")
+	appliedPath := filepath.Join(configDir, base+"-mtls.applied")
 
 	certInfo := loadCLICert()
 	if certInfo == nil || certInfo.PemCertificate == "" || certInfo.PemPrivateKey == "" {
@@ -727,11 +535,12 @@ func copyCertsToBuilder(ctx context.Context, builderName, hostCertDir, container
 // running), writes a new buildkitd.toml into it, and restarts so the updated
 // configuration takes effect.
 func updateBuilderConfig(ctx context.Context, builderName, config string) error {
-	// Bootstrap the builder to ensure the container is running.
+	fmt.Fprintf(os.Stderr, "[buildx] bootstrapping builder %q\n", builderName)
 	bootstrapCmd := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
 	if out, err := bootstrapCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("bootstrapping builder: %s: %w", string(out), err)
 	}
+	fmt.Fprintf(os.Stderr, "[buildx] bootstrap done\n")
 
 	containerName := "buildx_buildkit_" + builderName + "0"
 	const containerConfigPath = "/etc/buildkit/buildkitd.toml"
@@ -749,16 +558,42 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 	}
 	tmp.Close()
 
+	fmt.Fprintf(os.Stderr, "[buildx] copying config into container %q\n", containerName)
 	cmd := exec.CommandContext(ctx, "docker", "cp", tmp.Name(), containerName+":"+containerConfigPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker cp config: %s: %w", string(out), err)
 	}
 
-	// Restart the container so buildkitd reloads the config.
+	// Inject a clean Docker config without credsStore so buildkitd (running on
+	// Linux inside Colima) does not call docker-credential-osxkeychain, which
+	// is a macOS binary that does not exist on Linux and causes "signal: killed"
+	// errors when pulling public base images (e.g. python:3.11-slim).
+	fmt.Fprintf(os.Stderr, "[buildx] injecting clean docker config into container %q\n", containerName)
+	injectCmd := exec.CommandContext(ctx, "docker", "exec", containerName,
+		"sh", "-c", `mkdir -p /root/.docker && printf '{"auths":{}}' > /root/.docker/config.json`)
+	if out, err := injectCmd.CombinedOutput(); err != nil {
+		// Non-fatal: log the error but proceed. The credential helper may still
+		// fail for private images, but public images will work without credentials.
+		fmt.Fprintf(os.Stderr, "[buildx] warning: could not inject docker config: %s\n", string(out))
+	} else {
+		fmt.Fprintf(os.Stderr, "[buildx] docker config injected\n")
+	}
+
+	fmt.Fprintf(os.Stderr, "[buildx] restarting container %q\n", containerName)
 	cmd = exec.CommandContext(ctx, "docker", "restart", containerName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("restarting builder: %s: %w", string(out), err)
 	}
+	fmt.Fprintf(os.Stderr, "[buildx] container restarted, waiting for buildkitd\n")
+
+	bootstrapAfterRestart := exec.CommandContext(ctx, "docker", "buildx", "inspect", "--bootstrap", "--builder", builderName)
+	if out, err := bootstrapAfterRestart.CombinedOutput(); err != nil {
+		return fmt.Errorf("waiting for builder after restart: %s: %w", string(out), err)
+	}
+	fmt.Fprintf(os.Stderr, "[buildx] buildkitd ready, sleeping 3s to stabilize proxy\n")
+
+	time.Sleep(3 * time.Second)
+	fmt.Fprintf(os.Stderr, "[buildx] builder ready\n")
 
 	return nil
 }
@@ -787,6 +622,38 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		return fmt.Errorf("creating cache directory: %w", err)
 	}
 
+	// Use a clean Docker config without a credsStore credential helper.
+	// On macOS, the default config has "credsStore":"osxkeychain". When
+	// docker buildx forwards credentials to buildkitd via the build session,
+	// it calls the credential helper on the host. In CI (launchd agent context),
+	// the Keychain is inaccessible and the helper is killed → "signal: killed".
+	// Public images (e.g. python:3.11-slim) need no credentials; anonymous
+	// pull works fine with an empty auths map.
+	//
+	// We only replace config.json; everything else (cli-plugins, buildx builder
+	// instances, contexts) is symlinked from the original Docker config so that
+	// buildx and the "wendy" builder remain discoverable.
+	origDockerConfig := os.Getenv("DOCKER_CONFIG")
+	if origDockerConfig == "" {
+		origDockerConfig = filepath.Join(home, ".docker")
+	}
+	cleanDockerConfigDir := filepath.Join(home, ".cache", "wendy", "docker-config")
+	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
+		return fmt.Errorf("creating clean docker config directory: %w", err)
+	}
+	cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
+	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
+		return fmt.Errorf("writing clean docker config: %w", err)
+	}
+	// Symlink subdirs that docker/buildx need to find plugins and builder state.
+	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		dst := filepath.Join(cleanDockerConfigDir, subdir)
+		if _, err := os.Lstat(dst); err != nil {
+			// best-effort: ignore if source doesn't exist or symlink fails
+			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		}
+	}
+
 	args := []string{
 		"buildx", "build",
 		"--builder", builder,
@@ -809,10 +676,21 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		".",
 	)
 
+	fmt.Fprintf(os.Stderr, "[buildx] starting build: docker %s\n", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
 	cmd.Stdout = streamOutput
 	cmd.Stderr = streamOutput
+	// Override DOCKER_CONFIG so the buildx client does not call the host
+	// credential helper (osxkeychain) when setting up the build session.
+	// Filter any existing DOCKER_CONFIG first so our value takes effect.
+	baseEnv := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+			baseEnv = append(baseEnv, e)
+		}
+	}
+	cmd.Env = append(baseEnv, "DOCKER_CONFIG="+cleanDockerConfigDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker buildx build failed: %w", err)
@@ -840,26 +718,44 @@ func registryHost(host string, port int) string {
 }
 
 // resolveRegistry determines how to reach the device registry from Docker buildx.
-// For routable addresses it returns the direct registry address. For link-local
-// addresses (common with USB-connected devices) it starts a TCP proxy on the
-// host and returns host.docker.internal:<port> so the Docker Desktop VM can push
-// through it — link-local addresses cannot be routed from inside the VM.
+// Buildkitd runs inside the Docker VM (Colima/Docker Desktop) and cannot reach
+// LAN devices directly — only the macOS host can. We always proxy through
+// host.docker.internal so buildkitd can push via the host regardless of whether
+// the address is link-local or a routable LAN IP.
 //
 // The returned cleanup function MUST be called when the build is complete to
 // stop the proxy and release the port.
 func resolveRegistry(ctx context.Context, host string, port int) (registryAddr string, cleanup func(), err error) {
 	resolved := resolveRegistryIP(host)
-	if !isLinkLocalIP(resolved) {
-		return registryHost(host, port), func() {}, nil
+
+	// On Linux, buildkitd uses host networking (--driver-opt network=host) and
+	// can reach LAN devices directly. No proxy needed, and host.docker.internal
+	// does not exist on Linux.
+	if runtime.GOOS == "linux" {
+		addr := resolved
+		if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+			addr = "[" + addr + "]"
+		}
+		return fmt.Sprintf("%s:%d", addr, port), func() {}, nil
 	}
 
-	// Link-local address — Docker's VM cannot reach it directly.
-	// Dial via the original hostname so the host's resolver provides the
-	// zone ID (interface scope) needed for link-local routing.
-	target := net.JoinHostPort(host, strconv.Itoa(port))
+	// On macOS, buildkitd runs inside the Colima VM and cannot reach LAN devices
+	// directly. Proxy through host.docker.internal so the VM reaches the macOS host,
+	// which then forwards to the device.
+	//
+	// For link-local addresses (USB devices), dial via the original hostname so
+	// the host's resolver supplies the zone ID needed for link-local routing.
+	// For routable LAN addresses, dial the resolved IP directly.
+	var target string
+	if isLinkLocalIP(resolved) {
+		target = net.JoinHostPort(host, strconv.Itoa(port))
+	} else {
+		target = net.JoinHostPort(resolved, strconv.Itoa(port))
+	}
+
 	proxy, err := startRegistryProxy(ctx, target)
 	if err != nil {
-		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
+		return "", nil, fmt.Errorf("starting registry proxy: %w", err)
 	}
 
 	registryAddr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
@@ -1281,15 +1177,15 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 // This is used by the Docker Desktop provider for Swift projects that do not
 // have a Dockerfile, as an alternative to swift-container-plugin (which only
 // supports pushing to registries).
-func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, error) {
+func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
 	arch := runtime.GOARCH
-	sdk, err := findSwiftSDK(arch)
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, arch, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return "", fmt.Errorf("finding Swift SDK: %w", err)
 	}
 
 	cliLogln("Cross-compiling %s for linux/%s...", product, arch)
-	buildCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+	buildCmd := swifttoolchain.SwiftCommandContext(ctx,
 		"build", "-c", "release", "--swift-sdk="+sdk, "--product", product)
 	buildCmd.Dir = dir
 	buildCmd.Stdout = os.Stdout
@@ -1299,7 +1195,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, er
 	}
 
 	// Determine the binary output path.
-	showBinCmd := exec.CommandContext(ctx, "swiftly", "run", "+"+defaultSwiftVersion, "swift",
+	showBinCmd := swifttoolchain.SwiftCommandContext(ctx,
 		"build", "-c", "release", "--swift-sdk="+sdk, "--show-bin-path")
 	showBinCmd.Dir = dir
 	out, err := showBinCmd.CombinedOutput()
@@ -1325,7 +1221,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product string) (string, er
 
 	// Write a minimal Dockerfile using the fixed binary name.
 	dockerfile := fmt.Sprintf("FROM swift:%s-slim\nCOPY app /usr/local/bin/app\nCMD [\"app\"]\n",
-		defaultSwiftVersion)
+		swifttoolchain.DefaultVersion)
 	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
 		return "", fmt.Errorf("writing Dockerfile: %w", err)
 	}

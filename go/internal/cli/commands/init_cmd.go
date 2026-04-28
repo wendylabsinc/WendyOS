@@ -607,6 +607,13 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
+	// Collect schema-driven answers (multi-phase conditional questions).
+	if manifest.Schema != nil {
+		if err := collectSchemaAnswers(manifest.Schema, vals); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}

@@ -53,6 +53,7 @@ func newDeviceCmd() *cobra.Command {
 		newWifiCmd(),
 		newAppsCmd(),
 		newVolumesCmd(),
+		newVideoCmd(),
 	)
 
 	return cmd
@@ -63,8 +64,9 @@ func newDeviceVersionCmd() *cobra.Command {
 	var prerelease bool
 
 	cmd := &cobra.Command{
-		Use:   "version",
-		Short: "Get the agent version on the target device",
+		Use:     "version",
+		Aliases: []string{"info"},
+		Short:   "Show agent version, OS, architecture, GPU, and hardware info for the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
@@ -97,6 +99,19 @@ func newDeviceVersionCmd() *cobra.Command {
 					"cpuArchitecture": resp.GetCpuArchitecture(),
 					"deviceType":      resp.GetDeviceType(),
 					"cliVersion":      version.Version,
+					"hasGpu":          resp.GetHasGpu(),
+				}
+				if sm := resp.GetStorageMedium(); sm != "" {
+					out["storageMedium"] = sm
+				}
+				if v := resp.GetGpuVendor(); v != "" {
+					out["gpuVendor"] = v
+				}
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					out["jetpackVersion"] = jv
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					out["cudaVersion"] = cv
 				}
 				if checkUpdates {
 					out["latestVersion"] = latestVersion
@@ -115,6 +130,22 @@ func newDeviceVersionCmd() *cobra.Command {
 			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
 			if dt := resp.GetDeviceType(); dt != "" {
 				fmt.Printf("Device Type: %s\n", dt)
+			}
+			if sm := resp.GetStorageMedium(); sm != "" {
+				fmt.Printf("Storage: %s\n", sm)
+			}
+			if resp.GetHasGpu() {
+				vendor := resp.GetGpuVendor()
+				if vendor == "" {
+					vendor = "unknown"
+				}
+				fmt.Printf("GPU: %s\n", vendor)
+				if jv := resp.GetJetpackVersion(); jv != "" {
+					fmt.Printf("JetPack: %s\n", jv)
+				}
+				if cv := resp.GetCudaVersion(); cv != "" {
+					fmt.Printf("CUDA: %s\n", cv)
+				}
 			}
 			fmt.Printf("CLI Version: %s\n", version.Version)
 

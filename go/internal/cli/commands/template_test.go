@@ -451,6 +451,91 @@ func TestProgressReader_TracksBytes(t *testing.T) {
 	}
 }
 
+func TestExtractTemplateArchive_ParsesSchema(t *testing.T) {
+	schema := `{
+		"phases":[{
+			"id":"p1","title":"Phase 1",
+			"questions":[
+				{"id":"MODE","label":"Mode?","type":"radio","required":true,
+				 "options":[{"value":"local","label":"Local"},{"value":"cloud","label":"Cloud"}]}
+			]
+		}]
+	}`
+	files := map[string]string{
+		"template.json":        `{"name":"with-schema"}`,
+		"template.schema.json": schema,
+		"main.py":              "print('hi')\n",
+	}
+	archive := buildTestTarball(t, "templates-main", "python", "with-schema", files)
+
+	_, manifest, err := extractTemplateArchive(bytes.NewReader(archive), "python", "with-schema")
+	if err != nil {
+		t.Fatalf("extractTemplateArchive: %v", err)
+	}
+	if manifest.Schema == nil {
+		t.Fatal("expected Schema to be populated from template.schema.json")
+	}
+	if len(manifest.Schema.Phases) != 1 {
+		t.Fatalf("Schema.Phases len = %d, want 1", len(manifest.Schema.Phases))
+	}
+	phase := manifest.Schema.Phases[0]
+	if phase.ID != "p1" {
+		t.Errorf("phase.ID = %q, want %q", phase.ID, "p1")
+	}
+	if len(phase.Questions) != 1 || phase.Questions[0].ID != "MODE" {
+		t.Errorf("phase.Questions = %+v, want one MODE question", phase.Questions)
+	}
+}
+
+func TestExtractTemplateArchive_NoSchema_SchemaIsNil(t *testing.T) {
+	files := map[string]string{
+		"template.json": `{"name":"no-schema"}`,
+		"main.py":       "print('hi')\n",
+	}
+	archive := buildTestTarball(t, "templates-main", "python", "no-schema", files)
+
+	_, manifest, err := extractTemplateArchive(bytes.NewReader(archive), "python", "no-schema")
+	if err != nil {
+		t.Fatalf("extractTemplateArchive: %v", err)
+	}
+	if manifest.Schema != nil {
+		t.Error("expected Schema to be nil when template.schema.json is absent")
+	}
+}
+
+func TestEvaluateSchemaCondition(t *testing.T) {
+	eq := func(s string) *string { return &s }
+
+	vals := map[string]interface{}{
+		"MODE":     "local",
+		"FEATURES": "gps,camera",
+	}
+
+	cases := []struct {
+		name string
+		cond *templateSchemaCondition
+		want bool
+	}{
+		{"nil condition", nil, true},
+		{"equals match", &templateSchemaCondition{QuestionID: "MODE", Equals: eq("local")}, true},
+		{"equals no match", &templateSchemaCondition{QuestionID: "MODE", Equals: eq("cloud")}, false},
+		{"in match", &templateSchemaCondition{QuestionID: "MODE", In: []string{"cloud", "local"}}, true},
+		{"in no match", &templateSchemaCondition{QuestionID: "MODE", In: []string{"cloud"}}, false},
+		{"contains match", &templateSchemaCondition{QuestionID: "FEATURES", Contains: eq("gps")}, true},
+		{"contains no match", &templateSchemaCondition{QuestionID: "FEATURES", Contains: eq("lidar")}, false},
+		{"missing questionId", &templateSchemaCondition{QuestionID: "UNKNOWN", Equals: eq("x")}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evaluateSchemaCondition(tc.cond, vals)
+			if got != tc.want {
+				t.Errorf("evaluateSchemaCondition = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // keys returns the sorted keys of a map[string][]byte — used in test failure
 // messages so the output is deterministic.
 func keys(m map[string][]byte) []string {

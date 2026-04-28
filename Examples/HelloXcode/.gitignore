@@ -1,0 +1,6 @@
+# Xcode build artifacts (wendy run / wendy build output)
+.xcode/
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserstate

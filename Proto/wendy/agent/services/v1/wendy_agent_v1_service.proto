@@ -24,7 +24,19 @@ service WendyAgentService {
     
     // Disconnect from the current WiFi network
     rpc DisconnectWiFi(DisconnectWiFiRequest) returns (DisconnectWiFiResponse);
-    
+
+    // List only the WiFi networks that have a saved profile on the device.
+    rpc ListKnownWiFiNetworks(ListKnownWiFiNetworksRequest) returns (ListKnownWiFiNetworksResponse);
+
+    // Set the autoconnect priority (rank) of a single known network.
+    rpc SetWiFiNetworkPriority(SetWiFiNetworkPriorityRequest) returns (SetWiFiNetworkPriorityResponse);
+
+    // Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+    rpc ReorderKnownWiFiNetworks(ReorderKnownWiFiNetworksRequest) returns (ReorderKnownWiFiNetworksResponse);
+
+    // Remove a known network (NetworkManager profile) from the device.
+    rpc ForgetWiFiNetwork(ForgetWiFiNetworkRequest) returns (ForgetWiFiNetworkResponse);
+
     // List available hardware capabilities on the device
     rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
 
@@ -154,8 +166,18 @@ message GetAgentVersionResponse {
     string cpu_architecture = 4;
     optional string public_key = 5;
     repeated string featureset = 6;
-    // Hardware platform identifier read from /etc/wendyos/device-type (only present on WendyOS)
+    // MACHINE/BOARD value from /etc/wendyos/device-type (only present on WendyOS)
     optional string device_type = 7;
+    // Whether the device has a GPU.
+    optional bool has_gpu = 8;
+    // GPU vendor identifier (e.g. "nvidia"). Only present when has_gpu is true.
+    optional string gpu_vendor = 9;
+    // JetPack version (e.g. "6.2"). Only present on NVIDIA Jetson devices.
+    optional string jetpack_version = 10;
+    // CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
+    optional string cuda_version = 11;
+    // STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+    optional string storage_medium = 12;
 }
 
 // Request message for listing WiFi networks
@@ -163,18 +185,46 @@ message ListWiFiNetworksRequest {
     // Empty request - no parameters needed
 }
 
+// Security type advertised by or used for a WiFi network.
+enum WiFiSecurityType {
+    WIFI_SECURITY_TYPE_UNSPECIFIED = 0;
+    WIFI_SECURITY_TYPE_OPEN = 1;
+    WIFI_SECURITY_TYPE_WEP = 2;
+    WIFI_SECURITY_TYPE_WPA_PSK = 3;
+    WIFI_SECURITY_TYPE_WPA2_PSK = 4;
+    WIFI_SECURITY_TYPE_WPA3_SAE = 5;
+    WIFI_SECURITY_TYPE_WPA2_ENTERPRISE = 6;
+}
+
 // Response message for listing WiFi networks
 message ListWiFiNetworksResponse {
     // List of available WiFi networks
     repeated WiFiNetwork networks = 1;
-    
+
     // Information about a WiFi network
     message WiFiNetwork {
         // SSID (name) of the WiFi network
         string ssid = 1;
-        
-        // Signal strength indicator (if available)
+
+        // Signal strength indicator (0-100, if available)
         optional int32 signal_strength = 2;
+
+        // Best-effort security type detected from the scan / saved profile.
+        WiFiSecurityType security = 3;
+
+        // True if the device already has a saved connection profile for this SSID.
+        bool is_known = 4;
+
+        // True if this network is currently the active/connected WiFi network.
+        bool is_connected = 5;
+
+        // Autoconnect priority for the stored profile. Unset if not a known network.
+        // NetworkManager uses higher integers as higher priority; lower == tie-break
+        // by most-recently-used. We echo NM's raw value here.
+        optional int32 priority = 6;
+
+        // Raw RSSI in dBm if available from the scanner.
+        optional int32 rssi_dbm = 7;
     }
 }
 
@@ -182,9 +232,16 @@ message ListWiFiNetworksResponse {
 message ConnectToWiFiRequest {
     // SSID (name) of the WiFi network to connect to
     string ssid = 1;
-    
+
     // Password for the WiFi network
     string password = 2;
+
+    // Security type hint — used when connecting to unlisted (hidden) networks
+    // where autodetection is not possible.
+    optional WiFiSecurityType security = 3;
+
+    // When true, treat the SSID as hidden / non-broadcasting.
+    optional bool hidden = 4;
 }
 
 // Response message for connecting to a WiFi network
@@ -222,8 +279,66 @@ message DisconnectWiFiRequest {
 message DisconnectWiFiResponse {
     // Whether the disconnection was successful
     bool success = 1;
-    
+
     // Optional error message if disconnection failed
+    optional string error_message = 2;
+}
+
+// Request message for listing known (saved) WiFi networks.
+message ListKnownWiFiNetworksRequest {}
+
+// Response message for listing known (saved) WiFi networks.
+message ListKnownWiFiNetworksResponse {
+    repeated KnownWiFiNetwork networks = 1;
+
+    message KnownWiFiNetwork {
+        // SSID (name) of the saved WiFi network.
+        string ssid = 1;
+
+        // NetworkManager connection UUID (agent-internal identifier).
+        string uuid = 2;
+
+        // Autoconnect priority. Higher = prefer to auto-connect first.
+        int32 priority = 3;
+
+        // Best-effort security type of the saved profile.
+        WiFiSecurityType security = 4;
+    }
+}
+
+// Request to set the priority of a single saved network.
+message SetWiFiNetworkPriorityRequest {
+    // SSID of the saved network.
+    string ssid = 1;
+
+    // New autoconnect priority value.
+    int32 priority = 2;
+}
+
+message SetWiFiNetworkPriorityResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// Request to bulk-reorder saved networks. The first SSID in `order_ssids`
+// gets the highest priority, the last gets the lowest. SSIDs not listed
+// are left untouched.
+message ReorderKnownWiFiNetworksRequest {
+    repeated string order_ssids = 1;
+}
+
+message ReorderKnownWiFiNetworksResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// Request to remove a saved network profile.
+message ForgetWiFiNetworkRequest {
+    string ssid = 1;
+}
+
+message ForgetWiFiNetworkResponse {
+    bool success = 1;
     optional string error_message = 2;
 }
 

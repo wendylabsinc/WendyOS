@@ -8,12 +8,14 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
 // writeConfigPartition finds, mounts, populates, and unmounts the FAT32 config
-// partition on d after a dd write. agentBinary is the arm64 agent binary content.
-// ssid/password are written to wendy.conf if ssid is non-empty.
-func writeConfigPartition(d drive, agentBinary []byte, ssid, password string) error {
+// partition on d after a dd write. agentBinary is the arm64 agent binary
+// content. creds and deviceName are written to wendy.conf when non-empty.
+func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string) error {
 	// Re-read the partition table after dd.
 	exec.Command("sudo", "partprobe", d.DevicePath).Run() //nolint:errcheck
 	time.Sleep(500 * time.Millisecond)
@@ -35,7 +37,7 @@ func writeConfigPartition(d drive, agentBinary []byte, ssid, password string) er
 	}
 	defer exec.Command("sudo", "umount", tmpDir).Run() //nolint:errcheck
 
-	return writeConfigFiles(tmpDir, agentBinary, ssid, password)
+	return writeConfigFiles(tmpDir, agentBinary, creds, deviceName)
 }
 
 // findConfigPartition returns the device path of the partition labelled "config"

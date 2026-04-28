@@ -105,6 +105,7 @@ func main() {
 	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager)
 	containerSvc := services.NewContainerService(logger, containerdClient, services.WithLogManager(logManager))
 	audioSvc := services.NewAudioService(logger)
+	videoSvc := services.NewVideoService(logger)
 
 	configPath := "/etc/wendy-agent"
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
@@ -159,6 +160,7 @@ func main() {
 		agentpb.RegisterWendyAgentServiceServer(srv, agentSvc)
 		agentpb.RegisterWendyContainerServiceServer(srv, containerSvc)
 		agentpb.RegisterWendyAudioServiceServer(srv, audioSvc)
+		agentpb.RegisterWendyVideoServiceServer(srv, videoSvc)
 		agentpb.RegisterWendyProvisioningServiceServer(srv, provisioningSvc)
 		agentpb.RegisterWendyTelemetryServiceServer(srv, telemetrySvc)
 	}

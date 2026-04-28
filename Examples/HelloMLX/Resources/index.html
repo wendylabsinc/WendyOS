@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HelloMLX</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1d2230;
+      --border: rgba(255, 255, 255, 0.12);
+      --text: #f5f7fb;
+      --muted: #aeb7c6;
+      --accent: #79a8ff;
+      --accent-strong: #5b90ff;
+      --danger: #ff8f8f;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+      --radius: 16px;
+      --gap: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: linear-gradient(180deg, #0c0f14 0%, #111522 100%);
+      color: var(--text);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .page {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: grid;
+      gap: 20px;
+    }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .page-title {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .page-subtitle,
+    .page-url {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .page-header-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .summary-metric {
+      min-width: 220px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(121, 168, 255, 0.28);
+      background: rgba(121, 168, 255, 0.09);
+      box-shadow: var(--shadow);
+    }
+
+    .summary-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .summary-value {
+      display: block;
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--accent);
+    }
+
+    .top-grid {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.1fr) minmax(320px, 1fr);
+      gap: var(--gap);
+    }
+
+    .panel {
+      background: rgba(23, 26, 33, 0.92);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .panel-header {
+      padding: 16px 18px 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .panel-body {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .frame-shell {
+      min-height: 320px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      overflow: hidden;
+    }
+
+    .frame-shell img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #0b0d12;
+    }
+
+    .placeholder {
+      color: var(--muted);
+      padding: 24px;
+      text-align: center;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 12px;
+    }
+
+    .status-item {
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .status-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .status-value {
+      display: block;
+      font-size: 14px;
+      word-break: break-word;
+    }
+
+    .status-note {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .error-text {
+      margin: 0;
+      color: var(--danger);
+    }
+
+    .prompt-fieldset {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      display: grid;
+      gap: 12px;
+    }
+
+    .prompt-input {
+      width: 100%;
+      min-height: 240px;
+      resize: vertical;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(8, 10, 16, 0.65);
+      color: var(--text);
+      font: inherit;
+    }
+
+    .prompt-input:focus {
+      outline: 2px solid rgba(121, 168, 255, 0.35);
+      border-color: rgba(121, 168, 255, 0.45);
+    }
+
+    .prompt-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .prompt-meta,
+    .prompt-status {
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgba(121, 168, 255, 0.35);
+      background: var(--accent);
+      color: #08111f;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 120ms ease, transform 120ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-strong);
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+      transform: none;
+    }
+
+    .secondary-button {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    .runs-panel .panel-body {
+      gap: 18px;
+    }
+
+    .runs-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .runs-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .run-card {
+      padding: 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      display: grid;
+      gap: 12px;
+    }
+
+    .run-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .run-meta-main {
+      display: grid;
+      gap: 4px;
+    }
+
+    .run-time,
+    .run-frame-count {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .run-duration-block {
+      text-align: right;
+    }
+
+    .run-duration-label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 2px;
+    }
+
+    .run-duration {
+      display: block;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--accent);
+    }
+
+    .run-section {
+      display: grid;
+      gap: 6px;
+    }
+
+    .run-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .run-text {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .run-frames {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .run-frame {
+      margin: 0;
+      display: grid;
+      gap: 6px;
+    }
+
+    .run-frame img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0b0d12;
+      display: block;
+    }
+
+    .run-frame figcaption {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .empty-state {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    @media (max-width: 960px) {
+      body {
+        padding: 16px;
+      }
+
+      .page-header {
+        flex-direction: column;
+      }
+
+      .page-header-side {
+        width: 100%;
+        justify-items: stretch;
+      }
+
+      .top-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">HelloMLX</h1>
+        <p class="page-subtitle">Live camera input, editable prompt, and persisted run history.</p>
+      </div>
+      <div class="page-header-side">
+        <div class="summary-metric">
+          <span class="summary-label">Last run duration</span>
+          <span class="summary-value" id="last-run-duration">—</span>
+        </div>
+        <p class="page-url" id="page-url">Waiting for server state…</p>
+      </div>
+    </header>
+
+    <section class="top-grid" aria-label="Live view and prompt">
+      <article class="panel">
+        <header class="panel-header">
+          <h2 class="panel-title">Current frame</h2>
+        </header>
+        <div class="panel-body">
+          <div class="frame-shell">
+            <img id="live-frame" alt="Current live frame" hidden>
+            <div class="placeholder" id="live-frame-placeholder">Waiting for camera…</div>
+          </div>
+
+          <div class="status-grid" aria-label="Runtime status">
+            <div class="status-item">
+              <span class="status-label">Camera</span>
+              <span class="status-value" id="camera-status">Starting…</span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">Model</span>
+              <span class="status-value" id="model-status">Waiting…</span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">Run config</span>
+              <span class="status-value" id="run-config">—</span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">Latest run</span>
+              <span class="status-value" id="latest-run">None yet</span>
+            </div>
+          </div>
+
+          <p class="status-note" id="live-frame-note">No live frame yet.</p>
+          <p class="error-text" id="error-text" hidden></p>
+        </div>
+      </article>
+
+      <article class="panel">
+        <header class="panel-header">
+          <h2 class="panel-title">Current prompt</h2>
+        </header>
+        <div class="panel-body">
+          <form class="prompt-fieldset" id="prompt-form">
+            <label for="prompt-input" class="status-label">Prompt text</label>
+            <textarea id="prompt-input" class="prompt-input" spellcheck="false"></textarea>
+            <div class="prompt-actions">
+              <p class="prompt-meta" id="prompt-meta">Waiting for prompt…</p>
+              <div class="button-row">
+                <p class="prompt-status" id="prompt-status">Saved.</p>
+                <button type="submit" id="save-button" disabled>Save</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel runs-panel" aria-labelledby="runs-title">
+      <header class="panel-header runs-header">
+        <div>
+          <h2 class="panel-title" id="runs-title">Runs</h2>
+          <p class="page-subtitle">Newest first. The first load shows the latest four, and new runs are prepended as they arrive.</p>
+        </div>
+        <button type="button" class="secondary-button" id="show-more-button" hidden>Show more</button>
+      </header>
+      <div class="panel-body">
+        <p class="empty-state" id="runs-empty">No runs yet.</p>
+        <div class="runs-list" id="runs-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <template id="run-template">
+    <article class="run-card">
+      <header class="run-meta">
+        <div class="run-meta-main">
+          <time class="run-time"></time>
+          <span class="run-frame-count"></span>
+        </div>
+        <div class="run-duration-block">
+          <span class="run-duration-label">Duration</span>
+          <span class="run-duration"></span>
+        </div>
+      </header>
+      <section class="run-section">
+        <span class="run-label">Prompt</span>
+        <p class="run-text run-prompt"></p>
+      </section>
+      <section class="run-section">
+        <span class="run-label">Response</span>
+        <p class="run-text run-response"></p>
+      </section>
+      <section class="run-section">
+        <span class="run-label">Frames</span>
+        <div class="run-frames"></div>
+      </section>
+    </article>
+  </template>
+
+  <script>
+    const state = {
+      latestFrameAt: null,
+      latestRunID: null,
+      promptDirty: false,
+      promptSaving: false,
+      promptText: "",
+      renderedRunIDs: new Set(),
+      nextCursor: null,
+      pollTimer: null
+    };
+
+    const elements = {
+      pageURL: document.getElementById('page-url'),
+      lastRunDuration: document.getElementById('last-run-duration'),
+      liveFrame: document.getElementById('live-frame'),
+      liveFramePlaceholder: document.getElementById('live-frame-placeholder'),
+      liveFrameNote: document.getElementById('live-frame-note'),
+      cameraStatus: document.getElementById('camera-status'),
+      modelStatus: document.getElementById('model-status'),
+      runConfig: document.getElementById('run-config'),
+      latestRun: document.getElementById('latest-run'),
+      errorText: document.getElementById('error-text'),
+      promptForm: document.getElementById('prompt-form'),
+      promptInput: document.getElementById('prompt-input'),
+      promptMeta: document.getElementById('prompt-meta'),
+      promptStatus: document.getElementById('prompt-status'),
+      saveButton: document.getElementById('save-button'),
+      runsList: document.getElementById('runs-list'),
+      runsEmpty: document.getElementById('runs-empty'),
+      showMoreButton: document.getElementById('show-more-button'),
+      runTemplate: document.getElementById('run-template')
+    };
+
+    function formatDate(value) {
+      if (!value) return '—';
+      const date = new Date(value);
+      return date.toLocaleString();
+    }
+
+    function formatNumber(value) {
+      if (Number.isInteger(value)) return `${value}`;
+      return value.toFixed(3).replace(/\.0+$|0+$/g, '').replace(/\.$/, '');
+    }
+
+    function formatSquareResolution(value) {
+      return `${value}x${value}`;
+    }
+
+    function formatDuration(value) {
+      if (value == null || !Number.isFinite(value)) return '—';
+      if (value >= 3600) {
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const seconds = value % 60;
+        return `${hours}h ${minutes}m ${formatNumber(seconds)}s`;
+      }
+      if (value >= 60) {
+        const minutes = Math.floor(value / 60);
+        const seconds = value % 60;
+        return `${minutes}m ${formatNumber(seconds)}s`;
+      }
+      return `${formatNumber(value)}s`;
+    }
+
+    function updatePromptControls() {
+      const hasChanges = elements.promptInput.value !== state.promptText;
+      state.promptDirty = hasChanges;
+      elements.saveButton.disabled = state.promptSaving || !hasChanges;
+      if (state.promptSaving) {
+        elements.promptStatus.textContent = 'Saving…';
+      } else if (hasChanges) {
+        elements.promptStatus.textContent = 'Unsaved changes';
+      } else {
+        elements.promptStatus.textContent = 'Saved.';
+      }
+    }
+
+    async function fetchJSON(url, options) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    }
+
+    function setLiveFrame(frameURL, lastFrameAt) {
+      if (!frameURL || !lastFrameAt) {
+        elements.liveFrame.hidden = true;
+        elements.liveFramePlaceholder.hidden = false;
+        elements.liveFrameNote.textContent = 'No live frame yet.';
+        state.latestFrameAt = null;
+        return;
+      }
+
+      if (state.latestFrameAt !== lastFrameAt) {
+        elements.liveFrame.src = frameURL;
+        state.latestFrameAt = lastFrameAt;
+      }
+      elements.liveFrame.hidden = false;
+      elements.liveFramePlaceholder.hidden = true;
+      elements.liveFrameNote.textContent = `Latest frame: ${formatDate(lastFrameAt)}`;
+    }
+
+    function renderState(payload) {
+      elements.pageURL.textContent = payload.app.url;
+      elements.cameraStatus.textContent = payload.camera.name
+        ? `${payload.camera.status} · ${payload.camera.name}`
+        : payload.camera.status;
+      elements.modelStatus.textContent = payload.model.name
+        ? `${payload.model.status} · ${payload.model.name}`
+        : payload.model.status;
+      elements.runConfig.textContent = `${formatNumber(payload.run.interval)}s window · ${formatNumber(payload.run.fps)} fps · ${formatSquareResolution(payload.run.resolution)}`;
+      elements.lastRunDuration.textContent = formatDuration(payload.run.latestRunDuration);
+      elements.latestRun.textContent = payload.run.latestRunID
+        ? `${payload.run.latestRunID} · ${payload.run.isRunningInference ? 'running' : 'idle'}`
+        : (payload.run.isRunningInference ? 'Running…' : 'None yet');
+
+      if (!state.promptDirty) {
+        state.promptText = payload.prompt.text;
+        elements.promptInput.value = payload.prompt.text;
+      }
+      elements.promptMeta.textContent = `Saved ${formatDate(payload.prompt.updatedAt)}`;
+      updatePromptControls();
+
+      setLiveFrame(payload.camera.frameURL, payload.camera.lastFrameAt);
+
+      if (payload.error) {
+        elements.errorText.hidden = false;
+        elements.errorText.textContent = payload.error;
+      } else {
+        elements.errorText.hidden = true;
+        elements.errorText.textContent = '';
+      }
+
+      if (payload.run.latestRunID && payload.run.latestRunID !== state.latestRunID) {
+        state.latestRunID = payload.run.latestRunID;
+        if (!state.renderedRunIDs.has(payload.run.latestRunID)) {
+          prependLatestRun(payload.run.latestRunID);
+        }
+      }
+    }
+
+    function makeFrameFigure(frame) {
+      const figure = document.createElement('figure');
+      figure.className = 'run-frame';
+
+      const image = document.createElement('img');
+      image.src = frame.url;
+      image.alt = `Frame captured ${formatDate(frame.capturedAt)}`;
+      image.loading = 'lazy';
+
+      const caption = document.createElement('figcaption');
+      caption.textContent = formatDate(frame.capturedAt);
+
+      figure.append(image, caption);
+      return figure;
+    }
+
+    function makeRunCard(run) {
+      const fragment = elements.runTemplate.content.cloneNode(true);
+      const card = fragment.querySelector('.run-card');
+      card.dataset.runId = run.id;
+      fragment.querySelector('.run-time').textContent = formatDate(run.timestamp);
+      const resolution = run.resolution ?? 256;
+      fragment.querySelector('.run-frame-count').textContent = `${run.frameCount} frame${run.frameCount === 1 ? '' : 's'} · ${formatNumber(run.interval)}s · ${formatNumber(run.fps)} fps · ${formatSquareResolution(resolution)}`;
+      fragment.querySelector('.run-duration').textContent = formatDuration(run.duration);
+      fragment.querySelector('.run-prompt').textContent = run.prompt;
+      fragment.querySelector('.run-response').textContent = run.response;
+
+      const frames = fragment.querySelector('.run-frames');
+      run.frames.forEach(frame => frames.appendChild(makeFrameFigure(frame)));
+
+      return { fragment, card };
+    }
+
+    function showRunsEmptyState() {
+      elements.runsEmpty.hidden = state.renderedRunIDs.size > 0;
+    }
+
+    function renderRun(run, mode) {
+      if (state.renderedRunIDs.has(run.id)) return;
+      const { fragment } = makeRunCard(run);
+      if (mode === 'prepend') {
+        elements.runsList.prepend(fragment);
+      } else {
+        elements.runsList.append(fragment);
+      }
+      state.renderedRunIDs.add(run.id);
+      showRunsEmptyState();
+    }
+
+    async function prependLatestRun(runID) {
+      try {
+        const run = await fetchJSON(`/api/runs/${encodeURIComponent(runID)}`);
+        renderRun(run, 'prepend');
+      } catch (error) {
+        console.error('Failed to fetch latest run:', error);
+      }
+    }
+
+    async function loadInitialRuns() {
+      const payload = await fetchJSON('/api/runs?limit=4');
+      payload.items.forEach(run => renderRun(run, 'append'));
+      state.nextCursor = payload.nextCursor;
+      elements.showMoreButton.hidden = !state.nextCursor;
+    }
+
+    async function loadMoreRuns() {
+      if (!state.nextCursor) return;
+      elements.showMoreButton.disabled = true;
+      try {
+        const payload = await fetchJSON(`/api/runs?limit=4&before=${encodeURIComponent(state.nextCursor)}`);
+        payload.items.forEach(run => renderRun(run, 'append'));
+        state.nextCursor = payload.nextCursor;
+        elements.showMoreButton.hidden = !state.nextCursor;
+      } finally {
+        elements.showMoreButton.disabled = false;
+      }
+    }
+
+    async function savePrompt(event) {
+      event.preventDefault();
+      if (state.promptSaving) return;
+
+      state.promptSaving = true;
+      updatePromptControls();
+      try {
+        const payload = await fetchJSON('/api/prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: elements.promptInput.value })
+        });
+        state.promptText = payload.prompt.text;
+        elements.promptInput.value = payload.prompt.text;
+        elements.promptMeta.textContent = `Saved ${formatDate(payload.prompt.updatedAt)}`;
+      } catch (error) {
+        console.error('Failed to save prompt:', error);
+        elements.promptStatus.textContent = 'Save failed';
+      } finally {
+        state.promptSaving = false;
+        updatePromptControls();
+      }
+    }
+
+    async function refreshState() {
+      try {
+        const payload = await fetchJSON('/api/state');
+        renderState(payload);
+      } catch (error) {
+        console.error('Failed to refresh state:', error);
+        elements.errorText.hidden = false;
+        elements.errorText.textContent = `Failed to refresh state: ${error.message}`;
+      }
+    }
+
+    async function boot() {
+      elements.promptInput.addEventListener('input', updatePromptControls);
+      elements.promptForm.addEventListener('submit', savePrompt);
+      elements.showMoreButton.addEventListener('click', loadMoreRuns);
+
+      await refreshState();
+      await loadInitialRuns();
+      state.pollTimer = window.setInterval(refreshState, 1000);
+    }
+
+    void boot();
+  </script>
+</body>
+</html>

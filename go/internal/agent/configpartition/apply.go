@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/internal/agent/network"
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
 // elfMachineByArch maps GOARCH values to ELF e_machine field values (little-endian uint16).
@@ -165,10 +168,12 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	return true
 }
 
-// applyWiFiConfig reads /config/wendy.conf, connects to WiFi if [wifi] section
-// is present, then deletes the file regardless of outcome (bad creds should not
-// be retried on every boot).
-func applyWiFiConfig(logger *zap.Logger, cfgDir string) {
+// applyWendyConf reads /config/wendy.conf, registers every `[wifi]` /
+// `[wifi.N]` profile via NetworkManager, activates the highest-priority one
+// that is in range, applies the device name from the `[device]` section if
+// present, then deletes the file regardless of outcome (bad values should
+// not be retried on every boot).
+func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	confPath := cfgDir + "/wendy.conf"
 	data, err := os.ReadFile(confPath)
 	if os.IsNotExist(err) {
@@ -185,24 +190,179 @@ func applyWiFiConfig(logger *zap.Logger, cfgDir string) {
 	}
 
 	sections := parseINI(data)
-	wifi := sections["wifi"]
-	ssid := wifi["ssid"]
-	if ssid == "" {
-		logger.Warn("wendy.conf [wifi] section has no ssid, skipping WiFi provisioning")
+	creds := wendyconf.UnmarshalWiFi(sections)
+	if len(creds) == 0 {
+		logger.Warn("wendy.conf has no usable WiFi credentials, skipping WiFi provisioning")
 	} else {
-		if err := network.Connect(context.Background(), ssid, wifi["password"]); err != nil {
-			logger.Error("Failed to connect to WiFi from config partition",
-				zap.String("ssid", ssid), zap.Error(err))
-		} else {
-			logger.Info("Connected to WiFi from config partition", zap.String("ssid", ssid))
+		ctx := context.Background()
+		for _, c := range creds {
+			err := network.AddOrUpdateProfile(ctx, network.SavedCredential{
+				SSID:     c.SSID,
+				Password: c.Password,
+				Priority: c.Priority,
+				Hidden:   c.Hidden,
+				Security: c.Security,
+			})
+			if err != nil {
+				logger.Error("Failed to register WiFi profile from config partition",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				continue
+			}
+			logger.Info("Registered WiFi profile from config partition",
+				zap.String("ssid", c.SSID),
+				zap.Int32("priority", c.Priority))
+		}
+		// Try to bring up the first (highest-priority) credential so the
+		// device is online immediately when it's in range. Lower-priority
+		// profiles stay saved for future locations.
+		for _, c := range creds {
+			if err := network.ActivateProfile(ctx, c.SSID); err != nil {
+				logger.Warn("Could not activate WiFi profile",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				continue
+			}
+			logger.Info("Activated WiFi profile from config partition", zap.String("ssid", c.SSID))
+			break
 		}
 	}
 
-	// Always delete so we don't retry on the next boot.
+	if name := sections["device"]["name"]; name != "" {
+		if err := applyDeviceName(logger, name); err != nil {
+			logger.Error("Failed to apply device name from config partition",
+				zap.String("name", name), zap.Error(err))
+		}
+	}
+
 	if err := os.Remove(confPath); err != nil {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
 	}
+}
+
+// validDeviceName reports whether name satisfies the WendyOS device name rules:
+// starts with a lowercase letter, followed by 2–63 lowercase letters, digits, or hyphens.
+func validDeviceName(name string) bool {
+	if len(name) < 3 || len(name) > 64 {
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z':
+			// always ok
+		case (c >= '0' && c <= '9') || c == '-':
+			if i == 0 {
+				return false // must start with a letter
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// applyDeviceName writes the device name to /etc/wendyos/device-name, then
+// regenerates the hostname and reloads avahi so the mDNS advertisement reflects
+// the new name immediately.
+func applyDeviceName(logger *zap.Logger, name string) error {
+	if !validDeviceName(name) {
+		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{2,63}$", name)
+	}
+
+	const deviceNamePath = "/etc/wendyos/device-name"
+	if err := os.MkdirAll("/etc/wendyos", 0o755); err != nil {
+		return fmt.Errorf("creating /etc/wendyos: %w", err)
+	}
+	if err := os.WriteFile(deviceNamePath, []byte(name+"\n"), 0o644); err != nil {
+		return fmt.Errorf("writing device name: %w", err)
+	}
+	logger.Info("Wrote device name", zap.String("name", name), zap.String("path", deviceNamePath))
+
+	// Build an env with a full system PATH so scripts can find standard
+	// utilities (mkdir, logger, etc.) even when the agent runs under systemd
+	// with a restricted PATH.
+	env := os.Environ()
+	const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	replaced := false
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + systemPath
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		env = append(env, "PATH="+systemPath)
+	}
+
+	// generate-hostname.sh reads /etc/wendyos/device-name (which we just wrote)
+	// and derives wendyos-<name>, updating /etc/hostname and the running hostname.
+	hostnameScript := exec.Command("/usr/sbin/generate-hostname.sh")
+	hostnameScript.Env = env
+	if out, err := hostnameScript.CombinedOutput(); err != nil {
+		logger.Warn("generate-hostname.sh failed", zap.Error(err), zap.String("output", string(out)))
+	} else {
+		logger.Info("Hostname updated", zap.String("hostname", "wendyos-"+name))
+	}
+
+	// update-mdns-uuid.sh is a first-boot placeholder replacer and is a no-op
+	// on a running device. Update the avahi service file directly instead.
+	updateAvahiDeviceName(logger, name, env)
+
+	return nil
+}
+
+// updateAvahiDeviceName rewrites the name/displayname/fqdn TXT records in the
+// avahi service file and reloads avahi-daemon so mDNS picks up the new name.
+func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
+	const serviceFile = "/etc/avahi/services/wendyos-mdns.service"
+
+	data, err := os.ReadFile(serviceFile)
+	if err != nil {
+		logger.Warn("Could not read avahi service file", zap.String("path", serviceFile), zap.Error(err))
+		return
+	}
+
+	displayName := avahiDisplayName(name)
+	fqdn := "sh.wendy." + name
+
+	content := replaceTXTRecord(string(data), "name", name)
+	content = replaceTXTRecord(content, "displayname", displayName)
+	content = replaceTXTRecord(content, "fqdn", fqdn)
+
+	if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+		logger.Warn("Could not write avahi service file", zap.String("path", serviceFile), zap.Error(err))
+		return
+	}
+
+	// --reload (SIGHUP) only refreshes service files; it does not re-read the
+	// hostname from gethostname(), so %h would stay stale. A full restart picks
+	// up both the new service file and the updated hostname.
+	// Use the absolute path: exec.Command resolves binaries from the calling
+	// process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
+	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	restart.Env = env
+	if out, err := restart.CombinedOutput(); err != nil {
+		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
+	} else {
+		logger.Info("Restarted avahi-daemon with new device name", zap.String("name", name))
+	}
+}
+
+// replaceTXTRecord replaces the value in a <txt-record>key=...</txt-record> line.
+func replaceTXTRecord(content, key, value string) string {
+	re := regexp.MustCompile(`(<txt-record>` + regexp.QuoteMeta(key) + `=)[^<]*(</txt-record>)`)
+	return re.ReplaceAllString(content, `${1}`+value+`${2}`)
+}
+
+// avahiDisplayName converts "brave-dolphin" → "Brave Dolphin".
+func avahiDisplayName(name string) string {
+	words := strings.Split(name, "-")
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // Apply checks the config partition for a pending agent binary and WiFi config,
@@ -218,5 +378,5 @@ func Apply(logger *zap.Logger) {
 	if applyBinaryUpdate(logger, configDir, installPath) {
 		os.Exit(0)
 	}
-	applyWiFiConfig(logger, configDir)
+	applyWendyConf(logger, configDir)
 }

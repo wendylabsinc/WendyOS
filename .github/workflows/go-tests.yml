@@ -2,12 +2,17 @@ name: Go Tests
 
 on:
   pull_request:
-    branches: [main]
-    paths: ['go/**']
+    paths:
+      - 'go/**'
+      - 'Proto/**'
+      - '.github/workflows/**'
 
 concurrency:
-  group: tests-${{ github.event.pull_request.number }}
+  group: go-tests-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:

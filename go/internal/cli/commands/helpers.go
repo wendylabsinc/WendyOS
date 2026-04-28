@@ -108,6 +108,38 @@ func hostPort(host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
+// resolveHostPreferIPv4 resolves a hostname to a concrete IP address,
+// preferring IPv4 over global IPv6. If the input is already an IP address
+// or resolution fails, it returns the input unchanged.
+func resolveHostPreferIPv4(host string) string {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return host // already an IP
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return host
+	}
+
+	var globalIPv6 string
+	for _, a := range addrs {
+		addr, parseErr := netip.ParseAddr(a)
+		if parseErr != nil {
+			continue
+		}
+		if addr.Is4() {
+			return a
+		}
+		if !addr.IsLinkLocalUnicast() && globalIPv6 == "" {
+			globalIPv6 = addr.WithZone("").String()
+		}
+	}
+	if globalIPv6 != "" {
+		return globalIPv6
+	}
+	return host // only link-local IPv6 found — keep hostname for zone-aware dial
+}
+
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
 // Prefer the discovered IP address so commands still work when .local
 // hostname resolution is unavailable on the host machine.
@@ -864,11 +896,13 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 
 	// Detect language from the project files on disk.
 	language := ""
-	projectType := detectProjectType(dir)
+	projectType, _ := detectProjectType(dir) // ignore multiple-xcodeproj error for config init
 	switch projectType {
 	case "python":
 		language = "python"
 	case "swift":
+		language = "swift"
+	case "xcode":
 		language = "swift"
 	}
 
@@ -1234,4 +1268,40 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 	}
 
 	return nil, fmt.Errorf("selected device type is not yet supported")
+}
+
+// resolveAgentPlatform determines the target platform string from the user's
+// wendy.json platform field, the agent's OS, and the agent's CPU architecture.
+//
+// Rules:
+//   - If cfgPlatform is a full "os/arch" string, use it as-is.
+//   - If cfgPlatform is OS-only (e.g., "linux" or "darwin"), append the agent arch.
+//   - If cfgPlatform is empty, default to the agent's OS and architecture.
+func resolveAgentPlatform(cfgPlatform, agentOS, agentArch string) string {
+	if cfgPlatform == "" {
+		return agentOS + "/" + agentArch
+	}
+	if strings.Contains(cfgPlatform, "/") {
+		return cfgPlatform
+	}
+	// OS-only: append agent architecture.
+	return cfgPlatform + "/" + agentArch
+}
+
+// registryPort returns the OCI registry port for the given agent OS.
+// macOS uses 5555 to avoid conflicts with AirPlay Receiver which binds *:5000.
+// All other platforms use the standard 5000.
+func registryPort(agentOS string) int {
+	if agentOS == "darwin" {
+		return 5555
+	}
+	return 5000
+}
+
+// platformOS extracts the OS component from a platform string like "linux/arm64".
+func platformOS(platform string) string {
+	if i := strings.IndexByte(platform, '/'); i >= 0 {
+		return platform[:i]
+	}
+	return platform
 }
