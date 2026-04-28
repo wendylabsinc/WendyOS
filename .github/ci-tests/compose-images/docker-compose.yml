@@ -1,0 +1,20 @@
+services:
+  greeter:
+    image: python:3.11-slim
+    command:
+      - python3
+      - -c
+      - |
+        import platform, sys
+        print(f"Hello from greeter!")
+        print(f"Python {sys.version.split()[0]} on {platform.machine()}")
+
+  reporter:
+    image: python:3.11-slim
+    command:
+      - python3
+      - -c
+      - |
+        import os, sys
+        print(f"Hello from reporter!")
+        print(f"PID {os.getpid()}, Python {sys.version.split()[0]}")

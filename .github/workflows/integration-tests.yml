@@ -19,6 +19,24 @@ on:
         description: 'Platform to run integration tests on: all, macos, linux (default: all)'
         required: false
         default: 'all'
+  workflow_call:
+    inputs:
+      hostname:
+        type: string
+        required: false
+        default: ''
+      tests:
+        type: string
+        required: false
+        default: ''
+      jobs:
+        type: string
+        required: false
+        default: 'all'
+      platform:
+        type: string
+        required: false
+        default: 'all'
 
 jobs:
   discover:
@@ -40,10 +58,10 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -125,9 +143,12 @@ jobs:
 
       - name: Run integration tests
         run: |
-          # Run tests via SSH to localhost to bypass macOS Local Network
-          # privacy restrictions that block Go binaries launched by the
-          # LaunchAgent-based GitHub Actions runner.
+          # All wendy CLI calls below run via SSH to localhost rather than
+          # directly. The self-hosted runner runs as a macOS LaunchAgent which
+          # does not hold the Local Network TCC permission that macOS requires
+          # for mDNS (.local) resolution and link-local connections. An SSH
+          # session to localhost runs under the logged-in user, which has that
+          # permission. See nightly-os-update.yml for the same pattern.
           WORKDIR="$(pwd)"
           SSH_ENV="export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}'"
           SSH="ssh -o StrictHostKeyChecking=no localhost"
@@ -220,10 +241,10 @@ jobs:
       INPUT_HOSTNAME: ${{ inputs.hostname }}
       INPUT_TESTS: ${{ inputs.tests }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum

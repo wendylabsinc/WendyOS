@@ -18,10 +18,11 @@ require (
 	github.com/hashicorp/mdns v1.0.6
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
-	github.com/posthog/posthog-go v1.11.3
+	github.com/posthog/posthog-go v1.12.1
 	github.com/spf13/cobra v1.10.2
 	go.bug.st/serial v1.6.4
 	go.uber.org/zap v1.27.1
+	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
@@ -93,7 +94,6 @@ require (
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect

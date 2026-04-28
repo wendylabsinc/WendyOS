@@ -17,6 +17,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const (
+	grpcInitialStreamWindow = 8 * 1024 * 1024
+	grpcInitialConnWindow   = 16 * 1024 * 1024
+	grpcReadBufferSize      = 256 * 1024
+	grpcWriteBufferSize     = 256 * 1024
+)
+
 // AgentConnection holds a gRPC connection and typed service clients.
 type AgentConnection struct {
 	Conn                *grpc.ClientConn
@@ -25,13 +32,22 @@ type AgentConnection struct {
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
+	VideoService        agentpb.WendyVideoServiceClient
 	ProvisioningService agentpb.WendyProvisioningServiceClient
 	TelemetryService    agentpb.WendyTelemetryServiceClient
+	FileSyncService     agentpb.WendyFileSyncServiceClient
 }
 
 // Connect creates an insecure gRPC connection to the agent at the given address.
 func Connect(ctx context.Context, address string) (*AgentConnection, error) {
-	conn, err := grpc.NewClient(grpcTarget(address), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(
+		grpcTarget(address),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
+		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
+		grpc.WithReadBufferSize(grpcReadBufferSize),
+		grpc.WithWriteBufferSize(grpcWriteBufferSize),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
 	}
@@ -56,7 +72,14 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 	tlsCfg.InsecureSkipVerify = true // agent uses self-signed certs
 	tlsCfg.MinVersion = tls.VersionTLS12
 
-	conn, err := grpc.NewClient(grpcTarget(address), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	conn, err := grpc.NewClient(
+		grpcTarget(address),
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
+		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
+		grpc.WithReadBufferSize(grpcReadBufferSize),
+		grpc.WithWriteBufferSize(grpcWriteBufferSize),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)
 	}
@@ -123,7 +146,9 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		AgentService:        agentpb.NewWendyAgentServiceClient(conn),
 		ContainerService:    agentpb.NewWendyContainerServiceClient(conn),
 		AudioService:        agentpb.NewWendyAudioServiceClient(conn),
+		VideoService:        agentpb.NewWendyVideoServiceClient(conn),
 		ProvisioningService: agentpb.NewWendyProvisioningServiceClient(conn),
 		TelemetryService:    agentpb.NewWendyTelemetryServiceClient(conn),
+		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),
 	}
 }

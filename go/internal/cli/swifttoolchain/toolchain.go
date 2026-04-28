@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,8 +23,8 @@ const (
 )
 
 var wendySDKChecksums = map[string]string{
-	"x86_64":  "982bb4f1a3632e628d63cf5f7478e7ec12264dd13755b709f6dd40853b56ab92",
-	"aarch64": "506a6f002f3c434af79fb1396c3e13adbd18d8e2b294c7627b93d6fc51f29a34",
+	"x86_64":  "8b1e13f35b06fec17cb72ca64257ed51969d1ab1acd8d891251e28bb96ad4e9d",
+	"aarch64": "a0155f222bf741e8a4a894c1282941b3a86846fe9d27ac53f94a07d84f897981",
 }
 
 var ErrUserCancelled = errors.New("cancelled")
@@ -164,6 +166,24 @@ func lookupSwiftSDK(ctx context.Context, sdkArch string, isWasm bool) (string, e
 	return "", nil
 }
 
+// unzipOverwriteEnv returns a modified env with a unzip wrapper prepended to
+// PATH. The wrapper passes -o (overwrite without prompting) to the real unzip
+// binary, which prevents interactive prompts when the zip has duplicate entries.
+// Call the returned cleanup func when done.
+func unzipOverwriteEnv() (env []string, cleanup func(), err error) {
+	dir, err := os.MkdirTemp("", "wendy-unzip-*")
+	if err != nil {
+		return nil, func() {}, err
+	}
+	script := "#!/bin/sh\nexec /usr/bin/unzip -o \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "unzip"), []byte(script), 0755); err != nil {
+		os.RemoveAll(dir)
+		return nil, func() {}, err
+	}
+	env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	return env, func() { os.RemoveAll(dir) }, nil
+}
+
 func installWendySwiftSDK(ctx context.Context, sdkArch string, stdout, stderr io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -182,21 +202,29 @@ func installWendySwiftSDK(ctx context.Context, sdkArch string, stdout, stderr io
 		return fmt.Errorf("no checksum available for architecture %s", sdkArch)
 	}
 
+	env, cleanup, err := unzipOverwriteEnv()
+	if err != nil {
+		return fmt.Errorf("setting up unzip wrapper: %w", err)
+	}
+	defer cleanup()
+
 	cmd := SwiftCommandContext(ctx, "sdk", "install", url, "--checksum", checksum)
+	cmd.Env = env
 	cmd.Stdout = stdout
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = io.MultiWriter(stderr, &stderrBuf)
 
-	err := cmd.Run()
-	flushWriter(stdout)
-	flushWriter(stderr)
-	if err != nil {
+	if err := cmd.Run(); err != nil {
+		flushWriter(stdout)
+		flushWriter(stderr)
 		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
 			return fmt.Errorf("installing Swift SDK from %s: %w\n%s", url, err, out)
 		}
 		return fmt.Errorf("installing Swift SDK from %s: %w", url, err)
 	}
 
+	flushWriter(stdout)
+	flushWriter(stderr)
 	fmt.Fprintln(stdout, "Swift SDK installed.")
 	flushWriter(stdout)
 	return nil
@@ -215,15 +243,21 @@ func installWasmSwiftSDK(ctx context.Context, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "Installing Swift WASM SDK (%s)...\n", sdkName)
 
+	env, cleanup, err := unzipOverwriteEnv()
+	if err != nil {
+		return fmt.Errorf("setting up unzip wrapper: %w", err)
+	}
+	defer cleanup()
+
 	cmd := SwiftCommandContext(ctx, "sdk", "install", url, "--checksum", wasmSDKChecksum)
+	cmd.Env = env
 	cmd.Stdout = stdout
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = io.MultiWriter(stderr, &stderrBuf)
 
-	err := cmd.Run()
-	flushWriter(stdout)
-	flushWriter(stderr)
-	if err != nil {
+	if err := cmd.Run(); err != nil {
+		flushWriter(stdout)
+		flushWriter(stderr)
 		if out := strings.TrimSpace(stderrBuf.String()); out != "" {
 			return fmt.Errorf("installing Swift WASM SDK from %s: %w\n%s", url, err, out)
 		}

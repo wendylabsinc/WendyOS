@@ -87,7 +87,7 @@ func TestParseRestartPolicyLabel_Simple(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshImageFromRegistry(t *testing.T) {
+func TestIsLocalRegistryImage(t *testing.T) {
 	tests := []struct {
 		name      string
 		imageName string
@@ -122,8 +122,40 @@ func TestShouldRefreshImageFromRegistry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldRefreshImageFromRegistry(tt.imageName); got != tt.want {
-				t.Errorf("shouldRefreshImageFromRegistry(%q) = %v; want %v", tt.imageName, got, tt.want)
+			if got := isLocalRegistryImage(tt.imageName); got != tt.want {
+				t.Errorf("isLocalRegistryImage(%q) = %v; want %v", tt.imageName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeImageName(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"python", "docker.io/library/python:latest"},
+		{"python:3.11-slim", "docker.io/library/python:3.11-slim"},
+		{"library/nginx:1.27", "docker.io/library/nginx:1.27"},
+		{"bitnami/redis:7", "docker.io/bitnami/redis:7"},
+		// Already-qualified refs pass through (the localhost path needs
+		// isLocalRegistryImage to keep working unchanged).
+		{"localhost:5000/foo:bar", "localhost:5000/foo:bar"},
+		{"127.0.0.1:5000/example:latest", "127.0.0.1:5000/example:latest"},
+		{"ghcr.io/wendylabsinc/example:latest", "ghcr.io/wendylabsinc/example:latest"},
+		{"gcr.io/google-containers/pause:3.9", "gcr.io/google-containers/pause:3.9"},
+		// Digest references.
+		{"python@sha256:0000000000000000000000000000000000000000000000000000000000000000", "docker.io/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+		// Whitespace trimmed.
+		{"  python:3.11-slim  ", "docker.io/library/python:3.11-slim"},
+		// Empty input → unchanged.
+		{"", ""},
+		// Malformed → unchanged so the caller's error message stays useful.
+		{"not a ref", "not a ref"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizeImageName(tt.in); got != tt.want {
+				t.Errorf("normalizeImageName(%q) = %q; want %q", tt.in, got, tt.want)
 			}
 		})
 	}

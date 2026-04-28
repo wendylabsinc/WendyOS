@@ -1,6 +1,7 @@
 package appconfig
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -442,6 +443,261 @@ func TestValidate_ReadinessValidConfig(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestRunArgs_RoundTripJSON(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantRunNil  bool
+		wantRunArgs []string
+	}{
+		{
+			name:       "no run",
+			input:      `{"appId":"sh.wendy.App"}`,
+			wantRunNil: true,
+		},
+		{
+			name:        "one arg",
+			input:       `{"appId":"sh.wendy.App","run":{"args":["--verbose"]}}`,
+			wantRunArgs: []string{"--verbose"},
+		},
+		{
+			name:        "empty args",
+			input:       `{"appId":"sh.wendy.App","run":{"args":[]}}`,
+			wantRunArgs: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("LoadFromBytes: %v", err)
+			}
+
+			if tt.wantRunNil {
+				if cfg.Run != nil {
+					t.Fatalf("Run = %#v, want nil", cfg.Run)
+				}
+			} else {
+				if cfg.Run == nil {
+					t.Fatal("Run = nil, want non-nil")
+				}
+				if len(cfg.Run.Args) != len(tt.wantRunArgs) {
+					t.Fatalf("Run.Args len = %d, want %d", len(cfg.Run.Args), len(tt.wantRunArgs))
+				}
+				for i, want := range tt.wantRunArgs {
+					if got := cfg.Run.Args[i]; got != want {
+						t.Fatalf("Run.Args[%d] = %q, want %q", i, got, want)
+					}
+				}
+			}
+
+			data, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+
+			var decoded AppConfig
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+
+			if tt.wantRunNil {
+				if decoded.Run != nil {
+					t.Fatalf("decoded.Run = %#v, want nil", decoded.Run)
+				}
+			} else {
+				if decoded.Run == nil {
+					t.Fatal("decoded.Run = nil, want non-nil")
+				}
+				if len(decoded.Run.Args) != len(tt.wantRunArgs) {
+					t.Fatalf("decoded.Run.Args len = %d, want %d", len(decoded.Run.Args), len(tt.wantRunArgs))
+				}
+				for i, want := range tt.wantRunArgs {
+					if got := decoded.Run.Args[i]; got != want {
+						t.Fatalf("decoded.Run.Args[%d] = %q, want %q", i, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// --- Files field tests ---
+
+func TestLoadFromFile_WithFiles_BothFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "sh.wendy.MyApp",
+		"files": [
+			{"path": "models/weights.bin", "to": "models/w.bin"},
+			{"path": "config/prod.json"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if len(cfg.Files) != 2 {
+		t.Fatalf("Files count = %d, want 2", len(cfg.Files))
+	}
+	if cfg.Files[0].Path != "models/weights.bin" {
+		t.Errorf("Files[0].Path = %q, want %q", cfg.Files[0].Path, "models/weights.bin")
+	}
+	if cfg.Files[0].To != "models/w.bin" {
+		t.Errorf("Files[0].To = %q, want %q", cfg.Files[0].To, "models/w.bin")
+	}
+	if cfg.Files[1].Path != "config/prod.json" {
+		t.Errorf("Files[1].Path = %q, want %q", cfg.Files[1].Path, "config/prod.json")
+	}
+	if cfg.Files[1].To != "" {
+		t.Errorf("Files[1].To = %q, want empty", cfg.Files[1].To)
+	}
+}
+
+func TestLoadFromFile_WithFiles_PathOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{"appId": "sh.wendy.App", "files": [{"path": "data/model"}]}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if len(cfg.Files) != 1 {
+		t.Fatalf("Files count = %d, want 1", len(cfg.Files))
+	}
+	if cfg.Files[0].Path != "data/model" {
+		t.Errorf("Files[0].Path = %q, want %q", cfg.Files[0].Path, "data/model")
+	}
+	if cfg.Files[0].To != "" {
+		t.Errorf("Files[0].To should be empty, got %q", cfg.Files[0].To)
+	}
+}
+
+func TestLoadFromFile_WithoutFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{"appId": "sh.wendy.App"}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if len(cfg.Files) != 0 {
+		t.Errorf("Files = %v, want nil/empty", cfg.Files)
+	}
+}
+
+func TestValidate_Files_EmptyPath(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{{Path: ""}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() expected error for empty path, got nil")
+	}
+}
+
+func TestValidate_Files_AbsolutePath(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{{Path: "/absolute/path"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for absolute path")
+	}
+}
+
+func TestValidate_Files_DotDotPath(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{{Path: "../../etc/passwd"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for dotdot path")
+	}
+}
+
+func TestValidate_Files_AbsoluteTo(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{{Path: "data/file", To: "/absolute/dest"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for absolute to")
+	}
+}
+
+func TestValidate_Files_DotDotTo(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{{Path: "data/file", To: "../escaped"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for dotdot to")
+	}
+}
+
+func TestValidate_Files_Valid(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "sh.wendy.App",
+		Files: []FileSyncEntry{
+			{Path: "models/gemma"},
+			{Path: "config/prod.json", To: "config/app.json"},
+			{Path: "./data/file"},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestFiles_RoundTripJSON(t *testing.T) {
+	original := &AppConfig{
+		AppID: "sh.wendy.MyApp",
+		Files: []FileSyncEntry{
+			{Path: "models/gemma-3-27b"},
+			{Path: "config/prod.json", To: "config/app.json"},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded AppConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.Files) != 2 {
+		t.Fatalf("Files count = %d, want 2", len(decoded.Files))
+	}
+	if decoded.Files[0].Path != original.Files[0].Path {
+		t.Errorf("Files[0].Path = %q, want %q", decoded.Files[0].Path, original.Files[0].Path)
+	}
+	if decoded.Files[1].To != original.Files[1].To {
+		t.Errorf("Files[1].To = %q, want %q", decoded.Files[1].To, original.Files[1].To)
 	}
 }
 
