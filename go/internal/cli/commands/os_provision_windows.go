@@ -5,7 +5,6 @@ package commands
 import (
 	"fmt"
 	"os/exec"
-)
 
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
