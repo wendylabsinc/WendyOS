@@ -148,41 +148,41 @@ func newDeviceVersionCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Agent Version: %s\n", agentVersion)
-			fmt.Printf("OS: %s %s\n", resp.GetOs(), resp.GetOsVersion())
-			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
+			cliLogln("Agent Version: %s", agentVersion)
+			cliLogln("OS: %s %s", resp.GetOs(), resp.GetOsVersion())
+			cliLogln("Architecture: %s", resp.GetCpuArchitecture())
 			if dt := resp.GetDeviceType(); dt != "" {
-				fmt.Printf("Device Type: %s\n", dt)
+				cliLogln("Device Type: %s", dt)
 			}
 			if sm := resp.GetStorageMedium(); sm != "" {
-				fmt.Printf("Storage: %s\n", sm)
+				cliLogln("Storage: %s", sm)
 			}
 			if resp.GetHasGpu() {
 				vendor := resp.GetGpuVendor()
 				if vendor == "" {
 					vendor = "unknown"
 				}
-				fmt.Printf("GPU: %s\n", vendor)
+				cliLogln("GPU: %s", vendor)
 				if jv := resp.GetJetpackVersion(); jv != "" {
-					fmt.Printf("JetPack: %s\n", jv)
+					cliLogln("JetPack: %s", jv)
 				}
 				if cv := resp.GetCudaVersion(); cv != "" {
-					fmt.Printf("CUDA: %s\n", cv)
+					cliLogln("CUDA: %s", cv)
 				}
 			}
-			fmt.Printf("CLI Version: %s\n", version.Version)
+			cliLogln("CLI Version: %s", version.Version)
 
 			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
-				fmt.Println("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
+				cliNotice("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
-				fmt.Println("\nNote: CLI is behind the agent. Consider updating the CLI.")
+				cliNotice("\nNote: CLI is behind the agent. Consider updating the CLI.")
 			}
 
 			if checkUpdates {
 				if version.CompareVersions(latestVersion, agentVersion) > 0 {
-					fmt.Printf("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update\n", latestVersion, agentVersion)
+					cliNotice("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update", latestVersion, agentVersion)
 				} else {
-					fmt.Println("\nAgent is up to date.")
+					cliSuccess("\nAgent is up to date.")
 				}
 			}
 
@@ -223,7 +223,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Printf("Default device set to: %s\n", device)
+			cliSuccess("Default device set to: %s", device)
 			return nil
 		},
 	}
@@ -262,7 +262,7 @@ func newDeviceUnsetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Println("Default device cleared.")
+			cliSuccess("Default device cleared.")
 			return nil
 		},
 	}
@@ -284,7 +284,7 @@ func newDeviceSetupCmd() *cobra.Command {
 			reader := bufio.NewReader(os.Stdin)
 
 			// Step 1: Check provisioning status.
-			fmt.Println("Checking device provisioning status...")
+			cliLogln("Checking device provisioning status...")
 			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 			if err != nil {
 				return fmt.Errorf("checking provisioning status: %w", err)
@@ -292,12 +292,12 @@ func newDeviceSetupCmd() *cobra.Command {
 
 			if provResp.GetProvisioned() != nil {
 				prov := provResp.GetProvisioned()
-				fmt.Printf("Device is provisioned (org: %d, asset: %d, cloud: %s).\n",
+				cliSuccess("Device is provisioned (org: %d, asset: %d, cloud: %s).",
 					prov.GetOrganizationId(), prov.GetAssetId(), prov.GetCloudHost())
 			} else {
-				fmt.Println("Device is not provisioned.")
+				cliNotice("Device is not provisioned.")
 				if loadCLICert() == nil {
-					fmt.Println("You are not logged in to Wendy Cloud.")
+					cliNotice("You are not logged in to Wendy Cloud.")
 					fmt.Print("Log in now? [Y/n] ")
 					answer, _ := reader.ReadString('\n')
 					answer = strings.TrimSpace(strings.ToLower(answer))
@@ -311,75 +311,75 @@ func newDeviceSetupCmd() *cobra.Command {
 				// If we now have CLI certs, provision the device via cloud API.
 				if auth := loadCLIAuth(); auth != nil {
 					if provErr := provisionDevice(ctx, conn, auth, reader); provErr != nil {
-						fmt.Printf("Provisioning failed: %v\n", provErr)
+						cliNotice("Provisioning failed: %v", provErr)
 					}
 				}
 				fmt.Println()
 			}
 
 			// Step 2: Check WiFi status.
-			fmt.Println("Checking WiFi status...")
+			cliLogln("Checking WiFi status...")
 			wifiResp, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
 			if err != nil {
-				fmt.Println("Unable to check WiFi status (may not be supported on this device).")
+				cliNotice("Unable to check WiFi status (may not be supported on this device).")
 			} else if wifiResp.GetConnected() {
-				fmt.Printf("WiFi connected to: %s\n", wifiResp.GetSsid())
+				cliSuccess("WiFi connected to: %s", wifiResp.GetSsid())
 			} else {
-				fmt.Println("WiFi is not connected.")
+				cliNotice("WiFi is not connected.")
 
 				// Use the existing WiFi picker to let the user select a network.
 				target := &SelectedDevice{Agent: conn}
 				ssid, pickErr := pickWifiNetwork(ctx, target)
 				if pickErr != nil {
 					if errors.Is(pickErr, ErrUserCancelled) {
-						fmt.Println("WiFi setup skipped.")
+						cliLogln("WiFi setup skipped.")
 					} else {
-						fmt.Printf("WiFi scan failed: %v\n", pickErr)
+						cliNotice("WiFi scan failed: %v", pickErr)
 					}
 				} else {
 					fmt.Print("Password (leave empty for open networks): ")
 					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
 					fmt.Println()
 					if readErr != nil {
-						fmt.Printf("Failed to read password: %v\n", readErr)
+						cliNotice("Failed to read password: %v", readErr)
 					} else {
 						password := strings.TrimSpace(string(passwordBytes))
 
-						fmt.Printf("Connecting to %s...\n", ssid)
+						cliLogln("Connecting to %s...", ssid)
 						wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
 							Ssid:     ssid,
 							Password: password,
 						})
 						if connectErr != nil {
-							fmt.Printf("Failed to connect to WiFi: %v\n", connectErr)
+							cliNotice("Failed to connect to WiFi: %v", connectErr)
 						} else if !wifiConnResp.GetSuccess() {
-							fmt.Printf("Failed to connect: %s\n", wifiConnResp.GetErrorMessage())
+							cliNotice("Failed to connect: %s", wifiConnResp.GetErrorMessage())
 						} else {
-							fmt.Printf("Connected to %s\n", ssid)
+							cliSuccess("Connected to %s", ssid)
 						}
 					}
 				}
 			}
 
 			// Step 3: Check for agent updates.
-			fmt.Println("\nChecking agent version...")
+			cliLogln("\nChecking agent version...")
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
-				fmt.Printf("Unable to check agent version: %v\n", err)
+				cliNotice("Unable to check agent version: %v", err)
 			} else {
-				fmt.Printf("Agent version: %s\n", versionResp.GetVersion())
+				cliLogln("Agent version: %s", versionResp.GetVersion())
 				if cmp := version.CompareVersions(version.Version, versionResp.GetVersion()); cmp > 0 {
-					fmt.Printf("CLI version: %s (agent is behind)\n", version.Version)
-					fmt.Println("Consider running 'wendy device update' to update the agent.")
+					cliLogln("CLI version: %s (agent is behind)", version.Version)
+					cliNotice("Consider running 'wendy device update' to update the agent.")
 				} else if cmp < 0 {
-					fmt.Printf("CLI version: %s (CLI is behind)\n", version.Version)
-					fmt.Println("Consider updating the CLI to match the agent.")
+					cliLogln("CLI version: %s (CLI is behind)", version.Version)
+					cliNotice("Consider updating the CLI to match the agent.")
 				} else {
-					fmt.Println("Agent is up to date.")
+					cliSuccess("Agent is up to date.")
 				}
 			}
 
-			fmt.Println("\nSetup check complete.")
+			cliSuccess("\nSetup check complete.")
 			return nil
 		},
 	}
@@ -436,7 +436,7 @@ func provisionDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	}
 
 	// Provision the device.
-	fmt.Println("Provisioning device...")
+	cliLogln("Provisioning device...")
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),
 		AssetId:         tokenResp.GetAssetId(),
@@ -447,7 +447,7 @@ func provisionDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("starting provisioning: %w", err)
 	}
 
-	fmt.Printf("Device provisioned (org: %d, asset: %d).\n",
+	cliSuccess("Device provisioned (org: %d, asset: %d).",
 		tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 	return nil
 }
@@ -1204,7 +1204,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
 				if !jsonOutput {
-					fmt.Println("Detecting device architecture...")
+					cliLogln("Detecting device architecture...")
 				}
 				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 				if err != nil {
@@ -1216,7 +1216,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("device did not report CPU architecture; use --binary to provide the binary manually")
 				}
 				if !jsonOutput {
-					fmt.Printf("Device architecture: %s\n", arch)
+					cliLogln("Device architecture: %s", arch)
 				}
 
 				releaseType := "stable"
@@ -1224,7 +1224,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					releaseType = "nightly"
 				}
 				if !jsonOutput {
-					fmt.Printf("Fetching latest %s release...\n", releaseType)
+					cliLogln("Fetching latest %s release...", releaseType)
 				}
 
 				release, err := fetchAgentRelease(nightly)
@@ -1232,7 +1232,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("fetching release: %w", err)
 				}
 				if !jsonOutput {
-					fmt.Printf("Found release: %s\n", release.TagName)
+					cliLogln("Found release: %s", release.TagName)
 				}
 
 				// Find matching asset: wendy-agent-linux-{arch}-*.tar.gz
@@ -1249,7 +1249,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 
 				if !jsonOutput {
-					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+					cliLogln("Downloading %s...", matchedAsset.Name)
 				}
 				binaryData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
@@ -1281,7 +1281,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return updateErr
 				}
 			} else if !jsonOutput {
-				fmt.Println("Uploading agent binary...")
+				cliLogln("Uploading agent binary...")
 				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 					return err
 				}
@@ -1302,7 +1302,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 				fmt.Println(string(b))
 			} else {
-				fmt.Println("Agent updated successfully.")
+				cliSuccess("Agent updated successfully.")
 			}
 			return nil
 		},
