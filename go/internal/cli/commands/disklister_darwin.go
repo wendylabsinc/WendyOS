@@ -13,13 +13,13 @@ import (
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
-	DevicePath  string // e.g. /dev/disk4
-	RawPath     string // e.g. /dev/rdisk4
-	Name        string // human-readable name
-	Size        string // human-readable size
-	SizeBytes   int64  // size in bytes
+	DevicePath  string      // e.g. /dev/disk4
+	RawPath     string      // e.g. /dev/rdisk4
+	Name        string      // human-readable name
+	Size        string      // human-readable size
+	SizeBytes   int64       // size in bytes
 	IsRemovable bool
-	StorageType StorageType // underlying storage protocol
+	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
 }
 
 // listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
@@ -90,7 +90,6 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 		size := ""
 		var sizeBytes int64
 		removable := isExternal
-		storageType := StorageUnknown
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
@@ -100,9 +99,11 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			if !isExternal {
 				removable = info.removable || info.ejectable
 			}
-			if strings.EqualFold(info.protocol, "nvme") {
-				storageType = StorageNVMe
-			}
+		}
+
+		st := StorageUnknown
+		if infoErr == nil {
+			st = detectStorageTypeDarwin(info.protocol, info.name)
 		}
 
 		drives = append(drives, drive{
@@ -112,7 +113,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			Size:        size,
 			SizeBytes:   sizeBytes,
 			IsRemovable: removable,
-			StorageType: storageType,
+			StorageType: st,
 		})
 	}
 	return drives
@@ -124,7 +125,7 @@ type diskInfo struct {
 	sizeBytes int64
 	removable bool   // "Removable Media: Removable"
 	ejectable bool   // "Ejectable: Yes"
-	protocol  string // "Protocol:" field, e.g. "NVMe", "USB"
+	protocol  string // e.g. "SD", "USB", "SATA"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -165,6 +166,37 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 		}
 	}
 	return info, nil
+}
+
+// detectStorageTypeDarwin infers the physical storage medium of a disk from the
+// diskutil protocol string and media name.
+//
+//   - Internal SD card readers report Protocol: SD (or SDXC/SDHC).
+//   - External USB SD card readers report Protocol: USB but their media name
+//     usually contains "SD", "SDHC", "SDXC", or "MMC".
+//   - NVMe drives in USB enclosures report Protocol: USB with a vendor/model name.
+func detectStorageTypeDarwin(protocol, mediaName string) StorageType {
+	p := strings.ToUpper(strings.TrimSpace(protocol))
+	// Anything whose protocol begins with "SD" is an SD card slot.
+	if p == "SD" || strings.HasPrefix(p, "SD") || p == "MMC" || p == "SDXC" || p == "SDHC" {
+		return StorageSD
+	}
+	if p == "USB" {
+		lower := strings.ToLower(mediaName)
+		for _, kw := range []string{"emmc", "e-mmc", "embedded mmc"} {
+			if strings.Contains(lower, kw) {
+				return StorageEMMC
+			}
+		}
+		for _, kw := range []string{"sd card", "sdhc", "sdxc", "sd/mmc", " mmc", "sdcard"} {
+			if strings.Contains(lower, kw) {
+				return StorageSD
+			}
+		}
+		// USB without SD/eMMC indicators is assumed to be an NVMe drive in an enclosure.
+		return StorageNVMe
+	}
+	return StorageUnknown
 }
 
 // unmountDisk unmounts all volumes on a disk before writing.

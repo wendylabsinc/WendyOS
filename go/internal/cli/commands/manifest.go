@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// StorageType identifies the physical storage medium of a drive or image.
+type StorageType string
+
+const (
+	StorageUnknown StorageType = ""
+	StorageNVMe    StorageType = "nvme"
+	StorageSD      StorageType = "sd"
+	StorageEMMC    StorageType = "emmc"
+)
+
 const gcsBaseURL = "https://storage.googleapis.com/wendyos-images-public"
 
 // mainManifest is the top-level manifest fetched from GCS master.json.
@@ -41,6 +51,18 @@ type deviceVersion struct {
 	OTAUpdatePath      string `json:"ota_update_path"`
 	OTAUpdateChecksum  string `json:"ota_update_checksum"`
 	OTAUpdateSizeBytes int64  `json:"ota_update_size_bytes"`
+	// Storage-specific image paths for devices that produce both an NVMe and
+	// an SD card image (e.g. jetson-orin-nano). Old CLI versions use Path,
+	// which always points to the NVMe image for backwards compatibility.
+	NVMEPath        string `json:"nvme_path,omitempty"`
+	NVMESizeBytes   int64  `json:"nvme_size_bytes,omitempty"`
+	NVMEChecksum    string `json:"nvme_checksum,omitempty"`
+	SDCardPath      string `json:"sd_path,omitempty"`
+	SDCardSizeBytes int64  `json:"sd_size_bytes,omitempty"`
+	SDCardChecksum  string `json:"sd_checksum,omitempty"`
+	EMMCPath        string `json:"emmc_path,omitempty"`
+	EMMCSizeBytes   int64  `json:"emmc_size_bytes,omitempty"`
+	EMMCChecksum    string `json:"emmc_checksum,omitempty"`
 }
 
 // deviceInfo is the aggregated info shown in the picker for one device.
@@ -58,6 +80,7 @@ type imageInfo struct {
 	DownloadURL string
 	ImageSize   int64
 	Version     string
+	Storage     StorageType // set for multi-storage devices; empty for single-storage
 }
 
 func fetchMainManifest() (*mainManifest, error) {
@@ -144,7 +167,8 @@ func getAvailableDevices() ([]deviceInfo, error) {
 }
 
 // getImageInfo returns the download URL and metadata for a specific version
-// from an already-fetched device manifest.
+// from an already-fetched device manifest, using the legacy Path field.
+// For devices with multiple storage types use getImageInfoForStorage instead.
 func getImageInfo(dm *deviceManifest, ver string) (*imageInfo, error) {
 	v, ok := dm.Versions[ver]
 	if !ok {
@@ -155,6 +179,74 @@ func getImageInfo(dm *deviceManifest, ver string) (*imageInfo, error) {
 		DownloadURL: gcsBaseURL + "/" + v.Path,
 		ImageSize:   v.SizeBytes,
 		Version:     ver,
+	}, nil
+}
+
+// hasMultipleStorages reports whether the given version of dm has at least two
+// distinct storage-specific images published (NVMe, SD card, and/or eMMC).
+func hasMultipleStorages(dm *deviceManifest, ver string) bool {
+	v, ok := dm.Versions[ver]
+	if !ok {
+		return false
+	}
+	count := 0
+	if v.NVMEPath != "" {
+		count++
+	}
+	if v.SDCardPath != "" {
+		count++
+	}
+	if v.EMMCPath != "" {
+		count++
+	}
+	return count >= 2
+}
+
+// getImageInfoForStorage returns the image info for a specific storage type.
+// For single-storage devices (or when st is StorageUnknown) it falls back to
+// the legacy Path field so old behaviour is preserved.
+func getImageInfoForStorage(dm *deviceManifest, ver string, st StorageType) (*imageInfo, error) {
+	v, ok := dm.Versions[ver]
+	if !ok {
+		return nil, fmt.Errorf("version %s not found in device manifest", ver)
+	}
+
+	switch st {
+	case StorageNVMe:
+		if v.NVMEPath != "" {
+			return &imageInfo{
+				DownloadURL: gcsBaseURL + "/" + v.NVMEPath,
+				ImageSize:   v.NVMESizeBytes,
+				Version:     ver,
+				Storage:     StorageNVMe,
+			}, nil
+		}
+	case StorageSD:
+		if v.SDCardPath != "" {
+			return &imageInfo{
+				DownloadURL: gcsBaseURL + "/" + v.SDCardPath,
+				ImageSize:   v.SDCardSizeBytes,
+				Version:     ver,
+				Storage:     StorageSD,
+			}, nil
+		}
+	case StorageEMMC:
+		if v.EMMCPath != "" {
+			return &imageInfo{
+				DownloadURL: gcsBaseURL + "/" + v.EMMCPath,
+				ImageSize:   v.EMMCSizeBytes,
+				Version:     ver,
+				Storage:     StorageEMMC,
+			}, nil
+		}
+	}
+
+	// Fallback: use the legacy single-storage Path.
+	return &imageInfo{
+		DownloadURL: gcsBaseURL + "/" + v.Path,
+		ImageSize:   v.SizeBytes,
+		Version:     ver,
+		Storage:     StorageUnknown,
 	}, nil
 }
 

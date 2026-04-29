@@ -351,7 +351,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default: latest (or nightly if --nightly)
 	if flagVersion != "" {
-		// Validate the requested version exists in the manifest.
+		// Validate the requested version exists in the manifest (storage-agnostic check).
 		if _, err := getImageInfo(device.Manifest, flagVersion); err != nil {
 			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
@@ -411,6 +411,46 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
+	// Step 4: Resolve image storage type.
+	// For devices that publish both an NVMe and an SD card image, pick the one
+	// that matches the selected drive's storage medium. When the medium cannot
+	// be detected automatically, ask the user.
+	selectedStorage := StorageUnknown
+	if hasMultipleStorages(device.Manifest, selectedVersion) {
+		selectedStorage = targetDrive.StorageType
+		if selectedStorage == StorageUnknown {
+			v := device.Manifest.Versions[selectedVersion]
+			var storageItems []tui.PickerItem
+			if v.NVMEPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "NVMe",
+					Description: "drive connected via USB enclosure",
+					Value:       string(StorageNVMe),
+				})
+			}
+			if v.SDCardPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "SD card",
+					Description: "internal slot or USB card reader",
+					Value:       string(StorageSD),
+				})
+			}
+			if v.EMMCPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "eMMC",
+					Description: "onboard flash via USB eMMC reader",
+					Value:       string(StorageEMMC),
+				})
+			}
+			fmt.Println()
+			picked, pickErr := pickFromItems("Select target storage type", storageItems)
+			if pickErr != nil {
+				return pickErr
+			}
+			selectedStorage = StorageType(picked)
+		}
+	}
+
 	// Resolve pre-enrollment — must happen before provisionConfigPartition because
 	// the config partition is mounted and unmounted inside that call.
 	var provisioningJSON []byte
@@ -454,9 +494,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-	// Step 5: Resolve image (cached or download) and open streaming reader.
+
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
-	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
+	imgInfo, err := getImageInfoForStorage(device.Manifest, selectedVersion, selectedStorage)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
@@ -842,8 +882,9 @@ func osCacheDir() (string, error) {
 }
 
 // osCachedImagePath returns the expected cache path for a device+version image.
-// Format: <cache>/os-images/<device>-<version>.img
-func osCachedImagePath(deviceKey, version string) (string, error) {
+// Format: <cache>/os-images/<device>-<version>[-<storage>].img
+// The storage suffix is omitted for single-storage devices (StorageUnknown).
+func osCachedImagePath(deviceKey, version string, storageType StorageType) (string, error) {
 	// Sanitize to prevent path traversal from user-supplied --version flag.
 	safeDevice := filepath.Base(deviceKey)
 	safeVersion := filepath.Base(version)
@@ -856,25 +897,13 @@ func osCachedImagePath(deviceKey, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%s.img", safeDevice, safeVersion)), nil
+	suffix := ""
+	if storageType != StorageUnknown {
+		suffix = "-" + string(storageType)
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s%s.img", safeDevice, safeVersion, suffix)), nil
 }
 
-// osCachedZipPath returns the expected cache path for a device+version zip.
-// Format: <cache>/os-images/<device>-<version>.zip
-func osCachedZipPath(deviceKey, version string) (string, error) {
-	safeDevice := filepath.Base(deviceKey)
-	safeVersion := filepath.Base(version)
-	if safeDevice != deviceKey || safeVersion != version ||
-		strings.Contains(deviceKey, "..") || strings.Contains(version, "..") {
-		return "", fmt.Errorf("invalid device key or version: %q / %q", deviceKey, version)
-	}
-
-	dir, err := osCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%s.zip", safeDevice, safeVersion)), nil
-}
 
 // zipReadCloser wraps a zip.ReadCloser and its entry's ReadCloser so both
 // are released with a single Close call.
@@ -935,37 +964,32 @@ func streamZipImageEntry(zipPath string) (io.ReadCloser, int64, error) {
 }
 
 // resolveOSImage returns the path to a cached file ready for streaming.
-// For zip URLs: checks legacy .img cache, then .zip cache, then downloads.
-// For non-zip URLs: checks legacy .img cache, then downloads the img directly.
+// For zip URLs: checks .img cache then .zip cache, then downloads.
+// For non-zip URLs: checks .img cache, then downloads directly.
 func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	isZip := strings.HasSuffix(strings.ToLower(img.DownloadURL), ".zip")
 
-	// Legacy .img cache hit (backward compat with pre-streaming caches).
-	imgCached, err := osCachedImagePath(deviceKey, img.Version)
+	cached, err := osCachedImagePath(deviceKey, img.Version, img.Storage)
 	if err != nil {
 		return "", err
 	}
-	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached image (%s)\n", imgCached)
-		return imgCached, nil
+	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+		fmt.Printf("Using cached image (%s)\n", cached)
+		return cached, nil
 	}
 
 	if isZip {
-		// Zip cache hit.
-		zipCached, zipErr := osCachedZipPath(deviceKey, img.Version)
-		if zipErr != nil {
-			return "", zipErr
-		}
+		// Zip cache: same path but with .zip extension so openOSImageStream detects it.
+		zipCached := strings.TrimSuffix(cached, ".img") + ".zip"
 		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
 			fmt.Printf("Using cached image (%s)\n", zipCached)
 			return zipCached, nil
 		}
-		// Cache miss: download zip, rename to zip cache path.
 		downloadPath, dlErr := downloadImage(img)
 		if dlErr != nil {
 			return "", fmt.Errorf("downloading image: %w", dlErr)
 		}
-		os.Remove(zipCached) // remove stale/0-byte file if present so Rename succeeds on Windows
+		os.Remove(zipCached)
 		if renameErr := os.Rename(downloadPath, zipCached); renameErr != nil {
 			os.Remove(downloadPath)
 			return "", fmt.Errorf("caching image: %w", renameErr)
@@ -973,17 +997,16 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		return zipCached, nil
 	}
 
-	// Non-zip URL: download img directly and cache as .img.
 	downloadPath, err := downloadImage(img)
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
-	os.Remove(imgCached) // remove stale/0-byte file if present so Rename succeeds on Windows
-	if err := os.Rename(downloadPath, imgCached); err != nil {
+	os.Remove(cached)
+	if err := os.Rename(downloadPath, cached); err != nil {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)
 	}
-	return imgCached, nil
+	return cached, nil
 }
 
 // openOSImageStream resolves the cached file for deviceKey+img, then returns
