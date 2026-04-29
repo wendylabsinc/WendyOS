@@ -7,12 +7,12 @@ images:
   # WendyOS Yocto build runner. Built by .github/workflows/build-ami.yml,
   # consumed by the build matrix in .github/workflows/build.yml.
   #
-  # `owner` MUST be set to the AWS account ID that owns the built AMI before
-  # this is merged. (RunsOn looks the AMI up by Name + Owner.) We don't use
-  # GitHub Actions ${{ vars.* }} here because runs-on.yml is parsed by the
-  # RunsOn server, not the workflow runtime.
+  # `owner: self` resolves to the AWS account RunsOn is running in (the same
+  # account the AMI is built into), avoiding a hard-coded account ID in the
+  # repo. AWS DescribeImages accepts "self" as a documented special owner
+  # value, and RunsOn forwards it untouched.
   wendyos-builder:
     platform: linux
     arch: x64
-    owner: "REPLACE_WITH_AWS_ACCOUNT_ID"
+    owner: self
     name: "wendyos-builder-*"
