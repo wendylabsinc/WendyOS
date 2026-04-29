@@ -125,10 +125,13 @@ jobs:
           FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
           mkdir -p "$FLASH_WORKDIR"
           tar -xzf "$TEGRAFLASH_FILE" -C "$FLASH_WORKDIR"
+          if [[ "$STORAGE" != "nvme" && ! -f "$FLASH_WORKDIR/config-partition.fat32.img" ]]; then
+            cp "$DEPLOY_DIR/config-partition.fat32.img" "$FLASH_WORKDIR/"
+          fi
           cd "$FLASH_WORKDIR"
           case "$STORAGE" in
             nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
-            emmc) sudo ./makedisk.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+            emmc) sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
             sd)   sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-sd.img" ;;
           esac
 
