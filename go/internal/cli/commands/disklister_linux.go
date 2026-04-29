@@ -3,12 +3,9 @@
 package commands
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/dustin/go-humanize"
@@ -209,60 +206,18 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		return fmt.Errorf("starting dd: %w", err)
 	}
 
-	// dd emits progress lines separated by '\r' (overwriting in place) until
-	// the final newline-terminated summary. Parse out the leading byte count.
-	go scanDDProgress(stderr, progressFn)
+	scannerDone := make(chan struct{})
+	go func() {
+		defer close(scannerDone)
+		scanDDProgress(stderr, progressFn)
+	}()
 
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("writing image: %w", err)
+	waitErr := cmd.Wait()
+	<-scannerDone
+
+	if waitErr != nil {
+		return fmt.Errorf("writing image: %w", waitErr)
 	}
 
 	return nil
-}
-
-// scanDDProgress parses dd's `status=progress` output and invokes progressFn
-// with the running byte count. dd separates in-place updates with '\r' and
-// terminates the final summary block with '\n', so we split on either.
-func scanDDProgress(r io.Reader, progressFn func(written int64)) {
-	if progressFn == nil {
-		io.Copy(io.Discard, r) //nolint:errcheck
-		return
-	}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	scanner.Split(splitCROrLF)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Progress lines look like:
-		//   524288000 bytes (524 MB, 500 MiB) copied, 1 s, 524 MB/s
-		// The first whitespace-delimited token is the byte count.
-		var token string
-		for i, c := range line {
-			if c == ' ' || c == '\t' {
-				token = line[:i]
-				break
-			}
-		}
-		if token == "" {
-			continue
-		}
-		written, err := strconv.ParseInt(token, 10, 64)
-		if err != nil {
-			continue
-		}
-		progressFn(written)
-	}
-}
-
-// splitCROrLF is a bufio.SplitFunc that splits on '\r' or '\n'.
-func splitCROrLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	for i, b := range data {
-		if b == '\r' || b == '\n' {
-			return i + 1, data[:i], nil
-		}
-	}
-	if atEOF && len(data) > 0 {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
