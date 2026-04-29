@@ -245,8 +245,12 @@ public final class WendyAgent {
             self.mainServerTask = task
         } catch {
             server.beginGracefulShutdown()
-            _ = try? await task.value
-            throw error
+            throw await Self.startupError(
+                serviceName: "Wendy Agent gRPC",
+                port: self.configuration.port,
+                listeningAddressError: error,
+                serveTask: task
+            )
         }
     }
 
@@ -290,8 +294,12 @@ public final class WendyAgent {
             self.otelServerTask = task
         } catch {
             server.beginGracefulShutdown()
-            _ = try? await task.value
-            throw error
+            throw await Self.startupError(
+                serviceName: "local OpenTelemetry gRPC",
+                port: self.configuration.otelPort,
+                listeningAddressError: error,
+                serveTask: task
+            )
         }
     }
 
@@ -575,6 +583,55 @@ public final class WendyAgent {
         Task {
             try await server.serve()
         }
+    }
+
+    private static func startupError(
+        serviceName: String,
+        port: Int,
+        listeningAddressError: any Error,
+        serveTask: Task<Void, Error>
+    ) async -> any Error {
+        do {
+            try await serveTask.value
+        } catch {
+            return Self.startupError(
+                serviceName: serviceName,
+                port: port,
+                underlyingError: error
+            )
+        }
+
+        return Self.startupError(
+            serviceName: serviceName,
+            port: port,
+            underlyingError: listeningAddressError
+        )
+    }
+
+    private static func startupError(
+        serviceName: String,
+        port: Int,
+        underlyingError: any Error
+    ) -> any Error {
+        if Self.isAddressAlreadyInUse(underlyingError) {
+            return WendyAgentError.portInUse(serviceName: serviceName, port: port)
+        }
+
+        return underlyingError
+    }
+
+    private static func isAddressAlreadyInUse(_ error: any Error) -> Bool {
+        if let runtimeError = error as? RuntimeError,
+            let cause = runtimeError.cause,
+            Self.isAddressAlreadyInUse(cause)
+        {
+            return true
+        }
+
+        let description = String(describing: error).lowercased()
+        return description.contains("address already in use")
+            || description.contains("errno: 48")
+            || description.contains("errno: 98")
     }
 
     private static func errorMessage(for error: any Error) -> String {
