@@ -30,12 +30,13 @@ import (
 // AgentService implements agentpb.WendyAgentServiceServer.
 type AgentService struct {
 	agentpb.UnimplementedWendyAgentServiceServer
-	logger             *zap.Logger
-	networkManager     NetworkManager
-	hardwareDiscoverer HardwareDiscoverer
-	bluetoothManager   BluetoothManager
-	updateMu           sync.Mutex
-	isUpdating         bool
+	logger              *zap.Logger
+	networkManager      NetworkManager
+	hardwareDiscoverer  HardwareDiscoverer
+	bluetoothManager    BluetoothManager
+	systemInfoCollector SystemInfoCollector
+	updateMu            sync.Mutex
+	isUpdating          bool
 }
 
 // NewAgentService creates a new AgentService.
@@ -46,10 +47,11 @@ func NewAgentService(
 	bm BluetoothManager,
 ) *AgentService {
 	return &AgentService{
-		logger:             logger,
-		networkManager:     nm,
-		hardwareDiscoverer: hd,
-		bluetoothManager:   bm,
+		logger:              logger,
+		networkManager:      nm,
+		hardwareDiscoverer:  hd,
+		bluetoothManager:    bm,
+		systemInfoCollector: newSystemInfoCollector(),
 	}
 }
 
@@ -93,6 +95,19 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	}
 
 	return resp, nil
+}
+
+// GetSystemInfo returns current resource information for the agent host.
+func (s *AgentService) GetSystemInfo(ctx context.Context, _ *agentpb.GetSystemInfoRequest) (*agentpb.GetSystemInfoResponse, error) {
+	collector := s.systemInfoCollector
+	if collector == nil {
+		collector = newSystemInfoCollector()
+	}
+	info, err := collector.Collect(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "system info collection failed: %v", err)
+	}
+	return info, nil
 }
 
 type gpuInfo struct {

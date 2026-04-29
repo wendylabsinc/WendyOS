@@ -134,6 +134,32 @@ func TestGetAgentVersion(t *testing.T) {
 	}
 }
 
+func TestGetSystemInfo(t *testing.T) {
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	resp, err := client.GetSystemInfo(context.Background(), &agentpb.GetSystemInfoRequest{})
+	if err != nil {
+		t.Fatalf("GetSystemInfo: %v", err)
+	}
+	if resp.GetCpu().GetArchitecture() != runtime.GOARCH {
+		t.Errorf("cpu.architecture = %q; want %q", resp.GetCpu().GetArchitecture(), runtime.GOARCH)
+	}
+	if resp.GetCpu().GetLogicalCores() == 0 {
+		t.Error("cpu.logical_cores should be reported")
+	}
+	if resp.GetMemory() == nil {
+		t.Error("memory should be present")
+	}
+	if resp.GetCollectedAtUnixSeconds() == 0 {
+		t.Error("collected_at_unix_seconds should be set")
+	}
+}
+
 func TestListWiFiNetworks(t *testing.T) {
 	nets := []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{
 		{Ssid: "HomeWiFi"},
