@@ -39,12 +39,14 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		cert.PemCertificateChain,
+		"",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading broker TLS config: %w", err)
 	}
-
+	if !strings.HasSuffix(brokerURL, ":443") {
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
+	}
 	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
@@ -144,12 +146,14 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		cert.PemCertificateChain,
+		"",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading TLS config: %w", err)
 	}
-
+	if !strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
+	}
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)

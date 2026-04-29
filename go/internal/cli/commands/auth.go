@@ -480,10 +480,13 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		existingCert.PemCertificate,
 		existingCert.PemCertificateChain,
 		existingCert.PemPrivateKey,
-		existingCert.PemCertificateChain,
+		"",
 	)
 	if err != nil {
 		return fmt.Errorf("loading existing TLS config: %w", err)
+	}
+	if !strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
 	}
 	certConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
