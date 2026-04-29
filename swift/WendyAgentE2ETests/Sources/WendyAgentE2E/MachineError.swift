@@ -1,10 +1,16 @@
 import Subprocess
 
-public enum MachineError: Error, CustomStringConvertible {
+// MARK: - Public
+
+public enum MachineError: Error {
     case invalidMachineSpec(String)
     case connectionFailed(machine: String, stderr: String)
     case commandFailed(machine: String, command: String, terminationStatus: TerminationStatus)
+}
 
+// MARK: - CustomStringConvertible
+
+extension MachineError: CustomStringConvertible {
     public var description: String {
         switch self {
         case .invalidMachineSpec(let spec):

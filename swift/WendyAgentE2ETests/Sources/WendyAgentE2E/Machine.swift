@@ -7,7 +7,9 @@ import Subprocess
     import SystemPackage
 #endif
 
-public actor Machine: Sendable {
+// MARK: - Public
+
+public actor Machine {
     public nonisolated let sshTarget: String
     public nonisolated let baseDirectory: String
 
@@ -21,10 +23,6 @@ public actor Machine: Sendable {
 
     public static func parse(_ spec: String) throws -> Machine {
         try self.parse(spec, sshExecutable: "/usr/bin/ssh")
-    }
-
-    public nonisolated var description: String {
-        "\(self.sshTarget):\(self.baseDirectory)"
     }
 
     public func close() async throws {
@@ -258,5 +256,13 @@ public actor Machine: Sendable {
             output: output,
             error: error
         )
+    }
+}
+
+// MARK: - CustomStringConvertible
+
+extension Machine: CustomStringConvertible {
+    public nonisolated var description: String {
+        "\(self.sshTarget):\(self.baseDirectory)"
     }
 }
