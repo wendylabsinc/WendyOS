@@ -143,6 +143,12 @@ func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
+var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+
+func cliSuccess(format string, args ...any) {
+	fmt.Println(cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
+}
+
 func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
 	total := progress.GetTotalLayers()
 	if total <= 0 {

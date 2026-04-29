@@ -74,7 +74,7 @@ func newBluetoothListCmd() *cobra.Command {
 			}
 
 			if len(allDevices) == 0 {
-				fmt.Println("No Bluetooth devices found.")
+				cliNotice("No Bluetooth devices found.")
 				return nil
 			}
 
@@ -129,7 +129,7 @@ func newBluetoothConnectCmd() *cobra.Command {
 				return fmt.Errorf("connecting to Bluetooth device: %w", err)
 			}
 
-			fmt.Printf("Connected to %s\n", args[0])
+			cliSuccess("Connected to %s", args[0])
 			return nil
 		},
 	}
@@ -160,7 +160,7 @@ func newBluetoothDisconnectCmd() *cobra.Command {
 				return fmt.Errorf("disconnecting Bluetooth device: %w", err)
 			}
 
-			fmt.Printf("Disconnected from %s\n", args[0])
+			cliSuccess("Disconnected from %s", args[0])
 			return nil
 		},
 	}
@@ -186,7 +186,7 @@ func newBluetoothForgetCmd() *cobra.Command {
 				return fmt.Errorf("forgetting Bluetooth device: %w", err)
 			}
 
-			fmt.Printf("Forgot device %s\n", args[0])
+			cliSuccess("Forgot device %s", args[0])
 			return nil
 		},
 	}

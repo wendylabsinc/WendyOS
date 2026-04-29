@@ -145,19 +145,19 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	fmt.Printf("Opening browser for authentication: %s\n", loginURL)
+	cliLogln("Opening browser for authentication: %s", loginURL)
 
 	if err := openBrowser(loginURL); err != nil {
-		fmt.Printf("Could not open browser automatically. Please visit:\n  %s\n", loginURL)
+		cliNotice("Could not open browser automatically. Please visit:\n  %s", loginURL)
 	}
 
-	fmt.Println("Waiting for authentication...")
+	cliLogln("Waiting for authentication...")
 
 	// Wait for the token.
 	var enrollmentToken string
 	select {
 	case enrollmentToken = <-tokenCh:
-		fmt.Println("Received enrollment token.")
+		cliLogln("Received enrollment token.")
 	case loginErr := <-errCh:
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
@@ -231,12 +231,12 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	fmt.Println("Authentication successful. Certificates saved.")
+	cliSuccess("Authentication successful. Certificates saved.")
 
 	if len(issueResp.GetWarnings()) > 0 {
-		fmt.Println("Warnings:")
+		cliNotice("Warnings:")
 		for _, w := range issueResp.GetWarnings() {
-			fmt.Printf("  - %s\n", w)
+			cliNotice("  - %s", w)
 		}
 	}
 
@@ -258,7 +258,7 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Println("Logged out. All authentication credentials removed.")
+			cliSuccess("Logged out. All authentication credentials removed.")
 			return nil
 		},
 	}
@@ -284,18 +284,18 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 			// Refresh certificates for each auth entry.
 			for i, auth := range cfg.Auth {
 				if len(auth.Certificates) == 0 {
-					fmt.Printf("Skipping %s: no certificates to refresh\n", auth.CloudDashboard)
+					cliLogln("Skipping %s: no certificates to refresh", auth.CloudDashboard)
 					continue
 				}
 
-				fmt.Printf("Refreshing certificates for %s...\n", auth.CloudDashboard)
+				cliLogln("Refreshing certificates for %s...", auth.CloudDashboard)
 
 				if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-					fmt.Printf("Failed to refresh for %s: %v\n", auth.CloudDashboard, err)
+					cliNotice("Failed to refresh for %s: %v", auth.CloudDashboard, err)
 					continue
 				}
 
-				fmt.Printf("Certificates refreshed for %s.\n", auth.CloudDashboard)
+				cliSuccess("Certificates refreshed for %s.", auth.CloudDashboard)
 			}
 
 			if err := config.Save(cfg); err != nil {

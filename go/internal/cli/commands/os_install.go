@@ -133,18 +133,18 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 			return err
 		}
 		if !confirmed {
-			fmt.Println("Cancelled.")
+			cliNotice("Cancelled.")
 			return nil
 		}
 	}
 
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
-	fmt.Println(elevationHint())
+	cliLogln("Writing image to %s...", targetDrive.DevicePath)
+	cliNotice("%s", elevationHint())
 	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 
-	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
+	cliSuccess("\nSuccessfully installed image on %s.", targetDrive.Name)
 	return nil
 }
 
@@ -162,7 +162,7 @@ type pickerDevice struct {
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
 // an interactive picker. Returns the selected device key and its deviceInfo.
 func pickLinuxDevice() (string, deviceInfo, error) {
-	fmt.Println("Fetching available devices...")
+	cliLogln("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
 	if err != nil {
@@ -197,7 +197,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 }
 
 func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string) error {
-	fmt.Println("Fetching available devices...")
+	cliLogln("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
 	linuxDevices, err := getAvailableDevices()
@@ -379,7 +379,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return err
 		}
 		if !confirmed {
-			fmt.Println("Cancelled.")
+			cliNotice("Cancelled.")
 			return nil
 		}
 	}
@@ -459,7 +459,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	// Step 5: Write image to drive with progress bar.
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	cliLogln("Writing image to %s...", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	wp := tea.NewProgram(writeProg)
 
@@ -486,16 +486,16 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
-	fmt.Printf("\nWriting provisioning data to config partition...\n")
+	cliLogln("\nWriting provisioning data to config partition...")
 	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName); err != nil {
-		fmt.Printf("Warning: could not write config partition: %v\n", err)
-		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+		cliNotice("Warning: could not write config partition: %v", err)
+		cliNotice("Device will boot but WiFi and agent auto-update will not be pre-configured.")
 	}
 
 	ejectDisk(targetDrive.DevicePath)
 
-	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
-	fmt.Println("You can now insert the drive into your device and power it on.")
+	cliSuccess("\nSuccessfully installed %s %s on %s.", device.Name, imgInfo.Version, targetDrive.Name)
+	cliSuccess("You can now insert the drive into your device and power it on.")
 	return nil
 }
 
@@ -764,7 +764,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 
 	// Cache hit.
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached image (%s)\n", cached)
+		cliLogln("Using cached image (%s)", cached)
 		return cached, nil
 	}
 
@@ -986,10 +986,10 @@ func promptAddOneCredential(index int) (wendyconf.WifiCredential, bool, error) {
 		}
 		if useKeychain {
 			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
-				fmt.Println("Using saved password from keychain.")
+				cliLogln("Using saved password from keychain.")
 				c.Password = pw
 			} else {
-				fmt.Println("Password not available from keychain.")
+				cliNotice("Password not available from keychain.")
 			}
 		}
 	}
@@ -1083,7 +1083,7 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 		return fmt.Errorf("no arm64 asset found in release %s", release.TagName)
 	}
 
-	fmt.Printf("Downloading wendy-agent %s for device...\n", release.TagName)
+	cliLogln("Downloading wendy-agent %s for device...", release.TagName)
 	agentBinary, err := downloadAgentBinary(*matched)
 	if err != nil {
 		return fmt.Errorf("downloading agent binary: %w", err)
@@ -1095,24 +1095,24 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
 // chip is e.g. "esp32c6" or "esp32c5".
 func installESP32Firmware(ctx context.Context, nightly bool, chip string) error {
-	fmt.Println("\nScanning for ESP32 devices...")
+	cliLogln("\nScanning for ESP32 devices...")
 
 	serialPort, err := discovery.ResolveESP32SerialPort()
 	if err != nil {
-		fmt.Println("\nNo ESP32 device detected.")
-		fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
-		fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
+		cliNotice("\nNo ESP32 device detected.")
+		cliNotice("Make sure your ESP32 is connected via USB and in bootloader mode.")
+		cliNotice("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
 		return fmt.Errorf("ESP32 not found: %w", err)
 	}
 
-	fmt.Printf("Found ESP32 at %s\n", serialPort)
+	cliLogln("Found ESP32 at %s", serialPort)
 
-	fmt.Println("Fetching latest Wendy Lite firmware...")
+	cliLogln("Fetching latest Wendy Lite firmware...")
 	asset, err := fetchFirmwareFromManifest(chip, nightly)
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
-	fmt.Printf("Found firmware: %s v%s\n", asset.Name, asset.Version)
+	cliLogln("Found firmware: %s v%s", asset.Name, asset.Version)
 
 	// Download with progress bar.
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s %s...", asset.Name, asset.Version))
@@ -1167,7 +1167,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, chip string) error 
 		return fmt.Errorf("flashing failed: %w", flashModel.Err())
 	}
 
-	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
-	fmt.Println("The device will reboot automatically.")
+	cliSuccess("\nSuccessfully flashed Wendy Lite %s!", asset.Version)
+	cliLogln("The device will reboot automatically.")
 	return nil
 }

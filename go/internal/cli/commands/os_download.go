@@ -58,7 +58,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
 		sizeMB := float64(info.Size()) / (1024 * 1024)
-		fmt.Printf("\nImage already cached: %s (%.1f MB)\n", cached, sizeMB)
+		cliLogln("\nImage already cached: %s (%.1f MB)", cached, sizeMB)
 
 		if !overwrite {
 			confirmed, err := tui.Confirm("Re-download and overwrite?")
@@ -66,7 +66,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 				return err
 			}
 			if !confirmed {
-				fmt.Println("Keeping existing cached image.")
+				cliLogln("Keeping existing cached image.")
 				return nil
 			}
 		}
@@ -77,12 +77,12 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		}
 	}
 
-	fmt.Printf("\nDownloading %s %s...\n", dev.Name, version)
+	cliLogln("\nDownloading %s %s...", dev.Name, version)
 	path, err := resolveOSImage(selectedKey, imgInfo)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("\nCached at: %s\n", path)
+	cliSuccess("\nCached at: %s", path)
 	return nil
 }
