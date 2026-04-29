@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 func newDeviceCmd() *cobra.Command {
@@ -60,6 +61,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceSetDefaultCmd(),
 		newDeviceUnsetDefaultCmd(),
 		newDeviceSetupCmd(),
+		newDeviceEnrollCmd(),
 		newDeviceUpdateCmd(),
 	)
 	addToGroup("monitor",
@@ -148,41 +150,42 @@ func newDeviceVersionCmd() *cobra.Command {
 				return nil
 			}
 
-			cliLogln("Agent Version: %s", agentVersion)
-			cliLogln("OS: %s %s", resp.GetOs(), resp.GetOsVersion())
-			cliLogln("Architecture: %s", resp.GetCpuArchitecture())
+			fmt.Printf("Agent Version: %s\n", agentVersion)
+			fmt.Printf("OS: %s %s\n", resp.GetOs(), resp.GetOsVersion())
+			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
 			if dt := resp.GetDeviceType(); dt != "" {
-				cliLogln("Device Type: %s", dt)
+				fmt.Printf("Device Type: %s\n", dt)
 			}
 			if sm := resp.GetStorageMedium(); sm != "" {
-				cliLogln("Storage: %s", sm)
+				fmt.Printf("Storage: %s\n", sm)
 			}
 			if resp.GetHasGpu() {
 				vendor := resp.GetGpuVendor()
 				if vendor == "" {
 					vendor = "unknown"
 				}
-				cliLogln("GPU: %s", vendor)
+				fmt.Printf("GPU: %s\n", vendor)
 				if jv := resp.GetJetpackVersion(); jv != "" {
-					cliLogln("JetPack: %s", jv)
+					fmt.Printf("JetPack: %s\n", jv)
 				}
 				if cv := resp.GetCudaVersion(); cv != "" {
-					cliLogln("CUDA: %s", cv)
+					fmt.Printf("CUDA: %s\n", cv)
 				}
 			}
-			cliLogln("CLI Version: %s", version.Version)
+			fmt.Printf("CLI Version: %s\n", version.Version)
 
+			warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
-				cliNotice("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
+				fmt.Println(warn.Render("\nAgent is behind the CLI — run 'wendy device update' to update."))
 			} else if cmp < 0 {
-				cliNotice("\nNote: CLI is behind the agent. Consider updating the CLI.")
+				fmt.Println(warn.Render("\nCLI is behind the agent — consider updating the CLI."))
 			}
 
 			if checkUpdates {
 				if version.CompareVersions(latestVersion, agentVersion) > 0 {
-					cliNotice("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update", latestVersion, agentVersion)
+					fmt.Printf(warn.Render("\nUpdate available: %s (you have %s)")+"\nUpdate with: wendy device update\n", latestVersion, agentVersion)
 				} else {
-					cliSuccess("\nAgent is up to date.")
+					fmt.Println("\nAgent is up to date.")
 				}
 			}
 
@@ -223,7 +226,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			cliSuccess("Default device set to: %s", device)
+			fmt.Printf("Default device set to: %s\n", device)
 			return nil
 		},
 	}
@@ -262,7 +265,7 @@ func newDeviceUnsetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			cliSuccess("Default device cleared.")
+			fmt.Println("Default device cleared.")
 			return nil
 		},
 	}
@@ -271,8 +274,8 @@ func newDeviceUnsetDefaultCmd() *cobra.Command {
 func newDeviceSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Interactive device provisioning setup",
-		Long:  "Walks through provisioning, WiFi configuration, and agent updates for a new device.",
+		Short: "Interactive device setup: enroll, name, and configure WiFi",
+		Long:  "Walks through enrollment (with device naming) and WiFi configuration for a new device.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
@@ -283,21 +286,20 @@ func newDeviceSetupCmd() *cobra.Command {
 
 			reader := bufio.NewReader(os.Stdin)
 
-			// Step 1: Check provisioning status.
-			cliLogln("Checking device provisioning status...")
+			// Step 1: Enroll (and name) the device.
 			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 			if err != nil {
-				return fmt.Errorf("checking provisioning status: %w", err)
+				return fmt.Errorf("checking enrollment status: %w", err)
 			}
 
 			if provResp.GetProvisioned() != nil {
 				prov := provResp.GetProvisioned()
-				cliSuccess("Device is provisioned (org: %d, asset: %d, cloud: %s).",
+				fmt.Printf("Device is already enrolled (org: %d, asset: %d, cloud: %s).\n",
 					prov.GetOrganizationId(), prov.GetAssetId(), prov.GetCloudHost())
 			} else {
-				cliNotice("Device is not provisioned.")
+				fmt.Println("Device is not enrolled.")
 				if loadCLICert() == nil {
-					cliNotice("You are not logged in to Wendy Cloud.")
+					fmt.Println("You are not logged in to Wendy Cloud.")
 					fmt.Print("Log in now? [Y/n] ")
 					answer, _ := reader.ReadString('\n')
 					answer = strings.TrimSpace(strings.ToLower(answer))
@@ -308,96 +310,128 @@ func newDeviceSetupCmd() *cobra.Command {
 					}
 				}
 
-				// If we now have CLI certs, provision the device via cloud API.
 				if auth := loadCLIAuth(); auth != nil {
-					if provErr := provisionDevice(ctx, conn, auth, reader); provErr != nil {
-						cliNotice("Provisioning failed: %v", provErr)
+					// Collect the device name before enrolling (name cannot be changed after).
+					fmt.Print("Device name: ")
+					line, _ := reader.ReadString('\n')
+					deviceName := strings.TrimSpace(line)
+					if deviceName == "" {
+						return fmt.Errorf("device name is required")
+					}
+					if enrollErr := runEnrollDevice(ctx, conn, auth, deviceName); enrollErr != nil {
+						fmt.Printf("Enrollment failed: %v\n", enrollErr)
 					}
 				}
 				fmt.Println()
 			}
 
-			// Step 2: Check WiFi status.
-			cliLogln("Checking WiFi status...")
-			wifiResp, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
-			if err != nil {
-				cliNotice("Unable to check WiFi status (may not be supported on this device).")
-			} else if wifiResp.GetConnected() {
-				cliSuccess("WiFi connected to: %s", wifiResp.GetSsid())
-			} else {
-				cliNotice("WiFi is not connected.")
-
-				// Use the existing WiFi picker to let the user select a network.
-				target := &SelectedDevice{Agent: conn}
-				ssid, pickErr := pickWifiNetwork(ctx, target)
-				if pickErr != nil {
-					if errors.Is(pickErr, ErrUserCancelled) {
-						cliLogln("WiFi setup skipped.")
-					} else {
-						cliNotice("WiFi scan failed: %v", pickErr)
-					}
+			// Step 2: WiFi setup.
+			target := &SelectedDevice{Agent: conn}
+			ssid, pickErr := pickWifiNetwork(ctx, target)
+			if pickErr != nil {
+				if errors.Is(pickErr, ErrUserCancelled) {
+					fmt.Println("WiFi setup skipped.")
 				} else {
-					fmt.Print("Password (leave empty for open networks): ")
-					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Println()
-					if readErr != nil {
-						cliNotice("Failed to read password: %v", readErr)
+					fmt.Printf("WiFi scan failed: %v\n", pickErr)
+				}
+			} else {
+				fmt.Print("Password (leave empty for open networks): ")
+				passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if readErr != nil {
+					fmt.Printf("Failed to read password: %v\n", readErr)
+				} else {
+					password := strings.TrimSpace(string(passwordBytes))
+					fmt.Printf("Connecting to %s...\n", ssid)
+					wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
+						Ssid:     ssid,
+						Password: password,
+					})
+					if connectErr != nil {
+						fmt.Printf("Failed to connect to WiFi: %v\n", connectErr)
+					} else if !wifiConnResp.GetSuccess() {
+						fmt.Printf("Failed to connect: %s\n", wifiConnResp.GetErrorMessage())
 					} else {
-						password := strings.TrimSpace(string(passwordBytes))
-
-						cliLogln("Connecting to %s...", ssid)
-						wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
-							Ssid:     ssid,
-							Password: password,
-						})
-						if connectErr != nil {
-							cliNotice("Failed to connect to WiFi: %v", connectErr)
-						} else if !wifiConnResp.GetSuccess() {
-							cliNotice("Failed to connect: %s", wifiConnResp.GetErrorMessage())
-						} else {
-							cliSuccess("Connected to %s", ssid)
-						}
+						fmt.Printf("Connected to %s.\n", ssid)
 					}
 				}
 			}
 
-			// Step 3: Check for agent updates.
-			cliLogln("\nChecking agent version...")
+			// Step 3: Check agent version.
+			fmt.Println()
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
-				cliNotice("Unable to check agent version: %v", err)
+				fmt.Printf("Unable to check agent version: %v\n", err)
 			} else {
-				cliLogln("Agent version: %s", versionResp.GetVersion())
+				fmt.Printf("Agent version: %s\n", versionResp.GetVersion())
 				if cmp := version.CompareVersions(version.Version, versionResp.GetVersion()); cmp > 0 {
-					cliLogln("CLI version: %s (agent is behind)", version.Version)
-					cliNotice("Consider running 'wendy device update' to update the agent.")
-				} else if cmp < 0 {
-					cliLogln("CLI version: %s (CLI is behind)", version.Version)
-					cliNotice("Consider updating the CLI to match the agent.")
-				} else {
-					cliSuccess("Agent is up to date.")
+					fmt.Println("Agent is behind the CLI — consider running 'wendy device update'.")
 				}
 			}
 
-			cliSuccess("\nSetup check complete.")
+			fmt.Println("\nSetup complete.")
 			return nil
 		},
 	}
 }
 
-// provisionDevice creates an asset enrollment token via the cloud and calls
-// StartProvisioning on the device agent.
-func provisionDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, reader *bufio.Reader) error {
-	cert := auth.Certificates[0]
+func newDeviceEnrollCmd() *cobra.Command {
+	var name string
+	var cloudGRPC string
 
-	fmt.Print("Device name: ")
-	name, _ := reader.ReadString('\n')
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("device name is required")
+	cmd := &cobra.Command{
+		Use:   "enroll",
+		Short: "Enroll this device with Wendy Cloud or a local pki-core",
+		Long:  "Creates an enrollment token using your stored auth session and provisions the connected device with mTLS certificates. Run 'wendy auth login' first.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+
+			auth, err := pickAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+
+			return runEnrollDevice(ctx, conn, auth, name)
+		},
 	}
 
-	// Connect to cloud with CLI mTLS credentials.
+	cmd.Flags().StringVar(&name, "name", "", "Device name")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (required when multiple auth sessions exist)")
+	return cmd
+}
+
+// runEnrollDevice creates an enrollment token via the stored auth session and
+// calls StartProvisioning on the connected device agent. name is optional; the
+// user is prompted interactively when it is empty.
+func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string) error {
+	if len(auth.Certificates) == 0 {
+		return fmt.Errorf("selected auth entry has no certificates; re-run 'wendy auth login'")
+	}
+
+	if name == "" {
+		if !isInteractiveTerminal() {
+			return fmt.Errorf("device name is required; pass --name when not running interactively")
+		}
+		fmt.Print("Device name: ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		name = strings.TrimSpace(line)
+		if name == "" {
+			return fmt.Errorf("device name is required")
+		}
+	}
+
+	if auth == nil || len(auth.Certificates) == 0 {
+		return fmt.Errorf("missing authentication certificate in selected auth entry")
+	}
+	cert := auth.Certificates[0]
+
 	tlsCfg, err := certs.LoadTLSConfig(
 		cert.PemCertificate,
 		cert.PemCertificateChain,
@@ -419,24 +453,27 @@ func provisionDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	}
 	defer cloudConn.Close()
 
-	// Create an enrollment token for the device.
+	tokenCtx := ctx
+	if auth.APIKey != "" {
+		tokenCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
+	}
+
 	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-	tokenResp, err := certClient.CreateAssetEnrollmentToken(ctx, &cloudpb.CreateAssetEnrollmentTokenRequest{
+	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
 		OrganizationId: int32(cert.OrganizationID),
 		Name:           name,
+		TtlSeconds:     600,
 	})
 	if err != nil {
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
 
-	// Extract the cloud host from the gRPC endpoint (strip port).
 	cloudHost := auth.CloudGRPC
 	if h, _, splitErr := net.SplitHostPort(cloudHost); splitErr == nil {
 		cloudHost = h
 	}
 
-	// Provision the device.
-	cliLogln("Provisioning device...")
+	fmt.Println("Enrolling device...")
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),
 		AssetId:         tokenResp.GetAssetId(),
@@ -444,12 +481,41 @@ func provisionDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		CloudHost:       cloudHost,
 	})
 	if err != nil {
-		return fmt.Errorf("starting provisioning: %w", err)
+		return fmt.Errorf("enrolling device: %w", err)
 	}
 
-	cliSuccess("Device provisioned (org: %d, asset: %d).",
+	fmt.Printf("Device enrolled (org: %d, asset: %d).\n",
 		tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 	return nil
+}
+
+// pickAuthEntry returns the auth config entry to use for enrollment.
+// If cloudGRPC is specified it must match an existing entry. When no cloudGRPC
+// is given and multiple sessions exist, an error is returned requiring the user
+// to specify --cloud-grpc explicitly.
+func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	if len(cfg.Auth) == 0 {
+		return nil, fmt.Errorf("not logged in; run 'wendy auth login' first")
+	}
+	if cloudGRPC != "" {
+		for i := range cfg.Auth {
+			if cfg.Auth[i].CloudGRPC == cloudGRPC {
+				return &cfg.Auth[i], nil
+			}
+		}
+		return nil, fmt.Errorf("no auth session for %s; run 'wendy auth login --cloud-grpc %s' first", cloudGRPC, cloudGRPC)
+	}
+	if len(cfg.Auth) > 1 {
+		return nil, fmt.Errorf("multiple auth sessions exist; pass --cloud-grpc to select one")
+	}
+	if len(cfg.Auth[0].Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
+	return &cfg.Auth[0], nil
 }
 
 // scanWiFiNetworks queries the agent for available WiFi networks.
@@ -1191,20 +1257,22 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 
 				// Validate the binary's ELF architecture against the device.
-				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-				if err != nil {
-					return fmt.Errorf("could not query device architecture to verify binary: %w", err)
-				}
-				deviceArch := versionResp.GetCpuArchitecture()
-				if deviceArch != "" {
-					if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
-						return err
+				// If the device is provisioned and only exposes ProvisioningService
+				// on plaintext, GetAgentVersion may be unavailable — skip arch
+				// validation in that case rather than blocking the upload.
+				versionResp, versionErr := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+				if versionErr == nil {
+					deviceArch := versionResp.GetCpuArchitecture()
+					if deviceArch != "" {
+						if err := checkELFArchitecture(binaryData, deviceArch); err != nil {
+							return err
+						}
 					}
 				}
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
 				if !jsonOutput {
-					cliLogln("Detecting device architecture...")
+					fmt.Println("Detecting device architecture...")
 				}
 				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 				if err != nil {
@@ -1216,7 +1284,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("device did not report CPU architecture; use --binary to provide the binary manually")
 				}
 				if !jsonOutput {
-					cliLogln("Device architecture: %s", arch)
+					fmt.Printf("Device architecture: %s\n", arch)
 				}
 
 				releaseType := "stable"
@@ -1224,7 +1292,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					releaseType = "nightly"
 				}
 				if !jsonOutput {
-					cliLogln("Fetching latest %s release...", releaseType)
+					fmt.Printf("Fetching latest %s release...\n", releaseType)
 				}
 
 				release, err := fetchAgentRelease(nightly)
@@ -1232,7 +1300,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("fetching release: %w", err)
 				}
 				if !jsonOutput {
-					cliLogln("Found release: %s", release.TagName)
+					fmt.Printf("Found release: %s\n", release.TagName)
 				}
 
 				// Find matching asset: wendy-agent-linux-{arch}-*.tar.gz
@@ -1249,7 +1317,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 
 				if !jsonOutput {
-					cliLogln("Downloading %s...", matchedAsset.Name)
+					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
 				}
 				binaryData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
@@ -1281,7 +1349,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return updateErr
 				}
 			} else if !jsonOutput {
-				cliLogln("Uploading agent binary...")
+				fmt.Println("Uploading agent binary...")
 				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 					return err
 				}
@@ -1302,7 +1370,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 				fmt.Println(string(b))
 			} else {
-				cliSuccess("Agent updated successfully.")
+				fmt.Println("Agent updated successfully.")
 			}
 			return nil
 		},

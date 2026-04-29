@@ -13,8 +13,9 @@ import (
 // NewTLSConfig creates a TLS config from PEM-encoded certificate, chain, and private key.
 // The certificate and chain are concatenated to form the full server certificate chain.
 // Client certificates are required and verified against the chain as a CA pool.
+// ML-DSA (post-quantum) signed certificates are handled via a custom VerifyPeerCertificate
+// callback because Go's crypto/x509 does not natively support ML-DSA signature verification.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
-	// Build the full certificate chain for the server identity.
 	fullChain := certPEM
 	if chainPEM != "" {
 		fullChain = certPEM + "\n" + chainPEM
@@ -25,21 +26,28 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
 
-	// Build a CA pool from the chain to verify client certificates.
 	caPool := x509.NewCertPool()
+	var caCerts []*x509.Certificate
 	if chainPEM != "" {
-		if !caPool.AppendCertsFromPEM([]byte(chainPEM)) {
-			return nil, fmt.Errorf("failed to parse chain PEM for CA pool")
+		caPool.AppendCertsFromPEM([]byte(chainPEM))
+		caCerts, err = parseCertsFromPEM([]byte(chainPEM))
+		if err != nil {
+			return nil, fmt.Errorf("parsing chain PEM: %w", err)
+		}
+		if len(caCerts) == 0 {
+			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
 		}
 	}
-	// Also add the leaf cert itself in case it is self-signed or acts as CA.
 	caPool.AppendCertsFromPEM([]byte(certPEM))
 
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    caPool,
-		MinVersion:   tls.VersionTLS12,
+		// RequireAnyClientCert requires the client to present a cert but defers
+		// chain verification to VerifyPeerCertificate, which handles ML-DSA.
+		ClientAuth:            tls.RequireAnyClientCert,
+		ClientCAs:             caPool,
+		MinVersion:            tls.VersionTLS12,
+		VerifyPeerCertificate: buildVerifyPeerCertificate(caPool, caCerts),
 	}, nil
 }
 

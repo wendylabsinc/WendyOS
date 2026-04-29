@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 )
 
 func newCloudRunCmd() *cobra.Command {
@@ -51,12 +53,42 @@ func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName
 		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
-	appCfg, err := ensureAppConfig(cwd+"/wendy.json", opts.yes)
+	projectType, err := resolveRunProjectType(cwd, opts.buildType)
+	if err != nil {
+		return err
+	}
+	if projectType == "compose" {
+		return fmt.Errorf("compose projects are not supported by 'wendy cloud run'")
+	}
+
+	cfgPath := filepath.Join(cwd, "wendy.json")
+	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
 		return fmt.Errorf("loading wendy.json: %w", err)
 	}
 	if err := appCfg.Validate(); err != nil {
 		return fmt.Errorf("invalid wendy.json: %w", err)
+	}
+	if err := warnAppConfigFile(cfgPath); err != nil {
+		return fmt.Errorf("reading wendy.json warnings: %w", err)
+	}
+
+	if opts.debug {
+		appCfg.Debug = true
+		foundNetwork := false
+		for i, e := range appCfg.Entitlements {
+			if e.Type == appconfig.EntitlementNetwork {
+				appCfg.Entitlements[i].Mode = "host"
+				foundNetwork = true
+				break
+			}
+		}
+		if !foundNetwork {
+			appCfg.Entitlements = append(appCfg.Entitlements, appconfig.Entitlement{
+				Type: appconfig.EntitlementNetwork,
+				Mode: "host",
+			})
+		}
 	}
 
 	auth, err := pickAuthEntry(cloudGRPC)
@@ -93,7 +125,6 @@ func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName
 	if err != nil {
 		return fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
-	defer grpcConn.Close()
 
 	agentConn := grpcclient.NewFromConn(grpcConn)
 	agentConn.Host = asset.GetName()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -68,7 +69,12 @@ func main() {
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
-	configpartition.Apply(logger)
+	configPath := "/etc/wendy-agent"
+	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
+		configPath = envPath
+	}
+
+	configpartition.Apply(logger, configPath)
 	services.CommitMenderUpdate(logger)
 
 	// Clean up old agent binary backups from previous updates.
@@ -113,10 +119,6 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 	videoSvc := services.NewVideoService(logger)
 
-	configPath := "/etc/wendy-agent"
-	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
 	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
 
@@ -131,15 +133,56 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start the embedded dev container registry (Linux only, best-effort).
-	if runtime.GOOS == "linux" && ctrdErr == nil {
+	// registryTLSConfig builds a minimal server TLS config from provisioning PEM strings.
+	// Returns nil if the PEM data is invalid, which causes the registry to stay HTTP.
+	registryTLSConfig := func(certPEM, chainPEM, keyPEM string) *tls.Config {
+		fullChain := certPEM
+		if chainPEM != "" {
+			fullChain = certPEM + "\n" + chainPEM
+		}
+		cert, err := tls.X509KeyPair([]byte(fullChain), []byte(keyPEM))
+		if err != nil {
+			logger.Error("Failed to build registry TLS config", zap.Error(err))
+			return nil
+		}
+		return &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	}
+
+	// Track the registry server so it can be restarted with HTTPS on provisioning.
+	var (
+		registrySrv   *registry.Server
+		registrySrvMu sync.Mutex
+	)
+
+	// startRegistry starts (or restarts) the embedded OCI registry. When tlsConfig
+	// is non-nil it serves HTTPS; nil means plain HTTP (pre-provisioning only).
+	startRegistry := func(tlsConfig *tls.Config) {
+		registrySrvMu.Lock()
+		defer registrySrvMu.Unlock()
+
+		if registrySrv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := registrySrv.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("Registry shutdown error during restart", zap.Error(err))
+			}
+			registrySrv = nil
+		}
+
 		registryAddr := "0.0.0.0:5000"
 		if addr := os.Getenv("WENDY_REGISTRY_ADDR"); addr != "" {
 			registryAddr = addr
 		}
-		if _, err := registry.Start(ctx, containerdAddr, registryAddr, logger); err != nil {
+
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
+		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
+			return
 		}
+		registrySrv = srv
 	}
 
 	var wg sync.WaitGroup
@@ -255,11 +298,12 @@ func main() {
 		}()
 	}
 
-	// Set up the provisioning callback to start the mTLS server and tunnel broker.
-	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
-		startMTLSServer(certPEM, chainPEM, keyPEM)
-		startTunnelBroker(certPEM, chainPEM, keyPEM)
+	// mtlsPortNum is agentPort+1; used for the mTLS server and Avahi advertisement.
+	agentPortNum, err := strconv.Atoi(agentPort)
+	if err != nil {
+		logger.Fatal("Invalid agent port", zap.String("port", agentPort), zap.Error(err))
 	}
+	mtlsPortNum := agentPortNum + 1
 
 	// Check if already provisioned and start mTLS server and tunnel broker if certificates exist.
 	certPEM, chainPEM, keyPEM := provisioningSvc.ProvisioningCerts()
@@ -268,34 +312,59 @@ func main() {
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker(certPEM, chainPEM, keyPEM)
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
 	}
 
-	// Plaintext agent gRPC server.
-	agentServer := grpc.NewServer(
-		grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
-		grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
-	)
-	if alreadyProvisioned {
-		// When already provisioned, only expose ProvisioningService on plaintext.
-		agentpb.RegisterWendyProvisioningServiceServer(agentServer, provisioningSvc)
-	} else {
-		// When not provisioned, expose all services on plaintext.
-		registerAllServices(agentServer)
-	}
-
-	agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
-	if err != nil {
-		logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		logger.Info("Agent gRPC server listening", zap.String("port", agentPort))
-		if err := agentServer.Serve(agentLis); err != nil {
-			logger.Error("Agent gRPC server error", zap.Error(err))
+	// Start the embedded dev container registry (Linux only, best-effort).
+	// If already provisioned, start immediately with HTTPS; otherwise HTTP until provisioned.
+	if runtime.GOOS == "linux" && ctrdErr == nil {
+		if alreadyProvisioned {
+			startRegistry(registryTLSConfig(certPEM, chainPEM, keyPEM))
+		} else {
+			startRegistry(nil)
 		}
-	}()
+	}
+
+	// Plaintext gRPC server — only needed until the device is provisioned.
+	// Once provisioned the mTLS server handles all gRPC traffic and the plaintext
+	// port is shut down so unprovisioned clients cannot access device services.
+	var agentServer *grpc.Server
+	if !alreadyProvisioned {
+		agentServer = grpc.NewServer(
+			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+		)
+		registerAllServices(agentServer)
+
+		agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
+		if err != nil {
+			logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logger.Info("Agent gRPC server listening", zap.String("port", agentPort))
+			if err := agentServer.Serve(agentLis); err != nil {
+				logger.Error("Agent gRPC server error", zap.Error(err))
+			}
+		}()
+	}
+
+	// Set up the provisioning callback to start the mTLS server, shut down
+	// the plaintext server, and switch the registry to HTTPS.
+	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
+		startMTLSServer(certPEM, chainPEM, keyPEM)
+		startTunnelBroker(certPEM, chainPEM, keyPEM)
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
+		if agentServer != nil {
+			logger.Info("Device provisioned — shutting down plaintext gRPC port", zap.String("port", agentPort))
+			go agentServer.GracefulStop()
+		}
+		if runtime.GOOS == "linux" && ctrdErr == nil {
+			go startRegistry(registryTLSConfig(certPEM, chainPEM, keyPEM))
+		}
+	}
 
 	// OTEL gRPC receiver server.
 	otelPort := defaultOTELPort
@@ -354,7 +423,9 @@ func main() {
 	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 
 	cancel()
-	agentServer.GracefulStop()
+	if agentServer != nil {
+		agentServer.GracefulStop()
+	}
 	otelServer.GracefulStop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)

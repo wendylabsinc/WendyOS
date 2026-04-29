@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
@@ -40,25 +43,35 @@ func newAuthCmd() *cobra.Command {
 func newAuthLoginCmd() *cobra.Command {
 	var cloudDashboard string
 	var cloudGRPC string
+	var apiKey string
+	var orgID int32
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in to Wendy Cloud",
-		Long:  "Opens a browser for authentication, receives a callback with an enrollment token, generates certificates, and saves them to config.",
+		Short: "Log in to Wendy Cloud or a local pki-core instance",
+		Long:  "Without --api-key: opens a browser for authentication, receives a callback with an enrollment token, generates certificates, and saves them to config.\nWith --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if apiKey != "" {
+				if cloudGRPC == "" {
+					return fmt.Errorf("--cloud-grpc is required for local authentication")
+				}
+				return performLocalLogin(cmd.Context(), cloudGRPC, apiKey, orgID)
+			}
+
 			if cloudDashboard == "" {
 				cloudDashboard = defaultCloudDashboard
 			}
 			if cloudGRPC == "" {
 				cloudGRPC = defaultCloudGRPC
 			}
-
 			return performLogin(cmd.Context(), cloudDashboard, cloudGRPC)
 		},
 	}
 
 	cmd.Flags().StringVar(&cloudDashboard, "cloud", "", "Cloud dashboard URL")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint, or local pki-core address (host:port) when using --api-key")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for local pki-core authentication")
+	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID (used with --api-key)")
 	return cmd
 }
 
@@ -145,19 +158,21 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	cliLogln("Opening browser for authentication: %s", loginURL)
+	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
+	fmt.Printf("  %s\n", loginURL)
 
 	if err := openBrowser(loginURL); err != nil {
-		cliNotice("Could not open browser automatically. Please visit:\n  %s", loginURL)
+		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+		fmt.Printf("  %s\n", loginURL)
 	}
 
-	cliLogln("Waiting for authentication...")
+	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
 
 	// Wait for the token.
 	var enrollmentToken string
 	select {
 	case enrollmentToken = <-tokenCh:
-		cliLogln("Received enrollment token.")
+		fmt.Println(tui.SuccessMessage("Received enrollment token."))
 	case loginErr := <-errCh:
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
@@ -170,7 +185,11 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("generating key pair: %w", err)
 	}
 
-	csrPEM, err := certs.GenerateCSR(privateKeyPEM, "wendy-cli-user")
+	commonName, err := enrollmentTokenCommonName(enrollmentToken)
+	if err != nil {
+		return fmt.Errorf("reading enrollment token identity: %w", err)
+	}
+	csrPEM, err := certs.GenerateCSR(privateKeyPEM, commonName)
 	if err != nil {
 		return fmt.Errorf("generating CSR: %w", err)
 	}
@@ -231,15 +250,139 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	cliSuccess("Authentication successful. Certificates saved.")
+	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
 
 	if len(issueResp.GetWarnings()) > 0 {
-		cliNotice("Warnings:")
+		fmt.Println(tui.WarningMessage("Warnings:"))
 		for _, w := range issueResp.GetWarnings() {
-			cliNotice("  - %s", w)
+			fmt.Printf("  - %s\n", w)
 		}
 	}
 
+	return nil
+}
+
+func enrollmentTokenCommonName(token string) (string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid enrollment token")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decoding token payload: %w", err)
+	}
+
+	var claims struct {
+		OrganizationID int32  `json:"org_id"`
+		AssetID        int32  `json:"asset_id"`
+		UserID         string `json:"user_id"`
+		Type           string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("decoding token claims: %w", err)
+	}
+
+	switch claims.Type {
+	case "user_enrollment":
+		if claims.UserID == "" {
+			return "", fmt.Errorf("user enrollment token missing user_id")
+		}
+		return fmt.Sprintf("wendy/user/%s", claims.UserID), nil
+	case "asset_enrollment":
+		if claims.OrganizationID == 0 || claims.AssetID == 0 {
+			return "", fmt.Errorf("asset enrollment token missing org_id or asset_id")
+		}
+		return fmt.Sprintf("wendy/%d/%d", claims.OrganizationID, claims.AssetID), nil
+	default:
+		return "", fmt.Errorf("unsupported enrollment token type %q", claims.Type)
+	}
+}
+
+func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int32) error {
+	cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connecting to pki-core: %w", err)
+	}
+	defer cloudConn.Close()
+
+	authCtx := metadata.NewOutgoingContext(ctx,
+		metadata.Pairs("authorization", "Bearer "+apiKey))
+
+	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
+
+	tokenResp, err := certClient.CreateAssetEnrollmentToken(authCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
+		OrganizationId: orgID,
+		Name:           "cli-user",
+		TtlSeconds:     120,
+	})
+	if err != nil {
+		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
+	}
+	// Reconstruct the device_id that pki-core stored in the token.
+	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
+
+	privateKeyPEM, err := certs.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("generating key pair: %w", err)
+	}
+	csrPEM, err := certs.GenerateCSR(privateKeyPEM, deviceID)
+	if err != nil {
+		return fmt.Errorf("generating CSR: %w", err)
+	}
+
+	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
+		PemCsr:          csrPEM,
+		EnrollmentToken: tokenResp.GetEnrollmentToken(),
+	})
+	if err != nil {
+		return fmt.Errorf("issuing certificate: %w", err)
+	}
+	if issueResp.GetError() != nil {
+		return fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
+	}
+	cert := issueResp.GetCertificate()
+	if cert == nil {
+		return fmt.Errorf("no certificate returned from pki-core")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	certInfo := config.CertificateInfo{
+		PemCertificate:      cert.GetPemCertificate(),
+		PemCertificateChain: cert.GetPemCertificateChain(),
+		PemPrivateKey:       privateKeyPEM,
+		OrganizationID:      int(issueResp.GetOrganizationId()),
+	}
+	authEntry := config.AuthConfig{
+		CloudGRPC:    cloudGRPC,
+		APIKey:       apiKey,
+		Certificates: []config.CertificateInfo{certInfo},
+	}
+
+	// Prepend so local cert is tried first by connectWithAutoTLS.
+	cfg.Auth = append([]config.AuthConfig{authEntry}, cfg.Auth...)
+	// Deduplicate: remove older entry for the same cloudGRPC if any.
+	seen := make(map[string]bool)
+	filtered := cfg.Auth[:0]
+	for _, a := range cfg.Auth {
+		if seen[a.CloudGRPC] {
+			continue
+		}
+		seen[a.CloudGRPC] = true
+		filtered = append(filtered, a)
+	}
+	cfg.Auth = filtered
+
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+
+	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (org=%d, device=%s). Certificates saved.",
+		issueResp.GetOrganizationId(), deviceID)))
 	return nil
 }
 
@@ -258,7 +401,7 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			cliSuccess("Logged out. All authentication credentials removed.")
+			fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
 			return nil
 		},
 	}
@@ -284,18 +427,18 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 			// Refresh certificates for each auth entry.
 			for i, auth := range cfg.Auth {
 				if len(auth.Certificates) == 0 {
-					cliLogln("Skipping %s: no certificates to refresh", auth.CloudDashboard)
+					fmt.Println(tui.WarningMessage(fmt.Sprintf("Skipping %s: no certificates to refresh", auth.CloudDashboard)))
 					continue
 				}
 
-				cliLogln("Refreshing certificates for %s...", auth.CloudDashboard)
+				fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", auth.CloudDashboard)))
 
 				if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-					cliNotice("Failed to refresh for %s: %v", auth.CloudDashboard, err)
+					fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", auth.CloudDashboard, err)))
 					continue
 				}
 
-				cliSuccess("Certificates refreshed for %s.", auth.CloudDashboard)
+				fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", auth.CloudDashboard)))
 			}
 
 			if err := config.Save(cfg); err != nil {

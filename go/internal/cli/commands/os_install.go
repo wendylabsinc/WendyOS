@@ -26,9 +26,18 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
+type preEnrollMode int
+
+const (
+	preEnrollAuto   preEnrollMode = iota // prompt if interactive terminal + auth session exists
+	preEnrollForced                      // --pre-enroll explicitly set to true
+	preEnrollSkip                        // --pre-enroll explicitly set to false
+)
+
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
+	var preEnroll bool
 	var deviceType string
 	var versionFlag string
 	var driveFlag string
@@ -85,7 +94,15 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			if len(args) == 2 {
 				return runOSInstallDirect(args[0], args[1], force)
 			}
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, opts, deviceName)
+			mode := preEnrollAuto
+			if cmd.Flags().Changed("pre-enroll") {
+				if preEnroll {
+					mode = preEnrollForced
+				} else {
+					mode = preEnrollSkip
+				}
+			}
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, opts, deviceName, mode)
 		},
 	}
 
@@ -99,6 +116,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
 	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Skip WiFi setup entirely (no interactive prompt, no pre-seeded networks)")
 	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
+	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Pre-enroll this device with Wendy Cloud during imaging (requires 'wendy auth login')")
 
 	return cmd
 }
@@ -133,18 +151,18 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 			return err
 		}
 		if !confirmed {
-			cliNotice("Cancelled.")
+			fmt.Println("Cancelled.")
 			return nil
 		}
 	}
 
-	cliLogln("Writing image to %s...", targetDrive.DevicePath)
-	cliNotice("%s", elevationHint())
+	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
+	fmt.Println(elevationHint())
 	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 
-	cliSuccess("\nSuccessfully installed image on %s.", targetDrive.Name)
+	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
 	return nil
 }
 
@@ -162,7 +180,7 @@ type pickerDevice struct {
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
 // an interactive picker. Returns the selected device key and its deviceInfo.
 func pickLinuxDevice() (string, deviceInfo, error) {
-	cliLogln("Fetching available devices...")
+	fmt.Println("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
 	if err != nil {
@@ -196,8 +214,8 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string) error {
-	cliLogln("Fetching available devices...")
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
 	linuxDevices, err := getAvailableDevices()
@@ -295,12 +313,12 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifi, deviceName)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifi, deviceName, mode)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
 	if flagVersion != "" {
@@ -379,7 +397,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return err
 		}
 		if !confirmed {
-			cliNotice("Cancelled.")
+			fmt.Println("Cancelled.")
 			return nil
 		}
 	}
@@ -394,8 +412,51 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
+	// Resolve pre-enrollment — must happen before provisionConfigPartition because
+	// the config partition is mounted and unmounted inside that call.
+	var provisioningJSON []byte
+	switch mode {
+	case preEnrollForced:
+		auth, authErr := pickAuthEntry("")
+		if authErr != nil {
+			return fmt.Errorf("--pre-enroll: %w", authErr)
+		}
+		fmt.Printf("Pre-enrolling device with Wendy Cloud (org: %d)...\n", auth.Certificates[0].OrganizationID)
+		js, enrollErr := preEnrollDevice(ctx, auth, provDeviceName, nil)
+		if enrollErr != nil {
+			fmt.Printf("Warning: pre-enrollment failed: %v\n", enrollErr)
+			fmt.Println("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
+		} else {
+			provisioningJSON = js
+			fmt.Println("Device pre-enrolled. It will be secure from first boot.")
+		}
+	case preEnrollAuto:
+		if isInteractiveTerminal() {
+			cfg, loadErr := config.Load()
+			if loadErr == nil && len(cfg.Auth) > 0 {
+				ok, _ := tui.ConfirmDefaultYes("Pre-enroll this device with Wendy Cloud?")
+				if ok {
+					auth, authErr := pickAuthEntry("")
+					if authErr != nil {
+						fmt.Printf("Warning: could not resolve auth for pre-enrollment: %v\n", authErr)
+					} else {
+						fmt.Printf("Pre-enrolling device with Wendy Cloud (org: %d)...\n", auth.Certificates[0].OrganizationID)
+						js, enrollErr := preEnrollDevice(ctx, auth, provDeviceName, nil)
+						if enrollErr != nil {
+							fmt.Printf("Warning: pre-enrollment failed: %v\n", enrollErr)
+							fmt.Println("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
+						} else {
+							provisioningJSON = js
+							fmt.Println("Device pre-enrolled. It will be secure from first boot.")
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Step 4: Resolve image (cached or download).
-	cliLogln("\nPreparing %s %s image...", device.Name, selectedVersion)
+	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
 	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
@@ -420,7 +481,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	// Step 5: Write image to drive with progress bar.
-	cliLogln("Writing image to %s...", targetDrive.DevicePath)
+	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	wp := tea.NewProgram(writeProg)
 
@@ -447,16 +508,16 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
-	cliLogln("\nWriting provisioning data to config partition...")
-	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName); err != nil {
-		cliNotice("Warning: could not write config partition: %v", err)
-		cliNotice("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+	fmt.Printf("\nWriting provisioning data to config partition...\n")
+	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName, provisioningJSON); err != nil {
+		fmt.Printf("Warning: could not write config partition: %v\n", err)
+		fmt.Println("Device will boot but WiFi and agent auto-update will not be pre-configured.")
 	}
 
 	ejectDisk(targetDrive.DevicePath)
 
-	cliSuccess("\nSuccessfully installed %s %s on %s.", device.Name, imgInfo.Version, targetDrive.Name)
-	cliSuccess("You can now insert the drive into your device and power it on.")
+	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
+	fmt.Println("You can now insert the drive into your device and power it on.")
 	return nil
 }
 
@@ -720,7 +781,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 
 	// Cache hit.
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		cliLogln("Using cached image (%s)", cached)
+		fmt.Printf("Using cached image (%s)\n", cached)
 		return cached, nil
 	}
 
@@ -942,10 +1003,10 @@ func promptAddOneCredential(index int) (wendyconf.WifiCredential, bool, error) {
 		}
 		if useKeychain {
 			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
-				cliLogln("Using saved password from keychain.")
+				fmt.Println("Using saved password from keychain.")
 				c.Password = pw
 			} else {
-				cliNotice("Password not available from keychain.")
+				fmt.Println("Password not available from keychain.")
 			}
 		}
 	}
@@ -1020,7 +1081,7 @@ func resolveDeviceName(flagName string) (string, error) {
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
 // and writes it (along with zero or more WiFi credentials and an optional
 // device name) to the config partition on d.
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string) error {
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	release, err := fetchAgentRelease(false)
 	if err != nil {
 		return fmt.Errorf("fetching latest agent release: %w", err)
@@ -1039,36 +1100,36 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 		return fmt.Errorf("no arm64 asset found in release %s", release.TagName)
 	}
 
-	cliLogln("Downloading wendy-agent %s for device...", release.TagName)
+	fmt.Printf("Downloading wendy-agent %s for device...\n", release.TagName)
 	agentBinary, err := downloadAgentBinary(*matched)
 	if err != nil {
 		return fmt.Errorf("downloading agent binary: %w", err)
 	}
 
-	return writeConfigPartition(d, agentBinary, creds, deviceName)
+	return writeConfigPartition(d, agentBinary, creds, deviceName, provisioningJSON)
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
 // chip is e.g. "esp32c6" or "esp32c5".
 func installESP32Firmware(ctx context.Context, nightly bool, chip string) error {
-	cliLogln("\nScanning for ESP32 devices...")
+	fmt.Println("\nScanning for ESP32 devices...")
 
 	serialPort, err := discovery.ResolveESP32SerialPort()
 	if err != nil {
-		cliNotice("\nNo ESP32 device detected.")
-		cliNotice("Make sure your ESP32 is connected via USB and in bootloader mode.")
-		cliNotice("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
+		fmt.Println("\nNo ESP32 device detected.")
+		fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
+		fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
 		return fmt.Errorf("ESP32 not found: %w", err)
 	}
 
-	cliLogln("Found ESP32 at %s", serialPort)
+	fmt.Printf("Found ESP32 at %s\n", serialPort)
 
-	cliLogln("Fetching latest Wendy Lite firmware...")
+	fmt.Println("Fetching latest Wendy Lite firmware...")
 	asset, err := fetchFirmwareFromManifest(chip, nightly)
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
-	cliLogln("Found firmware: %s v%s", asset.Name, asset.Version)
+	fmt.Printf("Found firmware: %s v%s\n", asset.Name, asset.Version)
 
 	// Download with progress bar.
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s %s...", asset.Name, asset.Version))
@@ -1123,7 +1184,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, chip string) error 
 		return fmt.Errorf("flashing failed: %w", flashModel.Err())
 	}
 
-	cliSuccess("\nSuccessfully flashed Wendy Lite %s!", asset.Version)
-	cliLogln("The device will reboot automatically.")
+	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
+	fmt.Println("The device will reboot automatically.")
 	return nil
 }
