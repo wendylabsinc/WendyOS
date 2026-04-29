@@ -304,7 +304,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
 	if flagVersion != "" {
-		// Validate the requested version exists in the manifest.
+		// Validate the requested version exists in the manifest (storage-agnostic check).
 		if _, err := getImageInfo(device.Manifest, flagVersion); err != nil {
 			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
@@ -395,8 +395,47 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	// Step 4: Resolve image (cached or download).
+	// For devices that publish both an NVMe and an SD card image, pick the one
+	// that matches the selected drive's storage medium. When the medium cannot
+	// be detected automatically, ask the user.
+	selectedStorage := StorageUnknown
+	if hasMultipleStorages(device.Manifest, selectedVersion) {
+		selectedStorage = targetDrive.StorageType
+		if selectedStorage == StorageUnknown {
+			v := device.Manifest.Versions[selectedVersion]
+			var storageItems []tui.PickerItem
+			if v.NVMEPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "NVMe",
+					Description: "drive connected via USB enclosure",
+					Value:       string(StorageNVMe),
+				})
+			}
+			if v.SDCardPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "SD card",
+					Description: "internal slot or USB card reader",
+					Value:       string(StorageSD),
+				})
+			}
+			if v.EMMCPath != "" {
+				storageItems = append(storageItems, tui.PickerItem{
+					Name:        "eMMC",
+					Description: "onboard flash via USB eMMC reader",
+					Value:       string(StorageEMMC),
+				})
+			}
+			fmt.Println()
+			picked, pickErr := pickFromItems("Select target storage type", storageItems)
+			if pickErr != nil {
+				return pickErr
+			}
+			selectedStorage = StorageType(picked)
+		}
+	}
+
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
-	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
+	imgInfo, err := getImageInfoForStorage(device.Manifest, selectedVersion, selectedStorage)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
@@ -692,8 +731,9 @@ func osCacheDir() (string, error) {
 }
 
 // osCachedImagePath returns the expected cache path for a device+version image.
-// Format: <cache>/os-images/<device>-<version>.img
-func osCachedImagePath(deviceKey, version string) (string, error) {
+// Format: <cache>/os-images/<device>-<version>[-<storage>].img
+// The storage suffix is omitted for single-storage devices (StorageUnknown).
+func osCachedImagePath(deviceKey, version string, storageType StorageType) (string, error) {
 	// Sanitize to prevent path traversal from user-supplied --version flag.
 	safeDevice := filepath.Base(deviceKey)
 	safeVersion := filepath.Base(version)
@@ -706,14 +746,18 @@ func osCachedImagePath(deviceKey, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%s.img", safeDevice, safeVersion)), nil
+	suffix := ""
+	if storageType != StorageUnknown {
+		suffix = "-" + string(storageType)
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s%s.img", safeDevice, safeVersion, suffix)), nil
 }
 
 // resolveOSImage returns the path to a ready-to-write .img file.
 // It checks the local cache first; on a miss it downloads (and extracts if
 // zipped), then stores the result in the cache.
 func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
-	cached, err := osCachedImagePath(deviceKey, img.Version)
+	cached, err := osCachedImagePath(deviceKey, img.Version, img.Storage)
 	if err != nil {
 		return "", err
 	}

@@ -209,7 +209,7 @@ func (x *ListVideoDevicesResponse) GetDevices() []*VideoDevice {
 
 type StreamVideoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"` // 0 = first available device
+	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"` // numeric suffix N in /dev/videoN; 0 maps to /dev/video0
 	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`                       // pixels; 0 = device default
 	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`                     // pixels; 0 = device default
 	Framerate     uint32                 `protobuf:"varint,4,opt,name=framerate,proto3" json:"framerate,omitempty"`               // fps; 0 = device default
@@ -277,7 +277,7 @@ func (x *StreamVideoRequest) GetFramerate() uint32 {
 
 type VideoFrame struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`                                            // encoded video data; format described by codec
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`                                            // chunk of encoded video; concatenate chunks in order; format described by codec
 	TimestampNs   uint64                 `protobuf:"varint,2,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`          // wall-clock timestamp in nanoseconds
 	Codec         VideoCodec             `protobuf:"varint,3,opt,name=codec,proto3,enum=wendy.agent.services.v1.VideoCodec" json:"codec,omitempty"` // codec used; default 0 = H264
 	unknownFields protoimpl.UnknownFields
