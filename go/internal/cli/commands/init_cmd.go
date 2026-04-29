@@ -644,7 +644,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	cliSuccess("\nYour project is ready! Run `" + templateRunCommand(cwd, destDir, appID) + "` to build and deploy.")
+	cliSuccess("\nYour project is ready! Run `%s` to build and deploy.", templateRunCommand(cwd, destDir, appID))
 
 	return nil
 }
