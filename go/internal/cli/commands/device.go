@@ -206,7 +206,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if vendor == "" {
 					vendor = "unknown"
 				}
-				cliLogln("GPU: %s", vendor)
+			cliLogln("GPU: %s", vendor)
 				if jetpackVersion != "" {
 					cliLogln("JetPack: %s", jetpackVersion)
 				}
@@ -216,16 +216,15 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 			cliLogln("CLI Version: %s", version.Version)
 
-			warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
-				fmt.Println(warn.Render("\nAgent is behind the CLI — run 'wendy device update' to update."))
+			cliNotice("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
-				fmt.Println(warn.Render("\nCLI is behind the agent — consider updating the CLI."))
+				cliNotice("\nNote: CLI is behind the agent. Consider updating the CLI.")
 			}
 
 			if checkUpdates {
 				if version.CompareVersions(latestVersion, agentVersion) > 0 {
-					fmt.Printf(warn.Render("\nUpdate available: %s (you have %s)")+"\nUpdate with: wendy device update\n", latestVersion, agentVersion)
+				cliNotice("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update", latestVersion, agentVersion)
 				} else {
 					cliSuccess("\nAgent is up to date.")
 				}
@@ -337,10 +336,10 @@ func newDeviceSetupCmd() *cobra.Command {
 
 			if provResp.GetProvisioned() != nil {
 				prov := provResp.GetProvisioned()
-			cliSuccess("Device is provisioned (org: %d, asset: %d, cloud: %s).",
+			cliSuccess("Device is already enrolled (org: %d, asset: %d, cloud: %s).",
 					prov.GetOrganizationId(), prov.GetAssetId(), prov.GetCloudHost())
 			} else {
-				cliNotice("Device is not provisioned.")
+				cliNotice("Device is not enrolled.")
 				if loadCLICert() == nil {
 					cliNotice("You are not logged in to Wendy Cloud.")
 					fmt.Print("Log in now? [Y/n] ")
@@ -368,46 +367,34 @@ func newDeviceSetupCmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			// Step 2: Check WiFi status.
-			cliLogln("Checking WiFi status...")
-			wifiResp, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
-			if err != nil {
-				cliNotice("Unable to check WiFi status (may not be supported on this device).")
-			} else if wifiResp.GetConnected() {
-				cliSuccess("WiFi connected to: %s", wifiResp.GetSsid())
-			} else {
-				cliNotice("WiFi is not connected.")
-
-				// Use the existing WiFi picker to let the user select a network.
-				target := &SelectedDevice{Agent: conn}
-				ssid, pickErr := pickWifiNetwork(ctx, target)
-				if pickErr != nil {
-					if errors.Is(pickErr, ErrUserCancelled) {
-						cliLogln("WiFi setup skipped.")
-					} else {
-						cliNotice("WiFi scan failed: %v", pickErr)
-					}
+			// Step 2: WiFi setup.
+			target := &SelectedDevice{Agent: conn}
+			ssid, pickErr := pickWifiNetwork(ctx, target)
+			if pickErr != nil {
+				if errors.Is(pickErr, ErrUserCancelled) {
+					cliLogln("WiFi setup skipped.")
 				} else {
-					fmt.Print("Password (leave empty for open networks): ")
-					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Println()
-					if readErr != nil {
-						cliNotice("Failed to read password: %v", readErr)
+					cliNotice("WiFi scan failed: %v", pickErr)
+				}
+			} else {
+				fmt.Print("Password (leave empty for open networks): ")
+				passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if readErr != nil {
+					cliNotice("Failed to read password: %v", readErr)
+				} else {
+					password := strings.TrimSpace(string(passwordBytes))
+					cliLogln("Connecting to %s...", ssid)
+					wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
+						Ssid:     ssid,
+						Password: password,
+					})
+					if connectErr != nil {
+						cliNotice("Failed to connect to WiFi: %v", connectErr)
+					} else if !wifiConnResp.GetSuccess() {
+						cliNotice("Failed to connect: %s", wifiConnResp.GetErrorMessage())
 					} else {
-						password := strings.TrimSpace(string(passwordBytes))
-
-						cliLogln("Connecting to %s...", ssid)
-						wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
-							Ssid:     ssid,
-							Password: password,
-						})
-						if connectErr != nil {
-							cliNotice("Failed to connect to WiFi: %v", connectErr)
-						} else if !wifiConnResp.GetSuccess() {
-							cliNotice("Failed to connect: %s", wifiConnResp.GetErrorMessage())
-						} else {
-							cliSuccess("Connected to %s", ssid)
-						}
+						cliSuccess("Connected to %s.", ssid)
 					}
 				}
 			}
@@ -420,17 +407,11 @@ func newDeviceSetupCmd() *cobra.Command {
 			} else {
 				cliLogln("Agent version: %s", versionResp.GetVersion())
 				if cmp := version.CompareVersions(version.Version, versionResp.GetVersion()); cmp > 0 {
-				cliLogln("CLI version: %s (agent is behind)", version.Version)
-					cliNotice("Consider running 'wendy device update' to update the agent.")
-				} else if cmp < 0 {
-					cliLogln("CLI version: %s (CLI is behind)", version.Version)
-					cliNotice("Consider updating the CLI to match the agent.")
-				} else {
-					cliSuccess("Agent is up to date.")
+					cliNotice("Agent is behind the CLI — consider running 'wendy device update'.")
 				}
 			}
 
-			cliSuccess("\nSetup check complete.")
+			cliSuccess("\nSetup complete.")
 			return nil
 		},
 	}
@@ -583,7 +564,6 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
 
-	// Enroll the device.
 	cliLogln("Enrolling device...")
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),

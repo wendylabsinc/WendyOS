@@ -178,7 +178,7 @@ func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwri
 	defer r.Close()
 
 	cliLogln("Writing image to %s...", targetDrive.DevicePath)
-	fmt.Println(elevationHint())
+	cliNotice("%s", elevationHint())
 	if err := writeImageToDisk(r, size, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
@@ -460,14 +460,14 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		if authErr != nil {
 			return fmt.Errorf("--pre-enroll: %w", authErr)
 		}
-		fmt.Printf("Pre-enrolling device with Wendy Cloud (org: %d)...\n", auth.Certificates[0].OrganizationID)
+		cliLogln("Pre-enrolling device with Wendy Cloud (org: %d)...", auth.Certificates[0].OrganizationID)
 		js, enrollErr := preEnrollDevice(ctx, auth, provDeviceName, nil)
 		if enrollErr != nil {
-			fmt.Printf("Warning: pre-enrollment failed: %v\n", enrollErr)
-			fmt.Println("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
+			cliNotice("Warning: pre-enrollment failed: %v", enrollErr)
+			cliNotice("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
 		} else {
 			provisioningJSON = js
-			fmt.Println("Device pre-enrolled. It will be secure from first boot.")
+			cliLogln("Device pre-enrolled. It will be secure from first boot.")
 		}
 	case preEnrollAuto:
 		if isInteractiveTerminal() {
@@ -477,16 +477,16 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 				if ok {
 					auth, authErr := pickAuthEntry("")
 					if authErr != nil {
-						fmt.Printf("Warning: could not resolve auth for pre-enrollment: %v\n", authErr)
+						cliNotice("Warning: could not resolve auth for pre-enrollment: %v", authErr)
 					} else {
-						fmt.Printf("Pre-enrolling device with Wendy Cloud (org: %d)...\n", auth.Certificates[0].OrganizationID)
+						cliLogln("Pre-enrolling device with Wendy Cloud (org: %d)...", auth.Certificates[0].OrganizationID)
 						js, enrollErr := preEnrollDevice(ctx, auth, provDeviceName, nil)
 						if enrollErr != nil {
-							fmt.Printf("Warning: pre-enrollment failed: %v\n", enrollErr)
-							fmt.Println("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
+							cliNotice("Warning: pre-enrollment failed: %v", enrollErr)
+							cliNotice("The device will boot unenrolled. Run 'wendy device enroll' after first boot.")
 						} else {
 							provisioningJSON = js
-							fmt.Println("Device pre-enrolled. It will be secure from first boot.")
+							cliLogln("Device pre-enrolled. It will be secure from first boot.")
 						}
 					}
 				}
@@ -494,9 +494,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-
-
-	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
+	cliLogln("\nPreparing %s %s image...", device.Name, selectedVersion)
 	imgInfo, err := getImageInfoForStorage(device.Manifest, selectedVersion, selectedStorage)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
@@ -552,20 +550,16 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			ejectDisk(targetDrive)
 			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
 		}
-		cliNotice("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
+		cliLogln("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
 	} else {
 		cliLogln("\nWriting provisioning data to config partition...")
 		if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName, provisioningJSON); err != nil {
 			if hasProvisioningData {
-				// User asked for --wifi / --device-name / --pre-enroll. Silently
-				// dropping their input and printing "Successfully installed"
-				// would be a lie — this is the user-visible failure mode the
-				// ticket calls out. Fail loudly so the user knows to retry.
 				ejectDisk(targetDrive)
 				return fmt.Errorf("could not write provisioning data to config partition (--wifi / --device-name / --pre-enroll were requested but not applied): %w", err)
 			}
 			cliNotice("Warning: could not write config partition: %v", err)
-			cliNotice("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+			cliNotice("Device will boot but agent auto-update will not be pre-configured.")
 		}
 	}
 
