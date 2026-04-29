@@ -74,14 +74,14 @@ jobs:
 
           emit_one() {
             local dev="$1"
-            local entry
-            entry=$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")
-            if [[ -z "${entry}" ]]; then
+            local entries
+            entries=$(echo "${ALL_MATRIX}" | jq -c "[.[] | select(.device == \"${dev}\")]")
+            if [[ "$(echo "${entries}" | jq 'length')" -eq 0 ]]; then
               echo "ERROR: Unknown device '${dev}'." >&2
               exit 1
             fi
-            echo "matrix={\"include\":[${entry}]}" >> "$GITHUB_OUTPUT"
-            echo "devices=${dev}"                  >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":${entries}}" >> "$GITHUB_OUTPUT"
+            echo "devices=${dev}"                    >> "$GITHUB_OUTPUT"
           }
 
           # Non-PR triggers: build everything by default. workflow_dispatch can
@@ -117,16 +117,18 @@ jobs:
           declare -A DEV_RE=(
             [raspberry-pi-3]='(^conf/template/boards/rpi3-sd/|^conf/machine/raspberrypi3-64-wendyos\.conf$|^meta-rpi-extensions/)'
             [raspberry-pi-4]='(^conf/template/boards/rpi4-sd/|^conf/machine/raspberrypi4-64-wendyos\.conf$|^meta-rpi-extensions/)'
-            [raspberry-pi-5]='(^conf/template/boards/rpi5-sd/|^conf/machine/raspberrypi5-wendyos\.conf$|^meta-rpi-extensions/)'
-            [jetson-agx-orin]='(^conf/template/boards/jetson-agx-orin/|^conf/machine/jetson-agx-orin-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
-            [jetson-orin-nano]='(^conf/template/boards/jetson-orin-nano-nvme/|^conf/machine/jetson-orin-nano-devkit-nvme-wendyos\.conf$|^meta-tegra-extensions/)'
+            [raspberry-pi-5]='(^conf/template/boards/rpi5-(sd|nvme)/|^conf/machine/raspberrypi5(-nvme)?-wendyos\.conf$|^meta-rpi-extensions/)'
+            [jetson-agx-orin]='(^conf/template/boards/jetson-agx-orin(-emmc)?/|^conf/machine/jetson-agx-orin-devkit-(nvme|emmc)-wendyos\.conf$|^meta-tegra-extensions/)'
+            [jetson-orin-nano]='(^conf/template/boards/jetson-orin-nano-(nvme|sd)/|^conf/machine/jetson-orin-nano-devkit(-nvme)?-wendyos\.conf$|^meta-tegra-extensions/)'
           )
 
           INCLUDED=()
           DEVICES=()
           for dev in raspberry-pi-3 raspberry-pi-4 raspberry-pi-5 jetson-agx-orin jetson-orin-nano; do
             if echo "${CHANGED}" | grep -Eq "${DEV_RE[$dev]}"; then
-              INCLUDED+=("$(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")")
+              while IFS= read -r entry; do
+                INCLUDED+=("$entry")
+              done < <(echo "${ALL_MATRIX}" | jq -c ".[] | select(.device == \"${dev}\")")
               DEVICES+=("${dev}")
             fi
           done
@@ -236,6 +238,7 @@ jobs:
             raspberry-pi-5:sd)    BOARD=rpi5-sd;               MACHINE=raspberrypi5-wendyos ;;
             raspberry-pi-5:nvme)  BOARD=rpi5-nvme;             MACHINE=raspberrypi5-nvme-wendyos ;;
             jetson-agx-orin:nvme) BOARD=jetson-agx-orin;       MACHINE=jetson-agx-orin-devkit-nvme-wendyos ;;
+            jetson-agx-orin:emmc) BOARD=jetson-agx-orin-emmc;  MACHINE=jetson-agx-orin-devkit-emmc-wendyos ;;
             jetson-orin-nano:nvme) BOARD=jetson-orin-nano-nvme; MACHINE=jetson-orin-nano-devkit-nvme-wendyos ;;
             jetson-orin-nano:sd)  BOARD=jetson-orin-nano-sd;   MACHINE=jetson-orin-nano-devkit-wendyos ;;
             *) echo "Unknown device/storage: $DEVICE/$STORAGE"; exit 1 ;;
@@ -316,18 +319,22 @@ jobs:
         if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
         run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
 
-      - name: Generate flashable image (Jetson only)
-        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
+      - name: Generate flashable image (Jetson NVMe/eMMC)
+        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-') && (matrix.storage == 'nvme' || matrix.storage == 'emmc')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
+          STORAGE: ${{ matrix.storage }}
         run: |
           TEGRAFLASH_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
           FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
           mkdir -p "$FLASH_WORKDIR"
           tar -xzf "$TEGRAFLASH_FILE" -C "$FLASH_WORKDIR"
           cd "$FLASH_WORKDIR"
-          sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img"
+          case "$STORAGE" in
+            nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
+            emmc) sudo ./makedisk.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+          esac
 
       - name: Upload image and update device manifest
         if: github.event_name != 'pull_request'
@@ -335,15 +342,18 @@ jobs:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
           DEVICE: ${{ matrix.device }}
+          STORAGE: ${{ matrix.storage }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_NIGHTLY_WEBHOOK_URL }}
         run: |
           VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
           TOKEN=$(gcloud auth print-access-token)
 
-          if [[ "$MACHINE" == raspberry* ]]; then
-            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
-          else
+          if [[ "$MACHINE" != raspberry* && "$STORAGE" == "nvme" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
+          elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "emmc" ]]; then
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img"
+          else
+            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
           fi
 
           ARGS=(
@@ -355,9 +365,15 @@ jobs:
             --access-token "$TOKEN"
           )
 
-          # For Jetson, include the tegraflash as the recovery file
-          if [[ "$MACHINE" != raspberry* ]]; then
+          # For Jetson NVMe/eMMC, include the tegraflash bundle as the recovery file.
+          if [[ "$STORAGE" == "nvme" || "$STORAGE" == "emmc" ]] && [[ "$MACHINE" != raspberry* ]]; then
             ARGS+=(--recovery-file "$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz")
+          fi
+
+          # Devices with multiple storage variants pass --storage so the manifest
+          # records the correct per-storage-type paths.
+          if [[ "$DEVICE" == "jetson-orin-nano" || "$DEVICE" == "jetson-agx-orin" ]]; then
+            ARGS+=(--storage "$STORAGE")
           fi
 
           # Include Mender OTA artifact if the build produced one
