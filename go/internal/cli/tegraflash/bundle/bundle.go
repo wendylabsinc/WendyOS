@@ -92,25 +92,45 @@ func (b *Bundle) FindXML(fullEMMC bool) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no partition layout XML found in bundle — expected flash_t234_*.xml")
 }
 
+// openTar opens the bundle file and returns a tar.Reader. It detects gzip by
+// reading the first two magic bytes rather than relying on the file extension,
+// since CI sometimes produces plain-tar bundles with a .tar.gz suffix.
+// The caller must close f when done.
+func (b *Bundle) openTar() (*tar.Reader, *os.File, func(), error) {
+	f, err := os.Open(b.path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	magic := make([]byte, 2)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		f.Close()
+		return nil, nil, nil, fmt.Errorf("reading archive header: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, nil, nil, fmt.Errorf("seeking archive: %w", err)
+	}
+
+	isGzip := magic[0] == 0x1f && magic[1] == 0x8b
+	if isGzip {
+		gr, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, nil, nil, fmt.Errorf("opening gzip stream: %w", err)
+		}
+		return tar.NewReader(gr), f, func() { gr.Close(); f.Close() }, nil
+	}
+	return tar.NewReader(f), f, func() { f.Close() }, nil
+}
+
 // extract reads the first file matching name (basename only) from the archive.
 func (b *Bundle) extract(name string) ([]byte, error) {
-	f, err := os.Open(b.path)
+	tr, _, cleanup, err := b.openTar()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	var tr *tar.Reader
-	if strings.HasSuffix(b.path, ".gz") || strings.HasSuffix(b.path, ".tgz") {
-		gr, err := gzip.NewReader(f)
-		if err != nil {
-			return nil, fmt.Errorf("opening gzip stream: %w", err)
-		}
-		defer gr.Close()
-		tr = tar.NewReader(gr)
-	} else {
-		tr = tar.NewReader(f)
-	}
+	defer cleanup()
 
 	for {
 		hdr, err := tr.Next()
@@ -130,23 +150,11 @@ func (b *Bundle) extract(name string) ([]byte, error) {
 
 // ListFiles returns the names of all files in the bundle (for debugging).
 func (b *Bundle) ListFiles() ([]string, error) {
-	f, err := os.Open(b.path)
+	tr, _, cleanup, err := b.openTar()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	var tr *tar.Reader
-	if strings.HasSuffix(b.path, ".gz") || strings.HasSuffix(b.path, ".tgz") {
-		gr, err := gzip.NewReader(f)
-		if err != nil {
-			return nil, err
-		}
-		defer gr.Close()
-		tr = tar.NewReader(gr)
-	} else {
-		tr = tar.NewReader(f)
-	}
+	defer cleanup()
 
 	var names []string
 	for {
