@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -16,7 +17,7 @@ func (s *mcpServer) registerProvisioningTools(srv *server.MCPServer) {
 	), s.handleProvisioningStatus)
 
 	srv.AddTool(mcpgo.NewTool("provisioning_start",
-		mcpgo.WithDescription("Start provisioning the device with Wendy Cloud using an enrollment token"),
+		mcpgo.WithDescription("Provision the device with Wendy Cloud and wait for completion (up to 2 minutes)"),
 		mcpgo.WithString("enrollment_token",
 			mcpgo.Required(),
 			mcpgo.Description("Enrollment token obtained from Wendy Cloud"),
@@ -84,5 +85,25 @@ func (s *mcpServer) handleProvisioningStart(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
-	return mcpgo.NewToolResultText(fmt.Sprintf("provisioning started with cloud host %s", cloudHost)), nil
+
+	// Poll until provisioned or 2-minute timeout.
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		statusResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+		if err != nil {
+			return mcpgo.NewToolResultError(grpcErrString(err)), nil
+		}
+		if p, ok := statusResp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned); ok {
+			result := map[string]any{
+				"provisioned":     true,
+				"cloud_host":      p.Provisioned.GetCloudHost(),
+				"organization_id": p.Provisioned.GetOrganizationId(),
+				"asset_id":        p.Provisioned.GetAssetId(),
+			}
+			b, _ := json.MarshalIndent(result, "", "  ")
+			return mcpgo.NewToolResultText(string(b)), nil
+		}
+	}
+	return mcpgo.NewToolResultError(fmt.Sprintf("provisioning timed out after 2 minutes — check status with provisioning_status")), nil
 }
