@@ -3,11 +3,12 @@
 package commands
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/dustin/go-humanize"
@@ -180,51 +181,35 @@ func unmountLsblkDevice(dev lsblkDevice) {
 	}
 }
 
-// writeImageToDisk writes an image file to a block device using dd,
-// streaming data via stdin in 4 MiB chunks for progress tracking.
+// writeImageToDisk writes an image file to a block device using dd. dd reads
+// the file directly (rather than via a stdin pipe) so that bs=4M actually
+// produces 4 MiB writes to the device — pipe input forces dd to issue a write
+// per pipe-buffer-sized read, which is dramatically slower on raw devices.
+// Progress is driven by parsing dd's status=progress output on stderr.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	imgFile, err := os.Open(imagePath)
+	cmd := exec.Command("sudo", "dd",
+		fmt.Sprintf("if=%s", imagePath),
+		fmt.Sprintf("of=%s", d.DevicePath),
+		"bs=4M",
+		"status=progress",
+	)
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
-	}
-	defer imgFile.Close()
-
-	cmd := exec.Command("sudo", "dd", fmt.Sprintf("of=%s", d.DevicePath), "bs=4M")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("creating stdin pipe: %w", err)
+		return fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting dd: %w", err)
 	}
 
-	buf := make([]byte, 4*1024*1024) // 4 MiB
-	var totalWritten int64
-	for {
-		n, readErr := imgFile.Read(buf)
-		if n > 0 {
-			if _, writeErr := stdin.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing to dd: %w", writeErr)
-			}
-			totalWritten += int64(n)
-			if progressFn != nil {
-				progressFn(totalWritten)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading image: %w", readErr)
-		}
-	}
+	// dd emits progress lines separated by '\r' (overwriting in place) until
+	// the final newline-terminated summary. Parse out the leading byte count.
+	go scanDDProgress(stderr, progressFn)
 
-	stdin.Close()
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
@@ -233,4 +218,51 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	exec.Command("sync").Run() //nolint:errcheck
 
 	return nil
+}
+
+// scanDDProgress parses dd's `status=progress` output and invokes progressFn
+// with the running byte count. dd separates in-place updates with '\r' and
+// terminates the final summary block with '\n', so we split on either.
+func scanDDProgress(r io.Reader, progressFn func(written int64)) {
+	if progressFn == nil {
+		io.Copy(io.Discard, r) //nolint:errcheck
+		return
+	}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(splitCROrLF)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Progress lines look like:
+		//   524288000 bytes (524 MB, 500 MiB) copied, 1 s, 524 MB/s
+		// The first whitespace-delimited token is the byte count.
+		var token string
+		for i, c := range line {
+			if c == ' ' || c == '\t' {
+				token = line[:i]
+				break
+			}
+		}
+		if token == "" {
+			continue
+		}
+		written, err := strconv.ParseInt(token, 10, 64)
+		if err != nil {
+			continue
+		}
+		progressFn(written)
+	}
+}
+
+// splitCROrLF is a bufio.SplitFunc that splits on '\r' or '\n'.
+func splitCROrLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\r' || b == '\n' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }

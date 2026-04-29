@@ -597,6 +597,31 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 	return pickFromItems(title, items)
 }
 
+// throttledProgress returns a sender that forwards ProgressUpdateMsg to p at
+// most once per minInterval. Bubble Tea ingests every Send into a buffered
+// channel and SetPercent kicks off a cascade of animation FrameMsgs, so a
+// busy I/O loop posting updates per chunk can pile up enough work to slow
+// the I/O loop itself. The terminal can't usefully render faster than the
+// throttle rate anyway, and a trailing ProgressDoneMsg always renders 100%.
+func throttledProgress(p *tea.Program, minInterval time.Duration) func(written, total int64) {
+	var last time.Time
+	return func(written, total int64) {
+		if total <= 0 {
+			return
+		}
+		now := time.Now()
+		if now.Sub(last) < minInterval {
+			return
+		}
+		last = now
+		p.Send(tui.ProgressUpdateMsg{
+			Percent: float64(written) / float64(total),
+			Written: written,
+			Total:   total,
+		})
+	}
+}
+
 // downloadImage downloads an OS image to a temp file with a progress bar.
 func downloadImage(img *imageInfo) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Minute}
@@ -630,8 +655,9 @@ func downloadImage(img *imageInfo) (string, error) {
 	p := tea.NewProgram(prog)
 
 	var downloaded int64
+	sendProgress := throttledProgress(p, 33*time.Millisecond)
 	go func() {
-		buf := make([]byte, 64*1024)
+		buf := make([]byte, 1*1024*1024)
 		for {
 			n, readErr := resp.Body.Read(buf)
 			if n > 0 {
@@ -640,13 +666,7 @@ func downloadImage(img *imageInfo) (string, error) {
 					return
 				}
 				downloaded += int64(n)
-				if total > 0 {
-					p.Send(tui.ProgressUpdateMsg{
-						Percent: float64(downloaded) / float64(total),
-						Written: downloaded,
-						Total:   total,
-					})
-				}
+				sendProgress(downloaded, total)
 			}
 			if readErr == io.EOF {
 				p.Send(tui.ProgressDoneMsg{})
@@ -722,6 +742,7 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 		prog := tui.NewProgress("Extracting image...")
 		p := tea.NewProgram(prog)
 
+		sendProgress := throttledProgress(p, 33*time.Millisecond)
 		go func() {
 			// Brief pause so Bubble Tea can initialize the terminal
 			// before we start sending updates. Without this, fast local
@@ -737,13 +758,7 @@ func extractImageFromZipWithProgress(zipPath string) (string, error) {
 						return
 					}
 					extracted += int64(n)
-					if totalSize > 0 {
-						p.Send(tui.ProgressUpdateMsg{
-							Percent: float64(extracted) / float64(totalSize),
-							Written: extracted,
-							Total:   totalSize,
-						})
-					}
+					sendProgress(extracted, totalSize)
 				}
 				if readErr == io.EOF {
 					p.Send(tui.ProgressDoneMsg{})
