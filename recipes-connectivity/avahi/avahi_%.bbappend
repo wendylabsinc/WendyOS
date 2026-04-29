@@ -54,8 +54,10 @@ do_install:append() {
         # Enable D-Bus support for proper service publishing
         sed -i 's/^#*enable-dbus=.*/enable-dbus=yes/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
 
-        # Enable mDNS reflector for cross-interface discovery
-        sed -i 's/^#*enable-reflector=.*/enable-reflector=yes/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
+        # Reflector bridges mDNS across interfaces. In avahi 0.8 it prevents
+        # the daemon from completing startup regardless of interface count,
+        # so services never get published. Keep it disabled.
+        sed -i 's/^#*enable-reflector=.*/enable-reflector=no/' "${D}${sysconfdir}/avahi/avahi-daemon.conf"
 
         # Restrict Avahi to specific interfaces if configured
         # Empty WENDYOS_MDNS_INTERFACES means all interfaces (no restriction)
