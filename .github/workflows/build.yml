@@ -57,8 +57,11 @@ jobs:
             {"device":"raspberry-pi-3","storage":"sd"},
             {"device":"raspberry-pi-4","storage":"sd"},
             {"device":"raspberry-pi-5","storage":"sd"},
+            {"device":"raspberry-pi-5","storage":"nvme"},
             {"device":"jetson-agx-orin","storage":"nvme"},
-            {"device":"jetson-orin-nano","storage":"nvme"}
+            {"device":"jetson-agx-orin","storage":"emmc"},
+            {"device":"jetson-orin-nano","storage":"nvme"},
+            {"device":"jetson-orin-nano","storage":"sd"}
           ]'
           # Collapse to one line so it can be written to $GITHUB_OUTPUT, which
           # requires single-line key=value pairs (no implicit multiline support).
