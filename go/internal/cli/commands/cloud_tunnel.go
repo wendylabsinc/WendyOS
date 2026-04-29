@@ -45,15 +45,7 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		return nil, fmt.Errorf("loading broker TLS config: %w", err)
 	}
 
-	var transportCreds grpc.DialOption
-	if strings.HasSuffix(brokerURL, ":443") {
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		// Local/dev broker: present the client cert but skip server cert verification.
-		tlsCfg.InsecureSkipVerify = true
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	}
-	conn, err := grpc.NewClient(brokerURL, transportCreds)
+	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
 	}
@@ -158,15 +150,7 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return nil, fmt.Errorf("loading TLS config: %w", err)
 	}
 
-	var transportCreds grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		// Local/dev pki-core: present the client cert but skip server cert verification.
-		tlsCfg.InsecureSkipVerify = true
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, transportCreds)
+	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}

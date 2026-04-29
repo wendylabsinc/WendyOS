@@ -460,15 +460,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	if err != nil {
 		return fmt.Errorf("loading TLS config: %w", err)
 	}
-	var transportCreds grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		// Local/dev pki-core: present the client cert but skip server cert verification.
-		tlsCfg.InsecureSkipVerify = true
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, transportCreds)
+	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}

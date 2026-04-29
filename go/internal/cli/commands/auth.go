@@ -18,7 +18,6 @@ import (
 	"github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -195,13 +194,7 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	}
 
 	// Step 4: Issue certificate via cloud CertificateService.
-	var transportCreds grpc.DialOption
-	if strings.HasSuffix(cloudGRPC, ":443") {
-		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(nil))
-	} else {
-		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	certConn, err := grpc.NewClient(cloudGRPC, transportCreds)
+	certConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}
@@ -300,7 +293,7 @@ func enrollmentTokenCommonName(token string) (string, error) {
 }
 
 func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int32) error {
-	cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
 	if err != nil {
 		return fmt.Errorf("connecting to pki-core: %w", err)
 	}
@@ -479,13 +472,7 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 	if err != nil {
 		return fmt.Errorf("loading existing TLS config: %w", err)
 	}
-	var refreshTransportCreds grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		refreshTransportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		refreshTransportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	certConn, err := grpc.NewClient(auth.CloudGRPC, refreshTransportCreds)
+	certConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}
