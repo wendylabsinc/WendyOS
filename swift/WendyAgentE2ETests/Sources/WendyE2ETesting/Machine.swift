@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Subprocess
 
@@ -74,6 +75,7 @@ public struct Machine: Sendable {
         return try await Subprocess.run(
             .path(FilePath(invocation.executable)),
             arguments: Arguments(invocation.arguments),
+            environment: invocation.environment,
             workingDirectory: invocation.workingDirectory,
             preferredBufferSize: preferredBufferSize,
             isolation: isolation,
@@ -94,13 +96,16 @@ public struct Machine: Sendable {
                     ssh,
                     self.wrapped(command),
                 ],
+                environment: .inherit,
                 workingDirectory: nil
             )
         }
 
+        let user = Self.currentUser()
         return Invocation(
-            executable: "/bin/bash",
+            executable: user.shell,
             arguments: ["-lc", command],
+            environment: Self.loginEnvironment(for: user),
             workingDirectory: self.path.map { FilePath($0) }
         )
     }
@@ -115,6 +120,33 @@ public struct Machine: Sendable {
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func currentUser() -> User {
+        guard let entry = getpwuid(getuid()) else {
+            let environment = ProcessInfo.processInfo.environment
+            return User(
+                name: environment["USER"] ?? "",
+                home: environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path,
+                shell: environment["SHELL"] ?? "/bin/sh"
+            )
+        }
+
+        return User(
+            name: String(cString: entry.pointee.pw_name),
+            home: String(cString: entry.pointee.pw_dir),
+            shell: String(cString: entry.pointee.pw_shell)
+        )
+    }
+
+    private static func loginEnvironment(for user: User) -> Environment {
+        .custom([
+            "HOME": user.home,
+            "LOGNAME": user.name,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "SHELL": user.shell,
+            "USER": user.name,
+        ])
     }
 
     private static func printCommand(machine: String, command: String) {
@@ -139,6 +171,7 @@ public struct Machine: Sendable {
         try await Subprocess.run(
             .path(FilePath(invocation.executable)),
             arguments: Arguments(invocation.arguments),
+            environment: invocation.environment,
             workingDirectory: invocation.workingDirectory,
             output: output,
             error: error
@@ -149,7 +182,14 @@ public struct Machine: Sendable {
 private struct Invocation: Sendable {
     let executable: String
     let arguments: [String]
+    let environment: Environment
     let workingDirectory: FilePath?
+}
+
+private struct User: Sendable {
+    let name: String
+    let home: String
+    let shell: String
 }
 
 // MARK: - CustomStringConvertible
