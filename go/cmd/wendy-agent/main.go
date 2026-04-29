@@ -174,19 +174,21 @@ func main() {
 	}
 
 	// startTunnelBroker launches the tunnel broker presence loop in the background.
+	// ProvisioningInfo() is called inside the goroutine to avoid re-entering the
+	// provisioning mutex when called from the OnProvisioned callback.
 	startTunnelBroker := func(certPEM, chainPEM, keyPEM string) {
-		cloudHost, orgID, assetID, enrolled := provisioningSvc.ProvisioningInfo()
-		if !enrolled {
-			return
-		}
-		brokerURL := os.Getenv("WENDY_BROKER_URL")
-		if brokerURL == "" {
-			brokerURL = fmt.Sprintf("%s:50053", cloudHost)
-		}
-		client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, certPEM, chainPEM, keyPEM, chainPEM)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			cloudHost, orgID, assetID, enrolled := provisioningSvc.ProvisioningInfo()
+			if !enrolled {
+				return
+			}
+			brokerURL := os.Getenv("WENDY_BROKER_URL")
+			if brokerURL == "" {
+				brokerURL = fmt.Sprintf("%s:50053", cloudHost)
+			}
+			client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, certPEM, chainPEM, keyPEM, "")
 			client.Run(ctx)
 		}()
 	}
