@@ -386,7 +386,20 @@ jobs:
           fi
 
           cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
-          go run upload_and_manifest.go "${ARGS[@]}"
+          # Outer retry handles 412 races when multiple storage variants for the
+          # same device write to the same device manifest concurrently.
+          for attempt in 1 2 3 4 5; do
+            if go run upload_and_manifest.go "${ARGS[@]}"; then
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "Outer attempt $attempt failed, sleeping before retry..."
+              sleep $((attempt * 30))
+            else
+              echo "All outer attempts exhausted"
+              exit 1
+            fi
+          done
 
   publish:
     name: Update master manifest
