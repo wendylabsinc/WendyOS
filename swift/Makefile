@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources
 
-.PHONY: help format lint test proto build build-dev run reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
+.PHONY: help format lint test proto build build-cli build-dev run reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -30,6 +30,9 @@ clean: ## Remove Build/
 
 build: ## Build, sign, notarize, and package the macOS app
 	VERSION='$(VERSION)' OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh
+
+build-cli: ## Build the Go CLI in ../go
+	$(MAKE) -C ../go build-cli
 
 build-dev: ## Build and package a dev-signed macOS app without notarization
 	OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh --dev
