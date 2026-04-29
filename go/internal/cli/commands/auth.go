@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -62,6 +63,9 @@ func newAuthLoginCmd() *cobra.Command {
 			}
 			if cloudGRPC == "" {
 				cloudGRPC = defaultCloudGRPC
+			}
+			if !strings.HasPrefix(cloudDashboard, "http://") && !strings.HasPrefix(cloudDashboard, "https://") {
+				cloudDashboard = "http://" + cloudDashboard
 			}
 			return performLogin(cmd.Context(), cloudDashboard, cloudGRPC)
 		},
@@ -194,7 +198,16 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	}
 
 	// Step 4: Issue certificate via cloud CertificateService.
-	certConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
+	// This is the bootstrap step: no client cert exists yet, so we cannot do
+	// mTLS. Non-:443 endpoints are local dev cloud; use plaintext because we
+	// have no CA cert to verify the server with at this point.
+	var bootstrapCreds grpc.DialOption
+	if strings.HasSuffix(cloudGRPC, ":443") {
+		bootstrapCreds = grpc.WithTransportCredentials(credentials.NewTLS(nil))
+	} else {
+		bootstrapCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+	certConn, err := grpc.NewClient(cloudGRPC, bootstrapCreds)
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}
