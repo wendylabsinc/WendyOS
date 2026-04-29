@@ -503,23 +503,25 @@ _check-machine:
 		exit 1; \
 	fi
 
+# Each @-prefixed recipe line runs in its own shell, so a host-build "exit 0"
+# wouldn't skip subsequent Docker checks. Keep the whole branch in one block.
 _check-setup:
 	@if [ "$(WENDYOS_HOST_BUILD)" = "1" ]; then \
 		if [ ! -d "$(PROJECT_DIR)/repos/poky" ]; then \
 			printf "$(RED)Error: repos/poky not found. Run 'make setup' first.$(NC)\n"; \
 			exit 1; \
 		fi; \
-		exit 0; \
-	fi
-	@if [ ! -d "$(DOCKER_DIR)" ]; then \
-		printf "$(RED)Error: Build environment not set up.$(NC)\n"; \
-		printf "Run 'make setup' first.\n"; \
-		exit 1; \
-	fi
-	@if ! docker image inspect $(DOCKER_REPO):$(DOCKER_TAG) >/dev/null 2>&1; then \
-		printf "$(RED)Error: Docker image not found.$(NC)\n"; \
-		printf "Run 'make setup' or 'make docker-create' first.\n"; \
-		exit 1; \
+	else \
+		if [ ! -d "$(DOCKER_DIR)" ]; then \
+			printf "$(RED)Error: Build environment not set up.$(NC)\n"; \
+			printf "Run 'make setup' first.\n"; \
+			exit 1; \
+		fi; \
+		if ! docker image inspect $(DOCKER_REPO):$(DOCKER_TAG) >/dev/null 2>&1; then \
+			printf "$(RED)Error: Docker image not found.$(NC)\n"; \
+			printf "Run 'make setup' or 'make docker-create' first.\n"; \
+			exit 1; \
+		fi; \
 	fi
 
 _ensure-volumes:

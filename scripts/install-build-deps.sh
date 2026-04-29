@@ -33,7 +33,8 @@ apt-get -qy install \
     python3-gi python3-gi-cairo gir1.2-gtk-3.0 x11-apps \
     libncurses5-dev libncursesw5-dev bison flex patchutils \
     libssl-dev ca-certificates locales sudo mc quilt vim pkg-config \
-    gdisk dosfstools bmap-tools device-tree-compiler
+    gdisk dosfstools bmap-tools device-tree-compiler \
+    awscli
 
 # gcc-multilib (32-bit x86 multilib headers) is only available on amd64.
 # Skip on arm64 (e.g. Apple Silicon Docker Desktop, Graviton runners).
