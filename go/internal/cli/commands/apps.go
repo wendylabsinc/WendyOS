@@ -256,7 +256,7 @@ func newAppsStartCmd() *cobra.Command {
 			}
 
 			if target.Agent != nil {
-				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName)
+				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
 				if err != nil {
 					return err
 				}

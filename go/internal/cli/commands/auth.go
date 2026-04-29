@@ -7,11 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/cloudpb"
@@ -381,26 +380,7 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 // openBrowser opens the given URL in the default browser.
 // It is non-blocking: the browser process is detached so callers like
 // auth login don't hang. It is a package-level var so tests can replace it.
-var openBrowser = func(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return fmt.Errorf("unsupported platform")
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
-	return nil
-}
+var openBrowser = browseropen.Open
 
 // authConfigToJSON marshals an auth config for debugging.
 func authConfigToJSON(auth *config.AuthConfig) ([]byte, error) {

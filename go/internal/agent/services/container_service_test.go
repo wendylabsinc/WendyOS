@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -73,14 +74,14 @@ func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, 
 	}
 	return m.CreateContainer(ctx, req, appCfg)
 }
-func (m *mockContainerdClient) StartContainer(_ context.Context, _ string) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainer(_ context.Context, _ string, _ string) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
 	return m.startOutputCh, nil
 }
 
-func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader, _ string) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
@@ -98,14 +99,14 @@ func (m *mockContainerdClient) GetContainerMetrics(_ context.Context, _ string) 
 // so tests can capture the appName and stdin reader passed by AttachContainer.
 type attachTestMock struct {
 	mockContainerdClient
-	onStartWithStdin func(appName string, stdin io.Reader) (<-chan ContainerOutput, error)
+	onStartWithStdin func(appName string, stdin io.Reader, postStartAgentCommand string) (<-chan ContainerOutput, error)
 }
 
-func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan ContainerOutput, error) {
 	if m.onStartWithStdin != nil {
-		return m.onStartWithStdin(appName, stdin)
+		return m.onStartWithStdin(appName, stdin, postStartAgentCommand)
 	}
-	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin)
+	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin, postStartAgentCommand)
 }
 
 // ---------- bufconn helper ----------
@@ -138,6 +139,25 @@ func startContainerServer(t *testing.T, client ContainerdClient) (agentpb.WendyC
 		lis.Close()
 	}
 	return cl, cleanup
+}
+
+func TestPostStartAgentHookFromContext(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		appconfig.PostStartAgentHookMetadataKey,
+		"wendy-agent utils open-browser http://localhost:3000",
+	))
+
+	got := postStartAgentHookFromContext(ctx)
+	if got != "wendy-agent utils open-browser http://localhost:3000" {
+		t.Fatalf("postStartAgentHookFromContext = %q", got)
+	}
+}
+
+func TestPostStartAgentHookFromContextEmpty(t *testing.T) {
+	got := postStartAgentHookFromContext(context.Background())
+	if got != "" {
+		t.Fatalf("postStartAgentHookFromContext empty = %q", got)
+	}
 }
 
 // ---------- tests ----------
@@ -369,7 +389,7 @@ func TestAttachContainer(t *testing.T) {
 	stdinDataCh := make(chan string, 1)
 
 	mock := &attachTestMock{
-		onStartWithStdin: func(appName string, stdin io.Reader) (<-chan ContainerOutput, error) {
+		onStartWithStdin: func(appName string, stdin io.Reader, _ string) (<-chan ContainerOutput, error) {
 			capturedAppCh <- appName
 			go func() {
 				// Read all stdin bytes, then produce output so the server

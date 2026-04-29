@@ -119,6 +119,10 @@ type HooksConfig struct {
 	PostStart *HookCommand `json:"postStart,omitempty"`
 }
 
+// PostStartAgentHookMetadataKey carries hooks.postStart.agent on start RPCs
+// that should run the agent-side postStart hook.
+const PostStartAgentHookMetadataKey = "wendy-post-start-agent-command"
+
 // HookCommand holds CLI and agent-side commands for a lifecycle hook.
 type HookCommand struct {
 	CLI   string `json:"cli,omitempty"`   // Command to run on the developer's machine

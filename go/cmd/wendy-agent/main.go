@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -29,6 +30,7 @@ import (
 	agentnet "github.com/wendylabsinc/wendy/internal/agent/network"
 	"github.com/wendylabsinc/wendy/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/internal/agent/services"
+	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
@@ -41,6 +43,10 @@ const (
 )
 
 func main() {
+	if handled, code := handleUtilityCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// Setup logger.
 	logCfg := zap.NewProductionConfig()
 	if os.Getenv("WENDY_DEBUG") != "" {
@@ -344,4 +350,51 @@ func main() {
 	wg.Wait()
 
 	logger.Info("wendy-agent stopped")
+}
+
+func handleUtilityCommand(args []string) (bool, int) {
+	if len(args) == 0 {
+		return false, 0
+	}
+
+	if args[0] != "utils" {
+		return false, 0
+	}
+
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: wendy-agent utils open-browser <url>")
+		return true, 2
+	}
+	if args[1] != "open-browser" {
+		return false, 0
+	}
+
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: wendy-agent utils open-browser <url>")
+		return true, 2
+	}
+
+	rawURL := args[2]
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: %v\n", rawURL, err)
+		return true, 2
+	}
+	if parsed.Scheme == "" {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: missing scheme (e.g. http:// or https://)\n", rawURL)
+		return true, 2
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host == "" {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: must include a host (e.g. http://localhost:3000)\n", rawURL)
+		return true, 2
+	}
+
+	if err := browseropen.Open(rawURL); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not open browser: %v\n", err)
+		fmt.Println(rawURL)
+		return true, 0
+	}
+
+	fmt.Printf("Opening %s in default browser...\n", rawURL)
+	return true, 0
 }

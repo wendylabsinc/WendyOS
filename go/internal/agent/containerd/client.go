@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -578,7 +581,7 @@ func (c *Client) applyCDIGPU(spec *localoci.Spec) {
 // StartContainer starts the task for a named container and returns a channel
 // that streams stdout/stderr output. When the container exits, a final
 // ContainerOutput with Done=true is sent and the channel is closed.
-func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -642,6 +645,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	}
 
 	c.logger.Info("Container started", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
@@ -652,7 +656,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 
 // StartContainerWithStdin is like StartContainer but attaches the provided
 // stdin reader to the container's standard input.
-func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -708,11 +712,69 @@ func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, st
 	}
 
 	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 
 	return outputCh, nil
+}
+
+func shellCommand() (string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd.exe", "/C"
+	}
+	return "sh", "-c"
+}
+
+func expandAgentHook(command, appName string) string {
+	return os.Expand(command, func(key string) string {
+		switch key {
+		case "WENDY_HOSTNAME":
+			return "localhost"
+		case "WENDY_APP_ID":
+			return appName
+		default:
+			return os.Getenv(key)
+		}
+	})
+}
+
+var startPostStartHookCommand = func(shell, flag, command string) (func() error, error) {
+	cmd := exec.Command(shell, flag, command)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd.Wait, nil
+}
+
+func (c *Client) startPostStartAgentHook(command, appName string) bool {
+	if command == "" {
+		return false
+	}
+
+	expanded := expandAgentHook(command, appName)
+	shell, flag := shellCommand()
+	wait, err := startPostStartHookCommand(shell, flag, expanded)
+	if err != nil {
+		c.logger.Warn("Failed to start postStart agent hook",
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+		return false
+	}
+	go func() {
+		if err := wait(); err != nil {
+			c.logger.Warn("postStart agent hook exited with error",
+				zap.String("app_name", appName),
+				zap.Error(err),
+			)
+		}
+	}()
+	c.logger.Info("Started postStart agent hook",
+		zap.String("app_name", appName),
+	)
+	return true
 }
 
 // deleteStaleTask attempts to load and force-delete any existing task for the
