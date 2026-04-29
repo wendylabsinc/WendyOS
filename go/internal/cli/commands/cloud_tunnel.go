@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -19,6 +20,32 @@ import (
 )
 
 const defaultBrokerPort = "50053"
+
+// certXFCC builds the X-Forwarded-Client-Cert header value from stored cert
+// metadata. The server auth interceptor extracts the Wendy URI to identify
+// the caller when there is no TLS peer certificate (plaintext connections).
+func certXFCC(cert config.CertificateInfo) string {
+	if cert.UserID != "" {
+		return fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
+	}
+	return fmt.Sprintf("URI=urn:wendy:org:%d:user:unknown", cert.OrganizationID)
+}
+
+// cloudContext returns ctx enriched with cloud auth metadata.
+// The server checks TLS peer cert first and falls back to x-forwarded-client-cert,
+// so we always include the XFCC header; it is harmless when TLS peer cert is present.
+func cloudContext(ctx context.Context, auth *config.AuthConfig) context.Context {
+	if len(auth.Certificates) == 0 {
+		return ctx
+	}
+	cert := auth.Certificates[0]
+	md := metadata.MD{}
+	if auth.APIKey != "" {
+		md.Set("authorization", "Bearer "+auth.APIKey)
+	}
+	md.Set("x-forwarded-client-cert", certXFCC(cert))
+	return metadata.NewOutgoingContext(ctx, md)
+}
 
 // dialCloudBroker opens an mTLS gRPC connection to the tunnel broker.
 // brokerURL is host:port; if empty it is derived from auth.CloudGRPC.
@@ -35,19 +62,22 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
-	tlsCfg, err := certs.LoadTLSConfig(
-		cert.PemCertificate,
-		cert.PemCertificateChain,
-		cert.PemPrivateKey,
-		"",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("loading broker TLS config: %w", err)
+	var brokerTransport grpc.DialOption
+	if strings.HasSuffix(brokerURL, ":443") {
+		tlsCfg, err := certs.LoadTLSConfig(
+			cert.PemCertificate,
+			cert.PemCertificateChain,
+			cert.PemPrivateKey,
+			"",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading broker TLS config: %w", err)
+		}
+		brokerTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+	} else {
+		brokerTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	if !strings.HasSuffix(brokerURL, ":443") {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
-	}
-	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	conn, err := grpc.NewClient(brokerURL, brokerTransport)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
 	}
@@ -60,11 +90,7 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) (net.Conn, error) {
 	client := cloudpb.NewTunnelBrokerServiceClient(brokerConn)
 
-	callCtx := ctx
-	if auth.APIKey != "" {
-		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
-	}
-	stream, err := client.ClientTunnel(callCtx)
+	stream, err := client.ClientTunnel(cloudContext(ctx, auth))
 	if err != nil {
 		return nil, fmt.Errorf("opening tunnel stream: %w", err)
 	}
@@ -142,30 +168,29 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
-	tlsCfg, err := certs.LoadTLSConfig(
-		cert.PemCertificate,
-		cert.PemCertificateChain,
-		cert.PemPrivateKey,
-		"",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("loading TLS config: %w", err)
+	var cloudTransport grpc.DialOption
+	if strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg, err := certs.LoadTLSConfig(
+			cert.PemCertificate,
+			cert.PemCertificateChain,
+			cert.PemPrivateKey,
+			"",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading TLS config: %w", err)
+		}
+		cloudTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+	} else {
+		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	if !strings.HasSuffix(auth.CloudGRPC, ":443") {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	cloudConn, err := grpc.NewClient(auth.CloudGRPC, cloudTransport)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	callCtx := ctx
-	if auth.APIKey != "" {
-		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
-	}
-	resp, err := assetClient.ListAssets(callCtx, &cloudpb.ListAssetsRequest{
+	resp, err := assetClient.ListAssets(cloudContext(ctx, auth), &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(cert.OrganizationID),
 		IsComputeDevice: boolPtr(true),
 		PageSize:        100,

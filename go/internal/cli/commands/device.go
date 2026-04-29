@@ -32,7 +32,7 @@ import (
 	"golang.org/x/term"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func newDeviceCmd() *cobra.Command {
@@ -451,28 +451,28 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	}
 	cert := auth.Certificates[0]
 
-	tlsCfg, err := certs.LoadTLSConfig(
-		cert.PemCertificate,
-		cert.PemCertificateChain,
-		cert.PemPrivateKey,
-		"",
-	)
-	if err != nil {
-		return fmt.Errorf("loading TLS config: %w", err)
+	var cloudTransport grpc.DialOption
+	if strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg, err := certs.LoadTLSConfig(
+			cert.PemCertificate,
+			cert.PemCertificateChain,
+			cert.PemPrivateKey,
+			"",
+		)
+		if err != nil {
+			return fmt.Errorf("loading TLS config: %w", err)
+		}
+		cloudTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+	} else {
+		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	if !strings.HasSuffix(auth.CloudGRPC, ":443") {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	cloudConn, err := grpc.NewClient(auth.CloudGRPC, cloudTransport)
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
-	tokenCtx := ctx
-	if auth.APIKey != "" {
-		tokenCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
-	}
+	tokenCtx := cloudContext(ctx, auth)
 
 	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
 	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
