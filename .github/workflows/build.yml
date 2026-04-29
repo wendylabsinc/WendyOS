@@ -227,22 +227,44 @@ jobs:
           # Prefer s5cmd (parallel S3 client baked into the AMI). Fall back
           # to `aws s3 sync` so this step keeps working through the AMI rebuild
           # window after install-build-deps.sh changes land.
+          # NOTE: deliberately no `|| true` — a real failure (IAM regression,
+          # bucket typo, etc.) should fail the step loudly. s5cmd exits 0 when
+          # there's simply nothing to transfer.
           if command -v s5cmd >/dev/null 2>&1; then
             s3_sync() {
               # --size-only matches the prior aws-cli behavior; sstate filenames
               # are content-hashed so size is a reliable freshness check.
-              s5cmd sync --size-only "$1" "$2" || true
+              s5cmd sync --size-only "$1" "$2"
             }
             src_sstate_glob="s3://${CACHE_BUCKET}/sstate-cache/*"
             src_downloads_glob="s3://${CACHE_BUCKET}/downloads/*"
           else
             echo "::warning::s5cmd not found on runner; falling back to aws s3 sync"
             s3_sync() {
-              aws s3 sync --no-progress --size-only "$1" "$2" || true
+              aws s3 sync --no-progress --size-only "$1" "$2"
             }
             src_sstate_glob="s3://${CACHE_BUCKET}/sstate-cache/"
             src_downloads_glob="s3://${CACHE_BUCKET}/downloads/"
           fi
+
+          # Wrap each sync with timing + before/after size so the step is
+          # self-documenting even on no-op runs.
+          run_sync() {
+            local label="$1" src="$2" dst="$3" local_dir="$4"
+            echo "::group::$label"
+            echo "src=$src"
+            echo "dst=$dst"
+            if [[ -d "$local_dir" ]]; then
+              echo "local before: $(du -sh "$local_dir" 2>/dev/null | cut -f1) ($(find "$local_dir" -type f 2>/dev/null | wc -l) files)"
+            fi
+            local start; start=$(date +%s)
+            s3_sync "$src" "$dst"
+            echo "elapsed: $(( $(date +%s) - start ))s"
+            if [[ -d "$local_dir" ]]; then
+              echo "local after:  $(du -sh "$local_dir" 2>/dev/null | cut -f1) ($(find "$local_dir" -type f 2>/dev/null | wc -l) files)"
+            fi
+            echo "::endgroup::"
+          }
 
           # If the L1 EBS snapshot already restored a non-trivial sstate-cache,
           # skip the L2 sstate restore — at warm-cache scale (>200k objects)
@@ -261,13 +283,13 @@ jobs:
 
           if [[ "$sstate_files" -lt "$warm_threshold" ]]; then
             echo "Cold sstate-cache (${sstate_files} files seen); restoring from S3"
-            s3_sync "${src_sstate_glob}" "$GITHUB_WORKSPACE/sstate-cache/"
+            run_sync "restore sstate-cache" "${src_sstate_glob}" "$GITHUB_WORKSPACE/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache"
           else
             echo "Warm sstate-cache (>=${warm_threshold} files seen via L1 snapshot); skipping S3 restore"
           fi
 
           # downloads/ is not in the L1 snapshot, so always restore from S3.
-          s3_sync "${src_downloads_glob}" "$GITHUB_WORKSPACE/downloads/"
+          run_sync "restore downloads" "${src_downloads_glob}" "$GITHUB_WORKSPACE/downloads/" "$GITHUB_WORKSPACE/downloads"
 
       # ---------- Build ----------
 
@@ -324,23 +346,42 @@ jobs:
           # --size-only avoids re-uploading sstate siblings whose mtime drifted
           # but content matches. Sstate filenames are content-hashed, so file
           # size is a reliable freshness check.
+          # NOTE: deliberately no `|| true` — a real failure (IAM regression,
+          # bucket typo, etc.) should fail the step loudly. s5cmd exits 0 when
+          # there's simply nothing to transfer.
           if command -v s5cmd >/dev/null 2>&1; then
             s3_save() {
-              s5cmd sync --size-only "$1" "$2" || true
+              s5cmd sync --size-only "$1" "$2"
             }
             sstate_src="$GITHUB_WORKSPACE/sstate-cache/*"
             downloads_src="$GITHUB_WORKSPACE/downloads/*"
           else
             echo "::warning::s5cmd not found on runner; falling back to aws s3 sync"
             s3_save() {
-              aws s3 sync --no-progress --size-only "$1" "$2" || true
+              aws s3 sync --no-progress --size-only "$1" "$2"
             }
             sstate_src="$GITHUB_WORKSPACE/sstate-cache/"
             downloads_src="$GITHUB_WORKSPACE/downloads/"
           fi
 
+          run_save() {
+            local label="$1" src="$2" dst="$3" local_dir="$4"
+            echo "::group::$label"
+            echo "src=$src"
+            echo "dst=$dst"
+            if [[ -d "$local_dir" ]]; then
+              echo "local: $(du -sh "$local_dir" 2>/dev/null | cut -f1) ($(find "$local_dir" -type f 2>/dev/null | wc -l) files)"
+            fi
+            local start; start=$(date +%s)
+            s3_save "$src" "$dst"
+            echo "elapsed: $(( $(date +%s) - start ))s"
+            echo "::endgroup::"
+          }
+
           if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
-            s3_save "${sstate_src}" "s3://${CACHE_BUCKET}/sstate-cache/"
+            run_save "save sstate-cache" "${sstate_src}" "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache"
+          else
+            echo "No sstate-cache directory present; skipping sstate upload"
           fi
 
           # Skip the downloads/ upload on PR builds: PRs only need to *read*
@@ -348,7 +389,7 @@ jobs:
           # When merged to main, that build re-fetches and writes back. Saves
           # ~minutes of upload churn on every PR.
           if [[ "$GH_EVENT_NAME" != "pull_request" && -d "$GITHUB_WORKSPACE/downloads" ]]; then
-            s3_save "${downloads_src}" "s3://${CACHE_BUCKET}/downloads/"
+            run_save "save downloads" "${downloads_src}" "s3://${CACHE_BUCKET}/downloads/" "$GITHUB_WORKSPACE/downloads"
           else
             echo "Skipping downloads/ upload (event=${GH_EVENT_NAME})"
           fi
