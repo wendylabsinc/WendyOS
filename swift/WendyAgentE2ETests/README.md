@@ -9,22 +9,25 @@ cd swift/WendyAgentE2ETests
 swift test
 ```
 
-## Machine spec
+## Machine configuration
 
-`Machine` uses a compact SSH spec:
+`Machine` takes the SSH target and remote working directory separately:
 
-- `user@host:/path/to/repo`
+```swift
+let machine = try Machine(ssh: "user@host", path: "/path/to/repo")
+```
 
 Each command runs in its own SSH invocation.
 
 ## Run the smoke test
 
-The smoke test is gated behind `WENDY_E2E_SMOKE=1` and requires one remote
-machine spec:
+The smoke test is gated behind `WENDY_E2E_SMOKE=1` and requires an SSH target
+and remote working directory:
 
 ```bash
 cd swift/WendyAgentE2ETests
 WENDY_E2E_SMOKE=1 \
-E2E_MACHINE='user@host:~/wendy-agent' \
+E2E_MACHINE_SSH='user@host' \
+E2E_MACHINE_PATH='/path/to/wendy-agent' \
 swift test --filter MachineSmokeTests
 ```

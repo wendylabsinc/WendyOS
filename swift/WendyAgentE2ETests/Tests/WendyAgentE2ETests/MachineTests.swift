@@ -5,9 +5,9 @@ import Testing
 @testable import WendyAgentE2E
 
 struct MachineTests {
-    @Test("parse ssh machine spec")
-    func parseSSHMachineSpec() throws {
-        let machine = try Machine(ssh: "ai@example.local:~/wendy-agent")
+    @Test("creates SSH machine")
+    func createsSSHMachine() throws {
+        let machine = try Machine(ssh: "ai@example.local", path: "~/wendy-agent")
 
         #expect(machine.sshTarget == "ai@example.local")
         #expect(machine.baseDirectory == "~/wendy-agent")

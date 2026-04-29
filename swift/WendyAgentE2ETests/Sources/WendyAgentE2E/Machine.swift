@@ -13,8 +13,16 @@ public struct Machine: Sendable {
 
     // MARK: - Creating Machines
 
-    public init(ssh: String) throws {
-        try self.init(ssh, sshExecutable: "/usr/bin/ssh")
+    public init(ssh: String, path: String) throws {
+        guard !ssh.isEmpty, !path.isEmpty else {
+            throw MachineError.invalidMachineSpec("ssh: \(ssh), path: \(path)")
+        }
+
+        self.init(
+            sshTarget: ssh,
+            baseDirectory: path,
+            sshExecutable: "/usr/bin/ssh"
+        )
     }
 
     // MARK: - Running Commands
@@ -74,24 +82,6 @@ public struct Machine: Sendable {
     }
 
     // MARK: - Internal
-
-    init(_ spec: String, sshExecutable: String) throws {
-        guard let colonIndex = spec.firstIndex(of: ":") else {
-            throw MachineError.invalidMachineSpec(spec)
-        }
-
-        let target = String(spec[..<colonIndex])
-        let path = String(spec[spec.index(after: colonIndex)...])
-        guard !target.isEmpty, !path.isEmpty else {
-            throw MachineError.invalidMachineSpec(spec)
-        }
-
-        self.init(
-            sshTarget: target,
-            baseDirectory: path,
-            sshExecutable: sshExecutable
-        )
-    }
 
     init(
         sshTarget: String,
