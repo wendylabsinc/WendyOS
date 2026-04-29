@@ -20,38 +20,15 @@ ENV PROJECT=wendyos
 ENV TZ=America/Los_Angeles
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install the required packages
-RUN apt-get update && \
-    apt-get -qy upgrade && \
-    apt-get -qy install \
-        gawk wget git-core diffstat unzip texinfo \
-        build-essential chrpath socat cpio \
-        python3 python3-pip python3-pexpect python3-venv python3-git \
-        xz-utils bzip2 libxml2-utils debianutils iputils-ping \
-        python3-jinja2 python3-yaml libsdl1.2-dev xterm make \
-        xsltproc docbook-utils fop dblatex xmlto git-lfs u-boot-tools \
-        strace tree fdisk efitools uuid-runtime rsync \
-        lz4 zstd liblz4-tool graphviz \
-        python3-gi python3-gi-cairo gir1.2-gtk-3.0 x11-apps \
-        libncurses5-dev libncursesw5-dev bison flex patchutils \
-        libssl-dev ca-certificates locales sudo mc quilt vim pkg-config \
-        gdisk dosfstools bmap-tools device-tree-compiler && \
-    # gcc-multilib provides 32-bit x86 multilib headers and is only available
-    # on amd64. Skip it on arm64 (e.g. Apple Silicon Docker Desktop).
-    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        apt-get -qy install gcc-multilib; \
-    fi && \
-    apt-get -qy clean
+# Install the required packages. The package list lives in scripts/install-build-deps.sh
+# so the Packer-built CI runner AMI can install the exact same set with no drift.
+COPY ./files/install-build-deps.sh /tmp/install-build-deps.sh
+RUN /tmp/install-build-deps.sh && rm -f /tmp/install-build-deps.sh
 
 # By default, Ubuntu uses dash as an alias for sh.
 # Dash does not support the source command needed for setting up the build
 # environment in CMD. Use bash as an alias for sh.
 RUN rm /bin/sh && ln -s bash /bin/sh
-
-# Configure en_US.UTF-8 (Yocto build fails without any locale set)
-RUN locale-gen --purge en_US.UTF-8 && \
-    update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-COPY ./files/build.locale /etc/default/locale
 
 # The running container writes all the build artifacts to a host directory (outside the container).
 # The container can only write files to host directories, if it uses the same user ID and

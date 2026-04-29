@@ -1,0 +1,82 @@
+name: Build CI Runner AMI
+
+# Builds the WendyOS Yocto-builder AMI consumed by build.yml's RunsOn runners.
+# Rebuild only happens when the package list, pinned upstream SRCREVs, or the
+# Packer template itself changes. The weekly cron picks up Ubuntu security
+# updates. No untrusted webhook input is consumed below; only vars.* / secrets.*.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 0"
+  push:
+    branches: [main]
+    paths:
+      - "ci/packer/**"
+      - "scripts/install-build-deps.sh"
+      - "scripts/upstream-repos.env"
+      - ".github/workflows/build-ami.yml"
+
+jobs:
+  build:
+    name: Build runner AMI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PACKER_ROLE_ARN }}
+          aws-region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+
+      - name: Set up Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: latest
+
+      - name: packer init
+        working-directory: ci/packer
+        run: packer init .
+
+      - name: packer validate
+        working-directory: ci/packer
+        env:
+          PKR_VAR_aws_region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+        run: packer validate .
+
+      - name: packer build
+        working-directory: ci/packer
+        env:
+          PKR_VAR_aws_region: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+          PACKER_LOG: "1"
+        run: packer build -color=false wendyos-builder.pkr.hcl
+
+      # Deregister wendyos-builder AMIs older than 30 days so EBS snapshot
+      # costs don't grow without bound. Tags scope this strictly to AMIs
+      # this workflow produced.
+      - name: Prune AMIs older than 30 days
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          ami_ids=$(aws ec2 describe-images \
+            --owners self \
+            --filters "Name=tag:Project,Values=wendyos" "Name=tag:Component,Values=ci-builder" \
+            --query "Images[?CreationDate<'${cutoff}'].ImageId" \
+            --output text)
+          for ami in $ami_ids; do
+            echo "Deregistering ${ami}"
+            snap_ids=$(aws ec2 describe-images --image-ids "${ami}" \
+              --query 'Images[].BlockDeviceMappings[].Ebs.SnapshotId' --output text)
+            aws ec2 deregister-image --image-id "${ami}"
+            for snap in $snap_ids; do
+              aws ec2 delete-snapshot --snapshot-id "${snap}" || true
+            done
+          done

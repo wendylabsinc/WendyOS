@@ -1,0 +1,18 @@
+# RunsOn configuration. Custom AMIs referenced by jobs via the
+# `image=<name>` runner label.
+#
+# Reference: https://runs-on.com/configuration/runners/#images
+
+images:
+  # WendyOS Yocto build runner. Built by .github/workflows/build-ami.yml,
+  # consumed by the build matrix in .github/workflows/build.yml.
+  #
+  # `owner: self` resolves to the AWS account RunsOn is running in (the same
+  # account the AMI is built into), avoiding a hard-coded account ID in the
+  # repo. AWS DescribeImages accepts "self" as a documented special owner
+  # value, and RunsOn forwards it untouched.
+  wendyos-builder:
+    platform: linux
+    arch: x64
+    owner: self
+    name: "wendyos-builder-*"
