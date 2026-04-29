@@ -191,42 +191,41 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Agent Version: %s\n", agentVersion)
-			fmt.Printf("OS: %s %s\n", osName, osVersion)
-			fmt.Printf("Architecture: %s\n", cpuArch)
+			cliLogln("Agent Version: %s", agentVersion)
+			cliLogln("OS: %s %s", osName, osVersion)
+			cliLogln("Architecture: %s", cpuArch)
 			if deviceType != "" {
-				fmt.Printf("Device Type: %s\n", deviceType)
+				cliLogln("Device Type: %s", deviceType)
 			}
 			if storageMedium != "" {
-				fmt.Printf("Storage: %s\n", storageMedium)
+				cliLogln("Storage: %s", storageMedium)
 			}
 			if hasGPU {
 				vendor := gpuVendor
 				if vendor == "" {
 					vendor = "unknown"
 				}
-				fmt.Printf("GPU: %s\n", vendor)
+			cliLogln("GPU: %s", vendor)
 				if jetpackVersion != "" {
-					fmt.Printf("JetPack: %s\n", jetpackVersion)
+					cliLogln("JetPack: %s", jetpackVersion)
 				}
 				if cudaVersion != "" {
-					fmt.Printf("CUDA: %s\n", cudaVersion)
+					cliLogln("CUDA: %s", cudaVersion)
 				}
 			}
-			fmt.Printf("CLI Version: %s\n", version.Version)
+			cliLogln("CLI Version: %s", version.Version)
 
-			warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
-				fmt.Println(warn.Render("\nAgent is behind the CLI — run 'wendy device update' to update."))
+			cliNotice("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
 			} else if cmp < 0 {
-				fmt.Println(warn.Render("\nCLI is behind the agent — consider updating the CLI."))
+				cliNotice("\nNote: CLI is behind the agent. Consider updating the CLI.")
 			}
 
 			if checkUpdates {
 				if version.CompareVersions(latestVersion, agentVersion) > 0 {
-					fmt.Printf(warn.Render("\nUpdate available: %s (you have %s)")+"\nUpdate with: wendy device update\n", latestVersion, agentVersion)
+				cliNotice("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update", latestVersion, agentVersion)
 				} else {
-					fmt.Println("\nAgent is up to date.")
+					cliSuccess("\nAgent is up to date.")
 				}
 			}
 
@@ -267,7 +266,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Printf("Default device set to: %s\n", device)
+			cliSuccess("Default device set to: %s", device)
 			return nil
 		},
 	}
@@ -306,7 +305,7 @@ func newDeviceUnsetDefaultCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Println("Default device cleared.")
+			cliSuccess("Default device cleared.")
 			return nil
 		},
 	}
@@ -335,12 +334,12 @@ func newDeviceSetupCmd() *cobra.Command {
 
 			if provResp.GetProvisioned() != nil {
 				prov := provResp.GetProvisioned()
-				fmt.Printf("Device is already enrolled (org: %d, asset: %d, cloud: %s).\n",
+			cliSuccess("Device is already enrolled (org: %d, asset: %d, cloud: %s).",
 					prov.GetOrganizationId(), prov.GetAssetId(), prov.GetCloudHost())
 			} else {
-				fmt.Println("Device is not enrolled.")
+				cliNotice("Device is not enrolled.")
 				if loadCLICert() == nil {
-					fmt.Println("You are not logged in to Wendy Cloud.")
+					cliNotice("You are not logged in to Wendy Cloud.")
 					fmt.Print("Log in now? [Y/n] ")
 					answer, _ := reader.ReadString('\n')
 					answer = strings.TrimSpace(strings.ToLower(answer))
@@ -352,7 +351,7 @@ func newDeviceSetupCmd() *cobra.Command {
 				}
 
 				if auth := loadCLIAuth(); auth != nil {
-					// Collect the device name before enrolling (name cannot be changed after).
+				// Collect the device name before enrolling (name cannot be changed after).
 					fmt.Print("Device name: ")
 					line, _ := reader.ReadString('\n')
 					deviceName := strings.TrimSpace(line)
@@ -360,7 +359,7 @@ func newDeviceSetupCmd() *cobra.Command {
 						return fmt.Errorf("device name is required")
 					}
 					if enrollErr := runEnrollDevice(ctx, conn, auth, deviceName); enrollErr != nil {
-						fmt.Printf("Enrollment failed: %v\n", enrollErr)
+						cliNotice("Enrollment failed: %v", enrollErr)
 					}
 				}
 				fmt.Println()
@@ -371,29 +370,29 @@ func newDeviceSetupCmd() *cobra.Command {
 			ssid, pickErr := pickWifiNetwork(ctx, target)
 			if pickErr != nil {
 				if errors.Is(pickErr, ErrUserCancelled) {
-					fmt.Println("WiFi setup skipped.")
+					cliLogln("WiFi setup skipped.")
 				} else {
-					fmt.Printf("WiFi scan failed: %v\n", pickErr)
+					cliNotice("WiFi scan failed: %v", pickErr)
 				}
 			} else {
 				fmt.Print("Password (leave empty for open networks): ")
 				passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Println()
 				if readErr != nil {
-					fmt.Printf("Failed to read password: %v\n", readErr)
+					cliNotice("Failed to read password: %v", readErr)
 				} else {
 					password := strings.TrimSpace(string(passwordBytes))
-					fmt.Printf("Connecting to %s...\n", ssid)
+					cliLogln("Connecting to %s...", ssid)
 					wifiConnResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
 						Ssid:     ssid,
 						Password: password,
 					})
 					if connectErr != nil {
-						fmt.Printf("Failed to connect to WiFi: %v\n", connectErr)
+						cliNotice("Failed to connect to WiFi: %v", connectErr)
 					} else if !wifiConnResp.GetSuccess() {
-						fmt.Printf("Failed to connect: %s\n", wifiConnResp.GetErrorMessage())
+						cliNotice("Failed to connect: %s", wifiConnResp.GetErrorMessage())
 					} else {
-						fmt.Printf("Connected to %s.\n", ssid)
+						cliSuccess("Connected to %s.", ssid)
 					}
 				}
 			}
@@ -402,15 +401,15 @@ func newDeviceSetupCmd() *cobra.Command {
 			fmt.Println()
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
-				fmt.Printf("Unable to check agent version: %v\n", err)
+				cliNotice("Unable to check agent version: %v", err)
 			} else {
-				fmt.Printf("Agent version: %s\n", versionResp.GetVersion())
+				cliLogln("Agent version: %s", versionResp.GetVersion())
 				if cmp := version.CompareVersions(version.Version, versionResp.GetVersion()); cmp > 0 {
-					fmt.Println("Agent is behind the CLI — consider running 'wendy device update'.")
+					cliNotice("Agent is behind the CLI — consider running 'wendy device update'.")
 				}
 			}
 
-			fmt.Println("\nSetup complete.")
+			cliSuccess("\nSetup complete.")
 			return nil
 		},
 	}
@@ -563,7 +562,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
 
-	fmt.Println("Enrolling device...")
+	cliLogln("Enrolling device...")
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),
 		AssetId:         tokenResp.GetAssetId(),
@@ -574,7 +573,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("enrolling device: %w", err)
 	}
 
-	fmt.Printf("Device enrolled (org: %d, asset: %d).\n",
+	cliSuccess("Device enrolled (org: %d, asset: %d).",
 		tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 	return nil
 }
@@ -1362,7 +1361,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			} else {
 				// Auto-download: detect arch, fetch release, download binary.
 				if !jsonOutput {
-					fmt.Println("Detecting device architecture...")
+					cliLogln("Detecting device architecture...")
 				}
 				versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 				if err != nil {
@@ -1374,7 +1373,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("device did not report CPU architecture; use --binary to provide the binary manually")
 				}
 				if !jsonOutput {
-					fmt.Printf("Device architecture: %s\n", arch)
+					cliLogln("Device architecture: %s", arch)
 				}
 
 				releaseType := "stable"
@@ -1382,7 +1381,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					releaseType = "nightly"
 				}
 				if !jsonOutput {
-					fmt.Printf("Fetching latest %s release...\n", releaseType)
+					cliLogln("Fetching latest %s release...", releaseType)
 				}
 
 				release, err := fetchAgentRelease(nightly)
@@ -1390,7 +1389,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("fetching release: %w", err)
 				}
 				if !jsonOutput {
-					fmt.Printf("Found release: %s\n", release.TagName)
+					cliLogln("Found release: %s", release.TagName)
 				}
 
 				// Find matching asset: wendy-agent-linux-{arch}-*.tar.gz
@@ -1407,7 +1406,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 
 				if !jsonOutput {
-					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
+					cliLogln("Downloading %s...", matchedAsset.Name)
 				}
 				binaryData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
@@ -1439,7 +1438,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return updateErr
 				}
 			} else if !jsonOutput {
-				fmt.Println("Uploading agent binary...")
+				cliLogln("Uploading agent binary...")
 				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 					return err
 				}
@@ -1460,7 +1459,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 				fmt.Println(string(b))
 			} else {
-				fmt.Println("Agent updated successfully.")
+				cliSuccess("Agent updated successfully.")
 			}
 			return nil
 		},

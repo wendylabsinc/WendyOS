@@ -166,29 +166,27 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
-	fmt.Printf("  %s\n", loginURL)
+	cliLogln("Opening browser for authentication: %s", loginURL)
 
 	if err := openBrowser(loginURL); err != nil {
-		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
-		fmt.Printf("  %s\n", loginURL)
+		cliNotice("Could not open browser automatically. Please visit:\n  %s", loginURL)
 	}
 
 	// Show a QR code the user can scan with the Wendy iOS app to log in on their phone.
 	mobileRedirect := url.QueryEscape("wendy://cloud-login")
 	mobileLoginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, mobileRedirect)
 	if qr, qrErr := qrcode.New(mobileLoginURL, qrcode.Medium); qrErr == nil {
-		fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
+		cliLogln("Or scan with the Wendy iOS app:")
 		fmt.Println(qr.ToSmallString(false))
 	}
 
-	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
+	cliLogln("Waiting for authentication...")
 
 	// Wait for the token.
 	var enrollmentToken string
 	select {
 	case enrollmentToken = <-tokenCh:
-		fmt.Println(tui.SuccessMessage("Received enrollment token."))
+		cliLogln("Received enrollment token.")
 	case loginErr := <-errCh:
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
@@ -269,12 +267,12 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
+	cliSuccess("Authentication successful. Certificates saved.")
 
 	if len(issueResp.GetWarnings()) > 0 {
-		fmt.Println(tui.WarningMessage("Warnings:"))
+		cliNotice("Warnings:")
 		for _, w := range issueResp.GetWarnings() {
-			fmt.Printf("  - %s\n", w)
+			cliNotice("  - %s", w)
 		}
 	}
 
@@ -420,7 +418,7 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
+			cliSuccess("Logged out. All authentication credentials removed.")
 			return nil
 		},
 	}
@@ -446,18 +444,18 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 			// Refresh certificates for each auth entry.
 			for i, auth := range cfg.Auth {
 				if len(auth.Certificates) == 0 {
-					fmt.Println(tui.WarningMessage(fmt.Sprintf("Skipping %s: no certificates to refresh", auth.CloudDashboard)))
+				cliLogln("Skipping %s: no certificates to refresh", auth.CloudDashboard)
 					continue
 				}
 
-				fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", auth.CloudDashboard)))
+				cliLogln("Refreshing certificates for %s...", auth.CloudDashboard)
 
 				if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-					fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", auth.CloudDashboard, err)))
+					cliNotice("Failed to refresh for %s: %v", auth.CloudDashboard, err)
 					continue
 				}
 
-				fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", auth.CloudDashboard)))
+				cliSuccess("Certificates refreshed for %s.", auth.CloudDashboard)
 			}
 
 			if err := config.Save(cfg); err != nil {
