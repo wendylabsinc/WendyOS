@@ -19,7 +19,7 @@ type drive struct {
 	Size        string      // human-readable size
 	SizeBytes   int64       // size in bytes
 	IsRemovable bool
-	StorageType StorageType // underlying storage protocol
+	StorageType StorageType // detected medium: StorageSD, StorageNVMe, StorageEMMC, or StorageUnknown
 }
 
 // listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
@@ -90,7 +90,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 		size := ""
 		var sizeBytes int64
 		removable := isExternal
-		storageType := StorageUnknown
+		st := StorageUnknown
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
@@ -100,7 +100,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			if !isExternal {
 				removable = info.removable || info.ejectable
 			}
-			storageType = detectStorageTypeDarwin(info.protocol, info.name)
+			st = detectStorageTypeDarwin(info.protocol, info.name)
 		}
 
 		drives = append(drives, drive{
@@ -110,7 +110,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			Size:        size,
 			SizeBytes:   sizeBytes,
 			IsRemovable: removable,
-			StorageType: storageType,
+			StorageType: st,
 		})
 	}
 	return drives
@@ -122,7 +122,7 @@ type diskInfo struct {
 	sizeBytes int64
 	removable bool   // "Removable Media: Removable"
 	ejectable bool   // "Ejectable: Yes"
-	protocol  string // "Protocol:" field, e.g. "NVMe", "USB"
+	protocol  string // e.g. "SD", "USB", "SATA"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {

@@ -42,7 +42,7 @@ type drive struct {
 	Size        string      // human-readable size
 	SizeBytes   int64       // size in bytes
 	IsRemovable bool
-	StorageType StorageType // underlying storage protocol
+	StorageType StorageType // detected medium: StorageSD, StorageNVMe, StorageEMMC, or StorageUnknown
 }
 
 // lsblkOutput is the JSON output from lsblk.
@@ -136,10 +136,6 @@ func listDrivesLinux() ([]drive, error) {
 			sizeBytes = n
 		}
 
-		storageType := StorageUnknown
-		if dev.Transport == "nvme" {
-			storageType = StorageNVMe
-		}
 		drives = append(drives, drive{
 			DevicePath: devPath,
 			RawPath:    devPath,
@@ -149,7 +145,7 @@ func listDrivesLinux() ([]drive, error) {
 			// IsRemovable reflects our external-ness predicate so downstream code
 			// sees the same classification used to include this device.
 			IsRemovable: isExternal,
-			StorageType: storageType,
+			StorageType: detectStorageTypeLinux(dev.Transport, dev.Model, bool(dev.Removable)),
 		})
 	}
 
