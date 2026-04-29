@@ -219,6 +219,7 @@ func (s *mcpServer) handleContainerAttach(ctx context.Context, req mcpgo.CallToo
 	}); err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
+	_ = stream.CloseSend()
 
 	var sb strings.Builder
 	collected := 0

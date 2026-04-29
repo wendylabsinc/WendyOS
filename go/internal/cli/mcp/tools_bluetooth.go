@@ -60,6 +60,7 @@ func (s *mcpServer) handleBluetoothScan(ctx context.Context, req mcpgo.CallToolR
 	if err := stream.Send(&agentpb.ScanBluetoothPeripheralsRequest{}); err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
+	_ = stream.CloseSend()
 
 	seen := map[string]map[string]any{}
 	for {
