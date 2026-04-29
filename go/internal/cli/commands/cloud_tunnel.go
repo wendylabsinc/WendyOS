@@ -32,6 +32,9 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		brokerURL = net.JoinHostPort(host, defaultBrokerPort)
 	}
 
+	if len(auth.Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
 	cert := auth.Certificates[0]
 	tlsCfg, err := certs.LoadTLSConfig(
 		cert.PemCertificate,
@@ -44,6 +47,7 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 	}
 
 	var transportCreds grpc.DialOption
+	// Non-443 endpoints are assumed to be local dev brokers (plain TCP).
 	if strings.HasSuffix(brokerURL, ":443") {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	} else {
@@ -140,6 +144,9 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 // picker. If deviceName is non-empty and matches exactly one asset name
 // (case-insensitive), the picker is skipped.
 func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName string) (*cloudpb.Asset, error) {
+	if len(auth.Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
 	cert := auth.Certificates[0]
 	tlsCfg, err := certs.LoadTLSConfig(
 		cert.PemCertificate,
@@ -152,6 +159,7 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	}
 
 	var transportCreds grpc.DialOption
+	// Non-443 endpoints are assumed to be local dev or pki-core instances (plain TCP).
 	if strings.HasSuffix(auth.CloudGRPC, ":443") {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	} else {
