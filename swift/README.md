@@ -8,6 +8,7 @@ This directory contains:
 
 - `WendyAgentCore/` — the shared Swift package that implements the agent runtime, gRPC services, Bonjour advertising, and local OpenTelemetry ingestion.
 - `WendyAgentMac/` — a lightweight macOS menu bar app that launches and manages `WendyAgent`, organized into `Sources/`, `Assets/`, and `Design/`.
+- `WendyAgentE2ETests/` — a small standalone Swift package for script-like end-to-end tests built around a `Machine` helper.
 - `WendyAgent.xcworkspace/` — the Xcode workspace for working on the app and package together.
 - `Scripts/` — helper scripts, including protobuf generation.
 
@@ -53,6 +54,7 @@ swift/
 ├── Scripts/
 ├── WendyAgent.xcworkspace/
 ├── WendyAgentCore/
+├── WendyAgentE2ETests/
 └── WendyAgentMac/
     ├── Assets/
     ├── Design/
