@@ -100,4 +100,3 @@ func stringParam(req mcpgo.CallToolRequest, name string) string {
 func intParam(req mcpgo.CallToolRequest, name string, defaultVal int) int {
 	return req.GetInt(name, defaultVal)
 }
-

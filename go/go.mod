@@ -18,6 +18,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/mdns v1.0.6
+	github.com/mark3labs/mcp-go v0.49.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/posthog/posthog-go v1.12.1
@@ -68,7 +69,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
-	github.com/mark3labs/mcp-go v0.49.0 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect

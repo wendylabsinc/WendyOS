@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -86,24 +85,30 @@ func (s *mcpServer) handleProvisioningStart(ctx context.Context, req mcpgo.CallT
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
 
-	// Poll until provisioned or 2-minute timeout.
-	deadline := time.Now().Add(2 * time.Minute)
-	for time.Now().Before(deadline) {
-		time.Sleep(3 * time.Second)
-		statusResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
-		if err != nil {
-			return mcpgo.NewToolResultError(grpcErrString(err)), nil
-		}
-		if p, ok := statusResp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned); ok {
-			result := map[string]any{
-				"provisioned":     true,
-				"cloud_host":      p.Provisioned.GetCloudHost(),
-				"organization_id": p.Provisioned.GetOrganizationId(),
-				"asset_id":        p.Provisioned.GetAssetId(),
+	// Poll until provisioned, caller cancelled, or 2-minute timeout.
+	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-pollCtx.Done():
+			return mcpgo.NewToolResultError("provisioning timed out — check status with provisioning_status"), nil
+		case <-ticker.C:
+			statusResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+			if err != nil {
+				return mcpgo.NewToolResultError(grpcErrString(err)), nil
 			}
-			b, _ := json.MarshalIndent(result, "", "  ")
-			return mcpgo.NewToolResultText(string(b)), nil
+			if p, ok := statusResp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned); ok {
+				result := map[string]any{
+					"provisioned":     true,
+					"cloud_host":      p.Provisioned.GetCloudHost(),
+					"organization_id": p.Provisioned.GetOrganizationId(),
+					"asset_id":        p.Provisioned.GetAssetId(),
+				}
+				b, _ := json.MarshalIndent(result, "", "  ")
+				return mcpgo.NewToolResultText(string(b)), nil
+			}
 		}
 	}
-	return mcpgo.NewToolResultError(fmt.Sprintf("provisioning timed out after 2 minutes — check status with provisioning_status")), nil
 }

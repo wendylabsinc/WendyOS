@@ -16,9 +16,9 @@ import (
 
 type fakeTelemetryServer struct {
 	agentpb.UnimplementedWendyTelemetryServiceServer
-	logBatches     []*agentpb.StreamLogsResponse
-	metricBatches  []*agentpb.StreamMetricsResponse
-	traceBatches   []*agentpb.StreamTracesResponse
+	logBatches    []*agentpb.StreamLogsResponse
+	metricBatches []*agentpb.StreamMetricsResponse
+	traceBatches  []*agentpb.StreamTracesResponse
 }
 
 func (s *fakeTelemetryServer) StreamLogs(_ *agentpb.StreamLogsRequest, stream agentpb.WendyTelemetryService_StreamLogsServer) error {

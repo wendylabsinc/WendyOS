@@ -71,11 +71,12 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 
 // collectProtoStream receives up to maxBatches messages from stream, marshals
 // each to JSON with protojson, and returns them as a JSON array string.
+// Returns an error string on non-EOF stream failures.
 func collectProtoStream[T proto.Message](
 	ctx context.Context,
 	recv func() (T, error),
 	maxBatches int,
-) string {
+) (string, error) {
 	var parts []string
 	for len(parts) < maxBatches {
 		msg, err := recv()
@@ -86,7 +87,7 @@ func collectProtoStream[T proto.Message](
 			if ctx.Err() != nil {
 				break
 			}
-			break
+			return "", err
 		}
 		b, err := telemetryProtoJSON.Marshal(msg)
 		if err != nil {
@@ -95,9 +96,9 @@ func collectProtoStream[T proto.Message](
 		parts = append(parts, string(b))
 	}
 	if len(parts) == 0 {
-		return "[]"
+		return "[]", nil
 	}
-	return "[" + strings.Join(parts, ",\n") + "]"
+	return "[" + strings.Join(parts, ",\n") + "]", nil
 }
 
 func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -126,9 +127,12 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
-	result := collectProtoStream(ctx, func() (*agentpb.StreamLogsResponse, error) {
+	result, err := collectProtoStream(ctx, func() (*agentpb.StreamLogsResponse, error) {
 		return stream.Recv()
 	}, maxBatches)
+	if err != nil {
+		return mcpgo.NewToolResultError(grpcErrString(err)), nil
+	}
 	return mcpgo.NewToolResultText(result), nil
 }
 
@@ -157,9 +161,12 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
-	result := collectProtoStream(ctx, func() (*agentpb.StreamMetricsResponse, error) {
+	result, err := collectProtoStream(ctx, func() (*agentpb.StreamMetricsResponse, error) {
 		return stream.Recv()
 	}, maxBatches)
+	if err != nil {
+		return mcpgo.NewToolResultError(grpcErrString(err)), nil
+	}
 	return mcpgo.NewToolResultText(result), nil
 }
 
@@ -188,8 +195,11 @@ func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToo
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
-	result := collectProtoStream(ctx, func() (*agentpb.StreamTracesResponse, error) {
+	result, err := collectProtoStream(ctx, func() (*agentpb.StreamTracesResponse, error) {
 		return stream.Recv()
 	}, maxBatches)
+	if err != nil {
+		return mcpgo.NewToolResultError(grpcErrString(err)), nil
+	}
 	return mcpgo.NewToolResultText(result), nil
 }

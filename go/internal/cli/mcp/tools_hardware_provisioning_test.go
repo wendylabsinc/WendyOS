@@ -20,9 +20,9 @@ import (
 type fakeHWProvisioningOSServer struct {
 	agentpb.UnimplementedWendyAgentServiceServer
 	agentpb.UnimplementedWendyProvisioningServiceServer
-	capabilities    []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
-	isProvisioned   *agentpb.IsProvisionedResponse
-	osResponses     []*agentpb.UpdateOSResponse
+	capabilities  []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
+	isProvisioned *agentpb.IsProvisionedResponse
+	osResponses   []*agentpb.UpdateOSResponse
 }
 
 func (s *fakeHWProvisioningOSServer) ListHardwareCapabilities(_ context.Context, _ *agentpb.ListHardwareCapabilitiesRequest) (*agentpb.ListHardwareCapabilitiesResponse, error) {
@@ -213,7 +213,16 @@ func TestProvisioningStatus_Provisioned(t *testing.T) {
 }
 
 func TestProvisioningStart_Success(t *testing.T) {
-	fake := &fakeHWProvisioningOSServer{}
+	fake := &fakeHWProvisioningOSServer{
+		isProvisioned: &agentpb.IsProvisionedResponse{
+			Response: &agentpb.IsProvisionedResponse_Provisioned{
+				Provisioned: &agentpb.ProvisionedResponse{
+					CloudHost:      "cloud.wendy.sh",
+					OrganizationId: 1,
+				},
+			},
+		},
+	}
 	conn := startFakeHWProvisioningServer(t, fake)
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)

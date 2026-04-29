@@ -109,24 +109,34 @@ func (s *mcpServer) handleContainerStart(ctx context.Context, req mcpgo.CallTool
 	if appName == "" {
 		return mcpgo.NewToolResultError("app_name is required"), nil
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{AppName: appName})
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
 	}
 	var sb strings.Builder
-	for {
+	chunks := 0
+	for chunks < 200 {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			return mcpgo.NewToolResultError(grpcErrString(err)), nil
 		}
 		switch resp.ResponseType.(type) {
 		case *agentpb.RunContainerLayersResponse_StdoutOutput:
 			sb.Write(resp.GetStdoutOutput().GetData())
+			chunks++
 		case *agentpb.RunContainerLayersResponse_StderrOutput:
 			sb.Write(resp.GetStderrOutput().GetData())
+			chunks++
 		}
 	}
 	out := sb.String()
