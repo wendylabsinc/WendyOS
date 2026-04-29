@@ -11,7 +11,9 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -131,6 +133,43 @@ func TestGetAgentVersion(t *testing.T) {
 	}
 	if resp.CpuArchitecture != runtime.GOARCH {
 		t.Errorf("arch = %q; want %q", resp.CpuArchitecture, runtime.GOARCH)
+	}
+}
+
+func TestGetSystemInfo(t *testing.T) {
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	resp, err := client.GetSystemInfo(context.Background(), &agentpb.GetSystemInfoRequest{})
+	if err != nil {
+		t.Fatalf("GetSystemInfo: %v", err)
+	}
+	if resp.GetCpu().GetArchitecture() != runtime.GOARCH {
+		t.Errorf("cpu.architecture = %q; want %q", resp.GetCpu().GetArchitecture(), runtime.GOARCH)
+	}
+	if resp.GetCpu().GetLogicalCores() == 0 {
+		t.Error("cpu.logical_cores should be reported")
+	}
+	if resp.GetMemory() == nil {
+		t.Error("memory should be present")
+	}
+	if resp.GetCollectedAtUnixSeconds() == 0 {
+		t.Error("collected_at_unix_seconds should be set")
+	}
+}
+
+func TestGetSystemInfoPreservesContextStatus(t *testing.T) {
+	svc := NewAgentService(zap.NewNop(), &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.GetSystemInfo(ctx, &agentpb.GetSystemInfoRequest{})
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("status.Code(err) = %s; want %s", status.Code(err), codes.Canceled)
 	}
 }
 

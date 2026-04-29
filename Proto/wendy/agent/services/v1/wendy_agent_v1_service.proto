@@ -12,6 +12,9 @@ service WendyAgentService {
     rpc UpdateAgent(stream UpdateAgentRequest) returns (stream UpdateAgentResponse);
 
     rpc GetAgentVersion(GetAgentVersionRequest) returns (GetAgentVersionResponse);
+
+    // Get current device resource information from the agent host.
+    rpc GetSystemInfo(GetSystemInfoRequest) returns (GetSystemInfoResponse);
     
     // List available WiFi networks
     rpc ListWiFiNetworks(ListWiFiNetworksRequest) returns (ListWiFiNetworksResponse);
@@ -178,6 +181,45 @@ message GetAgentVersionResponse {
     optional string cuda_version = 11;
     // STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
     optional string storage_medium = 12;
+}
+
+message GetSystemInfoRequest {
+
+}
+
+message GetSystemInfoResponse {
+    CPUInfo cpu = 1;
+    MemoryInfo memory = 2;
+    repeated DiskInfo disks = 3;
+    int64 collected_at_unix_seconds = 4;
+
+    message CPUInfo {
+        string architecture = 1;
+        uint32 logical_cores = 2;
+        optional string model_name = 3;
+        optional double usage_percent = 4;
+        optional double load_average_1m = 5;
+        optional double load_average_5m = 6;
+        optional double load_average_15m = 7;
+    }
+
+    message MemoryInfo {
+        uint64 total_bytes = 1;
+        uint64 used_bytes = 2;
+        uint64 available_bytes = 3;
+        double used_percent = 4;
+    }
+
+    message DiskInfo {
+        string mount_point = 1;
+        string source = 2;
+        string filesystem_type = 3;
+        uint64 total_bytes = 4;
+        uint64 used_bytes = 5;
+        uint64 free_bytes = 6;
+        uint64 available_bytes = 7;
+        double used_percent = 8;
+    }
 }
 
 // Request message for listing WiFi networks

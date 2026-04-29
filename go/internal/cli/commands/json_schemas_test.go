@@ -10,6 +10,92 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
+// ---------- device info --json ----------
+
+func TestDeviceInfoJSONIncludesSystemResources(t *testing.T) {
+	osVersion := "Ubuntu 24.04"
+	hasGPU := true
+	gpuVendor := "nvidia"
+	model := "Test CPU"
+	usage := 12.5
+	load1 := 1.1
+	load5 := 1.2
+	load15 := 1.3
+	versionResp := &agentpb.GetAgentVersionResponse{
+		Version:         "1.2.3",
+		Os:              "linux",
+		OsVersion:       &osVersion,
+		CpuArchitecture: "arm64",
+		HasGpu:          &hasGPU,
+		GpuVendor:       &gpuVendor,
+	}
+	systemInfo := &agentpb.GetSystemInfoResponse{
+		Cpu: &agentpb.GetSystemInfoResponse_CPUInfo{
+			Architecture:    "arm64",
+			LogicalCores:    8,
+			ModelName:       &model,
+			UsagePercent:    &usage,
+			LoadAverage_1M:  &load1,
+			LoadAverage_5M:  &load5,
+			LoadAverage_15M: &load15,
+		},
+		Memory: &agentpb.GetSystemInfoResponse_MemoryInfo{
+			TotalBytes:     16_000,
+			UsedBytes:      6_000,
+			AvailableBytes: 10_000,
+			UsedPercent:    37.5,
+		},
+		Disks: []*agentpb.GetSystemInfoResponse_DiskInfo{
+			{
+				MountPoint:     "/",
+				Source:         "/dev/nvme0n1p2",
+				FilesystemType: "ext4",
+				TotalBytes:     100_000,
+				UsedBytes:      40_000,
+				FreeBytes:      60_000,
+				AvailableBytes: 55_000,
+				UsedPercent:    40,
+			},
+		},
+		CollectedAtUnixSeconds: 42,
+	}
+
+	data, err := json.Marshal(buildDeviceInfoJSON(versionResp, systemInfo, nil, "", false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if parsed["version"] != "1.2.3" {
+		t.Fatalf("version = %v; want 1.2.3", parsed["version"])
+	}
+	cpu, ok := parsed["cpu"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("cpu should be an object, got %T", parsed["cpu"])
+	}
+	if cpu["modelName"] != "Test CPU" {
+		t.Fatalf("cpu.modelName = %v; want Test CPU", cpu["modelName"])
+	}
+	memory, ok := parsed["memory"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("memory should be an object, got %T", parsed["memory"])
+	}
+	if memory["totalBytes"] != float64(16_000) {
+		t.Fatalf("memory.totalBytes = %v; want 16000", memory["totalBytes"])
+	}
+	disks, ok := parsed["disks"].([]interface{})
+	if !ok || len(disks) != 1 {
+		t.Fatalf("disks = %T len=%d; want one disk", parsed["disks"], len(disks))
+	}
+	disk := disks[0].(map[string]interface{})
+	if disk["mountPoint"] != "/" {
+		t.Fatalf("disk.mountPoint = %v; want /", disk["mountPoint"])
+	}
+}
+
 // ---------- device apps list --json ----------
 
 // TestAppsListJSON verifies the JSON schema produced by `wendy device apps list --json`.

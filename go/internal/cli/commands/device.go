@@ -89,7 +89,7 @@ func newDeviceVersionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "version",
 		Aliases: []string{"info"},
-		Short:   "Show agent version, OS, architecture, GPU, and hardware info for the target device",
+		Short:   "Show live agent, OS, CPU, memory, disk, GPU, and hardware info for the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
@@ -103,8 +103,6 @@ func newDeviceVersionCmd() *cobra.Command {
 				return fmt.Errorf("getting agent version: %w", err)
 			}
 
-			agentVersion := resp.GetVersion()
-
 			var latestVersion string
 			if checkUpdates {
 				release, err := fetchAgentRelease(prerelease)
@@ -114,32 +112,13 @@ func newDeviceVersionCmd() *cobra.Command {
 				latestVersion = release.TagName
 			}
 
+			systemInfo, systemErr := conn.AgentService.GetSystemInfo(ctx, &agentpb.GetSystemInfoRequest{})
+			if shouldFailDeviceSystemInfo(systemErr) {
+				return fmt.Errorf("getting system info: %w", systemErr)
+			}
+
 			if jsonOutput {
-				out := map[string]any{
-					"version":         agentVersion,
-					"os":              resp.GetOs(),
-					"osVersion":       resp.GetOsVersion(),
-					"cpuArchitecture": resp.GetCpuArchitecture(),
-					"deviceType":      resp.GetDeviceType(),
-					"cliVersion":      version.Version,
-					"hasGpu":          resp.GetHasGpu(),
-				}
-				if sm := resp.GetStorageMedium(); sm != "" {
-					out["storageMedium"] = sm
-				}
-				if v := resp.GetGpuVendor(); v != "" {
-					out["gpuVendor"] = v
-				}
-				if jv := resp.GetJetpackVersion(); jv != "" {
-					out["jetpackVersion"] = jv
-				}
-				if cv := resp.GetCudaVersion(); cv != "" {
-					out["cudaVersion"] = cv
-				}
-				if checkUpdates {
-					out["latestVersion"] = latestVersion
-					out["updateAvailable"] = version.CompareVersions(latestVersion, agentVersion) > 0
-				}
+				out := buildDeviceInfoJSON(resp, systemInfo, systemErr, latestVersion, checkUpdates)
 				data, err := json.MarshalIndent(out, "", "  ")
 				if err != nil {
 					return err
@@ -148,44 +127,15 @@ func newDeviceVersionCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Agent Version: %s\n", agentVersion)
-			fmt.Printf("OS: %s %s\n", resp.GetOs(), resp.GetOsVersion())
-			fmt.Printf("Architecture: %s\n", resp.GetCpuArchitecture())
-			if dt := resp.GetDeviceType(); dt != "" {
-				fmt.Printf("Device Type: %s\n", dt)
-			}
-			if sm := resp.GetStorageMedium(); sm != "" {
-				fmt.Printf("Storage: %s\n", sm)
-			}
-			if resp.GetHasGpu() {
-				vendor := resp.GetGpuVendor()
-				if vendor == "" {
-					vendor = "unknown"
+			if isInteractiveTerminal() {
+				model := newDeviceInfoModel(conn, ctx, resp, systemInfo, systemErr, latestVersion, checkUpdates)
+				if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
+					return fmt.Errorf("device info: %w", err)
 				}
-				fmt.Printf("GPU: %s\n", vendor)
-				if jv := resp.GetJetpackVersion(); jv != "" {
-					fmt.Printf("JetPack: %s\n", jv)
-				}
-				if cv := resp.GetCudaVersion(); cv != "" {
-					fmt.Printf("CUDA: %s\n", cv)
-				}
-			}
-			fmt.Printf("CLI Version: %s\n", version.Version)
-
-			if cmp := version.CompareVersions(version.Version, agentVersion); cmp > 0 {
-				fmt.Println("\nNote: Agent is behind the CLI. Consider running 'wendy device update'.")
-			} else if cmp < 0 {
-				fmt.Println("\nNote: CLI is behind the agent. Consider updating the CLI.")
+				return nil
 			}
 
-			if checkUpdates {
-				if version.CompareVersions(latestVersion, agentVersion) > 0 {
-					fmt.Printf("\nUpdate available: %s (you have %s)\nUpdate with: wendy device update\n", latestVersion, agentVersion)
-				} else {
-					fmt.Println("\nAgent is up to date.")
-				}
-			}
-
+			printDeviceInfoText(resp, systemInfo, systemErr, latestVersion, checkUpdates)
 			return nil
 		},
 	}
