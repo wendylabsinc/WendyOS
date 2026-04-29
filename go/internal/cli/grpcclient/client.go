@@ -152,3 +152,9 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),
 	}
 }
+
+// NewFromConn wraps an existing gRPC connection as an AgentConnection.
+// Use this when the caller manages its own dialing (e.g. a cloud tunnel).
+func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
+	return newAgentConnection(conn)
+}
