@@ -35,13 +35,13 @@ func TestScanDDProgress_Linux(t *testing.T) {
 
 func TestScanDDProgress_macOS(t *testing.T) {
 	// BSD dd `status=progress` (Monterey+) updates with '\r' and ends with
-	// a newline-terminated three-line summary on completion. The mid-stream
-	// format omits "in":
-	//   <bytes> bytes (<a> <unit>, <b> <unit>) transferred <s>s, <r>/s
-	// The final summary line uses "transferred in" instead.
+	// a newline-terminated three-line summary on completion. Critically,
+	// macOS dd right-pads the byte count with leading spaces so the column
+	// stays aligned as digits grow — we must skip that whitespace, not
+	// treat it as the token boundary.
 	input := "" +
-		"73519857664 bytes (74 GB, 68 GiB) transferred 1.004s, 73 GB/s\r" +
-		"146314100736 bytes (146 GB, 136 GiB) transferred 1.998s, 73 GB/s\r" +
+		"   73519857664 bytes (74 GB, 68 GiB) transferred 1.004s, 73 GB/s\r" +
+		"  146314100736 bytes (146 GB, 136 GiB) transferred 1.998s, 73 GB/s\r" +
 		"100+0 records in\n" +
 		"100+0 records out\n" +
 		"209715200 bytes transferred in 2.500 secs (83886080 bytes/sec)\n"
