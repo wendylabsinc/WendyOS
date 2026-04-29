@@ -5,9 +5,13 @@ import WendyE2ETesting
 struct AgentE2ETests {
     @Test("build CLI and agent", .timeLimit(.minutes(10)))
     func buildCLIAndAgent() async throws {
-        let repository = Self.repositoryDirectory()
-        let cli = Machine(name: "CLI", workingDirectory: repository.appendingPathComponent("go").path)
-        let agent = Machine(name: "Agent", workingDirectory: repository.appendingPathComponent("swift").path)
+        let rootDirectoryURL = Self.rootDirectoryURL()
+
+        let goDirectoryPath = rootDirectoryURL.appendingPathComponent("go").path
+        let swiftDirectoryPath = rootDirectoryURL.appendingPathComponent("go").path
+
+        let cli = Machine(name: "CLI", workingDirectory: goDirectoryPath)
+        let agent = Machine(name: "Agent", workingDirectory: swiftDirectoryPath)
 
         try await cli.run("make build")
         try await agent.run("make build-dev")
@@ -15,7 +19,7 @@ struct AgentE2ETests {
         print("All done!")
     }
 
-    private static func repositoryDirectory() -> URL {
+    private static func rootDirectoryURL() -> URL {
         URL(fileURLWithPath: #filePath, isDirectory: false)
             .deletingLastPathComponent()  // Tests/WendyAgentE2ETests
             .deletingLastPathComponent()  // Tests
