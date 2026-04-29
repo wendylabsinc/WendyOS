@@ -60,7 +60,7 @@ main() {
 
 CUDA_VER=$cuda_ver
 CUDA_HOME=/usr/local/cuda-$cuda_ver
-PATH=/usr/local/cuda-$cuda_ver/bin:\$PATH
+PATH=/usr/local/cuda-$cuda_ver/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LD_LIBRARY_PATH=/usr/local/cuda-$cuda_ver/lib:/usr/lib
 EOF
 
