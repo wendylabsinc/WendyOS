@@ -50,19 +50,14 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	// Check if already cached — zip format (new) or legacy extracted img.
-	cached := ""
-	if zipPath, zpErr := osCachedZipPath(selectedKey, version); zpErr == nil {
-		if info, statErr := os.Stat(zipPath); statErr == nil && info.Size() > 0 {
-			cached = zipPath
-		}
+	// Check if already cached.
+	cachePath, err := osCachedImagePath(selectedKey, imgInfo.Version, imgInfo.Storage)
+	if err != nil {
+		return err
 	}
-	if cached == "" {
-		if imgPath, ipErr := osCachedImagePath(selectedKey, version); ipErr == nil {
-			if info, statErr := os.Stat(imgPath); statErr == nil && info.Size() > 0 {
-				cached = imgPath
-			}
-		}
+	cached := ""
+	if info, statErr := os.Stat(cachePath); statErr == nil && info.Size() > 0 {
+		cached = cachePath
 	}
 
 	if cached != "" {

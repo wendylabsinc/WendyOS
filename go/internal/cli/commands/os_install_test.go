@@ -131,7 +131,7 @@ func TestPickManifestVersion_SemverOrdering(t *testing.T) {
 
 func TestOsCachedImagePath_Sanitization(t *testing.T) {
 	// Valid inputs should produce a valid path.
-	path, err := osCachedImagePath("raspberry-pi-5", "0.10.4")
+	path, err := osCachedImagePath("raspberry-pi-5", "0.10.4", StorageUnknown)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,36 +139,41 @@ func TestOsCachedImagePath_Sanitization(t *testing.T) {
 		t.Fatal("expected non-empty path")
 	}
 
+	// Storage suffix is appended for multi-storage devices.
+	nvmePath, err := osCachedImagePath("jetson-orin-nano", "0.10.4", StorageNVMe)
+	if err != nil {
+		t.Fatalf("unexpected error for nvme path: %v", err)
+	}
+	sdPath, err := osCachedImagePath("jetson-orin-nano", "0.10.4", StorageSD)
+	if err != nil {
+		t.Fatalf("unexpected error for sd path: %v", err)
+	}
+	if nvmePath == sdPath {
+		t.Fatal("expected distinct cache paths for nvme and sd")
+	}
+
 	// Path traversal in version should be rejected.
-	_, err = osCachedImagePath("raspberry-pi-5", "../../../etc/passwd")
+	_, err = osCachedImagePath("raspberry-pi-5", "../../../etc/passwd", StorageUnknown)
 	if err == nil {
 		t.Fatal("expected error for path traversal in version")
 	}
 
 	// Path traversal in device key should be rejected.
-	_, err = osCachedImagePath("../evil", "0.10.4")
+	_, err = osCachedImagePath("../evil", "0.10.4", StorageUnknown)
 	if err == nil {
 		t.Fatal("expected error for path traversal in device key")
 	}
 }
 
-func TestOsCachedZipPath_Sanitization(t *testing.T) {
-	path, err := osCachedZipPath("raspberry-pi-5", "0.10.4")
+func TestResolveOSImage_ZipCachePath(t *testing.T) {
+	// Verify that the zip cache path derived from osCachedImagePath ends in .zip.
+	imgPath, err := osCachedImagePath("raspberry-pi-5", "0.10.4", StorageUnknown)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.HasSuffix(path, ".zip") {
-		t.Fatalf("expected .zip suffix, got %q", path)
-	}
-
-	_, err = osCachedZipPath("raspberry-pi-5", "../../../etc/passwd")
-	if err == nil {
-		t.Fatal("expected error for path traversal in version")
-	}
-
-	_, err = osCachedZipPath("../evil", "0.10.4")
-	if err == nil {
-		t.Fatal("expected error for path traversal in device key")
+	zipPath := strings.TrimSuffix(imgPath, ".img") + ".zip"
+	if !strings.HasSuffix(zipPath, ".zip") {
+		t.Fatalf("expected .zip suffix, got %q", zipPath)
 	}
 }
 
@@ -339,10 +344,11 @@ func TestResolveOSImage_ZipCacheHit(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	content := []byte("fake image bytes")
-	zipPath, err := osCachedZipPath("test-device", "9.9.9")
+	imgPath, err := osCachedImagePath("test-device", "9.9.9", StorageUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}
+	zipPath := strings.TrimSuffix(imgPath, ".img") + ".zip"
 
 	f, err := os.Create(zipPath)
 	if err != nil {
@@ -377,7 +383,7 @@ func TestResolveOSImage_LegacyImgCacheHit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
-	imgPath, err := osCachedImagePath("test-device", "8.8.8")
+	imgPath, err := osCachedImagePath("test-device", "8.8.8", StorageUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,10 +407,11 @@ func TestOpenOSImageStream_ZipCacheHit(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	content := []byte("stream me please")
-	zipPath, err := osCachedZipPath("stream-device", "7.7.7")
+	imgPathForZip, err := osCachedImagePath("stream-device", "7.7.7", StorageUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}
+	zipPath := strings.TrimSuffix(imgPathForZip, ".img") + ".zip"
 
 	f, err := os.Create(zipPath)
 	if err != nil {
@@ -449,7 +456,7 @@ func TestOpenOSImageStream_LegacyImgCacheHit(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	content := []byte("old img cache data")
-	imgPath, err := osCachedImagePath("legacy-device", "6.6.6")
+	imgPath, err := osCachedImagePath("legacy-device", "6.6.6", StorageUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}

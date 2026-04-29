@@ -13,11 +13,11 @@ import (
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
-	DevicePath  string // e.g. /dev/disk4
-	RawPath     string // e.g. /dev/rdisk4
-	Name        string // human-readable name
-	Size        string // human-readable size
-	SizeBytes   int64  // size in bytes
+	DevicePath  string      // e.g. /dev/disk4
+	RawPath     string      // e.g. /dev/rdisk4
+	Name        string      // human-readable name
+	Size        string      // human-readable size
+	SizeBytes   int64       // size in bytes
 	IsRemovable bool
 	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
 }
