@@ -183,7 +183,7 @@ func main() {
 		if brokerURL == "" {
 			brokerURL = fmt.Sprintf("%s:50053", cloudHost)
 		}
-		client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, certPEM, chainPEM, keyPEM)
+		client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, certPEM, chainPEM, keyPEM, chainPEM)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
