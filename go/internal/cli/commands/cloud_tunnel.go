@@ -39,7 +39,7 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		"",
+		cert.PemCertificateChain,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading broker TLS config: %w", err)
@@ -144,7 +144,7 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		"",
+		cert.PemCertificateChain,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading TLS config: %w", err)

@@ -435,7 +435,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		"",
+		cert.PemCertificateChain,
 	)
 	if err != nil {
 		return fmt.Errorf("loading TLS config: %w", err)
