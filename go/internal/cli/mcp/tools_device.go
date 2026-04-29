@@ -105,8 +105,20 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	if resp.DeviceType != nil {
 		info["device_type"] = resp.GetDeviceType()
 	}
+	if resp.StorageMedium != nil {
+		info["storage_medium"] = resp.GetStorageMedium()
+	}
 	if resp.HasGpu != nil {
 		info["has_gpu"] = resp.GetHasGpu()
+	}
+	if resp.GpuVendor != nil {
+		info["gpu_vendor"] = resp.GetGpuVendor()
+	}
+	if resp.JetpackVersion != nil {
+		info["jetpack_version"] = resp.GetJetpackVersion()
+	}
+	if resp.CudaVersion != nil {
+		info["cuda_version"] = resp.GetCudaVersion()
 	}
 	b, _ := json.MarshalIndent(info, "", "  ")
 	return mcpgo.NewToolResultText(string(b)), nil
