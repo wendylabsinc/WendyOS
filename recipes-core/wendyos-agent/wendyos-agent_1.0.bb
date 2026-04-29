@@ -76,8 +76,8 @@ do_compile() {
 
 do_install() {
     # Install the pre-downloaded binary
-    install -d ${D}/usr/local/bin
-    install -m 0755 ${B}/wendy-agent ${D}/usr/local/bin/wendy-agent
+    install -d ${D}${bindir}
+    install -m 0755 ${B}/wendy-agent ${D}${bindir}/wendy-agent
 
     # Install systemd services
     install -d ${D}${systemd_system_unitdir}
@@ -96,7 +96,7 @@ do_install() {
     install -d ${D}/opt/wendy
 }
 
-FILES:${PN} = "/usr/local/bin/* \
+FILES:${PN} = "${bindir}/* \
                /opt/wendyos/bin/* \
                /opt/wendy \
                ${systemd_system_unitdir}/* \

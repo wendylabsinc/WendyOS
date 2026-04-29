@@ -102,10 +102,10 @@ download_binary() {
 
     if command -v jq >/dev/null 2>&1; then
         # Use jq if available - match wendy-agent platform archive (not wendy-cli)
-        download_url=$(echo "${release_info}" | jq -r '.assets[]? | select(.name | test("wendy-agent-linux-static-musl-aarch64.*\\.tar\\.gz$")) | .browser_download_url' 2>/dev/null | head -1)
+        download_url=$(echo "${release_info}" | jq -r '.assets[]? | select(.name | test("wendy-agent-linux-arm64.*\\.tar\\.gz$")) | .browser_download_url' 2>/dev/null | head -1)
     else
         # Fallback to grep - look for the URL pattern
-        download_url=$(echo "${release_info}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-static-musl-aarch64[^"]*\.tar\.gz[^"]*"' | head -1 | cut -d'"' -f4)
+        download_url=$(echo "${release_info}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*wendy-agent-linux-arm64[^"]*\.tar\.gz[^"]*"' | head -1 | cut -d'"' -f4)
     fi
 
     if [ -z "${download_url}" ] || [ "${download_url}" = "null" ]; then
