@@ -44,6 +44,56 @@ fi
 apt-get -qy clean
 rm -rf /var/lib/apt/lists/*
 
+# Detect host arch once; the AWS CLI and s5cmd installers below pick the
+# right release tarball based on it.
+arch="$(dpkg --print-architecture)"
+
+# AWS CLI v2. Ubuntu 24.04 (Noble) dropped the legacy 'awscli' apt package
+# (it was AWS CLI v1, which AWS itself deprecated). Install the official
+# bundle from awscli.amazonaws.com; idempotent thanks to '--update'.
+case "${arch}" in
+    amd64) aws_arch="x86_64" ;;
+    arm64) aws_arch="aarch64" ;;
+    *)     echo "Unsupported arch for aws-cli: ${arch}" >&2; exit 1 ;;
+esac
+tmp_aws=$(mktemp -d)
+wget -qO "${tmp_aws}/awscliv2.zip" \
+    "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip"
+unzip -q "${tmp_aws}/awscliv2.zip" -d "${tmp_aws}"
+"${tmp_aws}/aws/install" --update -i /usr/local/aws-cli -b /usr/local/bin
+rm -rf "${tmp_aws}"
+/usr/local/bin/aws --version
+
+# s5cmd: highly parallel S3 client. Used by .github/workflows/build.yml's
+# sstate / downloads cache restore + save steps. For the millions-of-tiny-files
+# shape of sstate-cache it is roughly an order of magnitude faster than
+# `aws s3 sync`. Pinned to a specific release so the AMI bake is reproducible.
+S5CMD_VERSION="2.2.2"
+case "${arch}" in
+    amd64) s5cmd_arch="64bit" ;;
+    arm64) s5cmd_arch="arm64" ;;
+    *)     echo "Unsupported arch for s5cmd: ${arch}" >&2; exit 1 ;;
+esac
+tmp_s5=$(mktemp -d)
+wget -qO "${tmp_s5}/s5cmd.tar.gz" \
+    "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VERSION}/s5cmd_${S5CMD_VERSION}_Linux-${s5cmd_arch}.tar.gz"
+tar -xzf "${tmp_s5}/s5cmd.tar.gz" -C "${tmp_s5}" s5cmd
+install -m 0755 "${tmp_s5}/s5cmd" /usr/local/bin/s5cmd
+rm -rf "${tmp_s5}"
+/usr/local/bin/s5cmd version
+
+# Ubuntu 24.04 (Noble) restricts unprivileged user namespaces via AppArmor by
+# default. BitBake's pseudo / fakeroot machinery needs them, and refuses to run
+# with: "User namespaces are not usable by BitBake, possibly due to AppArmor."
+# Persist the override so every fresh AMI boot re-applies it without operator
+# intervention. (The Docker dev path didn't trip on this because the container
+# runs --privileged, bypassing AppArmor.)
+mkdir -p /etc/sysctl.d
+cat > /etc/sysctl.d/60-bitbake-userns.conf <<'EOF'
+# Allow unprivileged user namespaces for Yocto / BitBake builds.
+kernel.apparmor_restrict_unprivileged_userns = 0
+EOF
+
 # Yocto requires a fully-formed UTF-8 locale. Without LANG / LC_ALL set, the
 # do_compile tasks fail on locale-sensitive scripts (e.g. perl).
 locale-gen --purge en_US.UTF-8
