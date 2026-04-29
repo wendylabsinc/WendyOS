@@ -10,6 +10,13 @@
 VERSION ?= dev
 MSI_VERSION ?= 0.0.1
 LDFLAGS := -s -w -X github.com/wendylabsinc/wendy/internal/shared/version.Version=$(VERSION)
+ifeq ($(shell uname -s),Darwin)
+# Go/cgo adds -lobjc for each Objective-C package. The native CLI links
+# multiple CoreBluetooth-backed packages, and recent Apple linkers warn about
+# the duplicate even though it is harmless.
+CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
+export CGO_LDFLAGS
+endif
 
 # Build both CLI and agent (native)
 build: build-cli build-agent
