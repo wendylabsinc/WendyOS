@@ -33,8 +33,7 @@ apt-get -qy install \
     python3-gi python3-gi-cairo gir1.2-gtk-3.0 x11-apps \
     libncurses5-dev libncursesw5-dev bison flex patchutils \
     libssl-dev ca-certificates locales sudo mc quilt vim pkg-config \
-    gdisk dosfstools bmap-tools device-tree-compiler \
-    awscli
+    gdisk dosfstools bmap-tools device-tree-compiler
 
 # gcc-multilib (32-bit x86 multilib headers) is only available on amd64.
 # Skip on arm64 (e.g. Apple Silicon Docker Desktop, Graviton runners).
@@ -44,6 +43,23 @@ fi
 
 apt-get -qy clean
 rm -rf /var/lib/apt/lists/*
+
+# AWS CLI v2. Ubuntu 24.04 (Noble) dropped the legacy 'awscli' apt package
+# (it was AWS CLI v1, which AWS itself deprecated). Install the official
+# bundle from awscli.amazonaws.com; idempotent thanks to '--update'.
+arch="$(dpkg --print-architecture)"
+case "${arch}" in
+    amd64) aws_arch="x86_64" ;;
+    arm64) aws_arch="aarch64" ;;
+    *)     echo "Unsupported arch for aws-cli: ${arch}" >&2; exit 1 ;;
+esac
+tmp_aws=$(mktemp -d)
+wget -qO "${tmp_aws}/awscliv2.zip" \
+    "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip"
+unzip -q "${tmp_aws}/awscliv2.zip" -d "${tmp_aws}"
+"${tmp_aws}/aws/install" --update -i /usr/local/aws-cli -b /usr/local/bin
+rm -rf "${tmp_aws}"
+/usr/local/bin/aws --version
 
 # Yocto requires a fully-formed UTF-8 locale. Without LANG / LC_ALL set, the
 # do_compile tasks fail on locale-sensitive scripts (e.g. perl).
