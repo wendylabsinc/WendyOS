@@ -224,12 +224,39 @@ jobs:
       - name: Restore sstate-cache and downloads from S3 (L2)
         run: |
           set -euo pipefail
-          # aws s3 sync is incremental: anything the L1 snapshot already has
-          # is skipped. On a fresh bucket / fresh runner this is a cold seed.
-          aws s3 sync --no-progress \
-            "s3://${CACHE_BUCKET}/sstate-cache/" "$GITHUB_WORKSPACE/sstate-cache/" || true
-          aws s3 sync --no-progress \
-            "s3://${CACHE_BUCKET}/downloads/"    "$GITHUB_WORKSPACE/downloads/"    || true
+          # Prefer s5cmd (parallel S3 client baked into the AMI). Fall back
+          # to `aws s3 sync` so this step keeps working through the AMI rebuild
+          # window after install-build-deps.sh changes land.
+          if command -v s5cmd >/dev/null 2>&1; then
+            s3_sync() {
+              # --size-only matches the prior aws-cli behavior; sstate filenames
+              # are content-hashed so size is a reliable freshness check.
+              s5cmd --no-sign-request=false sync --size-only "$1" "$2" || true
+            }
+            src_sstate_glob="s3://${CACHE_BUCKET}/sstate-cache/*"
+            src_downloads_glob="s3://${CACHE_BUCKET}/downloads/*"
+          else
+            echo "::warning::s5cmd not found on runner; falling back to aws s3 sync"
+            s3_sync() {
+              aws s3 sync --no-progress --size-only "$1" "$2" || true
+            }
+            src_sstate_glob="s3://${CACHE_BUCKET}/sstate-cache/"
+            src_downloads_glob="s3://${CACHE_BUCKET}/downloads/"
+          fi
+
+          # If the L1 EBS snapshot already restored a non-trivial sstate-cache,
+          # skip the L2 sstate restore — at warm-cache scale (>200k objects)
+          # the redundant HEAD requests cost more than they save.
+          sstate_files=$(find "$GITHUB_WORKSPACE/sstate-cache" -mindepth 2 -maxdepth 3 -type f 2>/dev/null | head -500 | wc -l)
+          if [[ "$sstate_files" -lt 500 ]]; then
+            echo "Cold sstate-cache (${sstate_files} files seen); restoring from S3"
+            s3_sync "${src_sstate_glob}" "$GITHUB_WORKSPACE/sstate-cache/"
+          else
+            echo "Warm sstate-cache (>=500 files seen via L1 snapshot); skipping S3 restore"
+          fi
+
+          # downloads/ is not in the L1 snapshot, so always restore from S3.
+          s3_sync "${src_downloads_glob}" "$GITHUB_WORKSPACE/downloads/"
 
       # ---------- Build ----------
 
@@ -279,18 +306,40 @@ jobs:
 
       - name: Save sstate-cache and downloads to S3 (L2)
         if: always()
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # --size-only avoids re-uploading sstate siblings whose mtime drifted
           # but content matches. Sstate filenames are content-hashed, so file
           # size is a reliable freshness check.
-          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
-            aws s3 sync --no-progress --size-only \
-              "$GITHUB_WORKSPACE/sstate-cache/" "s3://${CACHE_BUCKET}/sstate-cache/" || true
+          if command -v s5cmd >/dev/null 2>&1; then
+            s3_save() {
+              s5cmd sync --size-only "$1" "$2" || true
+            }
+            sstate_src="$GITHUB_WORKSPACE/sstate-cache/*"
+            downloads_src="$GITHUB_WORKSPACE/downloads/*"
+          else
+            echo "::warning::s5cmd not found on runner; falling back to aws s3 sync"
+            s3_save() {
+              aws s3 sync --no-progress --size-only "$1" "$2" || true
+            }
+            sstate_src="$GITHUB_WORKSPACE/sstate-cache/"
+            downloads_src="$GITHUB_WORKSPACE/downloads/"
           fi
-          if [[ -d "$GITHUB_WORKSPACE/downloads" ]]; then
-            aws s3 sync --no-progress --size-only \
-              "$GITHUB_WORKSPACE/downloads/" "s3://${CACHE_BUCKET}/downloads/" || true
+
+          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
+            s3_save "${sstate_src}" "s3://${CACHE_BUCKET}/sstate-cache/"
+          fi
+
+          # Skip the downloads/ upload on PR builds: PRs only need to *read*
+          # the cache, and a PR that pulls a brand-new source tarball is rare.
+          # When merged to main, that build re-fetches and writes back. Saves
+          # ~minutes of upload churn on every PR.
+          if [[ "$GH_EVENT_NAME" != "pull_request" && -d "$GITHUB_WORKSPACE/downloads" ]]; then
+            s3_save "${downloads_src}" "s3://${CACHE_BUCKET}/downloads/"
+          else
+            echo "Skipping downloads/ upload (event=${GH_EVENT_NAME})"
           fi
 
       # --- Upload image and update device manifest (master manifest is handled by the publish job) ---
