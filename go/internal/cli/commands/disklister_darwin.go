@@ -8,7 +8,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // drive represents an external disk suitable for image writing.
@@ -171,60 +174,195 @@ func unmountDisk(devPath string) error {
 	return nil
 }
 
-// writeImageToDisk writes an image file to a raw disk device using dd,
-// streaming data via stdin in 4 MiB chunks for progress tracking.
+// writeImageToDisk writes an image file to a raw disk device using dd. dd
+// reads the file directly (rather than via a stdin pipe) so that bs=4m
+// actually produces 4 MiB writes to /dev/rdiskN — pipe input forces dd to
+// issue one write per pipe-buffer-sized read, which is dramatically slower
+// on raw devices. Progress is driven by periodically signaling dd with
+// SIGINFO, which makes BSD dd emit a status line on stderr.
+//
+// SIGINFO delivery is non-trivial because sudo on macOS uses a PAM-based
+// monitor process that calls setsid() and runs dd in a new session/pgid,
+// and sudo does not relay SIGINFO to the command. So we can't just signal
+// the recorded sudo pid or its pgroup — we have to walk the process tree
+// to find dd itself, then signal it (via sudo, since dd is owned by root).
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	imgFile, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
-	}
-	defer imgFile.Close()
-
 	// Use rdisk for faster raw writes on macOS.
-	cmd := exec.Command("sudo", "dd", fmt.Sprintf("of=%s", d.RawPath), "bs=4m")
-	stdin, err := cmd.StdinPipe()
+	// conv=sync pads the final partial block so the total length is a
+	// multiple of bs, which raw devices require.
+	cmd := exec.Command("sudo", "dd",
+		fmt.Sprintf("if=%s", imagePath),
+		fmt.Sprintf("of=%s", d.RawPath),
+		"bs=4m",
+		"conv=sync",
+	)
+
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("creating stdin pipe: %w", err)
+		return fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting dd: %w", err)
 	}
+	sudoPid := cmd.Process.Pid
 
-	buf := make([]byte, 4*1024*1024) // 4 MiB
-	var totalWritten int64
-	for {
-		n, readErr := imgFile.Read(buf)
-		if n > 0 {
-			if _, writeErr := stdin.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing to dd: %w", writeErr)
-			}
-			totalWritten += int64(n)
-			if progressFn != nil {
-				progressFn(totalWritten)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading image: %w", readErr)
-		}
-	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
 
-	stdin.Close()
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("writing image: %w", err)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Send the first signal quickly so the user sees activity within a
+		// second, rather than waiting a full tick. The brief delay gives
+		// sudo's monitor time to fork and exec dd, so ps can find it.
+		select {
+		case <-done:
+			return
+		case <-time.After(750 * time.Millisecond):
+		}
+		signalDD(sudoPid)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				signalDD(sudoPid)
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanDDProgressBSD(stderr, progressFn)
+	}()
+
+	waitErr := cmd.Wait()
+	close(done)
+	wg.Wait()
+
+	if waitErr != nil {
+		return fmt.Errorf("writing image: %w", waitErr)
 	}
 
 	// Sync to flush any remaining writes.
 	exec.Command("sync").Run() //nolint:errcheck
 
 	return nil
+}
+
+// signalDD locates the dd descendant of the given sudo PID and sends it
+// SIGINFO so it prints a status line to stderr. dd is owned by root, so the
+// kill itself is run via sudo (-n: never prompt; relies on cached creds).
+//
+// We walk descendants instead of using process group or `pkill -f`:
+//   - process groups don't work because sudo's monitor calls setsid()
+//   - `pkill -f` is fragile against regex escaping in image paths
+//
+// Best-effort: any failure here just means the user sees no progress update
+// for that tick.
+func signalDD(sudoPid int) {
+	pid, ok := findDescendantNamed(sudoPid, "dd")
+	if !ok {
+		// Fallback: if sudo exec'd directly into dd (no monitor), the sudo
+		// pid IS dd. Signal it.
+		exec.Command("sudo", "-n", "kill", "-INFO", strconv.Itoa(sudoPid)).Run() //nolint:errcheck
+		return
+	}
+	exec.Command("sudo", "-n", "kill", "-INFO", strconv.Itoa(pid)).Run() //nolint:errcheck
+}
+
+// findDescendantNamed walks the process tree rooted at root and returns the
+// first descendant whose command name (argv[0] basename) is name.
+// Implemented via a single `ps` invocation rather than recursive `pgrep` to
+// avoid spawning multiple processes per tick.
+func findDescendantNamed(root int, name string) (int, bool) {
+	out, err := exec.Command("ps", "-Ao", "pid=,ppid=,comm=").Output()
+	if err != nil {
+		return 0, false
+	}
+	return findDescendantInPSOutput(string(out), root, name)
+}
+
+// findDescendantInPSOutput parses the output of `ps -Ao pid=,ppid=,comm=` and
+// returns the first descendant of root whose basename matches name. Split out
+// from findDescendantNamed so it can be unit-tested without spawning ps.
+func findDescendantInPSOutput(psOutput string, root int, name string) (int, bool) {
+	type entry struct {
+		ppid int
+		comm string
+	}
+	procs := make(map[int]entry, 256)
+	for _, line := range strings.Split(psOutput, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		// comm may contain spaces; rejoin remaining fields and basename it.
+		comm := strings.Join(fields[2:], " ")
+		if i := strings.LastIndex(comm, "/"); i >= 0 {
+			comm = comm[i+1:]
+		}
+		procs[pid] = entry{ppid: ppid, comm: comm}
+	}
+	// BFS from root.
+	queue := []int{root}
+	visited := map[int]bool{root: true}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for pid, e := range procs {
+			if e.ppid != cur || visited[pid] {
+				continue
+			}
+			if e.comm == name {
+				return pid, true
+			}
+			visited[pid] = true
+			queue = append(queue, pid)
+		}
+	}
+	return 0, false
+}
+
+// scanDDProgressBSD parses BSD dd's stderr output and invokes progressFn with
+// the running byte count. Each SIGINFO triggers three lines, the third of
+// which contains "<n> bytes transferred in ...".
+func scanDDProgressBSD(r io.Reader, progressFn func(written int64)) {
+	if progressFn == nil {
+		io.Copy(io.Discard, r) //nolint:errcheck
+		return
+	}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		idx := strings.Index(line, " bytes transferred")
+		if idx <= 0 {
+			continue
+		}
+		token := strings.TrimSpace(line[:idx])
+		written, err := strconv.ParseInt(token, 10, 64)
+		if err != nil {
+			continue
+		}
+		progressFn(written)
+	}
 }
 
 // ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
