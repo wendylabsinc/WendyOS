@@ -7,8 +7,9 @@ import Testing
 struct MachineTests {
     @Test("creates SSH machine")
     func createsSSHMachine() {
-        let machine = Machine(ssh: "ai@example.local", path: "~/wendy-agent")
+        let machine = Machine(name: "SSH", ssh: "ai@example.local", path: "~/wendy-agent")
 
+        #expect(machine.name == "SSH")
         #expect(machine.ssh == "ai@example.local")
         #expect(machine.path == "~/wendy-agent")
         #expect(machine.description == "ai@example.local:~/wendy-agent")
@@ -16,7 +17,7 @@ struct MachineTests {
 
     @Test("defaults to SSH user home directory")
     func defaultsToSSHUserHomeDirectory() {
-        let machine = Machine(ssh: "ai@example.local")
+        let machine = Machine(name: "SSH", ssh: "ai@example.local")
 
         #expect(machine.ssh == "ai@example.local")
         #expect(machine.path == nil)
@@ -25,7 +26,7 @@ struct MachineTests {
 
     @Test("defaults local machine to current directory")
     func defaultsLocalMachineToCurrentDirectory() {
-        let machine = Machine()
+        let machine = Machine(name: "Local")
 
         #expect(machine.ssh == nil)
         #expect(machine.path == FileManager.default.currentDirectoryPath)
@@ -34,7 +35,7 @@ struct MachineTests {
 
     @Test("runs a simple command")
     func runsSimpleCommand() async throws {
-        let machine = Machine()
+        let machine = Machine(name: "Local")
         let record = try await machine.run(
             "printf 'wendy-machine-smoke'",
             output: .string(limit: .max),
@@ -53,7 +54,7 @@ struct MachineTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let machine = Machine(path: directory.path)
+        let machine = Machine(name: "Local", path: directory.path)
         try await machine.run("touch local.txt")
 
         #expect(machine.ssh == nil)
@@ -129,6 +130,7 @@ struct MachineTests {
     ) async throws -> Result {
         let fixture = try SSHFixture()
         let machine = Machine(
+            name: "SSH",
             ssh: "ai@example.local",
             path: fixture.remoteRoot.path,
             sshExecutable: fixture.sshScript.path

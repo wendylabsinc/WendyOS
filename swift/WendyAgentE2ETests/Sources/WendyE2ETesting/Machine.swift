@@ -9,16 +9,24 @@ import Subprocess
 #endif
 
 public struct Machine: Sendable {
+    public let name: String
     public let ssh: String?
     public let path: String?
 
     // MARK: - Creating Machines
 
-    public init(ssh: String? = nil, path: String? = nil, sshExecutable: String = "/usr/bin/ssh") {
+    public init(
+        name: String,
+        ssh: String? = nil,
+        path: String? = nil,
+        sshExecutable: String = "/usr/bin/ssh"
+    ) {
+        precondition(!name.isEmpty, "name must not be empty")
         precondition(ssh?.isEmpty != true, "ssh must not be empty")
         precondition(path?.isEmpty != true, "path must not be empty")
         precondition(!sshExecutable.isEmpty, "sshExecutable must not be empty")
 
+        self.name = name
         self.ssh = ssh
         self.path = path ?? (ssh == nil ? FileManager.default.currentDirectoryPath : nil)
         self.sshExecutable = sshExecutable
@@ -28,8 +36,8 @@ public struct Machine: Sendable {
 
     public func run(_ command: String) async throws {
         let outcome = try await self.run(command) { _, _, stdout, stderr in
-            async let forwardStdout = Self.forward(stdout, to: .standardOutput)
-            async let forwardStderr = Self.forward(stderr, to: .standardError)
+            async let forwardStdout = Self.forward(stdout, to: .standardOutput, name: self.name)
+            async let forwardStderr = Self.forward(stderr, to: .standardError, name: self.name)
             _ = try await (forwardStdout, forwardStderr)
         }
 
@@ -47,7 +55,7 @@ public struct Machine: Sendable {
         output: Output,
         error: Error = .discarded
     ) async throws -> ExecutionRecord<Output, Error> {
-        Self.printCommand(machine: self.description, command: command)
+        Self.printCommand(machine: self.name, command: command)
 
         let invocation = self.invocation(for: command)
         return try await Self.invoke(
@@ -69,7 +77,7 @@ public struct Machine: Sendable {
                 _ standardError: AsyncBufferSequence
             ) async throws -> Result
     ) async throws -> ExecutionOutcome<Result> {
-        Self.printCommand(machine: self.description, command: command)
+        Self.printCommand(machine: self.name, command: command)
 
         let invocation = self.invocation(for: command)
         return try await Subprocess.run(
@@ -150,16 +158,17 @@ public struct Machine: Sendable {
     }
 
     private static func printCommand(machine: String, command: String) {
-        fputs("$ [\(machine)] \(command)\n", stderr)
+        fputs("[\(machine)] $ \(command)\n", stderr)
     }
 
     private static func forward(
         _ sequence: AsyncBufferSequence,
-        to handle: FileHandle
+        to handle: FileHandle,
+        name: String
     ) async throws {
-        for try await buffer in sequence {
-            let data = buffer.withUnsafeBytes { Data($0) }
-            try handle.write(contentsOf: data)
+        for try await rawLine in sequence.lines() {
+            let line = rawLine.trimmingCharacters(in: .newlines)
+            try handle.write(contentsOf: Data("[\(name)] \(line)\n".utf8))
         }
     }
 
