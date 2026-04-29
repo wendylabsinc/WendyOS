@@ -8,8 +8,8 @@ import Subprocess
 #endif
 
 public struct Machine: Sendable {
-    public let sshTarget: String
-    public let baseDirectory: String
+    public let ssh: String
+    public let path: String
 
     // MARK: - Creating Machines
 
@@ -19,8 +19,8 @@ public struct Machine: Sendable {
         }
 
         self.init(
-            sshTarget: ssh,
-            baseDirectory: path,
+            ssh: ssh,
+            path: path,
             sshExecutable: "/usr/bin/ssh"
         )
     }
@@ -84,12 +84,12 @@ public struct Machine: Sendable {
     // MARK: - Internal
 
     init(
-        sshTarget: String,
-        baseDirectory: String,
+        ssh: String,
+        path: String,
         sshExecutable: String = "/usr/bin/ssh"
     ) {
-        self.sshTarget = sshTarget
-        self.baseDirectory = baseDirectory
+        self.ssh = ssh
+        self.path = path
         self.sshExecutable = sshExecutable
     }
 
@@ -100,13 +100,13 @@ public struct Machine: Sendable {
     private func commandArguments(for command: String) -> [String] {
         [
             "-T",
-            self.sshTarget,
+            self.ssh,
             self.wrapped(command),
         ]
     }
 
     private func wrapped(_ command: String) -> String {
-        "cd \(Self.shellQuote(self.baseDirectory)) && \(command)"
+        "cd \(Self.shellQuote(self.path)) && \(command)"
     }
 
     private static func shellQuote(_ value: String) -> String {
@@ -146,6 +146,6 @@ public struct Machine: Sendable {
 
 extension Machine: CustomStringConvertible {
     public var description: String {
-        "\(self.sshTarget):\(self.baseDirectory)"
+        "\(self.ssh):\(self.path)"
     }
 }

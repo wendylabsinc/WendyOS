@@ -9,8 +9,8 @@ struct MachineTests {
     func createsSSHMachine() throws {
         let machine = try Machine(ssh: "ai@example.local", path: "~/wendy-agent")
 
-        #expect(machine.sshTarget == "ai@example.local")
-        #expect(machine.baseDirectory == "~/wendy-agent")
+        #expect(machine.ssh == "ai@example.local")
+        #expect(machine.path == "~/wendy-agent")
         #expect(machine.description == "ai@example.local:~/wendy-agent")
     }
 
@@ -81,8 +81,8 @@ struct MachineTests {
     ) async throws -> Result {
         let fixture = try SSHFixture()
         let machine = Machine(
-            sshTarget: "ai@example.local",
-            baseDirectory: fixture.remoteRoot.path,
+            ssh: "ai@example.local",
+            path: fixture.remoteRoot.path,
             sshExecutable: fixture.sshScript.path
         )
 
