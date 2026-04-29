@@ -96,7 +96,8 @@ source "amazon-ebs" "wendyos_builder" {
   ssh_username = "ubuntu"
 
   ami_name        = local.ami_name
-  ami_description = "WendyOS Yocto build runner — Ubuntu 24.04 + Yocto deps (Scarthgap)"
+  # AWS rejects non-ASCII in this field; keep it plain ASCII.
+  ami_description = "WendyOS Yocto build runner - Ubuntu 24.04 + Yocto deps (Scarthgap)"
   ami_virtualization_type = "hvm"
 
   # Plenty of headroom for the bake-time repo prefetch and apt cache.
