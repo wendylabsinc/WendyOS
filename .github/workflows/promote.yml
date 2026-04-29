@@ -1,0 +1,57 @@
+name: Promote Nightly to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create (e.g. v1.2.3)"
+        type: string
+        required: true
+      source_nightly:
+        description: "Nightly tag to promote from"
+        type: string
+        required: false
+        default: nightly
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.source_nightly }} to ${{ inputs.release_tag }}
+    permissions:
+      contents: write
+    runs-on:
+      - runs-on
+      - family=c7i-flex.8xlarge
+      - spot=false
+      - run-id=${{ github.run_id }}-promote
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9] ]]; then
+            echo "ERROR: release_tag must start with vMAJOR.MINOR.PATCH (got: $RELEASE_TAG)"
+            exit 1
+          fi
+
+      - name: Resolve nightly commit and push release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_NIGHTLY: ${{ inputs.source_nightly }}
+        run: |
+          # Resolve the exact commit the nightly tag points to.
+          if ! SHA=$(git rev-parse "refs/tags/${SOURCE_NIGHTLY}^{commit}" 2>/dev/null); then
+            git fetch origin "refs/tags/${SOURCE_NIGHTLY}:refs/tags/${SOURCE_NIGHTLY}"
+            SHA=$(git rev-parse "refs/tags/${SOURCE_NIGHTLY}^{commit}")
+          fi
+          echo "Promoting commit $SHA to $RELEASE_TAG"
+
+          git tag "$RELEASE_TAG" "$SHA"
+          git push origin "$RELEASE_TAG"
+          # Pushing a v* tag triggers release.yml, which rebuilds using the warm
+          # sstate cache, publishes to GCS, and creates the GitHub release.

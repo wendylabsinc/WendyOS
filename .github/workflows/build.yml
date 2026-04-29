@@ -319,8 +319,8 @@ jobs:
         if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
         run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
 
-      - name: Generate flashable image (Jetson NVMe/eMMC)
-        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-') && (matrix.storage == 'nvme' || matrix.storage == 'emmc')
+      - name: Generate flashable image (Jetson)
+        if: github.event_name != 'pull_request' && startsWith(matrix.device, 'jetson-')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
@@ -334,6 +334,7 @@ jobs:
           case "$STORAGE" in
             nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
             emmc) sudo ./makedisk.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+            sd)   sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-sd.img" ;;
           esac
 
       - name: Upload image and update device manifest
@@ -352,6 +353,8 @@ jobs:
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
           elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "emmc" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img"
+          elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "sd" ]]; then
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-sd.img"
           else
             IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
           fi
@@ -365,8 +368,8 @@ jobs:
             --access-token "$TOKEN"
           )
 
-          # For Jetson NVMe/eMMC, include the tegraflash bundle as the recovery file.
-          if [[ "$STORAGE" == "nvme" || "$STORAGE" == "emmc" ]] && [[ "$MACHINE" != raspberry* ]]; then
+          # For all Jetson targets, include the tegraflash bundle as the recovery file.
+          if [[ "$MACHINE" != raspberry* ]]; then
             ARGS+=(--recovery-file "$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz")
           fi
 
@@ -393,7 +396,7 @@ jobs:
       group: update-master-manifest
       cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       id-token: write
     runs-on:
       - runs-on
@@ -457,3 +460,22 @@ jobs:
               fi
             done
           done
+
+      - name: Tag nightly pre-release on GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep 'DISTRO_VERSION' "$GITHUB_WORKSPACE/wendyos/conf/distro/wendyos.conf" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAG="nightly"
+
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
+          cd "$GITHUB_WORKSPACE/wendyos"
+          git tag -f "$TAG"
+          git push origin "$TAG" --force
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Nightly ${VERSION}-nightly ($(date -u +%Y-%m-%d))" \
+            --notes "Automated nightly build from the \`main\` branch." \
+            --prerelease

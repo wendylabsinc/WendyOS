@@ -114,8 +114,8 @@ jobs:
         with:
           go-version-file: wendy-os-publisher/go.mod
 
-      - name: Generate flashable image (Jetson NVMe/eMMC)
-        if: startsWith(matrix.device, 'jetson-') && (matrix.storage == 'nvme' || matrix.storage == 'emmc')
+      - name: Generate flashable image (Jetson)
+        if: startsWith(matrix.device, 'jetson-')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
@@ -129,6 +129,7 @@ jobs:
           case "$STORAGE" in
             nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
             emmc) sudo ./makedisk.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+            sd)   sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-sd.img" ;;
           esac
 
       - name: Publish release to GCS
@@ -142,12 +143,12 @@ jobs:
         run: |
           TOKEN=$(gcloud auth print-access-token)
 
-          # Jetson NVMe/eMMC images are produced by the tegraflash step above.
-          # RPi (all storage types) and Jetson SD use the bitbake .wic output.
           if [[ "$MACHINE" != raspberry* && "$STORAGE" == "nvme" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
           elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "emmc" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img"
+          elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "sd" ]]; then
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-sd.img"
           else
             IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
           fi
@@ -159,8 +160,8 @@ jobs:
             --access-token "$TOKEN"
           )
 
-          # For Jetson NVMe/eMMC, include the tegraflash bundle as the recovery file.
-          if [[ "$STORAGE" == "nvme" || "$STORAGE" == "emmc" ]] && [[ "$MACHINE" != raspberry* ]]; then
+          # For all Jetson targets, include the tegraflash bundle as the recovery file.
+          if [[ "$MACHINE" != raspberry* ]]; then
             ARGS+=(--recovery-file "$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz")
           fi
 
@@ -178,3 +179,28 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/wendy-os-publisher/cmd"
           go run upload_and_manifest.go "${ARGS[@]}"
+
+  create-github-release:
+    name: Create GitHub release
+    needs: build
+    permissions:
+      contents: write
+    runs-on:
+      - runs-on
+      - family=c7i-flex.8xlarge
+      - spot=false
+      - run-id=${{ github.run_id }}-release
+    steps:
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists."
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "WendyOS $RELEASE_TAG" \
+              --generate-notes
+          fi
