@@ -231,7 +231,7 @@ jobs:
             s3_sync() {
               # --size-only matches the prior aws-cli behavior; sstate filenames
               # are content-hashed so size is a reliable freshness check.
-              s5cmd --no-sign-request=false sync --size-only "$1" "$2" || true
+              s5cmd sync --size-only "$1" "$2" || true
             }
             src_sstate_glob="s3://${CACHE_BUCKET}/sstate-cache/*"
             src_downloads_glob="s3://${CACHE_BUCKET}/downloads/*"
@@ -247,12 +247,23 @@ jobs:
           # If the L1 EBS snapshot already restored a non-trivial sstate-cache,
           # skip the L2 sstate restore — at warm-cache scale (>200k objects)
           # the redundant HEAD requests cost more than they save.
-          sstate_files=$(find "$GITHUB_WORKSPACE/sstate-cache" -mindepth 2 -maxdepth 3 -type f 2>/dev/null | head -500 | wc -l)
-          if [[ "$sstate_files" -lt 500 ]]; then
+          # NOTE: counted with a pipe-free idiom on purpose. `find ... | head | wc -l`
+          # under `set -o pipefail` aborts on warm caches because head closes
+          # stdin early and find SIGPIPEs — the exact case we're trying to detect.
+          warm_threshold=500
+          sstate_files=0
+          if [[ -d "$GITHUB_WORKSPACE/sstate-cache" ]]; then
+            while IFS= read -r _; do
+              sstate_files=$((sstate_files + 1))
+              if [[ "$sstate_files" -ge "$warm_threshold" ]]; then break; fi
+            done < <(find "$GITHUB_WORKSPACE/sstate-cache" -mindepth 2 -maxdepth 3 -type f -print 2>/dev/null)
+          fi
+
+          if [[ "$sstate_files" -lt "$warm_threshold" ]]; then
             echo "Cold sstate-cache (${sstate_files} files seen); restoring from S3"
             s3_sync "${src_sstate_glob}" "$GITHUB_WORKSPACE/sstate-cache/"
           else
-            echo "Warm sstate-cache (>=500 files seen via L1 snapshot); skipping S3 restore"
+            echo "Warm sstate-cache (>=${warm_threshold} files seen via L1 snapshot); skipping S3 restore"
           fi
 
           # downloads/ is not in the L1 snapshot, so always restore from S3.
