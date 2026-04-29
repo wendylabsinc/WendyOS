@@ -81,6 +81,13 @@ func (s *ProvisioningService) ProvisioningCerts() (certPEM, chainPEM, keyPEM str
 	return s.certPEM, s.chainPEM, s.keyPEM
 }
 
+// ProvisioningInfo returns the cloud host, org ID, and asset ID if the agent is provisioned.
+func (s *ProvisioningService) ProvisioningInfo() (cloudHost string, orgID, assetID int32, enrolled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cloudHost, s.orgID, s.assetID, s.enrolled
+}
+
 // IsProvisioned checks whether the agent is enrolled with a cloud organization.
 func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProvisionedRequest) (*agentpb.IsProvisionedResponse, error) {
 	s.mu.Lock()

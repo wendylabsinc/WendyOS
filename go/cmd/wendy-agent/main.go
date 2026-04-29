@@ -173,6 +173,24 @@ func main() {
 		agentPort = p
 	}
 
+	// startTunnelBroker launches the tunnel broker presence loop in the background.
+	startTunnelBroker := func(certPEM, chainPEM, keyPEM string) {
+		cloudHost, orgID, assetID, enrolled := provisioningSvc.ProvisioningInfo()
+		if !enrolled {
+			return
+		}
+		brokerURL := os.Getenv("WENDY_BROKER_URL")
+		if brokerURL == "" {
+			brokerURL = fmt.Sprintf("%s:50053", cloudHost)
+		}
+		client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, certPEM, chainPEM, keyPEM)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.Run(ctx)
+		}()
+	}
+
 	// Track the mTLS server so we can shut it down gracefully.
 	var mtlsServer *grpc.Server
 	var mtlsMu sync.Mutex
@@ -235,17 +253,19 @@ func main() {
 		}()
 	}
 
-	// Set up the provisioning callback to start the mTLS server dynamically.
+	// Set up the provisioning callback to start the mTLS server and tunnel broker.
 	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
+		startTunnelBroker(certPEM, chainPEM, keyPEM)
 	}
 
-	// Check if already provisioned and start mTLS server if certificates exist.
+	// Check if already provisioned and start mTLS server and tunnel broker if certificates exist.
 	certPEM, chainPEM, keyPEM := provisioningSvc.ProvisioningCerts()
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
 
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
+		startTunnelBroker(certPEM, chainPEM, keyPEM)
 	}
 
 	// Plaintext agent gRPC server.
