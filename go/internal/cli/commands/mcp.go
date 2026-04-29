@@ -15,6 +15,7 @@ func newMCPCmd() *cobra.Command {
 		Short: "MCP server for AI assistant access to wendy devices",
 	}
 	cmd.AddCommand(newMCPServeCmd())
+	cmd.AddCommand(newMCPSetupCmd())
 	return cmd
 }
 
