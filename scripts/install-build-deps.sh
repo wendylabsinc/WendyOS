@@ -82,6 +82,18 @@ install -m 0755 "${tmp_s5}/s5cmd" /usr/local/bin/s5cmd
 rm -rf "${tmp_s5}"
 /usr/local/bin/s5cmd version
 
+# Ubuntu 24.04 (Noble) restricts unprivileged user namespaces via AppArmor by
+# default. BitBake's pseudo / fakeroot machinery needs them, and refuses to run
+# with: "User namespaces are not usable by BitBake, possibly due to AppArmor."
+# Persist the override so every fresh AMI boot re-applies it without operator
+# intervention. (The Docker dev path didn't trip on this because the container
+# runs --privileged, bypassing AppArmor.)
+mkdir -p /etc/sysctl.d
+cat > /etc/sysctl.d/60-bitbake-userns.conf <<'EOF'
+# Allow unprivileged user namespaces for Yocto / BitBake builds.
+kernel.apparmor_restrict_unprivileged_userns = 0
+EOF
+
 # Yocto requires a fully-formed UTF-8 locale. Without LANG / LC_ALL set, the
 # do_compile tasks fail on locale-sensitive scripts (e.g. perl).
 locale-gen --purge en_US.UTF-8
