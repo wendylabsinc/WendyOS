@@ -27,6 +27,8 @@ jobs:
             storage: sd
           - device: raspberry-pi-5
             storage: sd
+          - device: raspberry-pi-5
+            storage: nvme
           - device: jetson-agx-orin
             storage: nvme
           - device: jetson-agx-orin
@@ -140,13 +142,15 @@ jobs:
         run: |
           TOKEN=$(gcloud auth print-access-token)
 
-          # Jetson NVMe/eMMC images are produced by the tegraflash step above;
-          # all other images (RPi and Jetson SD card) use the bitbake .wic output.
-          case "$STORAGE" in
-            nvme) IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
-            emmc) IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
-            *)    IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic" ;;
-          esac
+          # Jetson NVMe/eMMC images are produced by the tegraflash step above.
+          # RPi (all storage types) and Jetson SD use the bitbake .wic output.
+          if [[ "$MACHINE" != raspberry* && "$STORAGE" == "nvme" ]]; then
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
+          elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "emmc" ]]; then
+            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img"
+          else
+            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
+          fi
 
           ARGS=(
             --device "$DEVICE"
