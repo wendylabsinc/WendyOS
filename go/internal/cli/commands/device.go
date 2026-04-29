@@ -435,10 +435,13 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		cert.PemCertificate,
 		cert.PemCertificateChain,
 		cert.PemPrivateKey,
-		cert.PemCertificateChain,
+		"",
 	)
 	if err != nil {
 		return fmt.Errorf("loading TLS config: %w", err)
+	}
+	if !strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // local dev cloud with custom CA
 	}
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
