@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -61,7 +62,11 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) (net.Conn, error) {
 	client := cloudpb.NewTunnelBrokerServiceClient(brokerConn)
 
-	stream, err := client.ClientTunnel(ctx)
+	callCtx := ctx
+	if auth.APIKey != "" {
+		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
+	}
+	stream, err := client.ClientTunnel(callCtx)
 	if err != nil {
 		return nil, fmt.Errorf("opening tunnel stream: %w", err)
 	}
@@ -159,7 +164,11 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	defer cloudConn.Close()
 
 	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	resp, err := assetClient.ListAssets(ctx, &cloudpb.ListAssetsRequest{
+	callCtx := ctx
+	if auth.APIKey != "" {
+		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
+	}
+	resp, err := assetClient.ListAssets(callCtx, &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(cert.OrganizationID),
 		IsComputeDevice: boolPtr(true),
 		PageSize:        100,
