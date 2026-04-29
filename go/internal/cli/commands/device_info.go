@@ -193,10 +193,10 @@ func printSystemInfoText(systemInfo *agentpb.GetSystemInfoResponse) {
 	memory := systemInfo.GetMemory()
 	if memory != nil && memory.GetTotalBytes() > 0 {
 		fmt.Printf("RAM: %s / %s used (%.1f%%, %s available)\n",
-			formatDeviceBytes(memory.GetUsedBytes()),
-			formatDeviceBytes(memory.GetTotalBytes()),
+			formatBytesUint(memory.GetUsedBytes()),
+			formatBytesUint(memory.GetTotalBytes()),
 			memory.GetUsedPercent(),
-			formatDeviceBytes(memory.GetAvailableBytes()),
+			formatBytesUint(memory.GetAvailableBytes()),
 		)
 	}
 
@@ -210,9 +210,9 @@ func printSystemInfoText(systemInfo *agentpb.GetSystemInfoResponse) {
 			disk.GetMountPoint(),
 			disk.GetSource(),
 			disk.GetFilesystemType(),
-			formatDeviceBytes(disk.GetUsedBytes()),
-			formatDeviceBytes(disk.GetTotalBytes()),
-			formatDeviceBytes(disk.GetAvailableBytes()),
+			formatBytesUint(disk.GetUsedBytes()),
+			formatBytesUint(disk.GetTotalBytes()),
+			formatBytesUint(disk.GetAvailableBytes()),
 			fmt.Sprintf("%.1f%%", disk.GetUsedPercent()),
 		})
 	}
@@ -235,6 +235,7 @@ type deviceInfoModel struct {
 	systemErr     error
 	latestVersion string
 	checkUpdates  bool
+	autoRefresh   bool
 	width         int
 	height        int
 	lastRefresh   time.Time
@@ -261,11 +262,15 @@ func newDeviceInfoModel(
 		systemErr:     systemErr,
 		latestVersion: latestVersion,
 		checkUpdates:  checkUpdates,
+		autoRefresh:   !isDeviceSystemInfoUnimplemented(systemErr),
 		lastRefresh:   lastRefresh,
 	}
 }
 
 func (m deviceInfoModel) Init() tea.Cmd {
+	if !m.autoRefresh {
+		return nil
+	}
 	return deviceInfoTick()
 }
 
@@ -283,14 +288,26 @@ func (m deviceInfoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchDeviceSystemInfoCmd(m.conn, m.ctx)
 		}
 	case deviceInfoTickMsg:
+		if !m.autoRefresh {
+			return m, nil
+		}
 		return m, tea.Batch(fetchDeviceSystemInfoCmd(m.conn, m.ctx), deviceInfoTick())
 	case deviceInfoSystemMsg:
 		m.systemInfo = msg.info
 		m.systemErr = msg.err
+		wasPaused := !m.autoRefresh
+		if isDeviceSystemInfoUnimplemented(msg.err) {
+			m.autoRefresh = false
+		} else if msg.err == nil {
+			m.autoRefresh = true
+		}
 		if msg.info != nil && msg.info.GetCollectedAtUnixSeconds() > 0 {
 			m.lastRefresh = time.Unix(msg.info.GetCollectedAtUnixSeconds(), 0)
 		} else if msg.err == nil {
 			m.lastRefresh = time.Now()
+		}
+		if wasPaused && m.autoRefresh {
+			return m, deviceInfoTick()
 		}
 		return m, nil
 	}
@@ -368,10 +385,10 @@ func (m deviceInfoModel) systemSection() string {
 	}
 	if memory := m.systemInfo.GetMemory(); memory != nil && memory.GetTotalBytes() > 0 {
 		rows = append(rows, []string{"RAM", fmt.Sprintf("%s / %s used (%.1f%%, %s available)",
-			formatDeviceBytes(memory.GetUsedBytes()),
-			formatDeviceBytes(memory.GetTotalBytes()),
+			formatBytesUint(memory.GetUsedBytes()),
+			formatBytesUint(memory.GetTotalBytes()),
 			memory.GetUsedPercent(),
-			formatDeviceBytes(memory.GetAvailableBytes()),
+			formatBytesUint(memory.GetAvailableBytes()),
 		)})
 	}
 	if len(rows) == 0 {
@@ -391,9 +408,9 @@ func (m deviceInfoModel) diskSection() string {
 			disk.GetMountPoint(),
 			disk.GetSource(),
 			disk.GetFilesystemType(),
-			formatDeviceBytes(disk.GetUsedBytes()),
-			formatDeviceBytes(disk.GetTotalBytes()),
-			formatDeviceBytes(disk.GetAvailableBytes()),
+			formatBytesUint(disk.GetUsedBytes()),
+			formatBytesUint(disk.GetTotalBytes()),
+			formatBytesUint(disk.GetAvailableBytes()),
 			fmt.Sprintf("%.1f%%", disk.GetUsedPercent()),
 		})
 	}
@@ -402,6 +419,9 @@ func (m deviceInfoModel) diskSection() string {
 
 func (m deviceInfoModel) footer() string {
 	parts := []string{"r refresh", "q quit"}
+	if !m.autoRefresh && isDeviceSystemInfoUnimplemented(m.systemErr) {
+		parts = append(parts, "auto-refresh paused")
+	}
 	if !m.lastRefresh.IsZero() {
 		parts = append(parts, "updated "+m.lastRefresh.Format("15:04:05"))
 	}
@@ -425,23 +445,14 @@ func deviceSystemInfoErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	if status.Code(err) == codes.Unimplemented {
+	if isDeviceSystemInfoUnimplemented(err) {
 		return "agent does not support system info; run 'wendy device update'"
 	}
 	return err.Error()
 }
 
-func formatDeviceBytes(n uint64) string {
-	switch {
-	case n >= 1_000_000_000:
-		return fmt.Sprintf("%.1f GB", float64(n)/1_000_000_000)
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1f MB", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1f kB", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
+func isDeviceSystemInfoUnimplemented(err error) bool {
+	return status.Code(err) == codes.Unimplemented
 }
 
 var (

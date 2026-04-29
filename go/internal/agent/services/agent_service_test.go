@@ -11,7 +11,9 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -157,6 +159,17 @@ func TestGetSystemInfo(t *testing.T) {
 	}
 	if resp.GetCollectedAtUnixSeconds() == 0 {
 		t.Error("collected_at_unix_seconds should be set")
+	}
+}
+
+func TestGetSystemInfoPreservesContextStatus(t *testing.T) {
+	svc := NewAgentService(zap.NewNop(), &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.GetSystemInfo(ctx, &agentpb.GetSystemInfoRequest{})
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("status.Code(err) = %s; want %s", status.Code(err), codes.Canceled)
 	}
 }
 

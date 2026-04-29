@@ -105,6 +105,9 @@ func (s *AgentService) GetSystemInfo(ctx context.Context, _ *agentpb.GetSystemIn
 	}
 	info, err := collector.Collect(ctx)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
 		return nil, status.Errorf(codes.Internal, "system info collection failed: %v", err)
 	}
 	return info, nil
