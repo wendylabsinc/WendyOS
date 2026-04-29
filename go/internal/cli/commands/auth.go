@@ -480,7 +480,7 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		existingCert.PemCertificate,
 		existingCert.PemCertificateChain,
 		existingCert.PemPrivateKey,
-		"",
+		existingCert.PemCertificateChain,
 	)
 	if err != nil {
 		return fmt.Errorf("loading existing TLS config: %w", err)
