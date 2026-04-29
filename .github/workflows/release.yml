@@ -29,8 +29,12 @@ jobs:
             storage: sd
           - device: jetson-agx-orin
             storage: nvme
+          - device: jetson-agx-orin
+            storage: emmc
           - device: jetson-orin-nano
             storage: nvme
+          - device: jetson-orin-nano
+            storage: sd
 
     steps:
       # Disabled: build caching is flaky for mender builds
@@ -60,6 +64,7 @@ jobs:
             raspberry-pi-5:sd)    BOARD=rpi5-sd;               MACHINE=raspberrypi5-wendyos ;;
             raspberry-pi-5:nvme)  BOARD=rpi5-nvme;             MACHINE=raspberrypi5-nvme-wendyos ;;
             jetson-agx-orin:nvme) BOARD=jetson-agx-orin;       MACHINE=jetson-agx-orin-devkit-nvme-wendyos ;;
+            jetson-agx-orin:emmc) BOARD=jetson-agx-orin-emmc;  MACHINE=jetson-agx-orin-devkit-emmc-wendyos ;;
             jetson-orin-nano:nvme) BOARD=jetson-orin-nano-nvme; MACHINE=jetson-orin-nano-devkit-nvme-wendyos ;;
             jetson-orin-nano:sd)  BOARD=jetson-orin-nano-sd;   MACHINE=jetson-orin-nano-devkit-wendyos ;;
             *) echo "Unknown device/storage: $DEVICE/$STORAGE"; exit 1 ;;
@@ -107,34 +112,41 @@ jobs:
         with:
           go-version-file: wendy-os-publisher/go.mod
 
-      - name: Generate flashable image (Jetson only)
-        if: startsWith(matrix.device, 'jetson-')
+      - name: Generate flashable image (Jetson NVMe/eMMC)
+        if: startsWith(matrix.device, 'jetson-') && (matrix.storage == 'nvme' || matrix.storage == 'emmc')
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
+          STORAGE: ${{ matrix.storage }}
         run: |
           TEGRAFLASH_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
           FLASH_WORKDIR="$GITHUB_WORKSPACE/flash-work"
           mkdir -p "$FLASH_WORKDIR"
           tar -xzf "$TEGRAFLASH_FILE" -C "$FLASH_WORKDIR"
           cd "$FLASH_WORKDIR"
-          sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img"
+          case "$STORAGE" in
+            nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
+            emmc) sudo ./makedisk.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+          esac
 
       - name: Publish release to GCS
         env:
           DEPLOY_DIR: ${{ github.workspace }}/build/tmp/deploy/images/${{ steps.vars.outputs.machine }}
           MACHINE: ${{ steps.vars.outputs.machine }}
           DEVICE: ${{ matrix.device }}
+          STORAGE: ${{ matrix.storage }}
           RELEASE_VERSION: ${{ github.ref_name }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
         run: |
           TOKEN=$(gcloud auth print-access-token)
 
-          if [[ "$MACHINE" == raspberry* ]]; then
-            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic"
-          else
-            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
-          fi
+          # Jetson NVMe/eMMC images are produced by the tegraflash step above;
+          # all other images (RPi and Jetson SD card) use the bitbake .wic output.
+          case "$STORAGE" in
+            nvme) IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
+            emmc) IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+            *)    IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.rootfs.wic" ;;
+          esac
 
           ARGS=(
             --device "$DEVICE"
@@ -143,9 +155,15 @@ jobs:
             --access-token "$TOKEN"
           )
 
-          # For Jetson, include the tegraflash as the recovery file
-          if [[ "$MACHINE" != raspberry* ]]; then
+          # For Jetson NVMe/eMMC, include the tegraflash bundle as the recovery file.
+          if [[ "$STORAGE" == "nvme" || "$STORAGE" == "emmc" ]] && [[ "$MACHINE" != raspberry* ]]; then
             ARGS+=(--recovery-file "$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz")
+          fi
+
+          # Devices with multiple storage variants pass --storage so the manifest
+          # records the correct per-storage-type paths.
+          if [[ "$DEVICE" == "jetson-orin-nano" || "$DEVICE" == "jetson-agx-orin" ]]; then
+            ARGS+=(--storage "$STORAGE")
           fi
 
           # Include Mender OTA artifact if the build produced one

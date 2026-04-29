@@ -1,0 +1,25 @@
+
+/dts-v1/;
+/ {
+    overlay-name = "Boot Priority Settings (NVMe first)";
+    fragment@0 {
+        target-path = "/";
+        board_config { sw-modules = "uefi"; };
+        __overlay__ {
+            firmware {
+                uefi {
+                    variables {
+                        gNVIDIAPublicVariableGuid {
+                            /* Valid tokens include: sd, nvme, usb, emmc, sata, http, pxe, shell */
+                            DefaultBootPriority {
+                                /* NVMe first so wendy os install works out of the box */
+                                data = "nvme, sd, usb, http, pxe";
+                                locked;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+};
