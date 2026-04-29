@@ -68,26 +68,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Default repo URLs and commit hashes. A per-board
-# conf/template/boards/<board-id>/repos.overrides file may replace any of
-# these (and append entries via REPOS_EXTRA) before repos[] is built below.
-URL_POKY="git://git.yoctoproject.org/poky.git"
-URL_OE="https://github.com/openembedded/meta-openembedded.git"
-URL_TEGRA="https://github.com/OE4T/meta-tegra.git"
-URL_TEGRA_COMM="https://github.com/OE4T/meta-tegra-community"
-URL_VIRT="git://git.yoctoproject.org/meta-virtualization.git"
-URL_MENDER="https://github.com/mendersoftware/meta-mender.git"
-URL_MENDER_COMM="https://github.com/mendersoftware/meta-mender-community.git"
-URL_RPI="https://github.com/agherzan/meta-raspberrypi.git"
-
-SRCREV_POKY="353491479086e8d3f209d5cce0019a29e143b064"
-SRCREV_OE="2759d8870ea387b76c902070bed8a6649ff47b56"
-SRCREV_TEGRA="447c21467f65be2389f68a189b6871f13729d222"
-SRCREV_TEGRA_COMM="241d1073ba8e610ef8da3fe8470b0a4d0567521f"
-SRCREV_VIRT="f92518e20530edfebca45e4170e11460949a5303"
-SRCREV_MENDER="76404a7b914676a57d76ccb5fe12149112c05c03"
-SRCREV_MENDER_COMM="9145b8e34bac23c82984ddcdd5468154ffe7af6d"
-SRCREV_RPI="3afc9728b1f4ba0f5be1af34883d6582966133a1"
+# Default repo URLs and commit hashes live in scripts/upstream-repos.env so the
+# CI runner AMI (built by ci/packer/*.pkr.hcl) can prime the same revisions
+# without re-declaring them. A per-board conf/template/boards/<board-id>/
+# repos.overrides file may override any URL_*/SRCREV_* (and append entries via
+# REPOS_EXTRA) before repos[] is built below.
+# shellcheck source=scripts/upstream-repos.env
+source "${HOME_DIR}/scripts/upstream-repos.env"
 
 
 ##
@@ -110,6 +97,15 @@ Environment variables:
   MACHINE   Deprecated alias for BOARD. Prints a warning on use.
             Separate from bitbake's MACHINE (the yocto machine name) --
             rename scheduled to avoid confusion.
+  WENDYOS_HOST_BUILD
+            When set to 1, skip the Docker build environment and prepare the
+            tree for a host-native bitbake invocation. Used by CI runners that
+            boot from a custom AMI with the build prerequisites preinstalled.
+  WENDYOS_REPO_CACHE_DIR
+            Optional path to a directory with pre-cloned upstream layer repos
+            (poky/, meta-tegra/, ...). When set, missing entries in repos/ are
+            seeded from this cache before clone_repos runs, turning each clone
+            into a cheap fetch + checkout. Used by the CI AMI.
 
 Options:
   --help, -h   Show this help message.
@@ -340,6 +336,25 @@ cd "${PROJECT_DIR}"
 mkdir -p "repos"
 cd "repos"
 
+# Seed repos/ from a pre-cloned cache when one is provided. The CI runner AMI
+# (built by ci/packer/wendyos-builder.pkr.hcl) bakes the upstream layer
+# repos at the pinned SRCREVs into /opt/wendyos-cache/repos so clone_repos
+# below sees them as already-checked-out and only runs `git fetch` + `git
+# checkout`. Local dev leaves this unset and clones fresh as before.
+if [[ -n "${WENDYOS_REPO_CACHE_DIR:-}" && -d "${WENDYOS_REPO_CACHE_DIR}" ]]
+then
+    printf "Seeding repos/ from cache: %s\n" "${WENDYOS_REPO_CACHE_DIR}"
+    for cached in "${WENDYOS_REPO_CACHE_DIR}"/*/
+    do
+        [[ -d "${cached}" ]] || continue
+        folder=$(basename "${cached}")
+        if [[ ! -d "./${folder}" ]]
+        then
+            cp -r "${cached}" "./${folder}"
+        fi
+    done
+fi
+
 # Resolve template files based on BOARD. Each board has its own directory
 # conf/template/boards/<board-id>/ containing a self-contained local.conf and
 # bblayers.conf, which pull in shared fragments from
@@ -432,11 +447,40 @@ done
 printf "\nDirectory structure:\n"
 tree -d -L 2 -I 'build|downloads|sstate-cache' || true #--charset=ascii
 
+# Host-build mode: skip the Docker image entirely. CI runs on an AMI that
+# already has the build prerequisites installed (see ci/packer/), and a
+# disposable VM doesn't benefit from the container's isolation. Local dev
+# leaves WENDYOS_HOST_BUILD unset and gets the Docker flow as before.
+if [[ "${WENDYOS_HOST_BUILD:-0}" == "1" ]]
+then
+    cd "${WORK_DIR}"
+    cat <<EOF
+
+Bootstrap complete (host-build mode, no Docker image was created).
+
+Build with:
+   make build MACHINE=<machine-name> WENDYOS_HOST_BUILD=1
+
+Or directly:
+   . ./repos/poky/oe-init-build-env ${YOCTO_BUILD_DIR}
+   bitbake wendyos-image
+
+EOF
+    exit 0
+fi
+
 # prepare Docker image
 printf "\nCreate docker image...\n"
 docker_path="${PROJECT_DIR}/docker"
 mkdir -p "${docker_path}"
 copy_dir "${META_LAYER_DIR}/scripts/docker" "${docker_path}"
+
+# Stage the shared package install script into the Docker build context.
+# Same script is consumed by ci/packer/wendyos-builder.pkr.hcl so the dev
+# container and the CI AMI install an identical set of build prerequisites.
+mkdir -p "${docker_path}/files"
+cp "${META_LAYER_DIR}/scripts/install-build-deps.sh" "${docker_path}/files/install-build-deps.sh"
+chmod +x "${docker_path}/files/install-build-deps.sh"
 
 sed -i.bak "s|%HOST_DIR%|${PROJECT_DIR}|g" "${docker_path}/dockerfile.config"
 sed -i.bak "s|%OS_NAME%|${IMAGE_NAME}|g" "${docker_path}/dockerfile.config"

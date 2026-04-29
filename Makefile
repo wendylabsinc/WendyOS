@@ -25,6 +25,11 @@ DOCKER_WORKDIR := /home/$(DOCKER_USER)/$(IMAGE_NAME)
 BUILD_DIR := build
 IMAGE_TARGET ?= wendyos-image
 
+# When set to 1, run bitbake directly on the host instead of inside the
+# build Docker container. CI uses this on the custom RunsOn AMI that already
+# has the Yocto host prerequisites installed; local dev leaves it unset.
+WENDYOS_HOST_BUILD ?= 0
+
 # Flash configuration
 FLASH_DEVICE ?=
 FLASH_IMAGE_SIZE ?= 64G
@@ -119,7 +124,10 @@ setup: bootstrap
 
 bootstrap:
 	@printf "$(CYAN)Running bootstrap...$(NC)\n"
-	@cd $(PROJECT_DIR) && BOARD="$(BOARD)" MACHINE="$(MACHINE)" $(MAKEFILE_DIR)/bootstrap.sh
+	@cd $(PROJECT_DIR) && BOARD="$(BOARD)" MACHINE="$(MACHINE)" \
+		WENDYOS_HOST_BUILD="$(WENDYOS_HOST_BUILD)" \
+		WENDYOS_REPO_CACHE_DIR="$(WENDYOS_REPO_CACHE_DIR)" \
+		$(MAKEFILE_DIR)/bootstrap.sh
 
 #
 # Docker Management
@@ -161,7 +169,11 @@ build: _check-machine _check-setup _ensure-volumes
 	@printf "$(CYAN)Building $(IMAGE_TARGET) for $(MACHINE)...$(NC)\n"
 	@printf "$(YELLOW)This may take several hours on first build.$(NC)\n"
 	@printf "\n"
-	@if [ "$$(uname)" = "Darwin" ]; then \
+	@if [ "$(WENDYOS_HOST_BUILD)" = "1" ]; then \
+		cd $(PROJECT_DIR) && \
+		source ./repos/poky/oe-init-build-env $(BUILD_DIR) && \
+		BB_ENV_PASSTHROUGH_ADDITIONS="MACHINE" MACHINE=$(MACHINE) bitbake $(IMAGE_TARGET); \
+	elif [ "$$(uname)" = "Darwin" ]; then \
 		docker run \
 			--rm -t \
 			--privileged \
@@ -196,7 +208,9 @@ build: _check-machine _check-setup _ensure-volumes
 	fi
 	@printf "\n"
 	@printf "$(GREEN)Build complete!$(NC)\n"
-	@if [ "$$(uname)" = "Darwin" ]; then \
+	@if [ "$(WENDYOS_HOST_BUILD)" = "1" ]; then \
+		printf "Image location: $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
+	elif [ "$$(uname)" = "Darwin" ]; then \
 		printf "Run 'make deploy' to copy tegraflash tarball, or 'make flash-to-external' to flash.\n"; \
 	else \
 		printf "Image location: $(PROJECT_DIR)/build/tmp/deploy/images/$(MACHINE)/\n"; \
@@ -490,6 +504,13 @@ _check-machine:
 	fi
 
 _check-setup:
+	@if [ "$(WENDYOS_HOST_BUILD)" = "1" ]; then \
+		if [ ! -d "$(PROJECT_DIR)/repos/poky" ]; then \
+			printf "$(RED)Error: repos/poky not found. Run 'make setup' first.$(NC)\n"; \
+			exit 1; \
+		fi; \
+		exit 0; \
+	fi
 	@if [ ! -d "$(DOCKER_DIR)" ]; then \
 		printf "$(RED)Error: Build environment not set up.$(NC)\n"; \
 		printf "Run 'make setup' first.\n"; \
@@ -502,6 +523,7 @@ _check-setup:
 	fi
 
 _ensure-volumes:
+	@if [ "$(WENDYOS_HOST_BUILD)" = "1" ]; then exit 0; fi
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		docker volume inspect $(VOLUME_BUILD) >/dev/null 2>&1 || docker volume create $(VOLUME_BUILD) >/dev/null; \
 		docker volume inspect $(VOLUME_SSTATE) >/dev/null 2>&1 || docker volume create $(VOLUME_SSTATE) >/dev/null; \

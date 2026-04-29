@@ -161,6 +161,11 @@ jobs:
       - runs-on
       - family=c8id.8xlarge
       - spot=false
+      # Custom AMI built by .github/workflows/build-ami.yml. Has the Yocto
+      # host prerequisites preinstalled and upstream layer repos pre-cloned at
+      # the SRCREVs pinned by scripts/upstream-repos.env, so this job skips
+      # apt-get and 'docker build' entirely.
+      - image=wendyos-builder
       - run-id=${{ github.run_id }}-${{ matrix.device }}-${{ matrix.storage }}
     strategy:
       fail-fast: false
@@ -168,6 +173,8 @@ jobs:
     env:
       CACHE_BUCKET: ${{ vars.WENDYOS_BUILD_CACHE_BUCKET }}
       CACHE_REGION: ${{ vars.WENDYOS_BUILD_CACHE_REGION }}
+      WENDYOS_HOST_BUILD: "1"
+      WENDYOS_REPO_CACHE_DIR: /opt/wendyos-cache/repos
 
     steps:
       - name: Fix workspace permissions
@@ -250,23 +257,20 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           BOARD: ${{ steps.vars.outputs.board }}
-        run: BOARD="$BOARD" ./wendyos/bootstrap.sh
+        # WENDYOS_HOST_BUILD and WENDYOS_REPO_CACHE_DIR are inherited from the
+        # job-level env block above. Host-build mode skips the Docker image
+        # creation; the repo cache seeds repos/ from the AMI's bake-time clones.
+        run: ./wendyos/bootstrap.sh
 
       # Note: SSTATE_DIR / DL_DIR are pinned to ${TOPDIR}/../{sstate-cache,downloads}
       # by conf/template/include/local/common.inc, which matches the S3 sync paths
       # below, no auto.conf override needed.
-
-      - name: Fix workspace permissions for Docker
-        run: sudo chmod -R a+rwX "$GITHUB_WORKSPACE" 2>/dev/null || true
 
       - name: Build image
         working-directory: ${{ github.workspace }}/wendyos
         env:
           MACHINE: ${{ steps.vars.outputs.machine }}
         run: make build MACHINE="$MACHINE"
-
-      - name: Fix deploy directory permissions
-        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/build/tmp/deploy" 2>/dev/null || true
 
       # ---------- Build cache: save to S3 ----------------------------------
       # L1 snapshots are saved automatically by runs-on/snapshot at workflow
