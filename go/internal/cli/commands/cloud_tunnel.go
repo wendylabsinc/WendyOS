@@ -11,7 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -47,11 +46,12 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 	}
 
 	var transportCreds grpc.DialOption
-	// Non-443 endpoints are assumed to be local dev brokers (plain TCP).
 	if strings.HasSuffix(brokerURL, ":443") {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	} else {
-		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+		// Local/dev broker: present the client cert but skip server cert verification.
+		tlsCfg.InsecureSkipVerify = true
+		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	}
 	conn, err := grpc.NewClient(brokerURL, transportCreds)
 	if err != nil {
@@ -159,11 +159,12 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	}
 
 	var transportCreds grpc.DialOption
-	// Non-443 endpoints are assumed to be local dev or pki-core instances (plain TCP).
 	if strings.HasSuffix(auth.CloudGRPC, ":443") {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	} else {
-		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+		// Local/dev pki-core: present the client cert but skip server cert verification.
+		tlsCfg.InsecureSkipVerify = true
+		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	}
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, transportCreds)
 	if err != nil {
