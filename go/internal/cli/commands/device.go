@@ -32,7 +32,6 @@ import (
 	"golang.org/x/term"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -445,7 +444,9 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	if strings.HasSuffix(auth.CloudGRPC, ":443") {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	} else {
-		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
+		// Local/dev pki-core: present the client cert but skip server cert verification.
+		tlsCfg.InsecureSkipVerify = true
+		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
 	}
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, transportCreds)
 	if err != nil {
