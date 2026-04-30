@@ -332,6 +332,9 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return asset, err
 	}
 
+	if !isInteractiveTerminal() {
+		return nil, fmt.Errorf("multiple cloud devices found; rerun with --device in a non-interactive environment")
+	}
 	// Multiple devices — show interactive picker.
 	picker := tui.NewPickerWithTitle("Select a cloud device")
 	items := make([]tui.PickerItem, 0, len(assets))
