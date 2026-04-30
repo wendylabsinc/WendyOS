@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/dustin/go-humanize"
 )
@@ -34,12 +35,13 @@ func (f *flexBool) UnmarshalJSON(data []byte) error {
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
-	DevicePath  string // e.g. /dev/sdb
-	RawPath     string // same as DevicePath on Linux
-	Name        string // human-readable name
-	Size        string // human-readable size
-	SizeBytes   int64  // size in bytes
+	DevicePath  string      // e.g. /dev/sdb
+	RawPath     string      // same as DevicePath on Linux
+	Name        string      // human-readable name
+	Size        string      // human-readable size
+	SizeBytes   int64       // size in bytes
 	IsRemovable bool
+	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
 }
 
 // lsblkOutput is the JSON output from lsblk.
@@ -55,6 +57,7 @@ type lsblkDevice struct {
 	Hotplug    flexBool    `json:"hotplug"`
 	Transport  string      `json:"tran"`
 	Mountpoint string      `json:"mountpoint"`
+	Model      string      `json:"model"`
 }
 
 // listAllDrives lists external physical drives (USB, SD, hotplug) on Linux.
@@ -70,8 +73,41 @@ func listExternalDrives() ([]drive, error) {
 	return listDrivesLinux()
 }
 
+// detectStorageTypeLinux infers the physical storage medium from lsblk transport,
+// model name, and removable flag.
+//
+//   - "mmc" transport that is removable is an SD card (e.g. built-in slot).
+//   - "mmc" transport that is not removable is onboard eMMC.
+//   - "usb" transport whose model contains eMMC keywords is a USB eMMC reader.
+//   - "usb" transport whose model contains SD keywords is an SD card reader.
+//   - "usb" transport without SD/eMMC indicators is treated as an NVMe enclosure.
+func detectStorageTypeLinux(transport, model string, removable bool) StorageType {
+	switch strings.ToLower(transport) {
+	case "mmc", "sd":
+		if !removable {
+			return StorageEMMC
+		}
+		return StorageSD
+	case "usb":
+		lower := strings.ToLower(model)
+		for _, kw := range []string{"emmc", "e-mmc", "embedded mmc"} {
+			if strings.Contains(lower, kw) {
+				return StorageEMMC
+			}
+		}
+		for _, kw := range []string{"sd card", "sdhc", "sdxc", "sd/mmc", "mmc"} {
+			if strings.Contains(lower, kw) {
+				return StorageSD
+			}
+		}
+		return StorageNVMe
+	default:
+		return StorageUnknown
+	}
+}
+
 func listDrivesLinux() ([]drive, error) {
-	out, err := exec.Command("lsblk", "--json", "--bytes", "-o", "NAME,SIZE,TYPE,RM,HOTPLUG,TRAN,MOUNTPOINT").Output()
+	out, err := exec.Command("lsblk", "--json", "--bytes", "-o", "NAME,SIZE,TYPE,RM,HOTPLUG,TRAN,MOUNTPOINT,MODEL").Output()
 	if err != nil {
 		return nil, fmt.Errorf("running lsblk: %w", err)
 	}
@@ -108,6 +144,7 @@ func listDrivesLinux() ([]drive, error) {
 			// IsRemovable reflects our external-ness predicate so downstream code
 			// sees the same classification used to include this device.
 			IsRemovable: isExternal,
+			StorageType: detectStorageTypeLinux(dev.Transport, dev.Model, bool(dev.Removable)),
 		})
 	}
 

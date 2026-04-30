@@ -122,7 +122,7 @@ func TestPickManifestVersion_SemverOrdering(t *testing.T) {
 
 func TestOsCachedImagePath_Sanitization(t *testing.T) {
 	// Valid inputs should produce a valid path.
-	path, err := osCachedImagePath("raspberry-pi-5", "0.10.4")
+	path, err := osCachedImagePath("raspberry-pi-5", "0.10.4", StorageUnknown)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,14 +130,27 @@ func TestOsCachedImagePath_Sanitization(t *testing.T) {
 		t.Fatal("expected non-empty path")
 	}
 
+	// Storage suffix is appended for multi-storage devices.
+	nvmePath, err := osCachedImagePath("jetson-orin-nano", "0.10.4", StorageNVMe)
+	if err != nil {
+		t.Fatalf("unexpected error for nvme path: %v", err)
+	}
+	sdPath, err := osCachedImagePath("jetson-orin-nano", "0.10.4", StorageSD)
+	if err != nil {
+		t.Fatalf("unexpected error for sd path: %v", err)
+	}
+	if nvmePath == sdPath {
+		t.Fatal("expected distinct cache paths for nvme and sd")
+	}
+
 	// Path traversal in version should be rejected.
-	_, err = osCachedImagePath("raspberry-pi-5", "../../../etc/passwd")
+	_, err = osCachedImagePath("raspberry-pi-5", "../../../etc/passwd", StorageUnknown)
 	if err == nil {
 		t.Fatal("expected error for path traversal in version")
 	}
 
 	// Path traversal in device key should be rejected.
-	_, err = osCachedImagePath("../evil", "0.10.4")
+	_, err = osCachedImagePath("../evil", "0.10.4", StorageUnknown)
 	if err == nil {
 		t.Fatal("expected error for path traversal in device key")
 	}

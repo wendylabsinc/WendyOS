@@ -25,12 +25,13 @@ const (
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
-	DevicePath  string // e.g. \\.\PhysicalDrive1
-	RawPath     string // same as DevicePath on Windows
-	Name        string // human-readable name
-	Size        string // human-readable size
-	SizeBytes   int64  // size in bytes
+	DevicePath  string      // e.g. \\.\PhysicalDrive1
+	RawPath     string      // same as DevicePath on Windows
+	Name        string      // human-readable name
+	Size        string      // human-readable size
+	SizeBytes   int64       // size in bytes
 	IsRemovable bool
+	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
 }
 
 // psDisk is the JSON structure returned by the joined Get-Disk / Get-PhysicalDisk query.
@@ -112,10 +113,39 @@ func listDrivesWindows(externalOnly bool) ([]drive, error) {
 			Size:        humanize.Bytes(uint64(d.Size)),
 			SizeBytes:   d.Size,
 			IsRemovable: external || looksLikeCardReader(d),
+			StorageType: detectStorageTypeWindows(d.BusType, d.FriendlyName),
 		})
 	}
 
 	return drives, nil
+}
+
+// detectStorageTypeWindows infers the physical storage medium from the
+// PowerShell BusType and friendly name.
+//
+//   - "SD" and "MMC" bus types are always SD cards.
+//   - "USB" bus type with an SD-keyword name is an SD card reader.
+//   - "USB" bus type without SD keywords is assumed to be an NVMe enclosure.
+func detectStorageTypeWindows(busType, friendlyName string) StorageType {
+	switch strings.ToUpper(busType) {
+	case "SD", "MMC":
+		return StorageSD
+	case "USB":
+		lower := strings.ToLower(friendlyName)
+		for _, kw := range []string{"emmc", "e-mmc", "embedded mmc"} {
+			if strings.Contains(lower, kw) {
+				return StorageEMMC
+			}
+		}
+		for _, kw := range []string{"sd card", "sdhc", "sdxc", "sd/mmc", "mmc"} {
+			if strings.Contains(lower, kw) {
+				return StorageSD
+			}
+		}
+		return StorageNVMe
+	default:
+		return StorageUnknown
+	}
 }
 
 // isExternalBus returns true for bus types that indicate a removable/external drive.
