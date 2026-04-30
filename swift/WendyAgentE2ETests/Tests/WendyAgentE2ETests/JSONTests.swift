@@ -1,6 +1,6 @@
 import Testing
 
-@Suite
+@Suite(.serialized)
 struct `wendy json` {
     @Test
     func `'wendy json schema' prints the wendy_json schema`() async throws {

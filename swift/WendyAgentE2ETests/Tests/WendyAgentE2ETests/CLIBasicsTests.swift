@@ -1,6 +1,6 @@
 import Testing
 
-@Suite
+@Suite(.serialized)
 struct `CLI basics` {
 
     @Test

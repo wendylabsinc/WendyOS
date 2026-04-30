@@ -1,6 +1,6 @@
 import Testing
 
-@Suite
+@Suite(.serialized)
 struct `wendy analytics` {
     @Test
     func `'wendy analytics status' shows whether analytics are enabled`() async throws {

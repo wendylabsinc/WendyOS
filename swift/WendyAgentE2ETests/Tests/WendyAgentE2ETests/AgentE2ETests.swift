@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import WendyE2ETesting
 
+@Suite(.serialized)
 struct AgentE2ETests {
 
     @Test(.timeLimit(.minutes(10)))
