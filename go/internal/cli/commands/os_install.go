@@ -407,7 +407,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	// Step 3: Confirm destructive write (unless --force).
-	if err := confirmOverwriteInternalDrive(targetDrive, force, yesOverwriteInternal); err != nil {
+	if err := confirmOverwriteInternalDrive(targetDrive, force, false); err != nil {
 		return err
 	}
 	if !force {
@@ -582,6 +582,144 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	cliSuccess("\nSuccessfully installed %s %s on %s.", device.Name, imgInfo.Version, targetDrive.Name)
 	cliSuccess("You can now insert the drive into your device and power it on.")
+	return nil
+}
+
+type installStorage string
+
+const (
+	installStorageAuto      installStorage = "auto"
+	installStorageRemovable installStorage = "removable"
+	installStorageEMMC      installStorage = "emmc"
+	installStorageRecovery  installStorage = "recovery"
+)
+
+func resolveInstallStorage(manifest *deviceManifest, version, flagStorage, flagDrive string) (installStorage, error) {
+	storage, err := parseInstallStorage(flagStorage)
+	if err != nil {
+		return "", err
+	}
+
+	if flagDrive != "" {
+		if storage == installStorageEMMC || storage == installStorageRecovery {
+			return "", fmt.Errorf("--drive cannot be used with --storage %s; Jetson recovery flashing writes over USB", storage)
+		}
+		return installStorageRemovable, nil
+	}
+
+	if storage != installStorageAuto {
+		return storage, nil
+	}
+
+	v, ok := manifest.Versions[version]
+	if !ok {
+		return "", fmt.Errorf("version %s not found in device manifest", version)
+	}
+	if !isInteractiveTerminal() || (v.EMMCPath == "" && v.RecoveryPath == "") {
+		return installStorageRemovable, nil
+	}
+
+	var items []tui.PickerItem
+	items = append(items, tui.PickerItem{
+		Name:        "Removable drive",
+		Description: "Write a raw image to an SD card, USB drive, or external NVMe",
+		Value:       string(installStorageRemovable),
+	})
+	if v.EMMCPath != "" {
+		items = append(items, tui.PickerItem{
+			Name:        "Onboard eMMC",
+			Description: "Flash over Jetson USB recovery mode",
+			Value:       string(installStorageEMMC),
+		})
+	}
+	if v.RecoveryPath != "" {
+		items = append(items, tui.PickerItem{
+			Name:        "Jetson recovery / QSPI",
+			Description: "Flash boot firmware only over USB recovery mode",
+			Value:       string(installStorageRecovery),
+		})
+	}
+
+	fmt.Println()
+	picked, err := pickFromItems("Select install target", items)
+	if err != nil {
+		return "", err
+	}
+	return installStorage(picked), nil
+}
+
+func parseInstallStorage(raw string) (installStorage, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return installStorageAuto, nil
+	case "removable", "drive", "disk", "sd", "usb", "nvme", "external":
+		return installStorageRemovable, nil
+	case "emmc":
+		return installStorageEMMC, nil
+	case "recovery", "qspi", "tegraflash":
+		return installStorageRecovery, nil
+	default:
+		return "", fmt.Errorf("invalid --storage %q (expected auto, removable, emmc, or recovery)", raw)
+	}
+}
+
+func installLinuxTegraflash(ctx context.Context, deviceKey string, device pickerDevice, selectedVersion string, storage installStorage, tegraflashXML string, tegraflashSkipLarger int64, tegraflashSkipLargerChanged bool, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+	_ = ctx
+
+	if wifi.hasProvisioningFlags() || deviceName != "" || mode == preEnrollForced {
+		return fmt.Errorf("--storage %s uses Jetson USB recovery flashing and does not yet support --wifi, --wifi-ssid, --wifi-password, --device-name, or --pre-enroll", storage)
+	}
+
+	target := string(storage)
+	imgInfo, err := getTegraflashInfo(device.Manifest, selectedVersion, target)
+	if err != nil {
+		return fmt.Errorf("getting tegraflash info: %w", err)
+	}
+
+	if !force {
+		fmt.Println()
+		action := "write boot firmware"
+		if storage == installStorageEMMC {
+			action = "ERASE and write onboard eMMC"
+		}
+		confirmed, err := tui.Confirm(fmt.Sprintf("Jetson USB recovery flashing will %s on %s. Continue?", action, device.Name))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	fmt.Printf("\nPreparing %s %s %s tegraflash bundle...\n", device.Name, selectedVersion, storage)
+	bundlePath, err := resolveTegraflashBundle(deviceKey, target, imgInfo)
+	if err != nil {
+		return fmt.Errorf("resolving tegraflash bundle: %w", err)
+	}
+
+	skipLarger := tegraflashSkipLarger
+	fullEMMC := storage == installStorageEMMC
+	if fullEMMC && !tegraflashSkipLargerChanged {
+		skipLarger = 0
+	}
+
+	if err := tegraflash.Flash(tegraflash.FlashOptions{
+		BundlePath: bundlePath,
+		XMLName:    tegraflashXML,
+		FullEMMC:   fullEMMC,
+		SkipLarger: skipLarger,
+		Out:        os.Stdout,
+	}); err != nil {
+		return fmt.Errorf("tegraflash: %w", err)
+	}
+
+	fmt.Printf("\nSuccessfully flashed %s %s to %s.\n", device.Name, imgInfo.Version, storage)
+	if storage == installStorageEMMC {
+		fmt.Println("The device should reboot from onboard eMMC.")
+	} else {
+		fmt.Println("The device should reboot with updated Jetson recovery firmware.")
+	}
 	return nil
 }
 
@@ -898,193 +1036,13 @@ func osCacheDir() (string, error) {
 }
 
 // osCachedImagePath returns the expected cache path for a device+version image.
-type installStorage string
-
-const (
-	installStorageAuto      installStorage = "auto"
-	installStorageRemovable installStorage = "removable"
-	installStorageEMMC      installStorage = "emmc"
-	installStorageRecovery  installStorage = "recovery"
-)
-
-func resolveInstallStorage(manifest *deviceManifest, version, flagStorage, flagDrive string) (installStorage, error) {
-	storage, err := parseInstallStorage(flagStorage)
-	if err != nil {
-		return "", err
-	}
-
-	if flagDrive != "" {
-		if storage == installStorageEMMC || storage == installStorageRecovery {
-			return "", fmt.Errorf("--drive cannot be used with --storage %s; Jetson recovery flashing writes over USB", storage)
-		}
-		return installStorageRemovable, nil
-	}
-
-	if storage != installStorageAuto {
-		return storage, nil
-	}
-
-	v, ok := manifest.Versions[version]
-	if !ok {
-		return "", fmt.Errorf("version %s not found in device manifest", version)
-	}
-	if !isInteractiveTerminal() || (v.EMMCPath == "" && v.RecoveryPath == "") {
-		return installStorageRemovable, nil
-	}
-
-	var items []tui.PickerItem
-	items = append(items, tui.PickerItem{
-		Name:        "Removable drive",
-		Description: "Write a raw image to an SD card, USB drive, or external NVMe",
-		Value:       string(installStorageRemovable),
-	})
-	if v.EMMCPath != "" {
-		items = append(items, tui.PickerItem{
-			Name:        "Onboard eMMC",
-			Description: "Flash over Jetson USB recovery mode",
-			Value:       string(installStorageEMMC),
-		})
-	}
-	if v.RecoveryPath != "" {
-		items = append(items, tui.PickerItem{
-			Name:        "Jetson recovery / QSPI",
-			Description: "Flash boot firmware only over USB recovery mode",
-			Value:       string(installStorageRecovery),
-		})
-	}
-
-	fmt.Println()
-	picked, err := pickFromItems("Select install target", items)
-	if err != nil {
-		return "", err
-	}
-	return installStorage(picked), nil
-}
-
-func parseInstallStorage(raw string) (installStorage, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "auto":
-		return installStorageAuto, nil
-	case "removable", "drive", "disk", "sd", "usb", "nvme", "external":
-		return installStorageRemovable, nil
-	case "emmc":
-		return installStorageEMMC, nil
-	case "recovery", "qspi", "tegraflash":
-		return installStorageRecovery, nil
-	default:
-		return "", fmt.Errorf("invalid --storage %q (expected auto, removable, emmc, or recovery)", raw)
-	}
-}
-
-func installLinuxTegraflash(ctx context.Context, deviceKey string, device pickerDevice, selectedVersion string, storage installStorage, tegraflashXML string, tegraflashSkipLarger int64, tegraflashSkipLargerChanged bool, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
-	_ = ctx
-
-	if wifi.hasProvisioningFlags() || deviceName != "" || mode == preEnrollForced {
-		return fmt.Errorf("--storage %s uses Jetson USB recovery flashing and does not yet support --wifi, --wifi-ssid, --wifi-password, --device-name, or --pre-enroll", storage)
-	}
-
-	target := string(storage)
-	imgInfo, err := getTegraflashInfo(device.Manifest, selectedVersion, target)
-	if err != nil {
-		return fmt.Errorf("getting tegraflash info: %w", err)
-	}
-
-	if !force {
-		fmt.Println()
-		action := "write boot firmware"
-		if storage == installStorageEMMC {
-			action = "ERASE and write onboard eMMC"
-		}
-		confirmed, err := tui.Confirm(fmt.Sprintf("Jetson USB recovery flashing will %s on %s. Continue?", action, device.Name))
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			return nil
-		}
-	}
-
-	fmt.Printf("\nPreparing %s %s %s tegraflash bundle...\n", device.Name, selectedVersion, storage)
-	bundlePath, err := resolveTegraflashBundle(deviceKey, target, imgInfo)
-	if err != nil {
-		return fmt.Errorf("resolving tegraflash bundle: %w", err)
-	}
-
-	skipLarger := tegraflashSkipLarger
-	fullEMMC := storage == installStorageEMMC
-	if fullEMMC && !tegraflashSkipLargerChanged {
-		skipLarger = 0
-	}
-
-	if err := tegraflash.Flash(tegraflash.FlashOptions{
-		BundlePath: bundlePath,
-		XMLName:    tegraflashXML,
-		FullEMMC:   fullEMMC,
-		SkipLarger: skipLarger,
-		Out:        os.Stdout,
-	}); err != nil {
-		return fmt.Errorf("tegraflash: %w", err)
-	}
-
-	fmt.Printf("\nSuccessfully flashed %s %s to %s.\n", device.Name, imgInfo.Version, storage)
-	if storage == installStorageEMMC {
-		fmt.Println("The device should reboot from onboard eMMC.")
-	} else {
-		fmt.Println("The device should reboot with updated Jetson recovery firmware.")
-	}
-	return nil
-}
-
-func osCachedTegraflashPath(deviceKey, target, version string) (string, error) {
-	safeDevice := filepath.Base(deviceKey)
-	safeTarget := filepath.Base(target)
-	safeVersion := filepath.Base(version)
-	if safeDevice != deviceKey || safeTarget != target || safeVersion != version ||
-		strings.Contains(deviceKey, "..") || strings.Contains(target, "..") || strings.Contains(version, "..") {
-		return "", fmt.Errorf("invalid device key, target, or version: %q / %q / %q", deviceKey, target, version)
-	}
-
-	dir, err := osCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%s-%s.tegraflash.tar.gz", safeDevice, safeVersion, safeTarget)), nil
-}
-
-func resolveTegraflashBundle(deviceKey, target string, img *imageInfo) (string, error) {
-	cached, err := osCachedTegraflashPath(deviceKey, target, img.Version)
-	if err != nil {
-		return "", err
-	}
-
-	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached tegraflash bundle (%s)\n", cached)
-		return cached, nil
-	}
-
-	downloadPath, err := downloadImage(img)
-	if err != nil {
-		return "", fmt.Errorf("downloading tegraflash bundle: %w", err)
-	}
-	if err := os.Rename(downloadPath, cached); err != nil {
-		os.Remove(downloadPath)
-		return "", fmt.Errorf("caching tegraflash bundle: %w", err)
-	}
-	return cached, nil
-}
-
-// Format: <cache>/os-images/<device>-<version>[-<storage>].img
-// The storage suffix is omitted for single-storage devices (StorageUnknown).
 func osCachedImagePath(deviceKey, version string, storageType StorageType) (string, error) {
-	// Sanitize to prevent path traversal from user-supplied --version flag.
 	safeDevice := filepath.Base(deviceKey)
 	safeVersion := filepath.Base(version)
 	if safeDevice != deviceKey || safeVersion != version ||
 		strings.Contains(deviceKey, "..") || strings.Contains(version, "..") {
 		return "", fmt.Errorf("invalid device key or version: %q / %q", deviceKey, version)
 	}
-
 	dir, err := osCacheDir()
 	if err != nil {
 		return "", err
@@ -1096,6 +1054,20 @@ func osCachedImagePath(deviceKey, version string, storageType StorageType) (stri
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s.img", safeDevice, safeVersion, suffix)), nil
 }
 
+func osCachedTegraflashPath(deviceKey, target, version string) (string, error) {
+	safeDevice := filepath.Base(deviceKey)
+	safeTarget := filepath.Base(target)
+	safeVersion := filepath.Base(version)
+	if safeDevice != deviceKey || safeTarget != target || safeVersion != version ||
+		strings.Contains(deviceKey, "..") || strings.Contains(target, "..") || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid device key, target, or version: %q / %q / %q", deviceKey, target, version)
+	}
+	dir, err := osCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s-%s.tegraflash.tar.gz", safeDevice, safeVersion, safeTarget)), nil
+}
 
 // zipReadCloser wraps a zip.ReadCloser and its entry's ReadCloser so both
 // are released with a single Close call.
@@ -1241,6 +1213,28 @@ func openLocalImageStream(imagePath string) (io.ReadCloser, int64, error) {
 		return nil, 0, fmt.Errorf("stat image: %w", err)
 	}
 	return f, info.Size(), nil
+}
+
+func resolveTegraflashBundle(deviceKey, target string, img *imageInfo) (string, error) {
+	cached, err := osCachedTegraflashPath(deviceKey, target, img.Version)
+	if err != nil {
+		return "", err
+	}
+
+	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+		fmt.Printf("Using cached tegraflash bundle (%s)\n", cached)
+		return cached, nil
+	}
+
+	downloadPath, err := downloadImage(img)
+	if err != nil {
+		return "", fmt.Errorf("downloading tegraflash bundle: %w", err)
+	}
+	if err := os.Rename(downloadPath, cached); err != nil {
+		os.Remove(downloadPath)
+		return "", fmt.Errorf("caching tegraflash bundle: %w", err)
+	}
+	return cached, nil
 }
 
 // wifiCLIOptions captures the WiFi-related flags coming from cobra so they
