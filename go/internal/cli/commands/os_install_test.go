@@ -24,7 +24,7 @@ func TestNewOSInstallCmd_Flags(t *testing.T) {
 		t.Errorf("Use = %q; want %q", cmd.Use, "install [image] [drive]")
 	}
 
-	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name"}
+	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "storage", "tegraflash-xml", "tegraflash-skip-larger", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
@@ -62,7 +62,7 @@ func TestNewOSInstallCmd_PositionalArgsIncompatibleWithFlags(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error when positional args are combined with manifest flags")
 			}
-			expected := "positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name"
+			expected := "positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --storage, --tegraflash-xml, --tegraflash-skip-larger, --wifi-ssid, --wifi-password, --wifi, --no-wifi, or --device-name"
 			if got := err.Error(); got != expected {
 				t.Errorf("unexpected error: %q; want %q", got, expected)
 			}
@@ -253,6 +253,69 @@ func TestStreamZipImageEntry(t *testing.T) {
 			t.Fatal("expected error for nonexistent file")
 		}
 	})
+}
+
+func TestParseInstallStorage(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want installStorage
+	}{
+		{"", installStorageAuto},
+		{"auto", installStorageAuto},
+		{"removable", installStorageRemovable},
+		{"nvme", installStorageRemovable},
+		{"emmc", installStorageEMMC},
+		{"recovery", installStorageRecovery},
+		{"qspi", installStorageRecovery},
+	}
+
+	for _, tc := range tests {
+		got, err := parseInstallStorage(tc.raw)
+		if err != nil {
+			t.Fatalf("parseInstallStorage(%q): %v", tc.raw, err)
+		}
+		if got != tc.want {
+			t.Errorf("parseInstallStorage(%q) = %q; want %q", tc.raw, got, tc.want)
+		}
+	}
+
+	if _, err := parseInstallStorage("nand"); err == nil {
+		t.Fatal("expected invalid storage target to error")
+	}
+}
+
+func TestGetTegraflashInfo(t *testing.T) {
+	dm := &deviceManifest{Versions: map[string]deviceVersion{
+		"0.13.2-nightly": {
+			EMMCPath:          "images/jetson/0.13.2/emmc.tegraflash.tar.gz",
+			EMMCSizeBytes:     123,
+			RecoveryPath:      "images/jetson/0.13.2/recovery.tegraflash.tar.gz",
+			RecoverySizeBytes: 456,
+		},
+	}}
+
+	got, err := getTegraflashInfo(dm, "0.13.2-nightly", "emmc")
+	if err != nil {
+		t.Fatalf("getTegraflashInfo emmc: %v", err)
+	}
+	if got.DownloadURL != gcsBaseURL+"/images/jetson/0.13.2/emmc.tegraflash.tar.gz" || got.ImageSize != 123 {
+		t.Fatalf("emmc info = %+v", got)
+	}
+
+	got, err = getTegraflashInfo(dm, "0.13.2-nightly", "recovery")
+	if err != nil {
+		t.Fatalf("getTegraflashInfo recovery: %v", err)
+	}
+	if got.DownloadURL != gcsBaseURL+"/images/jetson/0.13.2/recovery.tegraflash.tar.gz" || got.ImageSize != 456 {
+		t.Fatalf("recovery info = %+v", got)
+	}
+
+	if _, err := getTegraflashInfo(dm, "missing", "emmc"); err == nil {
+		t.Fatal("expected missing version to error")
+	}
+	if _, err := getTegraflashInfo(dm, "0.13.2-nightly", "unknown"); err == nil {
+		t.Fatal("expected unknown target to error")
+	}
 }
 
 func TestParseWiFiEntry(t *testing.T) {
