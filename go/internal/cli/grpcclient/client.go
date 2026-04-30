@@ -4,7 +4,9 @@ package grpcclient
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"strings"
@@ -28,6 +30,8 @@ type AgentConnection struct {
 	Conn                *grpc.ClientConn
 	Host                string // hostname or IP of the connected agent
 	IsMTLS              bool   // true when connected via mutual TLS
+	RegistryDialer      func(context.Context, int) (net.Conn, error)
+	ExtraClosers        []io.Closer
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
@@ -138,10 +142,16 @@ func hostFromAddress(address string) string {
 
 // Close closes the underlying gRPC connection.
 func (c *AgentConnection) Close() error {
+	var errs []error
 	if c.Conn != nil {
-		return c.Conn.Close()
+		errs = append(errs, c.Conn.Close())
 	}
-	return nil
+	for _, closer := range c.ExtraClosers {
+		if closer != nil {
+			errs = append(errs, closer.Close())
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {

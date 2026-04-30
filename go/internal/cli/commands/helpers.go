@@ -448,6 +448,17 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		o(&cfg)
 	}
 
+	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
+		conn, err := connectToCloudAgent(ctx, cloudCfg.CloudGRPC, cloudCfg.DeviceName, cloudCfg.BrokerURL)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.suppressProvisioningHint {
+			suggestProvisioning(conn)
+		}
+		return conn, nil
+	}
+
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		startedAt := time.Now()
@@ -804,6 +815,15 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	for _, o := range opts {
 		o(&cfg)
 	}
+
+	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
+		conn, err := connectToCloudAgent(ctx, cloudCfg.CloudGRPC, cloudCfg.DeviceName, cloudCfg.BrokerURL)
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn}, nil
+	}
+
 	device := deviceFlag
 	isDefault := false
 	if device == "" {

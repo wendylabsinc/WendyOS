@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -176,6 +177,53 @@ func TestLoadTLSConfig_WithCABundle(t *testing.T) {
 
 	if tlsCfg.RootCAs == nil {
 		t.Error("RootCAs is nil, expected CA pool")
+	}
+}
+
+func TestLeafCertificatePEM(t *testing.T) {
+	leafPEM, _ := selfSignedCert(t)
+	chainPEM, _ := selfSignedCert(t)
+
+	got, err := LeafCertificatePEM(leafPEM + "\n" + chainPEM)
+	if err != nil {
+		t.Fatalf("LeafCertificatePEM() error = %v", err)
+	}
+	if got != leafPEM {
+		t.Errorf("LeafCertificatePEM() = %q; want %q", got, leafPEM)
+	}
+}
+
+func TestLeafCertificatePEM_StripsTrailingASN1Data(t *testing.T) {
+	leafPEM, _ := selfSignedCert(t)
+
+	block, _ := pem.Decode([]byte(leafPEM))
+	if block == nil {
+		t.Fatal("selfSignedCert produced invalid PEM")
+	}
+	wantDER := append([]byte(nil), block.Bytes...)
+	block.Bytes = append(block.Bytes, 0xde, 0xad, 0xbe, 0xef)
+
+	got, err := LeafCertificatePEM(string(pem.EncodeToMemory(block)))
+	if err != nil {
+		t.Fatalf("LeafCertificatePEM() error = %v", err)
+	}
+
+	gotBlock, _ := pem.Decode([]byte(got))
+	if gotBlock == nil {
+		t.Fatal("LeafCertificatePEM() produced invalid PEM")
+	}
+	if !bytes.Equal(gotBlock.Bytes, wantDER) {
+		t.Fatalf("LeafCertificatePEM() kept trailing bytes; got DER len %d, want %d", len(gotBlock.Bytes), len(wantDER))
+	}
+	if _, err := x509.ParseCertificate(gotBlock.Bytes); err != nil {
+		t.Fatalf("parsing stripped certificate: %v", err)
+	}
+}
+
+func TestLeafCertificatePEM_NoCertificate(t *testing.T) {
+	_, err := LeafCertificatePEM("not-a-cert")
+	if err == nil {
+		t.Fatal("LeafCertificatePEM() expected error for missing certificate")
 	}
 }
 
