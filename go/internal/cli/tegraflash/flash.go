@@ -38,7 +38,7 @@ func Flash(opts FlashOptions) error {
 	}
 	defer b.Close()
 
-	xmlData, xmlName, err := resolveLayoutXML(b, opts.XMLName)
+	xmlData, xmlName, err := resolveLayoutXML(b, opts.XMLName, opts.FullEMMC)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func Flash(opts FlashOptions) error {
 	return nil
 }
 
-func resolveLayoutXML(b *bundle.Bundle, xmlName string) ([]byte, string, error) {
+func resolveLayoutXML(b *bundle.Bundle, xmlName string, fullEMMC bool) ([]byte, string, error) {
 	if xmlName != "" {
 		xmlData, err := b.ExtractFile(xmlName)
 		if err != nil {
@@ -145,7 +145,7 @@ func resolveLayoutXML(b *bundle.Bundle, xmlName string) ([]byte, string, error) 
 		}
 		return xmlData, xmlName, nil
 	}
-	xmlData, found, err := b.FindXML()
+	xmlData, found, err := b.FindXML(fullEMMC)
 	if err != nil {
 		return nil, "", fmt.Errorf("finding partition XML: %w\n\nTip: use --tegraflash-xml <name> to specify the XML file", err)
 	}

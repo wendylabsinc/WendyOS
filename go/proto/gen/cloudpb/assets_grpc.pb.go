@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.0
-// source: cloud/assets.proto
+// source: assets.proto
 
 package cloudpb
 
@@ -24,8 +24,10 @@ const (
 	AssetService_UpdateAsset_FullMethodName       = "/wendycloud.v1.AssetService/UpdateAsset"
 	AssetService_DeleteAsset_FullMethodName       = "/wendycloud.v1.AssetService/DeleteAsset"
 	AssetService_ListAssets_FullMethodName        = "/wendycloud.v1.AssetService/ListAssets"
+	AssetService_ListAssetsByApp_FullMethodName   = "/wendycloud.v1.AssetService/ListAssetsByApp"
 	AssetService_ListAssetChildren_FullMethodName = "/wendycloud.v1.AssetService/ListAssetChildren"
 	AssetService_GetAssetLineage_FullMethodName   = "/wendycloud.v1.AssetService/GetAssetLineage"
+	AssetService_FilterAssets_FullMethodName      = "/wendycloud.v1.AssetService/FilterAssets"
 )
 
 // AssetServiceClient is the client API for AssetService service.
@@ -36,9 +38,13 @@ type AssetServiceClient interface {
 	GetAsset(ctx context.Context, in *GetAssetRequest, opts ...grpc.CallOption) (*Asset, error)
 	UpdateAsset(ctx context.Context, in *UpdateAssetRequest, opts ...grpc.CallOption) (*Asset, error)
 	DeleteAsset(ctx context.Context, in *DeleteAssetRequest, opts ...grpc.CallOption) (*DeleteAssetResponse, error)
+	// Server-streamed pagination using offset/limit (matches OrganizationService)
 	ListAssets(ctx context.Context, in *ListAssetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetsResponse], error)
+	ListAssetsByApp(ctx context.Context, in *ListAssetsByAppRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetsByAppResponse], error)
 	ListAssetChildren(ctx context.Context, in *ListAssetChildrenRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetChildrenResponse], error)
 	GetAssetLineage(ctx context.Context, in *GetAssetLineageRequest, opts ...grpc.CallOption) (*GetAssetLineageResponse, error)
+	// Filter assets using JQ filter with pagination
+	FilterAssets(ctx context.Context, in *FilterAssetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FilterAssetsResponse], error)
 }
 
 type assetServiceClient struct {
@@ -108,9 +114,28 @@ func (c *assetServiceClient) ListAssets(ctx context.Context, in *ListAssetsReque
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AssetService_ListAssetsClient = grpc.ServerStreamingClient[ListAssetsResponse]
 
+func (c *assetServiceClient) ListAssetsByApp(ctx context.Context, in *ListAssetsByAppRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetsByAppResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AssetService_ServiceDesc.Streams[1], AssetService_ListAssetsByApp_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ListAssetsByAppRequest, ListAssetsByAppResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AssetService_ListAssetsByAppClient = grpc.ServerStreamingClient[ListAssetsByAppResponse]
+
 func (c *assetServiceClient) ListAssetChildren(ctx context.Context, in *ListAssetChildrenRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetChildrenResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &AssetService_ServiceDesc.Streams[1], AssetService_ListAssetChildren_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &AssetService_ServiceDesc.Streams[2], AssetService_ListAssetChildren_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +162,25 @@ func (c *assetServiceClient) GetAssetLineage(ctx context.Context, in *GetAssetLi
 	return out, nil
 }
 
+func (c *assetServiceClient) FilterAssets(ctx context.Context, in *FilterAssetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FilterAssetsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AssetService_ServiceDesc.Streams[3], AssetService_FilterAssets_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FilterAssetsRequest, FilterAssetsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AssetService_FilterAssetsClient = grpc.ServerStreamingClient[FilterAssetsResponse]
+
 // AssetServiceServer is the server API for AssetService service.
 // All implementations must embed UnimplementedAssetServiceServer
 // for forward compatibility.
@@ -145,9 +189,13 @@ type AssetServiceServer interface {
 	GetAsset(context.Context, *GetAssetRequest) (*Asset, error)
 	UpdateAsset(context.Context, *UpdateAssetRequest) (*Asset, error)
 	DeleteAsset(context.Context, *DeleteAssetRequest) (*DeleteAssetResponse, error)
+	// Server-streamed pagination using offset/limit (matches OrganizationService)
 	ListAssets(*ListAssetsRequest, grpc.ServerStreamingServer[ListAssetsResponse]) error
+	ListAssetsByApp(*ListAssetsByAppRequest, grpc.ServerStreamingServer[ListAssetsByAppResponse]) error
 	ListAssetChildren(*ListAssetChildrenRequest, grpc.ServerStreamingServer[ListAssetChildrenResponse]) error
 	GetAssetLineage(context.Context, *GetAssetLineageRequest) (*GetAssetLineageResponse, error)
+	// Filter assets using JQ filter with pagination
+	FilterAssets(*FilterAssetsRequest, grpc.ServerStreamingServer[FilterAssetsResponse]) error
 	mustEmbedUnimplementedAssetServiceServer()
 }
 
@@ -173,11 +221,17 @@ func (UnimplementedAssetServiceServer) DeleteAsset(context.Context, *DeleteAsset
 func (UnimplementedAssetServiceServer) ListAssets(*ListAssetsRequest, grpc.ServerStreamingServer[ListAssetsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListAssets not implemented")
 }
+func (UnimplementedAssetServiceServer) ListAssetsByApp(*ListAssetsByAppRequest, grpc.ServerStreamingServer[ListAssetsByAppResponse]) error {
+	return status.Error(codes.Unimplemented, "method ListAssetsByApp not implemented")
+}
 func (UnimplementedAssetServiceServer) ListAssetChildren(*ListAssetChildrenRequest, grpc.ServerStreamingServer[ListAssetChildrenResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListAssetChildren not implemented")
 }
 func (UnimplementedAssetServiceServer) GetAssetLineage(context.Context, *GetAssetLineageRequest) (*GetAssetLineageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAssetLineage not implemented")
+}
+func (UnimplementedAssetServiceServer) FilterAssets(*FilterAssetsRequest, grpc.ServerStreamingServer[FilterAssetsResponse]) error {
+	return status.Error(codes.Unimplemented, "method FilterAssets not implemented")
 }
 func (UnimplementedAssetServiceServer) mustEmbedUnimplementedAssetServiceServer() {}
 func (UnimplementedAssetServiceServer) testEmbeddedByValue()                      {}
@@ -283,6 +337,17 @@ func _AssetService_ListAssets_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AssetService_ListAssetsServer = grpc.ServerStreamingServer[ListAssetsResponse]
 
+func _AssetService_ListAssetsByApp_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListAssetsByAppRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AssetServiceServer).ListAssetsByApp(m, &grpc.GenericServerStream[ListAssetsByAppRequest, ListAssetsByAppResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AssetService_ListAssetsByAppServer = grpc.ServerStreamingServer[ListAssetsByAppResponse]
+
 func _AssetService_ListAssetChildren_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ListAssetChildrenRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -311,6 +376,17 @@ func _AssetService_GetAssetLineage_Handler(srv interface{}, ctx context.Context,
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _AssetService_FilterAssets_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FilterAssetsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AssetServiceServer).FilterAssets(m, &grpc.GenericServerStream[FilterAssetsRequest, FilterAssetsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AssetService_FilterAssetsServer = grpc.ServerStreamingServer[FilterAssetsResponse]
 
 // AssetService_ServiceDesc is the grpc.ServiceDesc for AssetService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -347,10 +423,20 @@ var AssetService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 		{
+			StreamName:    "ListAssetsByApp",
+			Handler:       _AssetService_ListAssetsByApp_Handler,
+			ServerStreams: true,
+		},
+		{
 			StreamName:    "ListAssetChildren",
 			Handler:       _AssetService_ListAssetChildren_Handler,
 			ServerStreams: true,
 		},
+		{
+			StreamName:    "FilterAssets",
+			Handler:       _AssetService_FilterAssets_Handler,
+			ServerStreams: true,
+		},
 	},
-	Metadata: "cloud/assets.proto",
+	Metadata: "assets.proto",
 }
