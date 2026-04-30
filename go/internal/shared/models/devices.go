@@ -55,6 +55,7 @@ type LANDevice struct {
 	Hostname        string `json:"hostname"`
 	IPAddress       string `json:"ipAddress,omitempty"`
 	Port            int    `json:"port"`
+	IsMTLS          bool   `json:"isMTLS,omitempty"`
 	InterfaceType   string `json:"interfaceType"`
 	IsWendyDevice   bool   `json:"isWendyDevice"`
 	AgentVersion    string `json:"agentVersion,omitempty"`

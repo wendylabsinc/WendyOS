@@ -97,7 +97,7 @@ func newCameraViewCmd() *cobra.Command {
 				return fmt.Errorf("starting video stream: %w", err)
 			}
 
-			fmt.Fprintf(cmd.ErrOrStderr(), "Streaming video (Ctrl+C to stop)...\n")
+			cliLogln("Streaming video (Ctrl+C to stop)...")
 
 			if toStdout {
 				return pipeVideoToStdout(stream, cmd.OutOrStdout())

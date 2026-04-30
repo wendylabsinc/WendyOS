@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 )
 
 func mustDetectProjectType(t *testing.T, dir string) string {
@@ -218,6 +221,59 @@ func TestResolveRunProjectType_SwiftOverride(t *testing.T) {
 	}
 	if got != "swift" {
 		t.Fatalf("got %q, want swift", got)
+	}
+}
+
+func TestResolveRegistryForAgentUsesConnectionDialer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var dialedPort int
+	conn := &grpcclient.AgentConnection{
+		Host: "cloud-device-name",
+		RegistryDialer: func(_ context.Context, port int) (net.Conn, error) {
+			dialedPort = port
+			proxySide, registrySide := net.Pipe()
+			go func() {
+				defer registrySide.Close()
+				buf := make([]byte, 16)
+				n, err := registrySide.Read(buf)
+				if err == nil && n > 0 {
+					_, _ = registrySide.Write(buf[:n])
+				}
+			}()
+			return proxySide, nil
+		},
+	}
+
+	registryAddr, cleanup, err := resolveRegistryForAgent(ctx, conn, 5000)
+	if err != nil {
+		t.Fatalf("resolveRegistryForAgent: %v", err)
+	}
+	defer cleanup()
+
+	_, port, err := net.SplitHostPort(registryAddr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", registryAddr, err)
+	}
+	tcpConn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer tcpConn.Close()
+
+	if _, err := tcpConn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := tcpConn.Read(buf); err != nil {
+		t.Fatalf("read proxy: %v", err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("proxy echoed %q, want ping", string(buf))
+	}
+	if dialedPort != 5000 {
+		t.Fatalf("dialed port = %d, want 5000", dialedPort)
 	}
 }
 

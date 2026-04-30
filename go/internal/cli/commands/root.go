@@ -104,6 +104,8 @@ func NewRootCmd() *cobra.Command {
 	// Cloud Commands
 	authCmd := newAuthCmd()
 	authCmd.GroupID = "cloud"
+	cloudCmd := newCloudCmd()
+	cloudCmd.GroupID = "cloud"
 
 	// Device Commands
 	deviceCmd := newDeviceCmd()
@@ -146,6 +148,7 @@ func NewRootCmd() *cobra.Command {
 		projectCmd,
 		jsonCmd,
 		authCmd,
+		cloudCmd,
 		deviceCmd,
 		discoverCmd,
 		osCmd,

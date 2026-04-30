@@ -143,6 +143,12 @@ func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
+var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+
+func cliSuccess(format string, args ...any) {
+	fmt.Println(cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
+}
+
 func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
 	total := progress.GetTotalLayers()
 	if total <= 0 {
@@ -675,7 +681,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForSwiftAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -1052,7 +1058,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
 	// to the host so buildx can reach the device.
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -1062,7 +1068,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -1070,7 +1076,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}

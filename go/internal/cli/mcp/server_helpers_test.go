@@ -66,6 +66,18 @@ func (s *mcpServer) callTool(ctx context.Context, name string, args map[string]a
 		return s.handleProvisioningStart(ctx, req)
 	case "os_update":
 		return s.handleOSUpdate(ctx, req)
+	case "cloud_discover":
+		return s.handleCloudDiscover(ctx, req)
+	case "cloud_connect":
+		return s.handleCloudConnect(ctx, req)
+	case "cloud_device_connect":
+		return s.handleCloudConnect(ctx, req)
+	case "cloud_enroll_device":
+		return s.handleCloudEnrollDevice(ctx, req)
+	case "cloud_tunnel":
+		return s.handleCloudTunnel(ctx, req)
+	case "cloud_run":
+		return s.handleCloudRun(ctx, req)
 	default:
 		return mcpgo.NewToolResultError("unknown tool: " + name), nil
 	}

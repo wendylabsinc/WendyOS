@@ -2,20 +2,18 @@ package services
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math"
 	"net"
-	"os"
 	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 )
 
@@ -27,28 +25,19 @@ const (
 // TunnelBrokerClient maintains a persistent RegisterPresence stream with the broker
 // and dials local TCP connections in response to DialRequest messages.
 type TunnelBrokerClient struct {
-	logger      *zap.Logger
-	url         string
-	orgID       int32
-	assetID     int32
-	certPEM     string
-	chainPEM    string
-	keyPEM      string
-	caBundlePEM string
+	logger  *zap.Logger
+	url     string
+	orgID   int32
+	assetID int32
 }
 
 // NewTunnelBrokerClient creates a new TunnelBrokerClient.
-func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32,
-	certPEM, chainPEM, keyPEM, caBundlePEM string) *TunnelBrokerClient {
+func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32) *TunnelBrokerClient {
 	return &TunnelBrokerClient{
-		logger:      logger,
-		url:         url,
-		orgID:       orgID,
-		assetID:     assetID,
-		certPEM:     certPEM,
-		chainPEM:    chainPEM,
-		keyPEM:      keyPEM,
-		caBundlePEM: caBundlePEM,
+		logger:  logger,
+		url:     url,
+		orgID:   orgID,
+		assetID: assetID,
 	}
 }
 
@@ -80,7 +69,10 @@ func (c *TunnelBrokerClient) Run(ctx context.Context) {
 }
 
 func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
-	dialOpts, devMD := c.buildDialOpts()
+	dialOpts, devMD, err := c.buildDialOpts()
+	if err != nil {
+		return err
+	}
 	conn, err := grpc.NewClient(c.url, dialOpts...)
 	if err != nil {
 		return err
@@ -111,10 +103,17 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
 		for {
 			req, err := stream.Recv()
 			if err != nil {
-				recvErr <- err
+				select {
+				case recvErr <- err:
+				case <-ctx.Done():
+				}
 				return
 			}
-			recvCh <- req
+			select {
+			case recvCh <- req:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -137,25 +136,32 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
 	}
 }
 
-func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD) {
-	if os.Getenv("WENDY_BROKER_INSECURE_DEV") == "true" {
-		md := metadata.Pairs(
-			"x-dev-org-id", fmt.Sprint(c.orgID),
-			"x-dev-asset-id", fmt.Sprint(c.assetID),
-		)
-		return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, md
+func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, error) {
+	// The broker uses tls.NoClientCert because Go's TLS library rejects ML-DSA
+	// client certs (produced by pki-core) at the parsing stage regardless of
+	// ClientAuth level. Identity is verified via the XFCC header at the application
+	// layer instead.
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec
 	}
-
-	tlsCfg, err := certs.LoadTLSConfig(c.certPEM, c.chainPEM, c.keyPEM, c.caBundlePEM)
-	if err != nil {
-		c.logger.Error("failed to load TLS config for broker, falling back to insecure", zap.Error(err))
-		return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, nil
-	}
-	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, nil
+	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", c.orgID, c.assetID)
+	md := metadata.Pairs(
+		"x-wendy-client-cert", certHeader,
+		"x-forwarded-client-cert", certHeader,
+	)
+	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, md, nil
 }
 
 func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
 	req *cloudpb.DialRequest, devMD metadata.MD) {
+	// Only allow loopback connections to prevent broker-directed SSRF.
+	ip := net.ParseIP(req.Host)
+	if req.Host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		c.logger.Error("broker dial request rejected: only loopback targets allowed",
+			zap.String("host", req.Host))
+		return
+	}
+
 	addr := net.JoinHostPort(req.Host, fmt.Sprint(req.Port))
 	c.logger.Info("dialing local service for tunnel",
 		zap.String("session_id", req.SessionId), zap.String("addr", addr))
@@ -229,7 +235,7 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 				}
 			}
 			if readErr != nil {
-				if readErr != io.EOF {
+				if readErr == io.EOF {
 					_ = stream.Send(&cloudpb.TunnelData{HalfClose: true})
 				}
 				break

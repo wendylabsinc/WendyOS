@@ -9,7 +9,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string) error {
+func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, _ []byte) error {
 	return fmt.Errorf("config partition provisioning is not supported on Windows")
 }
 

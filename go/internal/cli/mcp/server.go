@@ -18,16 +18,17 @@ type ConnectFunc func(ctx context.Context, address string) (*grpcclient.AgentCon
 
 // mcpServer holds active connection state and implements all MCP tool handlers.
 type mcpServer struct {
-	cfg       *config.Config
-	connectFn ConnectFunc
-	conn      *grpcclient.AgentConnection
-	mu        sync.RWMutex
+	cfg          *config.Config
+	connectFn    ConnectFunc
+	conn         *grpcclient.AgentConnection
+	cloudTunnels map[string]*mcpCloudTunnel
+	mu           sync.RWMutex
 }
 
 // New creates a new mcpServer. connectFn is called by device_connect; pass nil
 // to disable dynamic connection (useful in tests that set conn directly).
 func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
-	return &mcpServer{cfg: cfg, connectFn: connectFn}
+	return &mcpServer{cfg: cfg, connectFn: connectFn, cloudTunnels: make(map[string]*mcpCloudTunnel)}
 }
 
 // GetConn returns the current active connection (nil if not connected).
@@ -75,6 +76,7 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerFileSyncTools(srv)
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
+	s.registerCloudTools(srv)
 	return server.ServeStdio(srv)
 }
 

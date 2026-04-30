@@ -346,6 +346,32 @@ func TestErrorClass_NeverLeaksMessageText(t *testing.T) {
 	}
 }
 
+func TestFormatError_EnrollmentTokenUnavailableIsCloudError(t *testing.T) {
+	err := fmt.Errorf("creating enrollment token: %w", status.Error(codes.Unavailable, "connection refused"))
+
+	got := formatError(err).Error()
+	want := "creating enrollment token: Could not connect to Wendy Cloud. Please try again later."
+	if got != want {
+		t.Fatalf("formatError() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "device") {
+		t.Fatalf("formatError() should not describe enrollment token creation as a device connection: %q", got)
+	}
+}
+
+func TestFormatError_LocalPKICoreUnavailable(t *testing.T) {
+	err := fmt.Errorf("creating enrollment token from pki-core services.orb.local:50051: %w", status.Error(codes.Unavailable, "connection refused"))
+
+	got := formatError(err).Error()
+	want := "creating enrollment token from pki-core services.orb.local:50051: Could not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine."
+	if got != want {
+		t.Fatalf("formatError() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "Wendy Cloud") || strings.Contains(got, "device") {
+		t.Fatalf("formatError() should describe local pki-core, got %q", got)
+	}
+}
+
 func TestEnv_IsCITripsKillSwitch(t *testing.T) {
 	// Sanity check that env.IsCI() recognizes the CI variable. The deeper
 	// contract — that analytics.Init refuses to enable in CI — is covered
