@@ -7,18 +7,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -233,7 +233,8 @@ func appsListProvider(ctx context.Context, cm providers.ContainerManager) error 
 }
 
 func newAppsStartCmd() *cobra.Command {
-	return &cobra.Command{
+	var configPath string
+	cmd := &cobra.Command{
 		Use:   "start [app-name]",
 		Short: "Start an application",
 		Args:  cobra.MaximumNArgs(1),
@@ -255,42 +256,17 @@ func newAppsStartCmd() *cobra.Command {
 				}
 			}
 
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("resolving working directory: %w", err)
+			}
+			appCfg, err := loadAppConfigForStart(cwd, configPath, appName)
+			if err != nil {
+				return err
+			}
+
 			if target.Agent != nil {
-				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
-				if err != nil {
-					return err
-				}
-				gotFirstResponse := false
-				for {
-					resp, err := outStream.Recv()
-					if err == io.EOF {
-						break
-					}
-					if err != nil {
-						if stdinAttempted && !gotFirstResponse && status.Code(err) == codes.Unimplemented {
-							cliNotice("Notice: stdin not attached (not supported by agent)")
-							startStream, startErr := target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-								AppName: appName,
-							})
-							if startErr != nil {
-								return fmt.Errorf("starting container: %w", startErr)
-							}
-							outStream = startStream
-							stdinAttempted = false
-							continue
-						}
-						return fmt.Errorf("receiving start response: %w", err)
-					}
-					gotFirstResponse = true
-					if out := resp.GetStdoutOutput(); out != nil {
-						os.Stdout.Write(out.GetData())
-					}
-					if out := resp.GetStderrOutput(); out != nil {
-						os.Stderr.Write(out.GetData())
-					}
-				}
-				fmt.Printf("Application %s stopped.\n", appName)
-				return nil
+				return streamContainerWithHooks(ctx, target.Agent, appName, appCfg)
 			}
 
 			if target.Provider != nil {
@@ -308,6 +284,38 @@ func newAppsStartCmd() *cobra.Command {
 			return fmt.Errorf("selected device does not support this command")
 		},
 	}
+	cmd.Flags().StringVar(&configPath, "config", "", "Path to wendy.json (defaults to ./wendy.json if present). Used to fire readiness probe and postStart hook.")
+	return cmd
+}
+
+// loadAppConfigForStart resolves the wendy.json used by `apps start` to fire
+// readiness probes and postStart hooks. --config is strict; <cwd>/wendy.json
+// is best-effort, returning (nil, nil) with a notice when found-but-unusable.
+func loadAppConfigForStart(cwd, configPath, appName string) (*appconfig.AppConfig, error) {
+	if configPath != "" {
+		cfg, err := appconfig.LoadFromFile(configPath)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.AppID != appName {
+			return nil, fmt.Errorf("--config %s has appId %q, does not match app %q", configPath, cfg.AppID, appName)
+		}
+		return cfg, nil
+	}
+
+	path := filepath.Join(cwd, "wendy.json")
+	cfg, err := appconfig.LoadFromFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			cliNotice("Notice: %s present but unreadable (%v); postStart hook will not fire", path, err)
+		}
+		return nil, nil
+	}
+	if cfg.AppID != appName {
+		cliNotice("Notice: %s has appId %q, does not match %q; postStart hook will not fire", path, cfg.AppID, appName)
+		return nil, nil
+	}
+	return cfg, nil
 }
 
 func newAppsStopCmd() *cobra.Command {

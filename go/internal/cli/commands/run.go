@@ -1135,18 +1135,9 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		return nil
 	}
 
-	// Start and stream output using AttachContainer so stdin is forwarded.
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID, appCfg)
-	if err != nil {
-		return err
-	}
-
-	cliLogln("Application %s started.", appCfg.AppID)
-
-	// Set up Ctrl+C handler first so readiness polling is cancellable.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
@@ -1158,32 +1149,59 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		runCancel()
 	}()
 
-	// Wait for readiness before firing hook.
-	if err := waitForReadiness(runCtx, appCfg.Readiness, conn.Host); err != nil {
-		if runCtx.Err() == nil {
-			cliLogln("Warning: %v", err)
-		}
-	}
+	return streamContainerWithHooks(runCtx, conn, appCfg.AppID, appCfg)
+}
 
-	// Post-start hook tied to runCtx so Ctrl+C kills it.
-	postStartCmd := startPostStartHook(runCtx, appCfg, conn.Host)
+// streamContainerWithHooks attaches to a container's stdout/stderr, runs the
+// readiness probe and postStart CLI hook, and pumps output until the stream
+// ends. appCfg may be nil — readiness and hook are skipped in that case.
+func streamContainerWithHooks(ctx context.Context, conn *grpcclient.AgentConnection, appName string, appCfg *appconfig.AppConfig) (retErr error) {
+	svc := conn.ContainerService
+	outStream, stdinAttempted, err := openContainerStream(ctx, svc, appName, appCfg)
+	if err != nil {
+		return err
+	}
+	cliLogln("Application %s started.", appName)
+	defer func() {
+		if retErr == nil {
+			cliLogln("\nApplication %s stopped.", appName)
+		}
+	}()
+
+	if appCfg != nil {
+		if err := waitForReadiness(ctx, appCfg.Readiness, conn.Host); err != nil {
+			if ctx.Err() == nil {
+				cliLogln("Warning: %v", err)
+			}
+		}
+		hookCtx, cancelHook := context.WithCancel(ctx)
+		postStartCmd := startPostStartHook(hookCtx, appCfg, conn.Host)
+		// Cancel the hook's context before waiting so we don't block on a
+		// still-running child after the container's stream ends.
+		defer func() {
+			cancelHook()
+			if postStartCmd != nil {
+				_ = postStartCmd.Wait()
+			}
+		}()
+	}
 
 	gotFirstResponse := false
 	for {
 		resp, recvErr := outStream.Recv()
 		if recvErr == io.EOF {
-			break
+			return nil
 		}
 		if recvErr != nil {
-			if runCtx.Err() != nil {
-				break
+			if ctx.Err() != nil {
+				return nil
 			}
 			// If the bidi stream returned Unimplemented before any response,
 			// the container was never started — fall back silently to StartContainer.
 			if stdinAttempted && !gotFirstResponse && status.Code(recvErr) == codes.Unimplemented {
 				cliNotice("Notice: stdin not attached (not supported by agent)")
-				startStream, startErr := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(runCtx, appCfg), &agentpb.StartContainerRequest{
-					AppName: appCfg.AppID,
+				startStream, startErr := svc.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
+					AppName: appName,
 				})
 				if startErr != nil {
 					return fmt.Errorf("starting container: %w", startErr)
@@ -1202,15 +1220,6 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}
-
-	// Cancel runCtx to terminate the postStart hook if it's still running,
-	// then wait for it to exit so we don't leave orphan processes.
-	runCancel()
-	if postStartCmd != nil {
-		_ = postStartCmd.Wait()
-	}
-	cliLogln("\nApplication %s stopped.", appCfg.AppID)
-	return nil
 }
 
 // waitForReadiness polls the readiness probe until it passes or the context is
