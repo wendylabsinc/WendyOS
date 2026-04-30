@@ -1,8 +1,19 @@
 package commands
 
 import (
+	"context"
+	"os"
+
 	"github.com/spf13/cobra"
 )
+
+type cloudDeviceConfig struct {
+	CloudGRPC  string
+	DeviceName string
+	BrokerURL  string
+}
+
+type cloudDeviceContextKey struct{}
 
 func newCloudCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -14,7 +25,53 @@ func newCloudCmd() *cobra.Command {
 	cmd.AddCommand(newCloudDiscoverCmd())
 	cmd.AddCommand(newCloudRunCmd())
 	cmd.AddCommand(newCloudTunnelCmd())
+	cmd.AddCommand(newCloudDeviceCmd())
 	return cmd
+}
+
+func newCloudDeviceCmd() *cobra.Command {
+	var cloudGRPC string
+	var brokerURL string
+
+	cmd := newDeviceCmd()
+	cmd.Short = "Manage WendyOS devices through Wendy Cloud"
+	cmd.Long = "Mirror of 'wendy device', but connects to the target device through the Wendy Cloud tunnel broker."
+	cmd.PersistentFlags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (required when multiple auth sessions exist)")
+	cmd.PersistentFlags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port (default: <cloud-host>:50052)")
+
+	wrapCloudDeviceCommands(cmd, func() cloudDeviceConfig {
+		return cloudDeviceConfig{
+			CloudGRPC:  cloudGRPC,
+			DeviceName: deviceFlag,
+			BrokerURL:  brokerURL,
+		}
+	})
+	return cmd
+}
+
+func wrapCloudDeviceCommands(cmd *cobra.Command, cfg func() cloudDeviceConfig) {
+	if cmd.RunE != nil {
+		runE := cmd.RunE
+		cmd.RunE = func(cmd *cobra.Command, args []string) error {
+			cmd.SetContext(context.WithValue(cmd.Context(), cloudDeviceContextKey{}, cfg()))
+			return runE(cmd, args)
+		}
+	}
+	if cmd.Run != nil {
+		run := cmd.Run
+		cmd.Run = func(cmd *cobra.Command, args []string) {
+			cmd.SetContext(context.WithValue(cmd.Context(), cloudDeviceContextKey{}, cfg()))
+			run(cmd, args)
+		}
+	}
+	for _, child := range cmd.Commands() {
+		wrapCloudDeviceCommands(child, cfg)
+	}
+}
+
+func cloudDeviceConfigFromContext(ctx context.Context) (cloudDeviceConfig, bool) {
+	cfg, ok := ctx.Value(cloudDeviceContextKey{}).(cloudDeviceConfig)
+	return cfg, ok
 }
 
 func newCloudEnrollDeviceCmd() *cobra.Command {

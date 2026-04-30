@@ -133,22 +133,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// registryTLSConfig builds a minimal server TLS config from provisioning PEM strings.
+	// registryTLSConfig builds the HTTPS/mTLS config for the embedded registry.
 	// Returns nil if the PEM data is invalid, which causes the registry to stay HTTP.
 	registryTLSConfig := func(certPEM, chainPEM, keyPEM string) *tls.Config {
-		fullChain := certPEM
-		if chainPEM != "" {
-			fullChain = certPEM + "\n" + chainPEM
-		}
-		cert, err := tls.X509KeyPair([]byte(fullChain), []byte(keyPEM))
+		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM)
 		if err != nil {
 			logger.Error("Failed to build registry TLS config", zap.Error(err))
 			return nil
 		}
-		return &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}
+		return tlsConfig
 	}
 
 	// Track the registry server so it can be restarted with HTTPS on provisioning.

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -9,17 +10,25 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 const defaultBrokerPort = "50052"
+
+type closeFunc func()
+
+func (f closeFunc) Close() error {
+	f()
+	return nil
+}
 
 // certXFCC builds the X-Forwarded-Client-Cert header value from stored cert
 // metadata. The server auth interceptor extracts the Wendy URI to identify
@@ -45,6 +54,73 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) context.Context 
 	}
 	md.Set("x-forwarded-client-cert", certXFCC(cert))
 	return metadata.NewOutgoingContext(ctx, md)
+}
+
+func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, error) {
+	auth, err := pickAuthEntry(cloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+
+	cliLogln("Fetching device list from cloud...")
+	asset, err := pickCloudDevice(ctx, auth, deviceName)
+	if err != nil {
+		return nil, err
+	}
+	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+
+	brokerConn, err := dialCloudBroker(auth, brokerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanupBroker := true
+	defer func() {
+		if cleanupBroker {
+			_ = brokerConn.Close()
+		}
+	}()
+
+	// Provisioned agents only serve mTLS on agentPort+1 (50052); the plaintext
+	// port (50051) is shut down after provisioning.
+	tunnelConn, err := openBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), defaultAgentPort+1)
+	if err != nil {
+		return nil, fmt.Errorf("opening cloud tunnel to %s: %w", asset.GetName(), err)
+	}
+
+	dialOpt, closeTunnel := tunnelDialer(tunnelConn)
+
+	cert := auth.Certificates[0]
+	x509Cert, err := tls.X509KeyPair([]byte(cert.PemCertificate), []byte(cert.PemPrivateKey))
+	if err != nil {
+		closeTunnel()
+		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		Certificates:       []tls.Certificate{x509Cert},
+		InsecureSkipVerify: true, //nolint:gosec — agent uses self-signed certs; chain verified server-side
+		MinVersion:         tls.VersionTLS12,
+	}
+
+	grpcConn, err := grpc.NewClient(
+		"passthrough:///cloud-tunnel",
+		dialOpt,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+	)
+	if err != nil {
+		closeTunnel()
+		return nil, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
+	}
+
+	agentConn := grpcclient.NewFromConn(grpcConn)
+	agentConn.Host = asset.GetName()
+	agentConn.IsMTLS = true
+	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
+		return openBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), uint32(port))
+	}
+	agentConn.ExtraClosers = append(agentConn.ExtraClosers, closeFunc(closeTunnel), brokerConn)
+	cleanupBroker = false
+	return agentConn, nil
 }
 
 // dialCloudBroker opens an mTLS gRPC connection to the tunnel broker.

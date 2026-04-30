@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 
+	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -20,7 +21,11 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
 	// Go's TLS library calls x509.ParseCertificate on every cert sent in the
 	// handshake, and ML-DSA chain certs (from pki-core) cause parse failures
 	// on the receiving client. The chain is used below only for the CA pool.
-	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	leafPEM, err := certs.LeafCertificatePEM(certPEM)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
+	}
+	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
 	if err != nil {
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
