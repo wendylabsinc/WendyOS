@@ -9,19 +9,13 @@ public import Subprocess
 #endif
 
 private let e2eTestRecordsDirectoryName: String = {
-    var time = time(nil)
-    var utc = tm()
-    gmtime_r(&time, &utc)
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd.HH-mm-ss"
 
-    return String(
-        format: "e2e-test-records.%04d-%02d-%02d.%02d-%02d-%02d",
-        utc.tm_year + 1900,
-        utc.tm_mon + 1,
-        utc.tm_mday,
-        utc.tm_hour,
-        utc.tm_min,
-        utc.tm_sec
-    )
+    return "e2e-test-records.\(formatter.string(from: Date()))"
 }()
 
 public struct Machine: Sendable {
