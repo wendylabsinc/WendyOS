@@ -37,7 +37,7 @@ func newCloudDeviceCmd() *cobra.Command {
 	cmd.Short = "Manage WendyOS devices through Wendy Cloud"
 	cmd.Long = "Mirror of 'wendy device', but connects to the target device through the Wendy Cloud tunnel broker."
 	cmd.PersistentFlags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (required when multiple auth sessions exist)")
-	cmd.PersistentFlags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port (default: <cloud-host>:50052)")
+	cmd.PersistentFlags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)")
 
 	wrapCloudDeviceCommands(cmd, func() cloudDeviceConfig {
 		return cloudDeviceConfig{

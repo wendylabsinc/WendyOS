@@ -17,6 +17,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
@@ -83,7 +84,7 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 			mcpgo.Description("Cloud gRPC endpoint to use when multiple auth sessions exist"),
 		),
 		mcpgo.WithString("broker_url",
-			mcpgo.Description("Tunnel broker host:port (default: <cloud-host>:50052)"),
+			mcpgo.Description("Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)"),
 		),
 	), s.handleCloudConnect)
 
@@ -96,7 +97,7 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 			mcpgo.Description("Cloud gRPC endpoint to use when multiple auth sessions exist"),
 		),
 		mcpgo.WithString("broker_url",
-			mcpgo.Description("Tunnel broker host:port (default: <cloud-host>:50052)"),
+			mcpgo.Description("Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)"),
 		),
 	), s.handleCloudConnect)
 
@@ -127,7 +128,7 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 			mcpgo.Description("Cloud gRPC endpoint to use when multiple auth sessions exist"),
 		),
 		mcpgo.WithString("broker_url",
-			mcpgo.Description("Tunnel broker host:port (default: <cloud-host>:50052)"),
+			mcpgo.Description("Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)"),
 		),
 	), s.handleCloudTunnel)
 
@@ -144,7 +145,7 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 			mcpgo.Description("Cloud gRPC endpoint to use when multiple auth sessions exist"),
 		),
 		mcpgo.WithString("broker_url",
-			mcpgo.Description("Tunnel broker host:port (default: <cloud-host>:50052)"),
+			mcpgo.Description("Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)"),
 		),
 		mcpgo.WithString("build_type",
 			mcpgo.Description("Build type: docker, swift, or python"),
@@ -559,13 +560,7 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 }
 
 func mcpDialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientConn, error) {
-	if brokerURL == "" {
-		host := auth.CloudGRPC
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-		brokerURL = net.JoinHostPort(host, mcpDefaultBrokerPort)
-	}
+	brokerURL = clouddefaults.BrokerURL(auth.CloudGRPC, brokerURL, mcpDefaultBrokerPort)
 	if len(auth.Certificates) == 0 {
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
