@@ -2,15 +2,19 @@ package services
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
@@ -36,7 +40,17 @@ type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error
 
 // DefaultCloudDialer connects to the cloud gRPC server with plaintext transport.
 func DefaultCloudDialer(ctx context.Context, addr string) (*grpc.ClientConn, error) {
+	if strings.HasSuffix(addr, ":443") {
+		return grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})))
+	}
 	return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+func certificateServiceAddr(cloudHost string) string {
+	if _, _, err := net.SplitHostPort(cloudHost); err == nil {
+		return cloudHost
+	}
+	return net.JoinHostPort(cloudHost, "50051")
 }
 
 // OnProvisionedFunc is called when provisioning completes successfully.
@@ -140,7 +154,7 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 	}
 
 	// Connect to the cloud gRPC server.
-	cloudAddr := fmt.Sprintf("%s:50051", req.GetCloudHost())
+	cloudAddr := certificateServiceAddr(req.GetCloudHost())
 	cloudConn, err := s.CloudDialer(ctx, cloudAddr)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "connecting to cloud: %v", err)

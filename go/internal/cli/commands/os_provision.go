@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,14 +113,9 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return nil, fmt.Errorf("cloud returned empty certificate")
 	}
 
-	cloudHost := auth.CloudGRPC
-	if h, _, splitErr := net.SplitHostPort(cloudHost); splitErr == nil {
-		cloudHost = h
-	}
-
 	state := preProvisionedState{
 		Enrolled:  true,
-		CloudHost: cloudHost,
+		CloudHost: auth.CloudGRPC,
 		OrgID:     orgID,
 		AssetID:   assetID,
 		KeyPEM:    keyPEM,

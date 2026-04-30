@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -464,17 +463,12 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
 
-	cloudHost := auth.CloudGRPC
-	if h, _, splitErr := net.SplitHostPort(cloudHost); splitErr == nil {
-		cloudHost = h
-	}
-
 	fmt.Println("Enrolling device...")
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),
 		AssetId:         tokenResp.GetAssetId(),
 		EnrollmentToken: tokenResp.GetEnrollmentToken(),
-		CloudHost:       cloudHost,
+		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
 		return fmt.Errorf("enrolling device: %w", err)
