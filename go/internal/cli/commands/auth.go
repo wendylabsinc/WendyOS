@@ -65,7 +65,7 @@ func newAuthLoginCmd() *cobra.Command {
 				cloudGRPC = defaultCloudGRPC
 			}
 			if !strings.HasPrefix(cloudDashboard, "http://") && !strings.HasPrefix(cloudDashboard, "https://") {
-				cloudDashboard = "http://" + cloudDashboard
+				cloudDashboard = "https://" + cloudDashboard
 			}
 			return performLogin(cmd.Context(), cloudDashboard, cloudGRPC)
 		},
