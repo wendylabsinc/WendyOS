@@ -30,6 +30,9 @@ jobs:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Run tests
         run: go test ./... -race -count=1 -timeout 120s
 
@@ -47,6 +50,9 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Run go vet
         run: go vet ./...

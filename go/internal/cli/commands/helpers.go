@@ -143,10 +143,17 @@ func resolveHostPreferIPv4(host string) string {
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
 // Prefer the discovered IP address so commands still work when .local
 // hostname resolution is unavailable on the host machine.
+//
+// For provisioned (mTLS) devices the Avahi advertisement carries the mTLS
+// port. connectWithAutoTLS derives the mTLS port as plaintext+1, so we
+// subtract 1 here to keep that convention working correctly.
 func lanAgentAddresses(dev models.LANDevice) []string {
 	port := dev.Port
 	if port == 0 {
 		port = defaultAgentPort
+	}
+	if dev.IsMTLS && dev.Port != 0 && port > 1 {
+		port-- // advertised port is mTLS; connectWithAutoTLS will add 1 back
 	}
 
 	var addresses []string
@@ -380,12 +387,12 @@ func isInteractiveTerminal() bool {
 // connection failure. Shows a warning and immediately opens the device picker
 // where the user can select a new device and optionally set/unset default
 // via 'd'/'x' shortcuts.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable after %s.", hostname, formatElapsedSeconds(elapsed))))
 	fmt.Println()
 
-	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
+	return pickDevice(ctx, excludeProviders, excludeBluetooth, suppressUpdateCheck)
 }
 
 func defaultDeviceSearchLabel(hostname string) string {
@@ -441,6 +448,17 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		o(&cfg)
 	}
 
+	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
+		conn, err := connectToCloudAgent(ctx, cloudCfg.CloudGRPC, cloudCfg.DeviceName, cloudCfg.BrokerURL)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.suppressProvisioningHint {
+			suggestProvisioning(conn)
+		}
+		return conn, nil
+	}
+
 	addr, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		startedAt := time.Now()
@@ -456,7 +474,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
-				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 				if recErr != nil {
 					return nil, recErr
 				}
@@ -517,27 +535,38 @@ func connectFromSelectedDevice(target *SelectedDevice, cfg resolveConfig) (*grpc
 }
 
 // connectWithAutoTLS tries to connect using mTLS if the CLI has auth certs,
-// falling back to plaintext if no certs are available or mTLS connection fails.
+// falling back to plaintext if no certs are available or all mTLS attempts fail.
+// It tries each stored certificate in order so that both production and local
+// pki-core certs are attempted.
 func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.AgentConnection, error) {
-	certInfo := loadCLICert()
-	if certInfo != nil {
-		// Derive the mTLS port (plaintext port + 1).
+	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
+	allCerts := loadAllCLICerts()
+	if len(allCerts) > 0 {
 		host, portStr, _ := net.SplitHostPort(plaintextAddr)
 		if port, err := strconv.Atoi(portStr); err == nil {
 			mtlsAddr := hostPort(host, port+1)
-			conn, tlsErr := grpcclient.ConnectWithTLS(ctx, mtlsAddr, certInfo)
-			if tlsErr == nil {
+			for i := range allCerts {
+				conn, tlsErr := grpcclient.ConnectWithTLS(ctx, mtlsAddr, &allCerts[i])
+				if tlsErr != nil {
+					if tlsDebug {
+						fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
+					}
+					continue
+				}
 				// grpc.NewClient is lazy — verify the connection actually
 				// works with a fast probe before committing to mTLS.
-				probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				// 8s allows time for mDNS (.local) resolution + TCP + TLS handshake.
+				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 				cancel()
 				if probeErr == nil {
 					return conn, nil
 				}
+				if tlsDebug {
+					fmt.Fprintf(os.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
+				}
 				conn.Close()
 			}
-			// mTLS failed — fall back to plaintext.
 		}
 	}
 	return grpcclient.Connect(ctx, plaintextAddr)
@@ -586,8 +615,9 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
 		return conn, nil
 	}
+	warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
-	fmt.Fprintf(os.Stderr, "Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] ", agentVer, version.Version)
+	fmt.Fprintf(os.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s). Update now? [Y/n] "), agentVer, version.Version)
 	reader := bufio.NewReader(os.Stdin)
 	answer, _ := reader.ReadString('\n')
 	answer = strings.TrimSpace(strings.ToLower(answer))
@@ -691,6 +721,22 @@ func loadCLICert() *config.CertificateInfo {
 	return &cert
 }
 
+// loadAllCLICerts returns the first certificate from each auth entry that has
+// one. Used by connectWithAutoTLS to try all available certs in order.
+func loadAllCLICerts() []config.CertificateInfo {
+	cfg, err := config.Load()
+	if err != nil || len(cfg.Auth) == 0 {
+		return nil
+	}
+	var out []config.CertificateInfo
+	for _, auth := range cfg.Auth {
+		if len(auth.Certificates) > 0 {
+			out = append(out, auth.Certificates[0])
+		}
+	}
+	return out
+}
+
 // loadCLIAuth returns the first auth entry that has certificates, or nil.
 func loadCLIAuth() *config.AuthConfig {
 	cfg, err := config.Load()
@@ -769,6 +815,15 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 	for _, o := range opts {
 		o(&cfg)
 	}
+
+	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
+		conn, err := connectToCloudAgent(ctx, cloudCfg.CloudGRPC, cloudCfg.DeviceName, cloudCfg.BrokerURL)
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn}, nil
+	}
+
 	device := deviceFlag
 	isDefault := false
 	if device == "" {
@@ -815,7 +870,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
-				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 			}
 			return nil, err
 		}

@@ -25,6 +25,7 @@ AGENT_PROTOS=(
     "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto"
     "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto"
     "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
 )
 
 # Build M options for agent protos
@@ -63,6 +64,7 @@ CLOUD_PROTOS=(
     "cloud/notifications.proto"
     "cloud/organizations.proto"
     "cloud/remote_logging.proto"
+    "cloud/tunnel.proto"
     "cloud/users.proto"
 )
 

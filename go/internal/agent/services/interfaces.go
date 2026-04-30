@@ -45,12 +45,13 @@ type ContainerdClient interface {
 	AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader) error
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error
-	StartContainer(ctx context.Context, appName string) (<-chan ContainerOutput, error)
-	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan ContainerOutput, error)
+	StartContainer(ctx context.Context, appName, postStartAgentCommand string) (<-chan ContainerOutput, error)
+	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error
 	DeleteContainer(ctx context.Context, appName string, deleteImage bool) error
 	ListContainers(ctx context.Context) ([]*agentpb.AppContainer, error)
 	GetContainerStats(ctx context.Context) ([]*agentpb.ContainerStats, error)
+	GetContainerMetrics(ctx context.Context, appName string) (ContainerMetrics, error)
 }
 
 // ContainerOutput represents a chunk of output from a running container.
@@ -58,4 +59,11 @@ type ContainerOutput struct {
 	Stdout []byte
 	Stderr []byte
 	Done   bool
+}
+
+// ContainerMetrics holds a point-in-time CPU and memory snapshot for a container.
+type ContainerMetrics struct {
+	UserCPUNanos int64 // cumulative user-mode CPU time in nanoseconds
+	SysCPUNanos  int64 // cumulative kernel-mode CPU time in nanoseconds
+	MemBytes     int64 // current memory usage in bytes
 }

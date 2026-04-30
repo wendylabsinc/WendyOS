@@ -255,6 +255,11 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		return err
 	}
 
+	// Ensure the disk is online before clearing partitions — a previous
+	// write may have left it offline.
+	onlineScript := fmt.Sprintf("Set-Disk -Number %d -IsOffline $false -Confirm:$false", diskNum)
+	_ = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", onlineScript).Run()
+
 	// Clear all partitions on the disk first. This is necessary because
 	// disks (e.g. from a prior Jetson flash) may contain many partitions
 	// without drive letters that getVolumesForDisk cannot enumerate. Those
@@ -272,11 +277,13 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	}
 
 	var volumeHandles []syscall.Handle
-	defer func() {
+	closeAllHandles := func() {
 		for _, h := range volumeHandles {
 			syscall.CloseHandle(h)
 		}
-	}()
+		volumeHandles = nil
+	}
+	defer closeAllHandles()
 
 	for _, letter := range letters {
 		h, err := lockAndDismountVolume(letter)
@@ -310,7 +317,6 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	if err != nil {
 		return fmt.Errorf("opening %s for writing (are you running as Administrator?): %w", d.DevicePath, err)
 	}
-	defer syscall.CloseHandle(handle)
 
 	// Allow writes beyond the reported partition layout. Without this,
 	// Windows may reject writes that extend past existing partitions.
@@ -357,6 +363,33 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	flushFileBuffers := kernel32.NewProc("FlushFileBuffers")
 	flushFileBuffers.Call(uintptr(handle)) //nolint:errcheck
+
+	// Release all our locks (physical drive + volume handles) and then
+	// immediately set the disk offline. When locks are released Windows
+	// rescans the partition table and auto-assigns drive letters to every
+	// partition it finds (EFI, rootfs, recovery, etc.), flooding Explorer
+	// with phantom drives. Setting the disk offline right after prevents this.
+	syscall.CloseHandle(handle)
+	closeAllHandles()
+
+	// Remove any auto-assigned drive letters, then take the disk offline.
+	// Set-Disk -IsOffline alone doesn't remove letters that Windows already
+	// assigned during the brief window between releasing locks and going offline.
+	cleanupScript := fmt.Sprintf(
+		"Get-Partition -DiskNumber %d | "+
+			"Where-Object { $_.DriveLetter } | "+
+			"ForEach-Object { Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue }; "+
+			"Set-Disk -Number %d -IsOffline $true -Confirm:$false -ErrorAction Stop",
+		diskNum, diskNum,
+	)
+	if output, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", cleanupScript).CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg != "" {
+			fmt.Fprintf(os.Stderr, "warning: failed to set disk %d offline: %v: %s\n", diskNum, err, msg)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: failed to set disk %d offline: %v\n", diskNum, err)
+		}
+	}
 
 	// Suppress unused import warning — unsafe is needed for DeviceIoControl pointer args.
 	_ = unsafe.Sizeof(0)

@@ -406,7 +406,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	platform := resolveAgentPlatform("", agentOS, architecture)
 
 	regPort := registryPort(agentOS)
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}

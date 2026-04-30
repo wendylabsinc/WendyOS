@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -29,6 +31,7 @@ import (
 	agentnet "github.com/wendylabsinc/wendy/internal/agent/network"
 	"github.com/wendylabsinc/wendy/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/internal/agent/services"
+	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
@@ -41,6 +44,10 @@ const (
 )
 
 func main() {
+	if handled, code := handleUtilityCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// Setup logger.
 	logCfg := zap.NewProductionConfig()
 	if os.Getenv("WENDY_DEBUG") != "" {
@@ -62,7 +69,12 @@ func main() {
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
 
-	configpartition.Apply(logger)
+	configPath := "/etc/wendy-agent"
+	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
+		configPath = envPath
+	}
+
+	configpartition.Apply(logger, configPath)
 	services.CommitMenderUpdate(logger)
 
 	// Clean up old agent binary backups from previous updates.
@@ -105,11 +117,8 @@ func main() {
 	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager)
 	containerSvc := services.NewContainerService(logger, containerdClient, services.WithLogManager(logManager))
 	audioSvc := services.NewAudioService(logger)
+	videoSvc := services.NewVideoService(logger)
 
-	configPath := "/etc/wendy-agent"
-	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
 	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
 
@@ -124,15 +133,49 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start the embedded dev container registry (Linux only, best-effort).
-	if runtime.GOOS == "linux" && ctrdErr == nil {
+	// registryTLSConfig builds the HTTPS/mTLS config for the embedded registry.
+	// Returns nil if the PEM data is invalid, which causes the registry to stay HTTP.
+	registryTLSConfig := func(certPEM, chainPEM, keyPEM string) *tls.Config {
+		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM)
+		if err != nil {
+			logger.Error("Failed to build registry TLS config", zap.Error(err))
+			return nil
+		}
+		return tlsConfig
+	}
+
+	// Track the registry server so it can be restarted with HTTPS on provisioning.
+	var (
+		registrySrv   *registry.Server
+		registrySrvMu sync.Mutex
+	)
+
+	// startRegistry starts (or restarts) the embedded OCI registry. When tlsConfig
+	// is non-nil it serves HTTPS; nil means plain HTTP (pre-provisioning only).
+	startRegistry := func(tlsConfig *tls.Config) {
+		registrySrvMu.Lock()
+		defer registrySrvMu.Unlock()
+
+		if registrySrv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := registrySrv.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("Registry shutdown error during restart", zap.Error(err))
+			}
+			registrySrv = nil
+		}
+
 		registryAddr := "0.0.0.0:5000"
 		if addr := os.Getenv("WENDY_REGISTRY_ADDR"); addr != "" {
 			registryAddr = addr
 		}
-		if _, err := registry.Start(ctx, containerdAddr, registryAddr, logger); err != nil {
+
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
+		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
+			return
 		}
+		registrySrv = srv
 	}
 
 	var wg sync.WaitGroup
@@ -144,10 +187,46 @@ func main() {
 		monitor.Run(ctx)
 	}()
 
+	// Collect CPU/memory metrics for all running containers.
+	if containerdClient != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			services.CollectContainerMetrics(ctx, containerdClient, broadcaster, logManager)
+		}()
+	}
+
+	// Collect CPU/memory metrics for the agent process itself.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		services.CollectAgentMetrics(ctx, broadcaster)
+	}()
+
 	// Main agent gRPC server port.
 	agentPort := defaultAgentPort
 	if p := os.Getenv("WENDY_AGENT_PORT"); p != "" {
 		agentPort = p
+	}
+
+	// startTunnelBroker launches the tunnel broker presence loop in the background.
+	// ProvisioningInfo() is called inside the goroutine to avoid re-entering the
+	// provisioning mutex when called from the OnProvisioned callback.
+	startTunnelBroker := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cloudHost, orgID, assetID, enrolled := provisioningSvc.ProvisioningInfo()
+			if !enrolled {
+				return
+			}
+			brokerURL := os.Getenv("WENDY_BROKER_URL")
+			if brokerURL == "" {
+				brokerURL = brokerURLForCloudHost(cloudHost)
+			}
+			client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID)
+			client.Run(ctx)
+		}()
 	}
 
 	// Track the mTLS server so we can shut it down gracefully.
@@ -159,6 +238,7 @@ func main() {
 		agentpb.RegisterWendyAgentServiceServer(srv, agentSvc)
 		agentpb.RegisterWendyContainerServiceServer(srv, containerSvc)
 		agentpb.RegisterWendyAudioServiceServer(srv, audioSvc)
+		agentpb.RegisterWendyVideoServiceServer(srv, videoSvc)
 		agentpb.RegisterWendyProvisioningServiceServer(srv, provisioningSvc)
 		agentpb.RegisterWendyTelemetryServiceServer(srv, telemetrySvc)
 	}
@@ -211,45 +291,73 @@ func main() {
 		}()
 	}
 
-	// Set up the provisioning callback to start the mTLS server dynamically.
-	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
-		startMTLSServer(certPEM, chainPEM, keyPEM)
+	// mtlsPortNum is agentPort+1; used for the mTLS server and Avahi advertisement.
+	agentPortNum, err := strconv.Atoi(agentPort)
+	if err != nil {
+		logger.Fatal("Invalid agent port", zap.String("port", agentPort), zap.Error(err))
 	}
+	mtlsPortNum := agentPortNum + 1
 
-	// Check if already provisioned and start mTLS server if certificates exist.
+	// Check if already provisioned and start mTLS server and tunnel broker if certificates exist.
 	certPEM, chainPEM, keyPEM := provisioningSvc.ProvisioningCerts()
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
 
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
+		startTunnelBroker()
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
 	}
 
-	// Plaintext agent gRPC server.
-	agentServer := grpc.NewServer(
-		grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
-		grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
-	)
-	if alreadyProvisioned {
-		// When already provisioned, only expose ProvisioningService on plaintext.
-		agentpb.RegisterWendyProvisioningServiceServer(agentServer, provisioningSvc)
-	} else {
-		// When not provisioned, expose all services on plaintext.
-		registerAllServices(agentServer)
-	}
-
-	agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
-	if err != nil {
-		logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		logger.Info("Agent gRPC server listening", zap.String("port", agentPort))
-		if err := agentServer.Serve(agentLis); err != nil {
-			logger.Error("Agent gRPC server error", zap.Error(err))
+	// Start the embedded dev container registry (Linux only, best-effort).
+	// If already provisioned, start immediately with HTTPS; otherwise HTTP until provisioned.
+	if runtime.GOOS == "linux" && ctrdErr == nil {
+		if alreadyProvisioned {
+			startRegistry(registryTLSConfig(certPEM, chainPEM, keyPEM))
+		} else {
+			startRegistry(nil)
 		}
-	}()
+	}
+
+	// Plaintext gRPC server — only needed until the device is provisioned.
+	// Once provisioned the mTLS server handles all gRPC traffic and the plaintext
+	// port is shut down so unprovisioned clients cannot access device services.
+	var agentServer *grpc.Server
+	if !alreadyProvisioned {
+		agentServer = grpc.NewServer(
+			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+		)
+		registerAllServices(agentServer)
+
+		agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
+		if err != nil {
+			logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logger.Info("Agent gRPC server listening", zap.String("port", agentPort))
+			if err := agentServer.Serve(agentLis); err != nil {
+				logger.Error("Agent gRPC server error", zap.Error(err))
+			}
+		}()
+	}
+
+	// Set up the provisioning callback to start the mTLS server, shut down
+	// the plaintext server, and switch the registry to HTTPS.
+	provisioningSvc.OnProvisioned = func(certPEM, chainPEM, keyPEM string) {
+		startMTLSServer(certPEM, chainPEM, keyPEM)
+		startTunnelBroker()
+		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
+		if agentServer != nil {
+			logger.Info("Device provisioned — shutting down plaintext gRPC port", zap.String("port", agentPort))
+			go agentServer.GracefulStop()
+		}
+		if runtime.GOOS == "linux" && ctrdErr == nil {
+			go startRegistry(registryTLSConfig(certPEM, chainPEM, keyPEM))
+		}
+	}
 
 	// OTEL gRPC receiver server.
 	otelPort := defaultOTELPort
@@ -308,7 +416,9 @@ func main() {
 	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 
 	cancel()
-	agentServer.GracefulStop()
+	if agentServer != nil {
+		agentServer.GracefulStop()
+	}
 	otelServer.GracefulStop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -326,4 +436,62 @@ func main() {
 	wg.Wait()
 
 	logger.Info("wendy-agent stopped")
+}
+
+func brokerURLForCloudHost(cloudHost string) string {
+	host, port, err := net.SplitHostPort(cloudHost)
+	if err == nil {
+		if port == "443" {
+			return cloudHost
+		}
+		return net.JoinHostPort(host, "50052")
+	}
+	return net.JoinHostPort(cloudHost, "50052")
+}
+
+func handleUtilityCommand(args []string) (bool, int) {
+	if len(args) == 0 {
+		return false, 0
+	}
+
+	if args[0] != "utils" {
+		return false, 0
+	}
+
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: wendy-agent utils open-browser <url>")
+		return true, 2
+	}
+	if args[1] != "open-browser" {
+		return false, 0
+	}
+
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: wendy-agent utils open-browser <url>")
+		return true, 2
+	}
+
+	rawURL := args[2]
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: %v\n", rawURL, err)
+		return true, 2
+	}
+	if parsed.Scheme == "" {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: missing scheme (e.g. http:// or https://)\n", rawURL)
+		return true, 2
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host == "" {
+		fmt.Fprintf(os.Stderr, "invalid URL %q: must include a host (e.g. http://localhost:3000)\n", rawURL)
+		return true, 2
+	}
+
+	if err := browseropen.Open(rawURL); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not open browser: %v\n", err)
+		fmt.Println(rawURL)
+		return true, 0
+	}
+
+	fmt.Printf("Opening %s in default browser...\n", rawURL)
+	return true, 0
 }

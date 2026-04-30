@@ -4,12 +4,13 @@ package grpcclient
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"strings"
 
-	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -29,9 +30,12 @@ type AgentConnection struct {
 	Conn                *grpc.ClientConn
 	Host                string // hostname or IP of the connected agent
 	IsMTLS              bool   // true when connected via mutual TLS
+	RegistryDialer      func(context.Context, int) (net.Conn, error)
+	ExtraClosers        []io.Closer
 	AgentService        agentpb.WendyAgentServiceClient
 	ContainerService    agentpb.WendyContainerServiceClient
 	AudioService        agentpb.WendyAudioServiceClient
+	VideoService        agentpb.WendyVideoServiceClient
 	ProvisioningService agentpb.WendyProvisioningServiceClient
 	TelemetryService    agentpb.WendyTelemetryServiceClient
 	FileSyncService     agentpb.WendyFileSyncServiceClient
@@ -58,18 +62,23 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 
 // ConnectWithTLS creates an mTLS connection using certificates from config.
 func ConnectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
-	tlsCfg, err := certs.LoadTLSConfig(
-		certInfo.PemCertificate,
-		certInfo.PemCertificateChain,
-		certInfo.PemPrivateKey,
-		"", // use system roots
+	// Only load the leaf cert — not the chain. Go's TLS library calls
+	// x509.ParseCertificate on every cert sent in the handshake, and ML-DSA
+	// chain certs (from pki-core) cause parse failures on the agent's server.
+	// The agent's VerifyPeerCertificate callback verifies the client cert via
+	// its own ML-DSA-aware CA pool without needing the chain in the handshake.
+	cert, err := tls.X509KeyPair(
+		[]byte(certInfo.PemCertificate),
+		[]byte(certInfo.PemPrivateKey),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("loading TLS config: %w", err)
+		return nil, fmt.Errorf("loading TLS cert: %w", err)
 	}
-
-	tlsCfg.InsecureSkipVerify = true // agent uses self-signed certs
-	tlsCfg.MinVersion = tls.VersionTLS12
+	tlsCfg := &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true, //nolint:gosec — agent uses self-signed certs
+		MinVersion:         tls.VersionTLS12,
+	}
 
 	conn, err := grpc.NewClient(
 		grpcTarget(address),
@@ -133,10 +142,16 @@ func hostFromAddress(address string) string {
 
 // Close closes the underlying gRPC connection.
 func (c *AgentConnection) Close() error {
+	var errs []error
 	if c.Conn != nil {
-		return c.Conn.Close()
+		errs = append(errs, c.Conn.Close())
 	}
-	return nil
+	for _, closer := range c.ExtraClosers {
+		if closer != nil {
+			errs = append(errs, closer.Close())
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
@@ -145,8 +160,15 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		AgentService:        agentpb.NewWendyAgentServiceClient(conn),
 		ContainerService:    agentpb.NewWendyContainerServiceClient(conn),
 		AudioService:        agentpb.NewWendyAudioServiceClient(conn),
+		VideoService:        agentpb.NewWendyVideoServiceClient(conn),
 		ProvisioningService: agentpb.NewWendyProvisioningServiceClient(conn),
 		TelemetryService:    agentpb.NewWendyTelemetryServiceClient(conn),
 		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),
 	}
+}
+
+// NewFromConn wraps an existing gRPC connection as an AgentConnection.
+// Use this when the caller manages its own dialing (e.g. a cloud tunnel).
+func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
+	return newAgentConnection(conn)
 }

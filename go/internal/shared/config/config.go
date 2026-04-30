@@ -20,6 +20,7 @@ type Config struct {
 type AuthConfig struct {
 	CloudDashboard string            `json:"cloudDashboard"`
 	CloudGRPC      string            `json:"cloudGRPC"`
+	APIKey         string            `json:"apiKey,omitempty"`
 	Certificates   []CertificateInfo `json:"certificates,omitempty"`
 }
 

@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources
 
-.PHONY: help format lint test proto build reset-mac-app-settings reset-mac-app-tcc reset-mac-app clean
+.PHONY: help format lint test proto build build-dev run reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -31,6 +31,14 @@ clean: ## Remove Build/
 build: ## Build, sign, notarize, and package the macOS app
 	VERSION='$(VERSION)' OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh
 
+build-dev: ## Build and package a dev-signed macOS app without notarization
+	OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh --dev
+
+run: ## Quit, build, and open the WendyAgentMac app
+	@$(MAKE) quit
+	@$(MAKE) build-dev
+	open Build/WendyAgentMac.app
+
 reset-mac-app-settings: ## Reset WendyAgentMac preferences/defaults
 	./Scripts/ResetMacAppSettings.sh
 
@@ -38,3 +46,6 @@ reset-mac-app-tcc: ## Reset WendyAgentMac TCC permissions
 	./Scripts/ResetMacAppTCC.sh
 
 reset-mac-app: reset-mac-app-settings reset-mac-app-tcc ## Reset WendyAgentMac settings and TCC permissions
+
+quit: ## Quit WendyAgentMac and fail if it is still running after 10 seconds
+	./Scripts/Quit.sh

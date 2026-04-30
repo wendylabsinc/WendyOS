@@ -25,6 +25,13 @@
 			);
 			target = B00000000000000000000003 /* WendyAgentMac */;
 		};
+		B3E92D422F9FBCD3000D2492 /* Exceptions for "Support" folder in "WendyAgentMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"WendyAgentMac-Info.plist",
+			);
+			target = B00000000000000000000003 /* WendyAgentMac */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -50,6 +57,9 @@
 		};
 		B373CFB12F96576D00C31493 /* Support */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B3E92D422F9FBCD3000D2492 /* Exceptions for "Support" folder in "WendyAgentMac" target */,
+			);
 			path = Support;
 			sourceTree = "<group>";
 		};
@@ -208,7 +218,6 @@
 			baseConfigurationReferenceAnchor = B373D0972F9B594D00C31493 /* Configuration */;
 			baseConfigurationReferenceRelativePath = WendyAgentMac.xcconfig;
 			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
 			};
 			name = Debug;
 		};
@@ -217,7 +226,6 @@
 			baseConfigurationReferenceAnchor = B373D0972F9B594D00C31493 /* Configuration */;
 			baseConfigurationReferenceRelativePath = WendyAgentMac.xcconfig;
 			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
 			};
 			name = Release;
 		};

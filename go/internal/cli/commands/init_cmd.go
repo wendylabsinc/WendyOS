@@ -316,7 +316,7 @@ func runInitWizard(args []string, opts initOptions) error {
 		return fmt.Errorf("writing wendy.json: %w", err)
 	}
 
-	fmt.Printf("\nCreated wendy.json for %s\n", appID)
+	cliSuccess("\nCreated wendy.json for %s", appID)
 
 	// Step 5: Scaffold project files.
 	if err := scaffoldProject(cwd, appID, target, language); err != nil {
@@ -484,7 +484,7 @@ func metaTemplateNames(meta *repoMeta) string {
 // in-flight HTTP request is aborted and ErrUserCancelled is returned.
 func fetchRepoMetaWithUI(branch string) (*repoMeta, error) {
 	if !isInteractiveTerminal() {
-		fmt.Println("Fetching template registry...")
+		cliLogln("Fetching template registry...")
 		return fetchRepoMeta(context.Background(), branch)
 	}
 
@@ -531,7 +531,7 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 	title := fmt.Sprintf("Downloading template %q for %s (branch: %s)", tmpl, language, resolveTemplateBranch(branch))
 
 	if !isInteractiveTerminal() {
-		fmt.Printf("\n%s...\n", title)
+		cliLogln("\n%s...", title)
 		return downloadTemplateArchive(context.Background(), language, tmpl, branch, nil)
 	}
 
@@ -607,6 +607,21 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
+	// Pre-populate vals with any --var overrides not consumed by template
+	// variables, so they can answer schema questions.
+	for k, v := range varOverrides {
+		if _, exists := vals[k]; !exists {
+			vals[k] = v
+		}
+	}
+
+	// Collect schema-driven answers (multi-phase conditional questions).
+	if manifest.Schema != nil {
+		if err := collectSchemaAnswers(manifest.Schema, vals); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}
@@ -616,11 +631,11 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Printf("\nScaffolded %s project from template %q\n", language, tmpl)
-	fmt.Printf("  Directory: %s/\n", destDir)
+	cliSuccess("\nScaffolded %s project from template %q", language, tmpl)
+	cliLogln("  Directory: %s/", destDir)
 	for _, v := range manifest.Variables {
 		if val, ok := vals[v.Name]; ok {
-			fmt.Printf("  %s: %v\n", v.Name, val)
+			cliLogln("  %s: %v", v.Name, val)
 		}
 	}
 
@@ -629,7 +644,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Println("\nYour project is ready! Run `" + templateRunCommand(cwd, destDir, appID) + "` to build and deploy.")
+	cliSuccess("\nYour project is ready! Run `%s` to build and deploy.", templateRunCommand(cwd, destDir, appID))
 
 	return nil
 }
@@ -719,7 +734,7 @@ func maybeGitInit(dir string, opts initOptions) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("  Warning: git init failed: %v\n", err)
+		cliNotice("  Warning: git init failed: %v", err)
 	}
 
 	return nil
@@ -812,7 +827,7 @@ func pickInitLanguage(target string) (string, error) {
 	switch target {
 	case targetWendyLite:
 		// Only WASM-capable languages (currently just Swift).
-		fmt.Println("Wendy Lite requires a WASM-compatible language.")
+		cliNotice("Wendy Lite requires a WASM-compatible language.")
 		return langSwift, nil
 
 	default:
@@ -837,7 +852,7 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 
 	if target == targetWendyLite {
 		// Wendy Lite has limited entitlements; skip interactive questions.
-		fmt.Println("Wendy Lite apps have network access by default.")
+		cliLogln("Wendy Lite apps have network access by default.")
 		return entitlements, nil
 	}
 
@@ -1113,7 +1128,7 @@ CMD ["uv", "run", "%s"]
 		}
 	}
 
-	fmt.Println("Created pyproject.toml, source package, and Dockerfile (using uv)")
+	cliSuccess("Created pyproject.toml, source package, and Dockerfile (using uv)")
 	return nil
 }
 
@@ -1172,8 +1187,8 @@ func installWendySkills(autoInstall bool) error {
 		return nil
 	}
 
-	fmt.Println("\nThe Wendy skills plugin gives Claude expert knowledge about")
-	fmt.Println("building and deploying apps to WendyOS and Wendy Lite devices.")
+	cliLogln("\nThe Wendy skills plugin gives Claude expert knowledge about")
+	cliLogln("building and deploying apps to WendyOS and Wendy Lite devices.")
 	fmt.Println()
 
 	if !autoInstall {
@@ -1193,8 +1208,8 @@ func installWendySkills(autoInstall bool) error {
 	addMarketplace.Stdout = os.Stdout
 	addMarketplace.Stderr = os.Stderr
 	if err := addMarketplace.Run(); err != nil {
-		fmt.Printf("  Could not add marketplace: %v\n", err)
-		fmt.Println("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
+		cliNotice("  Could not add marketplace: %v", err)
+		cliNotice("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
 		return nil
 	}
 
@@ -1203,18 +1218,18 @@ func installWendySkills(autoInstall bool) error {
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
-		fmt.Printf("  Could not install plugin: %v\n", err)
-		fmt.Println("  You can install manually: claude plugin install " + wendySkillsPluginName)
+		cliNotice("  Could not install plugin: %v", err)
+		cliNotice("  You can install manually: claude plugin install " + wendySkillsPluginName)
 		return nil
 	}
 
-	fmt.Println("  Wendy skills installed successfully!")
+	cliSuccess("  Wendy skills installed successfully!")
 	return nil
 }
 
 func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, interactive bool) error {
 	if choice == assistantSkip {
-		fmt.Println("\nYour project is ready! Run `wendy run` to build and deploy.")
+		cliSuccess("\nYour project is ready! Run `wendy run` to build and deploy.")
 		return nil
 	}
 
@@ -1237,7 +1252,7 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 
 	prompt := buildAssistantPrompt(appID, target, language, entitlements)
 
-	fmt.Printf("\nStarting %s with project context...\n", choice)
+	cliLogln("\nStarting %s with project context...", choice)
 
 	cmd := exec.Command(choice, prompt)
 	cmd.Stdin = os.Stdin
@@ -1364,7 +1379,7 @@ let package = Package(
 		return fmt.Errorf("creating main.swift: %w", err)
 	}
 
-	fmt.Println("Created Package.swift and source files")
+	cliSuccess("Created Package.swift and source files")
 	return nil
 }
 
@@ -1384,6 +1399,6 @@ CMD ["echo", "Hello from %s!"]
 		return fmt.Errorf("creating Dockerfile: %w", err)
 	}
 
-	fmt.Println("Created Dockerfile")
+	cliSuccess("Created Dockerfile")
 	return nil
 }

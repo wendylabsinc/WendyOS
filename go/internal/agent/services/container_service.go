@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -195,12 +196,20 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		return status.Errorf(codes.Internal, "failed to create container: %v", err)
 	}
 
-	return s.streamContainerOutput(ctx, req.GetAppName(), stream)
+	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), stream)
 }
 
 // StartContainer starts an existing container and streams output.
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
-	return s.streamContainerOutput(stream.Context(), req.GetAppName(), stream)
+	return s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), stream)
+}
+
+func postStartAgentHookFromContext(ctx context.Context) string {
+	values := metadata.ValueFromIncomingContext(ctx, appconfig.PostStartAgentHookMetadataKey)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[len(values)-1]
 }
 
 // streamContainerOutput starts a container and streams its stdout/stderr to the client.
@@ -209,9 +218,10 @@ func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, st
 func (s *ContainerService) streamContainerOutput(
 	ctx context.Context,
 	appName string,
+	postStartAgentCommand string,
 	stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse],
 ) error {
-	outputCh, err := s.containerd.StartContainer(ctx, appName)
+	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
 	}
@@ -298,6 +308,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	}
 
 	ctx := stream.Context()
+	postStartAgentCommand := postStartAgentHookFromContext(ctx)
 
 	// Pipe client stdin messages into the container's stdin.
 	stdinR, stdinW := io.Pipe()
@@ -319,7 +330,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 		}
 	}()
 
-	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR)
+	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentCommand)
 	if err != nil {
 		stdinR.Close()
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)

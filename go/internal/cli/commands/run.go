@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
@@ -72,8 +73,9 @@ type containerOutputStream interface {
 // be opened (e.g. the agent is too old and returns Unimplemented), it logs a
 // notice and falls back to a plain StartContainer stream. Returns the output
 // stream and whether stdin is being forwarded.
-func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) (containerOutputStream, bool, error) {
-	attachStream, attachErr := svc.AttachContainer(ctx)
+func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string, appCfg *appconfig.AppConfig) (containerOutputStream, bool, error) {
+	startCtx := contextWithPostStartAgentHook(ctx, appCfg)
+	attachStream, attachErr := svc.AttachContainer(startCtx)
 	if attachErr == nil {
 		attachErr = attachStream.Send(&agentpb.AttachContainerRequest{
 			RequestType: &agentpb.AttachContainerRequest_AppName{AppName: appName},
@@ -84,7 +86,7 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 	}
 	if attachErr != nil {
 		cliNotice("Notice: stdin not attached (%v)", attachErr)
-		startStream, startErr := svc.StartContainer(ctx, &agentpb.StartContainerRequest{
+		startStream, startErr := svc.StartContainer(startCtx, &agentpb.StartContainerRequest{
 			AppName: appName,
 		})
 		if startErr != nil {
@@ -114,6 +116,21 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 	return attachStream, true, nil
 }
 
+func postStartAgentHook(appCfg *appconfig.AppConfig) string {
+	if appCfg == nil || appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil {
+		return ""
+	}
+	return appCfg.Hooks.PostStart.Agent
+}
+
+func contextWithPostStartAgentHook(ctx context.Context, appCfg *appconfig.AppConfig) context.Context {
+	hook := postStartAgentHook(appCfg)
+	if hook == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, appconfig.PostStartAgentHookMetadataKey, hook)
+}
+
 func cliLog(format string, args ...any) {
 	fmt.Print(cliStyle.Render(fmt.Sprintf(format, args...)))
 }
@@ -124,6 +141,12 @@ func cliLogln(format string, args ...any) {
 
 func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
+}
+
+var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+
+func cliSuccess(format string, args ...any) {
+	fmt.Println(cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
@@ -565,7 +588,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	cliLogln("Container %s created.", appCfg.AppID)
 
 	if opts.detach {
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.AppID,
 		})
 		if err != nil {
@@ -581,7 +604,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+	stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(runCtx, appCfg), &agentpb.StartContainerRequest{
 		AppName: appCfg.AppID,
 	})
 	if err != nil {
@@ -658,7 +681,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForSwiftAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -1035,7 +1058,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
 	// to the host so buildx can reach the device.
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -1045,7 +1068,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -1053,7 +1076,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}
@@ -1099,7 +1122,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	cliLogln("Container %s created.", appCfg.AppID)
 
 	if opts.detach {
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.AppID,
 		})
 		if err != nil {
@@ -1122,7 +1145,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID)
+	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID, appCfg)
 	if err != nil {
 		return err
 	}
@@ -1165,7 +1188,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			// the container was never started — fall back silently to StartContainer.
 			if stdinAttempted && !gotFirstResponse && status.Code(recvErr) == codes.Unimplemented {
 				cliNotice("Notice: stdin not attached (not supported by agent)")
-				startStream, startErr := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+				startStream, startErr := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(runCtx, appCfg), &agentpb.StartContainerRequest{
 					AppName: appCfg.AppID,
 				})
 				if startErr != nil {

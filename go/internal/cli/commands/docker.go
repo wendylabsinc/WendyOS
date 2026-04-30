@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
+	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -283,11 +285,104 @@ func ensureContainerPlugin(dir string) error {
 	return nil
 }
 
+// dockerRuntimes lists macOS Docker-compatible runtimes in detection order.
+// Each entry maps a human-readable name to its .app bundle path.
+var dockerRuntimes = []struct{ name, app string }{
+	{"OrbStack", "/Applications/OrbStack.app"},
+	{"Docker Desktop", "/Applications/Docker.app"},
+	{"Rancher Desktop", "/Applications/Rancher Desktop.app"},
+}
+
+// ensureDockerDaemon verifies the Docker daemon is running. On macOS, when
+// running interactively it prompts the user before launching the installed
+// Docker runtime; in non-interactive mode it launches it automatically.
+// Waits up to 60 s for the daemon to become ready before returning an error.
+func ensureDockerDaemon(ctx context.Context) error {
+	if exec.CommandContext(ctx, "docker", "version").Run() == nil {
+		return nil
+	}
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		if runtime.GOOS == "darwin" && isInteractiveTerminalFn() {
+			fmt.Print("Docker is not installed. Install it now with 'brew install --cask docker'? [Y/n] ")
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "" && answer != "y" && answer != "yes" {
+				return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+			}
+			fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
+			installCmd := exec.CommandContext(ctx, "brew", "install", "--cask", "docker")
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				return fmt.Errorf("failed to install Docker: %w", err)
+			}
+			// Fall through to detect and launch the newly installed runtime.
+		} else if runtime.GOOS == "darwin" {
+			return fmt.Errorf("docker is not installed — run: brew install --cask docker")
+		} else {
+			return fmt.Errorf("docker is not installed — please install Docker Desktop or OrbStack")
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		runtimeName, appPath := detectDockerRuntime()
+		if appPath == "" {
+			return fmt.Errorf("no supported Docker runtime found — install Docker Desktop or OrbStack and try again")
+		}
+
+		if isInteractiveTerminalFn() {
+			fmt.Printf("%s is not running. Launch it now? [Y/n] ", runtimeName)
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "" && answer != "y" && answer != "yes" {
+				return fmt.Errorf("docker daemon is not running — please start %s and try again", runtimeName)
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "[docker] Launching %s...\n", runtimeName)
+		if err := exec.CommandContext(ctx, "open", "-a", appPath).Run(); err != nil {
+			return fmt.Errorf("docker daemon is not running: could not launch %s: %w", runtimeName, err)
+		}
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			if exec.CommandContext(ctx, "docker", "version").Run() == nil {
+				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", runtimeName)
+				return nil
+			}
+		}
+		return fmt.Errorf("docker daemon did not become ready within 60 seconds — please start %s manually", runtimeName)
+	}
+
+	return fmt.Errorf("docker daemon is not running — please start Docker before using wendy")
+}
+
+// detectDockerRuntime returns the name and .app path of the first installed
+// Docker-compatible runtime found on macOS, or empty strings if none is found.
+func detectDockerRuntime() (name, appPath string) {
+	for _, rt := range dockerRuntimes {
+		if _, err := os.Stat(rt.app); err == nil {
+			return rt.name, rt.app
+		}
+	}
+	return "", ""
+}
+
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
 // exists and returns its name plus the effective registry address to use in
 // image references. For IPv6 addresses, a hostname alias is configured inside
 // the builder container to avoid brackets that break the TOML parser.
 func ensureBuildxBuilder(ctx context.Context, registryAddr string, useMTLS bool) (builderName, effectiveAddr string, err error) {
+	if err := ensureDockerDaemon(ctx); err != nil {
+		return "", "", err
+	}
 	// Use separate builders for mTLS and plaintext so switching between
 	// provisioned and unprovisioned devices doesn't recreate builders.
 	const containerCertDir = "/etc/buildkit/certs"
@@ -456,11 +551,15 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	keyPath := filepath.Join(hostCertDir, "client-key.pem")
 	caPath := filepath.Join(hostCertDir, "ca.pem")
 
-	fullCert := certInfo.PemCertificate
-	if certInfo.PemCertificateChain != "" {
-		fullCert += "\n" + certInfo.PemCertificateChain
+	// BuildKit and the agent registry both use Go's TLS stack, which parses
+	// every certificate exchanged during the handshake even when verification
+	// is disabled or custom. Wendy cloud chains can contain ML-DSA certificates
+	// that Go cannot parse, so only present the parseable leaf certificate.
+	leafCertPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
+	if err != nil {
+		return "", fmt.Errorf("extracting client leaf certificate: %w", err)
 	}
-	if err := os.WriteFile(certPath, []byte(fullCert), 0o644); err != nil {
+	if err := os.WriteFile(certPath, []byte(leafCertPEM), 0o644); err != nil {
 		return "", fmt.Errorf("writing client cert: %w", err)
 	}
 	if err := os.WriteFile(keyPath, []byte(certInfo.PemPrivateKey), 0o600); err != nil {
@@ -762,6 +861,28 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 	return registryAddr, proxy.Close, nil
 }
 
+// resolveRegistryForAgent determines how Docker buildx should reach the
+// agent's registry. Cloud connections provide a RegistryDialer that opens a
+// fresh broker tunnel per TCP connection; local/LAN connections use the normal
+// host-to-device proxy path.
+func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+	if conn.RegistryDialer == nil {
+		return resolveRegistry(ctx, conn.Host, port)
+	}
+
+	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+		return conn.RegistryDialer(ctx, port)
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("starting cloud registry proxy: %w", err)
+	}
+
+	if runtime.GOOS == "linux" {
+		return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+	}
+	return fmt.Sprintf("host.docker.internal:%d", proxy.Port()), proxy.Close, nil
+}
+
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
 // plugin, which runs on the host (not inside a Docker VM). Because the host
 // can resolve mDNS hostnames directly, we pass the original hostname through
@@ -787,6 +908,20 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
 }
 
+func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+	if conn.RegistryDialer == nil {
+		return resolveRegistryForSwift(ctx, conn.Host, port)
+	}
+
+	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+		return conn.RegistryDialer(ctx, port)
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", err)
+	}
+	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+}
+
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
 // link-local unicast address (fe80::/10 for IPv6, 169.254.0.0/16 for IPv4).
 func isLinkLocalIP(ip string) bool {
@@ -807,6 +942,7 @@ func isLinkLocalIP(ip string) bool {
 type registryProxy struct {
 	listener net.Listener
 	target   string
+	dial     func(context.Context) (net.Conn, error)
 	cancel   context.CancelFunc
 	done     chan struct{}
 }
@@ -816,6 +952,12 @@ type registryProxy struct {
 // the target address. The target should use the device's mDNS hostname (not a
 // bare link-local IP) so the host's resolver provides the zone ID.
 func startRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
+	return startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+	}, target)
+}
+
+func startRegistryProxyWithDialer(ctx context.Context, dial func(context.Context) (net.Conn, error), target ...string) (*registryProxy, error) {
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return nil, err
@@ -824,9 +966,12 @@ func startRegistryProxy(ctx context.Context, target string) (*registryProxy, err
 	proxyCtx, cancel := context.WithCancel(ctx)
 	p := &registryProxy{
 		listener: ln,
-		target:   target,
+		dial:     dial,
 		cancel:   cancel,
 		done:     make(chan struct{}),
+	}
+	if len(target) > 0 {
+		p.target = target[0]
 	}
 
 	go p.serve(proxyCtx)
@@ -859,7 +1004,7 @@ func (p *registryProxy) serve(ctx context.Context) {
 func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
 	defer client.Close()
 
-	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.target)
+	remote, err := p.dial(ctx)
 	if err != nil {
 		return
 	}
