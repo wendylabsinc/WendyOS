@@ -65,7 +65,6 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 		return nil, err
 	}
 
-	cliLogln("Fetching device list from cloud...")
 	asset, err := pickCloudDevice(ctx, auth, deviceName)
 	if err != nil {
 		return nil, err
@@ -230,13 +229,8 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 	return local, nil
 }
 
-// pickCloudDevice lists compute-device assets in the org and shows a TUI
-// picker. If deviceName is non-empty and matches exactly one asset name
-// (case-insensitive), the picker is skipped.
-func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName string) (*cloudpb.Asset, error) {
-	if len(auth.Certificates) == 0 {
-		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
-	}
+// fetchCloudAssets retrieves all online compute-device assets for the org.
+func fetchCloudAssets(ctx context.Context, auth *config.AuthConfig) ([]*cloudpb.Asset, error) {
 	cert := auth.Certificates[0]
 	cloudConn, err := dialCloudGRPC(auth)
 	if err != nil {
@@ -266,10 +260,15 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 			assets = append(assets, a)
 		}
 	}
+	return assets, nil
+}
+
+// resolveCloudAsset performs name matching and single-device auto-select.
+// Returns (nil, nil) when multiple devices are present and a picker is needed.
+func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Asset, error) {
 	if len(assets) == 0 {
 		return nil, fmt.Errorf("no enrolled devices found for this org; enroll a device with 'wendy device enroll' first")
 	}
-
 	if deviceName != "" {
 		lower := strings.ToLower(deviceName)
 		var matched *cloudpb.Asset
@@ -286,11 +285,54 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		}
 		return nil, fmt.Errorf("no device named %q found; omit --device to choose from a list", deviceName)
 	}
-
 	if len(assets) == 1 {
 		return assets[0], nil
 	}
+	return nil, nil // multiple devices — show picker
+}
 
+// pickCloudDevice shows a spinner while fetching online compute-device assets,
+// auto-selects when only one matches, and shows an interactive TUI picker when
+// multiple devices are available. If deviceName is non-empty and matches exactly
+// one asset name (case-insensitive), the picker is skipped.
+func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName string) (*cloudpb.Asset, error) {
+	if len(auth.Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
+
+	// Fetch device list, showing a spinner in interactive terminals.
+	var assets []*cloudpb.Asset
+	if isInteractiveTerminal() {
+		prog := tea.NewProgram(tui.NewSpinner("Fetching devices from cloud..."))
+		var fetchErr error
+		go func() {
+			assets, fetchErr = fetchCloudAssets(ctx, auth)
+			prog.Send(tui.SpinnerDoneMsg{})
+		}()
+		finalModel, err := prog.Run()
+		if err != nil {
+			return nil, fmt.Errorf("spinner: %w", err)
+		}
+		if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+			return nil, ErrUserCancelled
+		}
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+	} else {
+		var err error
+		assets, err = fetchCloudAssets(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	asset, err := resolveCloudAsset(assets, deviceName)
+	if err != nil || asset != nil {
+		return asset, err
+	}
+
+	// Multiple devices — show interactive picker.
 	picker := tui.NewPickerWithTitle("Select a cloud device")
 	items := make([]tui.PickerItem, 0, len(assets))
 	for _, a := range assets {
@@ -303,8 +345,10 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		})
 	}
 	p := tea.NewProgram(picker)
-	p.Send(tui.PickerAddMsg{Items: items})
-	p.Send(tui.PickerDoneMsg{})
+	go func() {
+		p.Send(tui.PickerAddMsg{Items: items})
+		p.Send(tui.PickerDoneMsg{})
+	}()
 
 	finalModel, err := p.Run()
 	if err != nil {
