@@ -22,22 +22,26 @@ For a fresh, easy-to-find record location, prefer setting
 
 ```bash
 cd swift/WendyAgentE2ETests
-rm -rf .build/e2e-test-records.*
-WENDY_AGENT_E2E_TEST_RECORDS_DIR="$PWD/.build" swift test
+WENDY_AGENT_E2E_TEST_RECORDS_DIR="$PWD/.build/e2e-test-records.current" swift test
 ```
 
-The harness writes records to a timestamped UTC directory:
+When `WENDY_AGENT_E2E_TEST_RECORDS_DIR` is set, record files are written
+directly into that directory. The harness empties the directory before writing
+records for the test process.
+
+Without `WENDY_AGENT_E2E_TEST_RECORDS_DIR`, the harness writes records to a
+timestamped UTC directory:
 
 ```text
 swift/WendyAgentE2ETests/.build/e2e-test-records.YYYY-MM-DD.HH-MM-SS/
 ```
 
-If `WENDY_AGENT_E2E_TEST_RECORDS_DIR` is set, the timestamped records folder is
-created under that directory instead.
-
 ## Locate Records
 
-After the run, find the newest records directory:
+After the run, locate the records directory.
+
+If `WENDY_AGENT_E2E_TEST_RECORDS_DIR` was set, use that directory directly.
+Otherwise, find the newest timestamped records directory:
 
 ```bash
 find swift/WendyAgentE2ETests/.build -maxdepth 1 -type d -name 'e2e-test-records.*' | sort | tail -1

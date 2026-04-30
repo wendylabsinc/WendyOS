@@ -266,8 +266,7 @@ public struct Machine: Sendable {
     }
 
     private static func reportURL(filePath: String, function: String) throws -> URL {
-        let directoryURL = Self.recordsDirectoryURL()
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let directoryURL = try Self.recordsDirectoryURL()
 
         return directoryURL.appendingPathComponent(
             "\(Self.fileName(from: filePath)).\(Self.slug(function)).md",
@@ -275,16 +274,39 @@ public struct Machine: Sendable {
         )
     }
 
-    private static func recordsDirectoryURL() -> URL {
-        let environment = ProcessInfo.processInfo.environment
-        let baseURL: URL
-        if let path = environment["WENDY_AGENT_E2E_TEST_RECORDS_DIR"], !path.isEmpty {
-            baseURL = URL(fileURLWithPath: path, isDirectory: true)
+    private static func recordsDirectoryURL() throws -> URL {
+        try Self.preparedRecordsDirectoryURL.get()
+    }
+
+    private static let preparedRecordsDirectoryURL: Result<URL, any Error> = Result {
+        let directoryURL = Self.unpreparedRecordsDirectoryURL()
+        if FileManager.default.fileExists(atPath: directoryURL.path) {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil
+            )
+            for url in contents {
+                try FileManager.default.removeItem(at: url)
+            }
         } else {
-            baseURL = Self.packageRootDirectoryURL().appendingPathComponent(".build", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
         }
 
-        return baseURL.appendingPathComponent(Self.e2eTestRecordsDirectoryName, isDirectory: true)
+        return directoryURL
+    }
+
+    private static func unpreparedRecordsDirectoryURL() -> URL {
+        let environment = ProcessInfo.processInfo.environment
+        if let path = environment["WENDY_AGENT_E2E_TEST_RECORDS_DIR"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+
+        return Self.packageRootDirectoryURL()
+            .appendingPathComponent(".build", isDirectory: true)
+            .appendingPathComponent(Self.e2eTestRecordsDirectoryName, isDirectory: true)
     }
 
     private static func packageRootDirectoryURL() -> URL {
