@@ -8,6 +8,22 @@ public import Subprocess
     import SystemPackage
 #endif
 
+private let e2eTestRecordsDirectoryName: String = {
+    var time = time(nil)
+    var utc = tm()
+    gmtime_r(&time, &utc)
+
+    return String(
+        format: "e2e-test-records.%04d-%02d-%02d.%02d-%02d-%02d",
+        utc.tm_year + 1900,
+        utc.tm_mon + 1,
+        utc.tm_mday,
+        utc.tm_hour,
+        utc.tm_min,
+        utc.tm_sec
+    )
+}()
+
 public struct Machine: Sendable {
     public let name: String
     public let ssh: String?
@@ -315,7 +331,7 @@ public struct Machine: Sendable {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
         return directoryURL.appendingPathComponent(
-            "\(Self.slug(Self.fileName(from: filePath))).\(Self.slug(function)).e2e-test-record.md",
+            "\(Self.fileName(from: filePath)).\(Self.slug(function)).md",
             isDirectory: false
         )
     }
@@ -329,7 +345,7 @@ public struct Machine: Sendable {
             baseURL = Self.packageRootDirectoryURL().appendingPathComponent(".build", isDirectory: true)
         }
 
-        return baseURL.appendingPathComponent("e2e-test-records", isDirectory: true)
+        return baseURL.appendingPathComponent(e2eTestRecordsDirectoryName, isDirectory: true)
     }
 
     private static func packageRootDirectoryURL() -> URL {
