@@ -11,6 +11,7 @@ func newCloudCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newCloudEnrollDeviceCmd())
+	cmd.AddCommand(newCloudDiscoverCmd())
 	cmd.AddCommand(newCloudRunCmd())
 	cmd.AddCommand(newCloudTunnelCmd())
 	return cmd

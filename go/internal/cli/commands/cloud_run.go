@@ -2,13 +2,14 @@ package commands
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -109,7 +110,9 @@ func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName
 	}
 	defer brokerConn.Close()
 
-	tunnelConn, err := openBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), defaultAgentPort)
+	// Provisioned agents only serve mTLS on agentPort+1 (50052); the plaintext
+	// port (50051) is shut down after provisioning.
+	tunnelConn, err := openBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), defaultAgentPort+1)
 	if err != nil {
 		return fmt.Errorf("opening cloud tunnel to %s: %w", asset.GetName(), err)
 	}
@@ -117,10 +120,24 @@ func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName
 	dialOpt, closeTunnel := tunnelDialer(tunnelConn)
 	defer closeTunnel()
 
+	// Build mTLS credentials for the agent connection. The agent requires client
+	// cert auth; InsecureSkipVerify skips hostname checks since the agent cert CN
+	// won't match "cloud-tunnel". The chain verification is handled server-side.
+	cert := auth.Certificates[0]
+	x509Cert, err := tls.X509KeyPair([]byte(cert.PemCertificate), []byte(cert.PemPrivateKey))
+	if err != nil {
+		return fmt.Errorf("loading agent mTLS cert: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		Certificates:       []tls.Certificate{x509Cert},
+		InsecureSkipVerify: true, //nolint:gosec — agent uses self-signed certs; chain verified server-side
+		MinVersion:         tls.VersionTLS12,
+	}
+
 	grpcConn, err := grpc.NewClient(
 		"passthrough:///cloud-tunnel",
 		dialOpt,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 	)
 	if err != nil {
 		return fmt.Errorf("creating tunnelled gRPC connection: %w", err)
@@ -128,6 +145,7 @@ func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName
 
 	agentConn := grpcclient.NewFromConn(grpcConn)
 	agentConn.Host = asset.GetName()
+	agentConn.IsMTLS = true
 	defer agentConn.Close()
 
 	return runWithAgent(ctx, agentConn, cwd, appCfg, opts)
