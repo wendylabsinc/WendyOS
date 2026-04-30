@@ -80,10 +80,13 @@ the same file and separated with Markdown `---` rules.
    - Compare the captured stdout/stderr and command metadata against each
      checklist item.
 
-4. Evaluate each checklist item as:
-   - `pass` — the record clearly satisfies the instruction.
-   - `concern` — the record is ambiguous, noisy, incomplete, or surprising.
-   - `fail` — the record contradicts the instruction.
+4. Evaluate each checklist item with status emojis:
+   - `✅ pass` — the record clearly satisfies the instruction.
+   - `⚠️ concern` — the record is ambiguous, noisy, incomplete, or surprising.
+   - `❌ fail` — the record contradicts the instruction.
+
+   Prefer these symbols over colored hearts because they are more explicit in
+   plain-text logs and easier to scan in Markdown.
 
 5. Continue test-by-test until every `// AI:` section has been evaluated.
 
@@ -112,11 +115,11 @@ Summarize results by test file and test function:
 
 Record: `CLIBasicsTests.wendy-help-describes-the-top-level-command-groups.md`
 
-- pass: Help text is readable and well-grouped.
-- pass: Group names match the CLI docs.
+- ✅ pass: Help text is readable and well-grouped.
+- ✅ pass: Group names match the CLI docs.
 
 Notes: No stderr output was captured.
 ```
 
-Include concise evidence for any `concern` or `fail`, quoting only the relevant
-record lines.
+Include concise evidence for any `⚠️ concern` or `❌ fail`, quoting only the
+relevant record lines.
