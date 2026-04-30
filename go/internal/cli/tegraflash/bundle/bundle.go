@@ -30,10 +30,16 @@ func Open(path string) (*Bundle, error) {
 // Close is a no-op; bundles are read on demand.
 func (b *Bundle) Close() error { return nil }
 
-// Applet returns the contents of the T234 recovery applet binary.
-// The file is named applet_t234.bin inside the tarball.
+// Applet returns the contents of the recovery applet binary.
+// Tries T264 (Thor) first, then T234 (Orin) as fallback.
 func (b *Bundle) Applet() ([]byte, error) {
-	return b.extract("applet_t234.bin")
+	for _, name := range []string{"applet_t264.bin", "applet_t234.bin"} {
+		data, err := b.extract(name)
+		if err == nil {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("applet binary not found in bundle (tried applet_t264.bin, applet_t234.bin)")
 }
 
 // ExtractFile extracts a file by basename from the bundle.
@@ -42,18 +48,24 @@ func (b *Bundle) ExtractFile(name string) ([]byte, error) {
 }
 
 // FindXML returns the contents and filename of the partition layout XML.
-// It tries common T234 layout XML names in order.
-func (b *Bundle) FindXML() ([]byte, string, error) {
-	// Common XML filenames in L4T tegraflash bundles (T234 variants).
-	// flash_t234_qspi.xml is the QSPI-only layout used by the NVMe WendyOS bundle.
-	// flash.xml.in is used by the eMMC bundle (NVIDIA's template convention).
-	candidates := []string{
-		"flash.xml.in",
-		"flash_t234_qspi.xml",
-		"flash_t234_qspi_sdmmc.xml",
-		"flash_l4t_t234_nvme.xml",
-		"flash_l4t_t234_sdmmc.xml",
-		"flash_t234.xml",
+// fullEMMC selects the full eMMC layout; false selects recovery/QSPI boot only.
+func (b *Bundle) FindXML(fullEMMC bool) ([]byte, string, error) {
+	var candidates []string
+	if fullEMMC {
+		// Full eMMC flash: write all partitions.
+		candidates = []string{
+			"flash.xml.in",
+			"flash_t234_qspi_sdmmc.xml",
+			"flash_l4t_t234_sdmmc.xml",
+			"flash_t234.xml",
+		}
+	} else {
+		// Recovery / QSPI-only boot firmware update.
+		candidates = []string{
+			"rcmboot-flash.xml.in",
+			"flash_t234_qspi.xml",
+			"flash_l4t_t234_nvme.xml",
+		}
 	}
 	for _, name := range candidates {
 		data, err := b.extract(name)
