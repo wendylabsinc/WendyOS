@@ -4,14 +4,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$REPO_DIR/.." && pwd)"
-TESTS_DIR="$REPO_ROOT/.github/ci-tests"
+TESTS_DIR="$REPO_ROOT/.github/e2e-tests"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Run CI integration tests against a real WendyOS device. Each test deploys a
-minimal app that exercises a specific entitlement and verifies it works.
+Run E2E tests against a real device. Each test deploys a minimal app that
+exercises a specific entitlement and verifies it works.
 
 Tests:
   swift-hello           Basic Swift containerized deployment (no entitlements)
@@ -167,7 +167,7 @@ echo ""
 # ── Validate tests directory ─────────────────────────────────────────
 
 if [[ ! -d "$TESTS_DIR" ]]; then
-    echo -e "${RED}ERROR: CI tests directory not found at $TESTS_DIR${RESET}"
+    echo -e "${RED}ERROR: E2E tests directory not found at $TESTS_DIR${RESET}"
     exit 1
 fi
 

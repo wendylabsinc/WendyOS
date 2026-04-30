@@ -10,7 +10,7 @@ on:
 # hold the Local Network TCC permission that macOS requires for mDNS (.local)
 # resolution and link-local connections. SSHing to localhost spawns a shell
 # under the logged-in user session, which does have that permission.
-# See integration-tests.yml for the same pattern with more context.
+# See e2e-tests.yml for the same pattern with more context.
 
 jobs:
   discover:

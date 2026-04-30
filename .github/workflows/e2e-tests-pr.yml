@@ -1,0 +1,14 @@
+name: E2E Tests PR
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e-tests:
+    if: github.head_ref == 'kb.mac-integration-tests'
+    uses: ./.github/workflows/e2e-tests.yml
+    with:
+      jobs: all
+      platform: all
+    secrets: inherit
