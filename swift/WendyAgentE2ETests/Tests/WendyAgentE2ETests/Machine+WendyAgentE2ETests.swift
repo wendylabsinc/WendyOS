@@ -9,7 +9,7 @@ extension Machine {
             workingDirectory: Self.rootDirectoryURL().appendingPathComponent("go").path
         )
 
-        try! await Gate.buildCLI.once {
+        try await buildCLIOnce.perform {
             try await machine.run("make build-cli") { standardOutput, _ in
                 #expect(standardOutput.contains(/go build .* bin\/wendy/))
             }
@@ -24,7 +24,7 @@ extension Machine {
             workingDirectory: Self.rootDirectoryURL().appendingPathComponent("swift").path
         )
 
-        try! await Gate.buildAgent.once {
+        try await buildAgentOnce.perform {
             try await machine.run("make build-dev") { standardOutput, _ in
                 #expect(
                     standardOutput.contains(
@@ -37,6 +37,11 @@ extension Machine {
         return machine
     }
 
+    // MARK: - Private
+
+    private static let buildCLIOnce = Once()
+    private static let buildAgentOnce = Once()
+
     private static func rootDirectoryURL() -> URL {
         URL(fileURLWithPath: #filePath, isDirectory: false)
             .deletingLastPathComponent()  // Tests/WendyAgentE2ETests
@@ -44,18 +49,5 @@ extension Machine {
             .deletingLastPathComponent()  // swift/WendyAgentE2ETests
             .deletingLastPathComponent()  // swift
             .deletingLastPathComponent()  // repository root
-    }
-}
-
-private actor Gate {
-    static let buildCLI = Gate()
-    static let buildAgent = Gate()
-
-    private var done = false
-
-    func once(_ block: () async throws -> Void) async rethrows {
-        guard !done else { return }
-        done = true
-        try await block()
     }
 }
