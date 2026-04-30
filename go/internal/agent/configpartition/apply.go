@@ -355,33 +355,50 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 // then restarts avahi-daemon so the mDNS advertisement reflects that the
 // device is now provisioned.
 //
-// The WendyOS avahi file contains multiple <service> blocks (SSH, HTTP, etc.)
-// so we locate and modify only the _wendyos._udp block.
+// The service file name varies by image (e.g. wendyos-mdns.service or
+// wendy-agent.service), so we scan all files in /etc/avahi/services/ and
+// update the first one that contains a _wendyos._udp block.
 func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int) {
-	const serviceFile = "/etc/avahi/services/wendyos-mdns.service"
+	const serviceDir = "/etc/avahi/services"
 
-	data, err := os.ReadFile(serviceFile)
+	entries, err := os.ReadDir(serviceDir)
 	if err != nil {
-		logger.Warn("Could not read avahi service file for provisioning update",
-			zap.String("path", serviceFile), zap.Error(err))
+		logger.Warn("Could not read avahi services dir", zap.String("path", serviceDir), zap.Error(err))
 		return
 	}
 
-	content := updateWendyOSServicePort(string(data), mtlsPort)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".service") {
+			continue
+		}
+		serviceFile := filepath.Join(serviceDir, e.Name())
+		data, err := os.ReadFile(serviceFile)
+		if err != nil {
+			continue
+		}
+		if !strings.Contains(string(data), "_wendyos._udp") {
+			continue
+		}
 
-	if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
-		logger.Warn("Could not write avahi service file",
-			zap.String("path", serviceFile), zap.Error(err))
+		content := updateWendyOSServicePort(string(data), mtlsPort)
+		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+			logger.Warn("Could not write avahi service file",
+				zap.String("path", serviceFile), zap.Error(err))
+			return
+		}
+
+		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+		if out, err := restart.CombinedOutput(); err != nil {
+			logger.Warn("systemctl restart avahi-daemon failed after provisioning",
+				zap.Error(err), zap.String("output", string(out)))
+		} else {
+			logger.Info("Updated avahi advertisement for mTLS",
+				zap.String("file", e.Name()), zap.Int("port", mtlsPort))
+		}
 		return
 	}
 
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
-	if out, err := restart.CombinedOutput(); err != nil {
-		logger.Warn("systemctl restart avahi-daemon failed after provisioning",
-			zap.Error(err), zap.String("output", string(out)))
-	} else {
-		logger.Info("Updated avahi advertisement for mTLS", zap.Int("port", mtlsPort))
-	}
+	logger.Warn("No avahi service file with _wendyos._udp found; mDNS not updated")
 }
 
 // updateWendyOSServicePort finds the _wendyos._udp service block and updates

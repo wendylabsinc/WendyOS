@@ -48,7 +48,16 @@ func parseCertsFromPEM(chainPEM []byte) ([]*x509.Certificate, error) {
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parsing certificate from PEM: %w", err)
+			// ML-DSA certs produce "trailing data" because pki-core appends extra
+			// bytes after the outer SEQUENCE. Strip them by reading exactly one
+			// ASN.1 element and re-parsing.
+			var raw asn1.RawValue
+			if _, asn1Err := asn1.Unmarshal(block.Bytes, &raw); asn1Err == nil {
+				cert, err = x509.ParseCertificate(raw.FullBytes)
+			}
+		}
+		if err != nil {
+			continue
 		}
 		certs = append(certs, cert)
 	}

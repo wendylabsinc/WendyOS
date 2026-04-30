@@ -387,12 +387,12 @@ func isInteractiveTerminal() bool {
 // connection failure. Shows a warning and immediately opens the device picker
 // where the user can select a new device and optionally set/unset default
 // via 'd'/'x' shortcuts.
-func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool) (*SelectedDevice, error) {
+func handleDefaultDeviceRecovery(ctx context.Context, hostname string, elapsed time.Duration, _ error, excludeProviders map[string]bool, excludeBluetooth bool, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	fmt.Println(warnStyle.Render(fmt.Sprintf("⚠ Default device %q is unreachable after %s.", hostname, formatElapsedSeconds(elapsed))))
 	fmt.Println()
 
-	return pickDevice(ctx, excludeProviders, excludeBluetooth, false)
+	return pickDevice(ctx, excludeProviders, excludeBluetooth, suppressUpdateCheck)
 }
 
 func defaultDeviceSearchLabel(hostname string) string {
@@ -463,7 +463,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && isInteractiveTerminal() {
 				hostname, _, _ := net.SplitHostPort(addr)
-				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 				if recErr != nil {
 					return nil, recErr
 				}
@@ -528,6 +528,7 @@ func connectFromSelectedDevice(target *SelectedDevice, cfg resolveConfig) (*grpc
 // It tries each stored certificate in order so that both production and local
 // pki-core certs are attempted.
 func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.AgentConnection, error) {
+	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
 	allCerts := loadAllCLICerts()
 	if len(allCerts) > 0 {
 		host, portStr, _ := net.SplitHostPort(plaintextAddr)
@@ -536,6 +537,9 @@ func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.
 			for i := range allCerts {
 				conn, tlsErr := grpcclient.ConnectWithTLS(ctx, mtlsAddr, &allCerts[i])
 				if tlsErr != nil {
+					if tlsDebug {
+						fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
+					}
 					continue
 				}
 				// grpc.NewClient is lazy — verify the connection actually
@@ -546,6 +550,9 @@ func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.
 				cancel()
 				if probeErr == nil {
 					return conn, nil
+				}
+				if tlsDebug {
+					fmt.Fprintf(os.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
 				}
 				conn.Close()
 			}
@@ -843,7 +850,7 @@ func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice,
 			}
 			// Default device is unreachable — offer interactive recovery.
 			if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
-				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth)
+				return handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.excludeBluetooth, cfg.suppressUpdateCheck)
 			}
 			return nil, err
 		}

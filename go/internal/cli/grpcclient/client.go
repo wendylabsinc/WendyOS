@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -59,18 +58,23 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 
 // ConnectWithTLS creates an mTLS connection using certificates from config.
 func ConnectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
-	tlsCfg, err := certs.LoadTLSConfig(
-		certInfo.PemCertificate,
-		certInfo.PemCertificateChain,
-		certInfo.PemPrivateKey,
-		"", // use system roots
+	// Only load the leaf cert — not the chain. Go's TLS library calls
+	// x509.ParseCertificate on every cert sent in the handshake, and ML-DSA
+	// chain certs (from pki-core) cause parse failures on the agent's server.
+	// The agent's VerifyPeerCertificate callback verifies the client cert via
+	// its own ML-DSA-aware CA pool without needing the chain in the handshake.
+	cert, err := tls.X509KeyPair(
+		[]byte(certInfo.PemCertificate),
+		[]byte(certInfo.PemPrivateKey),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("loading TLS config: %w", err)
+		return nil, fmt.Errorf("loading TLS cert: %w", err)
 	}
-
-	tlsCfg.InsecureSkipVerify = true // agent uses self-signed certs
-	tlsCfg.MinVersion = tls.VersionTLS12
+	tlsCfg := &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true, //nolint:gosec — agent uses self-signed certs
+		MinVersion:         tls.VersionTLS12,
+	}
 
 	conn, err := grpc.NewClient(
 		grpcTarget(address),

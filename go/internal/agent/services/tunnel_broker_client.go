@@ -2,20 +2,18 @@ package services
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math"
 	"net"
-	"os"
 	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 )
 
@@ -27,28 +25,19 @@ const (
 // TunnelBrokerClient maintains a persistent RegisterPresence stream with the broker
 // and dials local TCP connections in response to DialRequest messages.
 type TunnelBrokerClient struct {
-	logger      *zap.Logger
-	url         string
-	orgID       int32
-	assetID     int32
-	certPEM     string
-	chainPEM    string
-	keyPEM      string
-	caBundlePEM string
+	logger  *zap.Logger
+	url     string
+	orgID   int32
+	assetID int32
 }
 
 // NewTunnelBrokerClient creates a new TunnelBrokerClient.
-func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32,
-	certPEM, chainPEM, keyPEM, caBundlePEM string) *TunnelBrokerClient {
+func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32) *TunnelBrokerClient {
 	return &TunnelBrokerClient{
-		logger:      logger,
-		url:         url,
-		orgID:       orgID,
-		assetID:     assetID,
-		certPEM:     certPEM,
-		chainPEM:    chainPEM,
-		keyPEM:      keyPEM,
-		caBundlePEM: caBundlePEM,
+		logger:  logger,
+		url:     url,
+		orgID:   orgID,
+		assetID: assetID,
 	}
 }
 
@@ -148,19 +137,18 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
 }
 
 func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, error) {
-	if os.Getenv("WENDY_BROKER_INSECURE_DEV") == "true" {
-		md := metadata.Pairs(
-			"x-dev-org-id", fmt.Sprint(c.orgID),
-			"x-dev-asset-id", fmt.Sprint(c.assetID),
-		)
-		return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, md, nil
+	// The broker uses tls.NoClientCert because Go's TLS library rejects ML-DSA
+	// client certs (produced by pki-core) at the parsing stage regardless of
+	// ClientAuth level. Identity is verified via the XFCC header at the application
+	// layer instead.
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec
 	}
-
-	tlsCfg, err := certs.LoadTLSConfig(c.certPEM, c.chainPEM, c.keyPEM, c.caBundlePEM)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading broker TLS config: %w", err)
-	}
-	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, nil, nil
+	md := metadata.Pairs(
+		"x-forwarded-client-cert",
+		fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", c.orgID, c.assetID),
+	)
+	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, md, nil
 }
 
 func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
