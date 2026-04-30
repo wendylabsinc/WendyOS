@@ -19,7 +19,7 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 )
 
-const defaultBrokerPort = "50053"
+const defaultBrokerPort = "50052"
 
 // certXFCC builds the X-Forwarded-Client-Cert header value from stored cert
 // metadata. The server auth interceptor extracts the Wendy URI to identify
@@ -62,22 +62,19 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
-	var brokerTransport grpc.DialOption
-	if strings.HasSuffix(brokerURL, ":443") {
-		tlsCfg, err := certs.LoadTLSConfig(
-			cert.PemCertificate,
-			cert.PemCertificateChain,
-			cert.PemPrivateKey,
-			"",
-		)
-		if err != nil {
-			return nil, fmt.Errorf("loading broker TLS config: %w", err)
-		}
-		brokerTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		brokerTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
+	tlsCfg, err := certs.LoadTLSConfig(
+		cert.PemCertificate,
+		cert.PemCertificateChain,
+		cert.PemPrivateKey,
+		"",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading broker TLS config: %w", err)
 	}
-	conn, err := grpc.NewClient(brokerURL, brokerTransport)
+	// Server cert CN (localhost) won't match the cloud host IP — skip server cert
+	// hostname verification. The cloud verifies the client cert via mTLS.
+	tlsCfg.InsecureSkipVerify = true //nolint:gosec
+	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
 	}
@@ -168,38 +165,34 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
-	var cloudTransport grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		tlsCfg, err := certs.LoadTLSConfig(
-			cert.PemCertificate,
-			cert.PemCertificateChain,
-			cert.PemPrivateKey,
-			"",
-		)
-		if err != nil {
-			return nil, fmt.Errorf("loading TLS config: %w", err)
-		}
-		cloudTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, cloudTransport)
+	cloudConn, err := dialCloudGRPC(auth)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to cloud: %w", err)
+		return nil, err
 	}
 	defer cloudConn.Close()
 
 	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	resp, err := assetClient.ListAssets(cloudContext(ctx, auth), &cloudpb.ListAssetsRequest{
+	stream, err := assetClient.ListAssets(cloudContext(ctx, auth), &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(cert.OrganizationID),
 		IsComputeDevice: boolPtr(true),
-		PageSize:        100,
+		OnlineOnly:      boolPtr(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("listing devices: %w", err)
 	}
-
-	assets := resp.GetAssets()
+	var assets []*cloudpb.Asset
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing devices: %w", err)
+		}
+		if a := msg.GetAsset(); a != nil {
+			assets = append(assets, a)
+		}
+	}
 	if len(assets) == 0 {
 		return nil, fmt.Errorf("no enrolled devices found for this org; enroll a device with 'wendy device enroll' first")
 	}
@@ -260,6 +253,36 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// dialCloudGRPC opens a gRPC connection to auth.CloudGRPC using the same
+// transport selection logic as dialCloudBroker: :443 gets mTLS, anything else
+// gets plaintext h2c.
+func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
+	if len(auth.Certificates) == 0 {
+		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
+	cert := auth.Certificates[0]
+	var transport grpc.DialOption
+	if strings.HasSuffix(auth.CloudGRPC, ":443") {
+		tlsCfg, err := certs.LoadTLSConfig(
+			cert.PemCertificate,
+			cert.PemCertificateChain,
+			cert.PemPrivateKey,
+			"",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading TLS config: %w", err)
+		}
+		transport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+	} else {
+		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
+	}
+	conn, err := grpc.NewClient(auth.CloudGRPC, transport)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to cloud: %w", err)
+	}
+	return conn, nil
+}
 
 // tunnelDialer returns a grpc.DialOption that routes all dials through the
 // given net.Conn (the broker tunnel). The returned closer shuts the conn.
