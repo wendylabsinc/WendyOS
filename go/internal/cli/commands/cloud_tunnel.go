@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wendylabsinc/wendy/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
@@ -128,13 +129,7 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 // dialCloudBroker opens an mTLS gRPC connection to the tunnel broker.
 // brokerURL is host:port; if empty it is derived from auth.CloudGRPC.
 func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientConn, error) {
-	if brokerURL == "" {
-		host := auth.CloudGRPC
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-		brokerURL = net.JoinHostPort(host, defaultBrokerPort)
-	}
+	brokerURL = clouddefaults.BrokerURL(auth.CloudGRPC, brokerURL, defaultBrokerPort)
 
 	if len(auth.Certificates) == 0 {
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
