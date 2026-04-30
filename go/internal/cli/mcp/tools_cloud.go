@@ -210,15 +210,11 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
-	cloudHost := auth.CloudGRPC
-	if h, _, splitErr := net.SplitHostPort(cloudHost); splitErr == nil {
-		cloudHost = h
-	}
 	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  tokenResp.GetOrganizationId(),
 		AssetId:         tokenResp.GetAssetId(),
 		EnrollmentToken: tokenResp.GetEnrollmentToken(),
-		CloudHost:       cloudHost,
+		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
 		return mcpgo.NewToolResultError(grpcErrString(err)), nil
@@ -226,7 +222,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	out := map[string]any{
 		"organization_id": tokenResp.GetOrganizationId(),
 		"asset_id":        tokenResp.GetAssetId(),
-		"cloud_host":      cloudHost,
+		"cloud_host":      auth.CloudGRPC,
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return mcpgo.NewToolResultText(string(b)), nil
@@ -526,11 +522,12 @@ func mcpCloudContext(ctx context.Context, auth *config.AuthConfig) context.Conte
 	if auth.APIKey != "" {
 		md.Set("authorization", "Bearer "+auth.APIKey)
 	}
+	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:user:unknown", certInfo.OrganizationID)
 	if certInfo.UserID != "" {
-		md.Set("x-forwarded-client-cert", fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", certInfo.OrganizationID, certInfo.UserID))
-	} else {
-		md.Set("x-forwarded-client-cert", fmt.Sprintf("URI=urn:wendy:org:%d:user:unknown", certInfo.OrganizationID))
+		certHeader = fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", certInfo.OrganizationID, certInfo.UserID)
 	}
+	md.Set("x-wendy-client-cert", certHeader)
+	md.Set("x-forwarded-client-cert", certHeader)
 	return metadata.NewOutgoingContext(ctx, md)
 }
 

@@ -52,7 +52,9 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) context.Context 
 	if auth.APIKey != "" {
 		md.Set("authorization", "Bearer "+auth.APIKey)
 	}
-	md.Set("x-forwarded-client-cert", certXFCC(cert))
+	certHeader := certXFCC(cert)
+	md.Set("x-wendy-client-cert", certHeader)
+	md.Set("x-forwarded-client-cert", certHeader)
 	return metadata.NewOutgoingContext(ctx, md)
 }
 

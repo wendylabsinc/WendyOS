@@ -222,7 +222,7 @@ func main() {
 			}
 			brokerURL := os.Getenv("WENDY_BROKER_URL")
 			if brokerURL == "" {
-				brokerURL = fmt.Sprintf("%s:50052", cloudHost)
+				brokerURL = brokerURLForCloudHost(cloudHost)
 			}
 			client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID)
 			client.Run(ctx)
@@ -442,6 +442,17 @@ func main() {
 	wg.Wait()
 
 	logger.Info("wendy-agent stopped")
+}
+
+func brokerURLForCloudHost(cloudHost string) string {
+	host, port, err := net.SplitHostPort(cloudHost)
+	if err == nil {
+		if port == "443" {
+			return cloudHost
+		}
+		return net.JoinHostPort(host, "50052")
+	}
+	return net.JoinHostPort(cloudHost, "50052")
 }
 
 func handleUtilityCommand(args []string) (bool, int) {

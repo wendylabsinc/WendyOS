@@ -157,6 +157,38 @@ func TestStartProvisioning(t *testing.T) {
 	}
 }
 
+func TestCertificateServiceAddr(t *testing.T) {
+	tests := []struct {
+		name      string
+		cloudHost string
+		want      string
+	}{
+		{
+			name:      "host without port uses legacy provisioning port",
+			cloudHost: "test.wendy.io",
+			want:      "test.wendy.io:50051",
+		},
+		{
+			name:      "cloud run endpoint keeps explicit tls port",
+			cloudHost: "wendy-cloud-services-114319063177.us-central1.run.app:443",
+			want:      "wendy-cloud-services-114319063177.us-central1.run.app:443",
+		},
+		{
+			name:      "local endpoint keeps explicit port",
+			cloudHost: "localhost:50051",
+			want:      "localhost:50051",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := certificateServiceAddr(tt.cloudHost); got != tt.want {
+				t.Fatalf("certificateServiceAddr(%q) = %q, want %q", tt.cloudHost, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStartProvisioning_PersistAndReload(t *testing.T) {
 	svc, tmpDir := newTestProvisioningService(t)
 	defer os.RemoveAll(tmpDir)

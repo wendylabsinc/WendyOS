@@ -144,9 +144,10 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec
 	}
+	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", c.orgID, c.assetID)
 	md := metadata.Pairs(
-		"x-forwarded-client-cert",
-		fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", c.orgID, c.assetID),
+		"x-wendy-client-cert", certHeader,
+		"x-forwarded-client-cert", certHeader,
 	)
 	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, md, nil
 }
