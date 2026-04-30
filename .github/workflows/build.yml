@@ -442,10 +442,23 @@ jobs:
           if [[ "$STORAGE" != "nvme" && ! -f "$FLASH_WORKDIR/config-partition.fat32.img" ]]; then
             cp "$DEPLOY_DIR/config-partition.fat32.img" "$FLASH_WORKDIR/"
           fi
+          # For SD/eMMC machines PARTITION_LAYOUT_EXTERNAL="" causes mender_flash_layout_adjust
+          # to be a no-op, leaving the literal string DATAFILE in flash.xml.bin. tegrasign
+          # then fails to write signed/flash.xml.tmp because no file named DATAFILE exists.
+          # Provide it so tegrasign can produce signed/flash.xml.tmp and generateflashindex
+          # can build flash.idx from it.
+          if [[ "$STORAGE" != "nvme" ]]; then
+            DATAIMG=$(find "$DEPLOY_DIR" -maxdepth 1 -name "wendyos-image-*.dataimg" -print -quit 2>/dev/null || true)
+            if [[ -n "$DATAIMG" && ! -f "$FLASH_WORKDIR/DATAFILE" ]]; then
+              cp "$DATAIMG" "$FLASH_WORKDIR/DATAFILE"
+            fi
+          fi
           cd "$FLASH_WORKDIR"
           case "$STORAGE" in
             nvme) sudo ./doexternal.sh -s 64G "$GITHUB_WORKSPACE/wendyos-nvme.img" ;;
-            emmc) sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-emmc.img" ;;
+            # eMMC uses sdmmc_user device type; meta-tegra never generates dosdcard.sh for it.
+            # The tegraflash tarball is the correct recovery-flash artifact for eMMC.
+            emmc) : ;;
             sd)   sudo ./dosdcard.sh "$GITHUB_WORKSPACE/wendyos-sd.img" ;;
           esac
 
@@ -464,7 +477,9 @@ jobs:
           if [[ "$MACHINE" != raspberry* && "$STORAGE" == "nvme" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-nvme.img"
           elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "emmc" ]]; then
-            IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-emmc.img"
+            # No offline disk image for eMMC (meta-tegra doesn't generate dosdcard.sh for
+            # sdmmc_user devices). The tegraflash tarball is the recovery-flash artifact.
+            IMAGE_FILE="$DEPLOY_DIR/wendyos-image-${MACHINE}.tegraflash.tar.gz"
           elif [[ "$MACHINE" != raspberry* && "$STORAGE" == "sd" ]]; then
             IMAGE_FILE="$GITHUB_WORKSPACE/wendyos-sd.img"
           else
