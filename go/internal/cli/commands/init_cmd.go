@@ -679,7 +679,14 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	cliSuccess("\nYour project is ready! Run `%s` to build and deploy.", templateRunCommand(cwd, destDir, appID))
+	cliSuccess("\nYour project is ready!")
+	cliLogln("Next steps:")
+	for _, step := range templateNextSteps(cwd, destDir, appID) {
+		cliLogln("  %s", step)
+	}
+	if filepath.Clean(destDir) != filepath.Clean(cwd) {
+		cliLogln("Note: run the cd command in your shell; a CLI process cannot change its parent shell directory.")
+	}
 
 	return nil
 }
@@ -689,11 +696,15 @@ func shellQuote(s string) string {
 }
 
 func templateRunCommand(cwd, destDir, appID string) string {
+	return strings.Join(templateNextSteps(cwd, destDir, appID), " && ")
+}
+
+func templateNextSteps(cwd, destDir, appID string) []string {
 	if filepath.Clean(destDir) == filepath.Clean(cwd) {
-		return "wendy run"
+		return []string{"wendy run"}
 	}
 
-	return "cd " + shellQuote(appID) + " && wendy run"
+	return []string{"cd " + shellQuote(appID), "wendy run"}
 }
 
 // resolveInitDestAndID determines the destination directory and app ID for template flow.
