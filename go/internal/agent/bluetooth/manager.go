@@ -4,6 +4,7 @@ package bluetooth
 
 import (
 	"context"
+	"crypto/tls"
 
 	"go.uber.org/zap"
 
@@ -25,13 +26,14 @@ func NewManager(logger *zap.Logger) Manager {
 	return newPlatformManager(logger)
 }
 
-// StartBLEPeripheral starts BLE advertising and the L2CAP command server.
+// StartBLEPeripheral starts BLE advertising and the mTLS-protected L2CAP command server.
+// tlsConfig must be non-nil (provisioned device cert); BLE is not started without it.
 // Both are best-effort: failures are logged but do not affect LAN/USB serving.
-func StartBLEPeripheral(ctx context.Context, logger *zap.Logger, d *Dispatcher) {
+func StartBLEPeripheral(ctx context.Context, logger *zap.Logger, d *Dispatcher, tlsConfig *tls.Config) {
 	if err := startAdvertising(ctx, logger); err != nil {
 		logger.Warn("BLE advertising unavailable", zap.Error(err))
 	}
-	if err := startL2CAPServer(ctx, logger, d); err != nil {
+	if err := startL2CAPServer(ctx, logger, d, tlsConfig); err != nil {
 		logger.Warn("BLE L2CAP server unavailable", zap.Error(err))
 	}
 }
