@@ -239,26 +239,21 @@ func fetchCloudAssets(ctx context.Context, auth *config.AuthConfig) ([]*cloudpb.
 	defer cloudConn.Close()
 
 	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	stream, err := assetClient.ListAssets(cloudContext(ctx, auth), &cloudpb.ListAssetsRequest{
+	req := &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(cert.OrganizationID),
 		IsComputeDevice: boolPtr(true),
-		OnlineOnly:      boolPtr(true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("listing devices: %w", err)
 	}
 	var assets []*cloudpb.Asset
 	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
+		resp, err := assetClient.ListAssets(cloudContext(ctx, auth), req)
 		if err != nil {
 			return nil, fmt.Errorf("listing devices: %w", err)
 		}
-		if a := msg.GetAsset(); a != nil {
-			assets = append(assets, a)
+		assets = append(assets, resp.GetAssets()...)
+		if resp.GetNextPageToken() == "" {
+			break
 		}
+		req.PageToken = resp.GetNextPageToken()
 	}
 	return assets, nil
 }

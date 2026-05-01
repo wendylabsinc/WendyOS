@@ -18,14 +18,9 @@ type fakeCloudAssetServer struct {
 	req    *cloudpb.ListAssetsRequest
 }
 
-func (s *fakeCloudAssetServer) ListAssets(req *cloudpb.ListAssetsRequest, stream grpc.ServerStreamingServer[cloudpb.ListAssetsResponse]) error {
+func (s *fakeCloudAssetServer) ListAssets(_ context.Context, req *cloudpb.ListAssetsRequest) (*cloudpb.ListAssetsResponse, error) {
 	s.req = req
-	for _, asset := range s.assets {
-		if err := stream.Send(&cloudpb.ListAssetsResponse{Asset: asset}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return &cloudpb.ListAssetsResponse{Assets: s.assets}, nil
 }
 
 func startFakeCloudAssetServer(t *testing.T, svc *fakeCloudAssetServer) string {
@@ -86,9 +81,6 @@ func TestCloudDiscover_ReturnsConfiguredCloudDevices(t *testing.T) {
 	}
 	if !fake.req.GetIsComputeDevice() {
 		t.Fatal("ListAssets did not request compute devices")
-	}
-	if !fake.req.GetOnlineOnly() {
-		t.Fatal("ListAssets did not default to online_only")
 	}
 }
 

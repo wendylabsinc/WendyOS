@@ -31,7 +31,7 @@ func NewContainerServiceV2(v1 *ContainerService) *ContainerServiceV2 {
 
 // StartContainer starts an existing container and streams its output to the client.
 func (s *ContainerServiceV2) StartContainer(req *agentpbv2.StartContainerRequest, stream grpc.ServerStreamingServer[agentpbv2.ContainerStreamResponse]) error {
-	return s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), &containerStreamV1Adapter{v2stream: stream})
+	return s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), &containerStreamV1Adapter{v2stream: stream})
 }
 
 // AttachContainer starts a container with stdin support, forwarding I/O bidirectionally.
@@ -67,7 +67,7 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 		}
 	}()
 
-	outputCh, err := s.v1.containerd.StartContainerWithStdin(ctx, appName, stdinR)
+	outputCh, err := s.v1.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentHookFromContext(ctx))
 	if err != nil {
 		stdinR.Close()
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)

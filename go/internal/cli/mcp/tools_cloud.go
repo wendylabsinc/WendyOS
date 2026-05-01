@@ -489,27 +489,22 @@ func mcpListCloudAssets(ctx context.Context, auth *config.AuthConfig, filter str
 	req := &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(auth.Certificates[0].OrganizationID),
 		IsComputeDevice: boolPtr(true),
-		OnlineOnly:      boolPtr(onlineOnly),
 	}
 	if filter != "" {
 		req.Filter = &filter
 	}
-	stream, err := cloudpb.NewAssetServiceClient(conn).ListAssets(mcpCloudContext(ctx, auth), req)
-	if err != nil {
-		return nil, fmt.Errorf("listing devices: %w", err)
-	}
+	client := cloudpb.NewAssetServiceClient(conn)
 	var assets []*cloudpb.Asset
 	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
+		resp, err := client.ListAssets(mcpCloudContext(ctx, auth), req)
 		if err != nil {
 			return nil, fmt.Errorf("listing devices: %w", err)
 		}
-		if a := msg.GetAsset(); a != nil {
-			assets = append(assets, a)
+		assets = append(assets, resp.GetAssets()...)
+		if resp.GetNextPageToken() == "" {
+			break
 		}
+		req.PageToken = resp.GetNextPageToken()
 	}
 	return assets, nil
 }

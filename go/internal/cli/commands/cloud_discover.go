@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"io"
 
 	"github.com/spf13/cobra"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
@@ -33,27 +32,21 @@ func newCloudDiscoverCmd() *cobra.Command {
 			defer conn.Close()
 
 			assetClient := cloudpb.NewAssetServiceClient(conn)
-			stream, err := assetClient.ListAssets(cloudContext(ctx, auth), &cloudpb.ListAssetsRequest{
+			req := &cloudpb.ListAssetsRequest{
 				OrganizationId:  int32(cert.OrganizationID),
 				IsComputeDevice: boolPtr(true),
-				OnlineOnly:      boolPtr(true),
-			})
-			if err != nil {
-				return fmt.Errorf("listing devices: %w", err)
 			}
-
 			var assets []*cloudpb.Asset
 			for {
-				msg, err := stream.Recv()
-				if err == io.EOF {
-					break
-				}
+				resp, err := assetClient.ListAssets(cloudContext(ctx, auth), req)
 				if err != nil {
 					return fmt.Errorf("listing devices: %w", err)
 				}
-				if a := msg.GetAsset(); a != nil {
-					assets = append(assets, a)
+				assets = append(assets, resp.GetAssets()...)
+				if resp.GetNextPageToken() == "" {
+					break
 				}
+				req.PageToken = resp.GetNextPageToken()
 			}
 
 			if len(assets) == 0 {
