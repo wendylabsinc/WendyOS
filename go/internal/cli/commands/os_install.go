@@ -320,23 +320,13 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
 func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
-	selectedVersion := device.RawVersion // default from device picker (latest or nightly)
+	selectedVersion := device.RawVersion // default: latest (or nightly if --nightly)
 	if flagVersion != "" {
 		// Validate the requested version exists in the manifest (storage-agnostic check).
 		if _, err := getImageInfo(device.Manifest, flagVersion); err != nil {
 			return fmt.Errorf("version %q not found for %s", flagVersion, device.Name)
 		}
 		selectedVersion = flagVersion
-	} else if nightly {
-		// --nightly: use the nightly version directly, skip the version picker.
-		selectedVersion = device.RawVersion
-	} else {
-		// Show version picker.
-		picked, err := pickManifestVersion("Select a version", device.Manifest)
-		if err != nil {
-			return err
-		}
-		selectedVersion = picked
 	}
 
 	// Step 2: Resolve target drive — use flag or interactive picker.
