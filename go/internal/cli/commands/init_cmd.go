@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -61,6 +63,7 @@ type initOptions struct {
 	target              string
 	language            string
 	template            string
+	branch              string
 	vars                []string
 	gitInit             string
 	entitlements        []string
@@ -115,6 +118,9 @@ func newInitCmd() *cobra.Command {
 
   # Non-interactive template scaffold with variable overrides
   wendy init --app-id my-api --template simple-api --language rust --var PORT=8080
+
+  # Use a template from a specific branch of the templates repo
+  wendy init --template simple-api --branch feature/new-template
 
   # Fully non-interactive WendyOS Python app with persist storage
   wendy init \
@@ -189,6 +195,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos or wendy-lite")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
 	cmd.Flags().StringSliceVar(&opts.entitlements, "entitlement", nil, "App entitlement to enable (repeatable or comma-separated)")
@@ -309,7 +316,7 @@ func runInitWizard(args []string, opts initOptions) error {
 		return fmt.Errorf("writing wendy.json: %w", err)
 	}
 
-	fmt.Printf("\nCreated wendy.json for %s\n", appID)
+	cliSuccess("\nCreated wendy.json for %s", appID)
 
 	// Step 5: Scaffold project files.
 	if err := scaffoldProject(cwd, appID, target, language); err != nil {
@@ -332,7 +339,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 		tmpl := normalizeInitChoice(opts.template)
 
 		// Fetch meta.json to validate or show picker.
-		meta, err := fetchRepoMeta()
+		meta, err := fetchRepoMetaWithUI(opts.branch)
 		if err != nil {
 			return "", nil, err
 		}
@@ -363,7 +370,7 @@ func resolveInitTemplateForTarget(target string, opts initOptions) (string, *rep
 	}
 
 	// In interactive mode, fetch meta and offer templates for this target.
-	meta, err := fetchRepoMeta()
+	meta, err := fetchRepoMetaWithUI(opts.branch)
 	if err != nil {
 		return "", nil, err
 	}
@@ -431,13 +438,28 @@ func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) 
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
-// Wendy Lite always uses Swift; WendyOS offers the full language picker.
-func resolveTemplateLanguage(target string, meta *repoMeta, opts initOptions) (string, error) {
+// Wendy Lite always uses Swift; WendyOS offers the languages available for the selected template.
+func resolveTemplateLanguage(target, tmpl string, meta *repoMeta, opts initOptions) (string, error) {
 	if target == targetWendyLite {
 		if opts.languageSet && normalizeInitChoice(opts.language) != langSwift {
 			return "", fmt.Errorf("%s templates require %s", targetWendyLite, langSwift)
 		}
+		languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
+		if err != nil {
+			return "", err
+		}
+		if !templateLanguageAvailable(langSwift, languages) {
+			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, langSwift, repoMetaLanguageKeys(languages))
+		}
 		return langSwift, nil
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
+	if err != nil {
+		return "", err
+	}
+	if len(languages) == 0 {
+		return "", fmt.Errorf("template %q is not available for any registered language", tmpl)
 	}
 
 	if opts.languageSet {
@@ -449,18 +471,38 @@ func resolveTemplateLanguage(target string, meta *repoMeta, opts initOptions) (s
 			}
 			return "", fmt.Errorf("invalid language %q for templates (available: %s)", opts.language, strings.Join(names, ", "))
 		}
+		if !templateLanguageAvailable(lang, languages) {
+			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, opts.language, repoMetaLanguageKeys(languages))
+		}
 		return lang, nil
 	}
 
 	fmt.Println()
 	var items []tui.PickerItem
-	for _, l := range meta.Languages {
+	for _, l := range languages {
 		items = append(items, tui.PickerItem{
 			Name:  l.Name,
 			Value: l.Key,
 		})
 	}
 	return pickFromItems("What language will you use?", items)
+}
+
+func templateLanguageAvailable(language string, languages []repoMetaLanguage) bool {
+	for _, available := range languages {
+		if available.Key == language {
+			return true
+		}
+	}
+	return false
+}
+
+func repoMetaLanguageKeys(languages []repoMetaLanguage) string {
+	keys := make([]string, len(languages))
+	for i, language := range languages {
+		keys[i] = language.Key
+	}
+	return strings.Join(keys, ", ")
 }
 
 func metaTemplateNames(meta *repoMeta) string {
@@ -471,10 +513,114 @@ func metaTemplateNames(meta *repoMeta) string {
 	return strings.Join(names, ", ")
 }
 
+// fetchRepoMetaWithUI wraps fetchRepoMeta with a bubbletea spinner when
+// stdout is a TTY. In non-interactive contexts it falls back to a plain
+// printf so logs stay readable. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func fetchRepoMetaWithUI(branch string) (*repoMeta, error) {
+	if !isInteractiveTerminal() {
+		cliLogln("Fetching template registry...")
+		return fetchRepoMeta(context.Background(), branch)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewSpinner("Fetching template registry..."))
+
+	var (
+		meta     *repoMeta
+		fetchErr error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		meta, fetchErr = fetchRepoMeta(ctx, branch)
+		prog.Send(tui.SpinnerDoneMsg{Err: fetchErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, fmt.Errorf("spinner TUI: %w", err)
+	}
+
+	// If the user quit before the fetch completed, cancel the request and
+	// wait for the goroutine to finish so we don't leak it.
+	if sm, ok := finalModel.(tui.SpinnerModel); ok && !sm.Done() {
+		cancel()
+		<-done
+		return nil, ErrUserCancelled
+	}
+
+	<-done
+	return meta, fetchErr
+}
+
+// downloadTemplateArchiveWithUI wraps downloadTemplateArchive with a
+// bubbletea progress bar when stdout is a TTY. In non-interactive contexts
+// it falls back to plain text. If the user cancels (q / ctrl+c) the
+// in-flight HTTP request is aborted and ErrUserCancelled is returned.
+func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]byte, *templateManifest, error) {
+	title := fmt.Sprintf("Downloading template %q for %s (branch: %s)", tmpl, language, resolveTemplateBranch(branch))
+
+	if !isInteractiveTerminal() {
+		cliLogln("\n%s...", title)
+		return downloadTemplateArchive(context.Background(), language, tmpl, branch, nil)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prog := tea.NewProgram(tui.NewProgress(title).WithoutErrorView())
+
+	var (
+		files    map[string][]byte
+		manifest *templateManifest
+		dlErr    error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		files, manifest, dlErr = downloadTemplateArchive(ctx, language, tmpl, branch, func(written, total int64) {
+			if total > 0 {
+				prog.Send(tui.ProgressUpdateMsg{
+					Percent: float64(written) / float64(total),
+					Written: written,
+					Total:   total,
+				})
+			}
+		})
+		prog.Send(tui.ProgressDoneMsg{Err: dlErr})
+	}()
+
+	finalModel, err := prog.Run()
+	if err != nil {
+		cancel()
+		<-done
+		return nil, nil, fmt.Errorf("progress TUI: %w", err)
+	}
+
+	// If the user quit via q / ctrl+c, ProgressModel.Err() returns
+	// context.Canceled. Cancel the in-flight request and surface
+	// ErrUserCancelled so the caller doesn't dereference nil manifest/files.
+	if pm, ok := finalModel.(tui.ProgressModel); ok {
+		if errors.Is(pm.Err(), context.Canceled) {
+			cancel()
+			<-done
+			return nil, nil, ErrUserCancelled
+		}
+	}
+
+	<-done
+	return files, manifest, dlErr
+}
+
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	language, err := resolveTemplateLanguage(target, meta, opts)
+	language, err := resolveTemplateLanguage(target, tmpl, meta, opts)
 	if err != nil {
 		return err
 	}
@@ -485,9 +631,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Printf("\nDownloading template %q for %s...\n", tmpl, language)
-
-	files, manifest, err := downloadTemplateArchive(language, tmpl)
+	files, manifest, err := downloadTemplateArchiveWithUI(language, tmpl, opts.branch)
 	if err != nil {
 		return err
 	}
@@ -496,6 +640,21 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	vals, err := collectTemplateValues(manifest, appID, varOverrides)
 	if err != nil {
 		return err
+	}
+
+	// Pre-populate vals with any --var overrides not consumed by template
+	// variables, so they can answer schema questions.
+	for k, v := range varOverrides {
+		if _, exists := vals[k]; !exists {
+			vals[k] = v
+		}
+	}
+
+	// Collect schema-driven answers (multi-phase conditional questions).
+	if manifest.Schema != nil {
+		if err := collectSchemaAnswers(manifest.Schema, vals); err != nil {
+			return err
+		}
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -507,11 +666,11 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Printf("\nScaffolded %s project from template %q\n", language, tmpl)
-	fmt.Printf("  Directory: %s/\n", destDir)
+	cliSuccess("\nScaffolded %s project from template %q", language, tmpl)
+	cliLogln("  Directory: %s/", destDir)
 	for _, v := range manifest.Variables {
 		if val, ok := vals[v.Name]; ok {
-			fmt.Printf("  %s: %v\n", v.Name, val)
+			cliLogln("  %s: %v", v.Name, val)
 		}
 	}
 
@@ -520,7 +679,14 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		return err
 	}
 
-	fmt.Println("\nYour project is ready! Run `" + templateRunCommand(cwd, destDir, appID) + "` to build and deploy.")
+	cliSuccess("\nYour project is ready!")
+	cliLogln("Next steps:")
+	for _, step := range templateNextSteps(cwd, destDir, appID) {
+		cliLogln("  %s", step)
+	}
+	if filepath.Clean(destDir) != filepath.Clean(cwd) {
+		cliLogln("Note: run the cd command in your shell; a CLI process cannot change its parent shell directory.")
+	}
 
 	return nil
 }
@@ -530,11 +696,15 @@ func shellQuote(s string) string {
 }
 
 func templateRunCommand(cwd, destDir, appID string) string {
+	return strings.Join(templateNextSteps(cwd, destDir, appID), " && ")
+}
+
+func templateNextSteps(cwd, destDir, appID string) []string {
 	if filepath.Clean(destDir) == filepath.Clean(cwd) {
-		return "wendy run"
+		return []string{"wendy run"}
 	}
 
-	return "cd " + shellQuote(appID) + " && wendy run"
+	return []string{"cd " + shellQuote(appID), "wendy run"}
 }
 
 // resolveInitDestAndID determines the destination directory and app ID for template flow.
@@ -610,7 +780,7 @@ func maybeGitInit(dir string, opts initOptions) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("  Warning: git init failed: %v\n", err)
+		cliNotice("  Warning: git init failed: %v", err)
 	}
 
 	return nil
@@ -703,7 +873,7 @@ func pickInitLanguage(target string) (string, error) {
 	switch target {
 	case targetWendyLite:
 		// Only WASM-capable languages (currently just Swift).
-		fmt.Println("Wendy Lite requires a WASM-compatible language.")
+		cliNotice("Wendy Lite requires a WASM-compatible language.")
 		return langSwift, nil
 
 	default:
@@ -728,7 +898,7 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 
 	if target == targetWendyLite {
 		// Wendy Lite has limited entitlements; skip interactive questions.
-		fmt.Println("Wendy Lite apps have network access by default.")
+		cliLogln("Wendy Lite apps have network access by default.")
 		return entitlements, nil
 	}
 
@@ -1004,7 +1174,7 @@ CMD ["uv", "run", "%s"]
 		}
 	}
 
-	fmt.Println("Created pyproject.toml, source package, and Dockerfile (using uv)")
+	cliSuccess("Created pyproject.toml, source package, and Dockerfile (using uv)")
 	return nil
 }
 
@@ -1063,8 +1233,8 @@ func installWendySkills(autoInstall bool) error {
 		return nil
 	}
 
-	fmt.Println("\nThe Wendy skills plugin gives Claude expert knowledge about")
-	fmt.Println("building and deploying apps to WendyOS and Wendy Lite devices.")
+	cliLogln("\nThe Wendy skills plugin gives Claude expert knowledge about")
+	cliLogln("building and deploying apps to WendyOS and Wendy Lite devices.")
 	fmt.Println()
 
 	if !autoInstall {
@@ -1084,8 +1254,8 @@ func installWendySkills(autoInstall bool) error {
 	addMarketplace.Stdout = os.Stdout
 	addMarketplace.Stderr = os.Stderr
 	if err := addMarketplace.Run(); err != nil {
-		fmt.Printf("  Could not add marketplace: %v\n", err)
-		fmt.Println("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
+		cliNotice("  Could not add marketplace: %v", err)
+		cliNotice("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
 		return nil
 	}
 
@@ -1094,18 +1264,18 @@ func installWendySkills(autoInstall bool) error {
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
-		fmt.Printf("  Could not install plugin: %v\n", err)
-		fmt.Println("  You can install manually: claude plugin install " + wendySkillsPluginName)
+		cliNotice("  Could not install plugin: %v", err)
+		cliNotice("  You can install manually: claude plugin install " + wendySkillsPluginName)
 		return nil
 	}
 
-	fmt.Println("  Wendy skills installed successfully!")
+	cliSuccess("  Wendy skills installed successfully!")
 	return nil
 }
 
 func runAIAssistantChoice(choice, appID, target, language string, entitlements []appconfig.Entitlement, installClaudeSkills bool, interactive bool) error {
 	if choice == assistantSkip {
-		fmt.Println("\nYour project is ready! Run `wendy run` to build and deploy.")
+		cliSuccess("\nYour project is ready! Run `wendy run` to build and deploy.")
 		return nil
 	}
 
@@ -1128,7 +1298,7 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 
 	prompt := buildAssistantPrompt(appID, target, language, entitlements)
 
-	fmt.Printf("\nStarting %s with project context...\n", choice)
+	cliLogln("\nStarting %s with project context...", choice)
 
 	cmd := exec.Command(choice, prompt)
 	cmd.Stdin = os.Stdin
@@ -1255,7 +1425,7 @@ let package = Package(
 		return fmt.Errorf("creating main.swift: %w", err)
 	}
 
-	fmt.Println("Created Package.swift and source files")
+	cliSuccess("Created Package.swift and source files")
 	return nil
 }
 
@@ -1275,6 +1445,6 @@ CMD ["echo", "Hello from %s!"]
 		return fmt.Errorf("creating Dockerfile: %w", err)
 	}
 
-	fmt.Println("Created Dockerfile")
+	cliSuccess("Created Dockerfile")
 	return nil
 }

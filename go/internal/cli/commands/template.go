@@ -2,16 +2,21 @@ package commands
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -23,6 +28,22 @@ const (
 	templateRepoBranch = "main"
 )
 
+var (
+	templateArchiveAttemptTimeout = 2 * time.Minute
+	templateArchiveMaxAttempts    = 3
+	templateArchiveRetryDelay     = 750 * time.Millisecond
+	templateRawBaseURL            = "https://raw.githubusercontent.com"
+	templateLanguageProbeClient   = &http.Client{Timeout: 10 * time.Second}
+)
+
+// resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
+func resolveTemplateBranch(branch string) string {
+	if branch == "" {
+		return templateRepoBranch
+	}
+	return branch
+}
+
 // repoMeta is the parsed meta.json from the templates repo root.
 type repoMeta struct {
 	Templates []repoMetaTemplate `json:"templates"`
@@ -32,7 +53,8 @@ type repoMeta struct {
 type repoMetaTemplate struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Targets     []string `json:"targets"` // optional; empty means all targets
+	Targets     []string `json:"targets"`   // optional; empty means all targets
+	Languages   []string `json:"languages"` // optional; empty means discover from repo layout
 }
 
 type repoMetaLanguage struct {
@@ -45,6 +67,50 @@ type templateManifest struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	Variables   []templateVariable `json:"variables"`
+	Schema      *templateSchema    `json:"-"` // populated from template.schema.json
+}
+
+// templateSchema is the parsed template.schema.json — defines multi-phase
+// configuration questions whose answers become template variables.
+type templateSchema struct {
+	Phases []templateSchemaPhase `json:"phases"`
+}
+
+// templateSchemaPhase groups a set of questions under an optional condition.
+type templateSchemaPhase struct {
+	ID        string                   `json:"id"`
+	Title     string                   `json:"title"`
+	Questions []templateSchemaQuestion `json:"questions"`
+	When      *templateSchemaCondition `json:"when,omitempty"`
+}
+
+// templateSchemaQuestion is a single question shown to the user.
+// Type is one of "radio", "checkbox", or "input".
+type templateSchemaQuestion struct {
+	ID       string                   `json:"id"`
+	Label    string                   `json:"label"`
+	Type     string                   `json:"type"`
+	Options  []templateSchemaOption   `json:"options,omitempty"`
+	When     *templateSchemaCondition `json:"when,omitempty"`
+	Required bool                     `json:"required"`
+	Default  string                   `json:"default,omitempty"`
+	Secret   bool                     `json:"secret,omitempty"`
+}
+
+// templateSchemaOption is a single selectable choice in a radio or checkbox question.
+type templateSchemaOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// templateSchemaCondition controls whether a phase or question is shown,
+// based on a previously answered question's value.
+// Exactly one of Equals, In, or Contains should be set.
+type templateSchemaCondition struct {
+	QuestionID string   `json:"questionId"`
+	Equals     *string  `json:"equals,omitempty"`
+	In         []string `json:"in,omitempty"`
+	Contains   *string  `json:"contains,omitempty"`
 }
 
 // templateVariable declares a single template variable.
@@ -59,19 +125,30 @@ type templateVariable struct {
 }
 
 // fetchRepoMeta downloads and parses meta.json from the templates repo.
-func fetchRepoMeta() (*repoMeta, error) {
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If ctx is cancelled, the in-flight request is aborted.
+func fetchRepoMeta(ctx context.Context, branch string) (*repoMeta, error) {
+	branch = resolveTemplateBranch(branch)
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/meta.json",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+		templateRepoOwner, templateRepoName, branch)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetching template registry: %w", err)
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching template registry (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("template registry not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching template registry: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetching template registry (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
 	var meta repoMeta
@@ -91,25 +168,238 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 	return false
 }
 
-// downloadTemplateArchive fetches the templates repo tarball and extracts
-// the files for {language}/{templateName}/ into a map of relative path -> content.
-// It also returns the parsed template.json manifest.
-func downloadTemplateArchive(language, templateName string) (map[string][]byte, *templateManifest, error) {
-	url := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
-		templateRepoOwner, templateRepoName, templateRepoBranch)
+func templateByName(meta *repoMeta, templateName string) (*repoMetaTemplate, bool) {
+	if meta == nil {
+		return nil, false
+	}
+	for i := range meta.Templates {
+		if meta.Templates[i].Name == templateName {
+			return &meta.Templates[i], true
+		}
+	}
+	return nil, false
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+func templateLanguagesForTemplate(ctx context.Context, meta *repoMeta, templateName, branch string) ([]repoMetaLanguage, error) {
+	tmpl, ok := templateByName(meta, templateName)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", templateName)
+	}
+
+	if len(tmpl.Languages) > 0 {
+		return repoMetaLanguagesForKeys(meta, tmpl.Languages), nil
+	}
+
+	return probeTemplateLanguages(ctx, meta.Languages, templateName, branch)
+}
+
+func repoMetaLanguagesForKeys(meta *repoMeta, keys []string) []repoMetaLanguage {
+	if meta == nil || len(keys) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
+
+	languages := make([]repoMetaLanguage, 0, len(keys))
+	for _, language := range meta.Languages {
+		if _, ok := allowed[language.Key]; ok {
+			languages = append(languages, language)
+		}
+	}
+	return languages
+}
+
+func probeTemplateLanguages(ctx context.Context, languages []repoMetaLanguage, templateName, branch string) ([]repoMetaLanguage, error) {
+	branch = resolveTemplateBranch(branch)
+
+	available := make([]repoMetaLanguage, 0, len(languages))
+	for _, language := range languages {
+		ok, err := probeTemplateLanguage(ctx, branch, language.Key, templateName)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			available = append(available, language)
+		}
+	}
+	return available, nil
+}
+
+func probeTemplateLanguage(ctx context.Context, branch, language, templateName string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, templateLanguageManifestURL(branch, language, templateName), nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("downloading template: %w", err)
+		return false, fmt.Errorf("checking template language availability: %w", err)
+	}
+
+	resp, err := templateLanguageProbeClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("checking template language availability (branch %q): %w", branch, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("downloading template: HTTP %d", resp.StatusCode)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("checking template language availability (branch %q): HTTP %d", branch, resp.StatusCode)
+	}
+}
+
+func templateLanguageManifestURL(branch, language, templateName string) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/template.json",
+		strings.TrimRight(templateRawBaseURL, "/"),
+		templateRepoOwner,
+		templateRepoName,
+		resolveTemplateBranch(branch),
+		language,
+		templateName,
+	)
+}
+
+// progressCallback reports download progress. total is the expected content
+// length in bytes (0 if unknown); written is the cumulative number of bytes
+// read from the response body so far.
+type progressCallback func(written, total int64)
+
+// progressReader wraps an io.Reader and invokes onProgress after each Read.
+type progressReader struct {
+	r          io.Reader
+	total      int64
+	written    int64
+	onProgress progressCallback
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	if n > 0 {
+		pr.written += int64(n)
+		if pr.onProgress != nil {
+			pr.onProgress(pr.written, pr.total)
+		}
+	}
+	return n, err
+}
+
+// downloadTemplateArchive fetches the templates repo tarball and extracts
+// the files for {language}/{templateName}/ into a map of relative path -> content.
+// It also returns the parsed template.json manifest.
+// If branch is empty, it defaults to templateRepoBranch ("main").
+// If onProgress is non-nil, it is invoked as the response body is read.
+// If ctx is cancelled, the in-flight request is aborted.
+func downloadTemplateArchive(ctx context.Context, language, templateName, branch string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	branch = resolveTemplateBranch(branch)
+	// Use codeload directly to avoid an extra redirect through github.com for the
+	// repository archive download.
+	url := fmt.Sprintf("https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s",
+		templateRepoOwner, templateRepoName, branch)
+	return downloadTemplateArchiveFromURL(ctx, url, branch, language, templateName, onProgress)
+}
+
+// downloadTemplateArchiveFromURL is the testable core of downloadTemplateArchive:
+// it performs the HTTP GET against the caller-supplied URL and delegates
+// tarball parsing to extractTemplateArchive.
+func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	var lastErr error
+	for attempt := 1; attempt <= templateArchiveMaxAttempts; attempt++ {
+		files, manifest, err := downloadTemplateArchiveAttempt(ctx, url, branch, language, templateName, onProgress)
+		if err == nil {
+			return files, manifest, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil || attempt == templateArchiveMaxAttempts || !shouldRetryTemplateArchiveError(err) {
+			return nil, nil, err
+		}
+
+		if err := waitForTemplateArchiveRetry(ctx, templateArchiveRetryDelay); err != nil {
+			return nil, nil, err
+		}
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	return nil, nil, lastErr
+}
+
+func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, templateArchiveAttemptTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil, fmt.Errorf("template archive not found for branch %q — check that the branch exists in %s/%s",
+			branch, templateRepoOwner, templateRepoName)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("downloading template (branch %q): HTTP %d", branch, resp.StatusCode)
+	}
+
+	var reader io.Reader = resp.Body
+	if onProgress != nil {
+		// Normalize ContentLength to the progressCallback contract:
+		// http.Response.ContentLength is -1 when unknown, but callers expect 0.
+		total := resp.ContentLength
+		if total < 0 {
+			total = 0
+		}
+		reader = &progressReader{
+			r:          resp.Body,
+			total:      total,
+			onProgress: onProgress,
+		}
+	}
+
+	return extractTemplateArchive(reader, language, templateName)
+}
+
+func shouldRetryTemplateArchiveError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "Client.Timeout") || strings.Contains(msg, "while reading body")
+}
+
+func waitForTemplateArchiveRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// extractTemplateArchive reads a gzipped tarball from r and extracts files
+// matching {language}/{templateName}/ into a map of relative path -> content.
+// It also returns the parsed template.json manifest (with optional schema
+// from template.schema.json attached).
+func extractTemplateArchive(r io.Reader, language, templateName string) (map[string][]byte, *templateManifest, error) {
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decompressing template archive: %w", err)
 	}
@@ -123,6 +413,7 @@ func downloadTemplateArchive(language, templateName string) (map[string][]byte, 
 
 	files := make(map[string][]byte)
 	var manifest *templateManifest
+	var schema *templateSchema
 
 	for {
 		header, err := tr.Next()
@@ -175,6 +466,15 @@ func downloadTemplateArchive(language, templateName string) (map[string][]byte, 
 			continue // don't include template.json in output files
 		}
 
+		if relPath == "template.schema.json" {
+			var s templateSchema
+			if err := json.Unmarshal(content, &s); err != nil {
+				return nil, nil, fmt.Errorf("parsing template.schema.json: %w", err)
+			}
+			schema = &s
+			continue // don't include template.schema.json in output files
+		}
+
 		files[relPath] = content
 	}
 
@@ -182,6 +482,7 @@ func downloadTemplateArchive(language, templateName string) (map[string][]byte, 
 		return nil, nil, fmt.Errorf("template %q not found for language %q (no template.json)", templateName, language)
 	}
 
+	manifest.Schema = schema
 	return files, manifest, nil
 }
 
@@ -388,9 +689,9 @@ func validateVariable(v templateVariable, val interface{}) error {
 	return nil
 }
 
-// renderAndWriteTemplate takes the raw file map, replaces {{.VAR}} tokens
-// with collected values, and writes to destDir.
-// It renames directories named after the template to the app ID.
+// renderAndWriteTemplate takes the raw file map, evaluates each text file as a
+// Go text/template (so {{.VAR}}, {{if}}, {{range}}, etc. all work), and writes
+// to destDir. It renames directories named after the template to the app ID.
 func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}) error {
 	for relPath, content := range files {
 		// Rename template-named directories to app ID.
@@ -402,16 +703,14 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			return fmt.Errorf("creating directory for %s: %w", relPath, err)
 		}
 
-		// Only apply token replacement to text files. Binary files
-		// (images, fonts, wasm) are written as-is.
+		// Only render text files. Binary files (images, fonts, wasm) are written as-is.
 		output := content
 		if isTextFile(relPath) {
-			rendered := string(content)
-			for key, val := range vals {
-				token := fmt.Sprintf("{{.%s}}", key)
-				rendered = strings.ReplaceAll(rendered, token, fmt.Sprintf("%v", val))
+			rendered, err := renderTemplateContent(relPath, content, vals)
+			if err != nil {
+				return err
 			}
-			output = []byte(rendered)
+			output = rendered
 		}
 
 		if err := os.WriteFile(destPath, output, 0o644); err != nil {
@@ -420,6 +719,24 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 	}
 
 	return nil
+}
+
+// renderTemplateContent evaluates content as a Go text/template against vals.
+// Parse errors are surfaced (scoped to path) so template-authoring mistakes
+// like a broken {{if}} don't silently produce files with unrendered actions.
+// missingkey=error causes references to undeclared variables to fail rather
+// than render as "<no value>".
+func renderTemplateContent(path string, content []byte, vals map[string]interface{}) ([]byte, error) {
+	tmpl, err := template.New(path).Option("missingkey=error").Parse(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, vals); err != nil {
+		return nil, fmt.Errorf("rendering %s: %w", path, err)
+	}
+	return buf.Bytes(), nil
 }
 
 // renameTemplatePath replaces occurrences of the template name in path
@@ -435,12 +752,15 @@ func renameTemplatePath(relPath, templateName, appID string) string {
 }
 
 // isTextFile returns true if a file path looks like a text file that should
-// have template tokens replaced. Binary files are left as-is.
+// have template tokens replaced. Binary files are left as-is. JSX/TSX files
+// are excluded because they routinely contain `{{ … }}` object expressions
+// (e.g. `icons={{ success: ... }}`) that collide with Go template syntax;
+// they don't need variable interpolation in practice.
 func isTextFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".html", ".css",
-		".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".swift", ".go",
+		".js", ".ts", ".py", ".rs", ".swift", ".go",
 		".cpp", ".c", ".h", ".hpp", ".cmake", ".sh", ".bash", ".zsh",
 		".dockerfile", ".gitignore", ".env", ".cfg", ".ini", ".xml",
 		".svg", ".lock":
@@ -454,6 +774,191 @@ func isTextFile(path string) bool {
 		return true
 	}
 	return false
+}
+
+// collectSchemaAnswers walks a templateSchema and collects answers for each
+// applicable phase and question, storing results in vals. Phase and question
+// conditions are evaluated against the already-collected vals, so earlier
+// answers can gate later questions.
+//
+// For "radio" questions, vals[q.ID] is set to the selected option value.
+// For "input" questions, vals[q.ID] is set to the entered string.
+// For "checkbox" questions, vals[q.ID] is a comma-separated list of selected
+// values, and vals[q.ID+"_"+optionValue] is true/false for each option.
+//
+// In non-interactive mode, questions already answered in vals (e.g. via --var)
+// are skipped, and unanswered questions fall back to their defaults. Required
+// questions with no default and no pre-supplied value return an error.
+func collectSchemaAnswers(schema *templateSchema, vals map[string]interface{}) error {
+	interactive := isInteractiveTerminal()
+	for _, phase := range schema.Phases {
+		if !evaluateSchemaCondition(phase.When, vals) {
+			continue
+		}
+
+		if phase.Title != "" {
+			fmt.Printf("\n%s\n", phase.Title)
+		}
+
+		for _, q := range phase.Questions {
+			if !evaluateSchemaCondition(q.When, vals) {
+				continue
+			}
+			if _, answered := vals[q.ID]; answered {
+				continue
+			}
+			if !interactive {
+				if err := applySchemaDefault(q, vals); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := promptSchemaQuestion(q, vals); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// applySchemaDefault sets a schema question's answer in vals using its declared
+// default. For radio questions with no default, the first option is used. For
+// required questions that have no fallback, an error is returned directing the
+// user to supply the answer via --var.
+func applySchemaDefault(q templateSchemaQuestion, vals map[string]interface{}) error {
+	switch q.Type {
+	case "radio":
+		if q.Default != "" {
+			vals[q.ID] = q.Default
+		} else if len(q.Options) > 0 {
+			vals[q.ID] = q.Options[0].Value
+		} else if q.Required {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		}
+	case "checkbox":
+		if q.Required && q.Default == "" && len(q.Options) == 0 {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		}
+		selectedSet := map[string]bool{}
+		if q.Default != "" {
+			for _, p := range strings.Split(q.Default, ",") {
+				selectedSet[strings.TrimSpace(p)] = true
+			}
+		}
+		vals[q.ID] = q.Default
+		for _, opt := range q.Options {
+			vals[q.ID+"_"+opt.Value] = selectedSet[opt.Value]
+		}
+	default: // "input"
+		if q.Default != "" {
+			vals[q.ID] = q.Default
+		} else if q.Required {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		} else {
+			vals[q.ID] = ""
+		}
+	}
+	return nil
+}
+
+// evaluateSchemaCondition returns true when cond is nil (no condition) or when
+// the condition matches the current vals.
+func evaluateSchemaCondition(cond *templateSchemaCondition, vals map[string]interface{}) bool {
+	if cond == nil {
+		return true
+	}
+
+	raw, ok := vals[cond.QuestionID]
+	if !ok {
+		return false
+	}
+	answer := fmt.Sprintf("%v", raw)
+
+	if cond.Equals != nil {
+		return answer == *cond.Equals
+	}
+
+	if len(cond.In) > 0 {
+		for _, v := range cond.In {
+			if answer == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	if cond.Contains != nil {
+		parts := strings.Split(answer, ",")
+		for _, p := range parts {
+			if strings.TrimSpace(p) == *cond.Contains {
+				return true
+			}
+		}
+		return false
+	}
+
+	return true
+}
+
+// promptSchemaQuestion shows the appropriate TUI prompt for a single question
+// and writes the result into vals.
+func promptSchemaQuestion(q templateSchemaQuestion, vals map[string]interface{}) error {
+	fmt.Println()
+
+	switch q.Type {
+	case "radio":
+		items := make([]tui.PickerItem, len(q.Options))
+		for i, opt := range q.Options {
+			items[i] = tui.PickerItem{Name: opt.Label, Value: opt.Value}
+		}
+		val, err := pickFromItems(q.Label, items)
+		if err != nil {
+			return err
+		}
+		vals[q.ID] = val
+
+	case "checkbox":
+		items := make([]tui.ChecklistItem, len(q.Options))
+		for i, opt := range q.Options {
+			items[i] = tui.ChecklistItem{Label: opt.Label, Value: opt.Value}
+		}
+		selected, err := tui.RunChecklist(q.Label, items)
+		if err != nil {
+			return err
+		}
+		// Build comma-separated list and per-option booleans.
+		selectedSet := make(map[string]bool, len(selected))
+		selectedValues := make([]string, 0, len(selected))
+		for _, item := range selected {
+			selectedSet[item.Value] = true
+			selectedValues = append(selectedValues, item.Value)
+		}
+		vals[q.ID] = strings.Join(selectedValues, ",")
+		for _, opt := range q.Options {
+			vals[q.ID+"_"+opt.Value] = selectedSet[opt.Value]
+		}
+
+	default: // "input"
+		validate := func(input string) error {
+			if q.Required && strings.TrimSpace(input) == "" {
+				return fmt.Errorf("%s cannot be empty", q.Label)
+			}
+			return nil
+		}
+		var val string
+		var err error
+		if q.Default != "" {
+			val, err = tui.PromptTextWithDefault(q.Label, "", q.Default, validate)
+		} else {
+			val, err = tui.PromptText(q.Label, "", validate)
+		}
+		if err != nil {
+			return err
+		}
+		vals[q.ID] = strings.TrimSpace(val)
+	}
+
+	return nil
 }
 
 // parseVarFlags parses --var KEY=VALUE flags into a map.

@@ -33,11 +33,14 @@ type deviceManifest struct {
 
 // deviceVersion describes one OS image version.
 type deviceVersion struct {
-	Path      string `json:"path"`
-	SizeBytes int64  `json:"size_bytes"`
-	Checksum  string `json:"checksum"`
-	IsLatest  bool   `json:"is_latest"`
-	IsNightly bool   `json:"is_nightly"`
+	Path               string `json:"path"`
+	SizeBytes          int64  `json:"size_bytes"`
+	Checksum           string `json:"checksum"`
+	IsLatest           bool   `json:"is_latest"`
+	IsNightly          bool   `json:"is_nightly"`
+	OTAUpdatePath      string `json:"ota_update_path"`
+	OTAUpdateChecksum  string `json:"ota_update_checksum"`
+	OTAUpdateSizeBytes int64  `json:"ota_update_size_bytes"`
 }
 
 // deviceInfo is the aggregated info shown in the picker for one device.
@@ -153,6 +156,56 @@ func getImageInfo(dm *deviceManifest, ver string) (*imageInfo, error) {
 		ImageSize:   v.SizeBytes,
 		Version:     ver,
 	}, nil
+}
+
+// getOTAUpdateURL returns the Mender artifact URL for a specific version,
+// or an error if the version has no OTA artifact.
+func getOTAUpdateURL(dm *deviceManifest, ver string) (string, error) {
+	v, ok := dm.Versions[ver]
+	if !ok {
+		return "", fmt.Errorf("version %s not found in device manifest", ver)
+	}
+	if v.OTAUpdatePath == "" {
+		return "", fmt.Errorf("version %s has no OTA update artifact", ver)
+	}
+	return gcsBaseURL + "/" + v.OTAUpdatePath, nil
+}
+
+// getLatestOTAInfoForDeviceType fetches the manifest and returns the OTA artifact
+// URL and version tag for the given device type. When nightly is true the latest
+// nightly (prerelease) version is used instead of the latest stable version.
+func getLatestOTAInfoForDeviceType(deviceType string, nightly bool) (artifactURL, latestVersion string, err error) {
+	main, err := fetchMainManifest()
+	if err != nil {
+		return "", "", fmt.Errorf("fetching manifest: %w", err)
+	}
+
+	dev, ok := main.Devices[deviceType]
+	if !ok {
+		return "", "", fmt.Errorf("device type %q not found in manifest", deviceType)
+	}
+	if dev.ManifestPath == "" {
+		return "", "", fmt.Errorf("no manifest path for device type %q", deviceType)
+	}
+
+	dm, err := fetchDeviceManifest(dev.ManifestPath)
+	if err != nil {
+		return "", "", fmt.Errorf("fetching device manifest: %w", err)
+	}
+
+	latest := dev.Latest
+	if nightly && dev.LatestNightly != "" {
+		latest = dev.LatestNightly
+	}
+	if latest == "" {
+		return "", "", fmt.Errorf("no latest version for device type %q", deviceType)
+	}
+
+	u, err := getOTAUpdateURL(dm, latest)
+	if err != nil {
+		return "", "", err
+	}
+	return u, latest, nil
 }
 
 // firmwareManifest contains version info for a specific chip.

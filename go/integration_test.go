@@ -34,13 +34,25 @@ func (m *integrationNetworkManager) ListWiFiNetworks(_ context.Context) ([]*agen
 		{Ssid: "IntegrationNet"},
 	}, nil
 }
-func (m *integrationNetworkManager) ConnectToWiFi(_ context.Context, _, _ string) error {
+func (m *integrationNetworkManager) ConnectToWiFi(_ context.Context, _ *agentpb.ConnectToWiFiRequest) error {
 	return nil
 }
 func (m *integrationNetworkManager) GetWiFiStatus(_ context.Context) (bool, string, error) {
 	return true, "IntegrationNet", nil
 }
 func (m *integrationNetworkManager) DisconnectWiFi(_ context.Context) error {
+	return nil
+}
+func (m *integrationNetworkManager) ListKnownWiFiNetworks(_ context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error) {
+	return nil, nil
+}
+func (m *integrationNetworkManager) SetWiFiNetworkPriority(_ context.Context, _ string, _ int32) error {
+	return nil
+}
+func (m *integrationNetworkManager) ReorderKnownWiFiNetworks(_ context.Context, _ []string) error {
+	return nil
+}
+func (m *integrationNetworkManager) ForgetWiFiNetwork(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -161,7 +173,7 @@ func (m *statefulContainerdClient) CreateContainerWithProgress(ctx context.Conte
 	return m.CreateContainer(ctx, req, appCfg)
 }
 
-func (m *statefulContainerdClient) StartContainer(_ context.Context, appName string) (<-chan services.ContainerOutput, error) {
+func (m *statefulContainerdClient) StartContainer(_ context.Context, appName, _ string) (<-chan services.ContainerOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.containers[appName]; !ok {
@@ -180,12 +192,16 @@ func (m *statefulContainerdClient) StartContainer(_ context.Context, appName str
 	return ch, nil
 }
 
-func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader) (<-chan services.ContainerOutput, error) {
-	return m.StartContainer(context.Background(), appName)
+func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
+	return m.StartContainer(context.Background(), appName, postStartAgentCommand)
 }
 
 func (m *statefulContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.ContainerStats, error) {
 	return nil, nil
+}
+
+func (m *statefulContainerdClient) GetContainerMetrics(_ context.Context, _ string) (services.ContainerMetrics, error) {
+	return services.ContainerMetrics{}, nil
 }
 
 // getLayerData returns the data stored for a given digest, for test assertions.

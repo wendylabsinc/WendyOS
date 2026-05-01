@@ -67,7 +67,7 @@ func TestNewRunCmd(t *testing.T) {
 	}
 
 	// Verify expected flags exist.
-	expectedFlags := []string{"debug", "deploy", "detach", "restart-unless-stopped", "restart-on-failure", "no-restart", "prefix", "user-args"}
+	expectedFlags := []string{"build-type", "debug", "deploy", "detach", "restart-unless-stopped", "restart-on-failure", "no-restart", "prefix", "user-args"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
@@ -168,6 +168,9 @@ func TestNewBuildCmd(t *testing.T) {
 	if cmd.Short == "" {
 		t.Error("Short should not be empty")
 	}
+	if cmd.Flags().Lookup("build-type") == nil {
+		t.Error("missing flag \"build-type\"")
+	}
 }
 
 func TestNewDeviceCmd(t *testing.T) {
@@ -190,6 +193,35 @@ func TestNewDeviceCmd(t *testing.T) {
 	for _, name := range expectedSubs {
 		if !subNames[name] {
 			t.Errorf("device command missing subcommand %q", name)
+		}
+	}
+}
+
+func TestNewCloudDeviceCmd(t *testing.T) {
+	cmd := newCloudDeviceCmd()
+	if cmd.Use != "device" {
+		t.Errorf("Use = %q; want %q", cmd.Use, "device")
+	}
+	if cmd.Short == "" {
+		t.Error("Short should not be empty")
+	}
+	if cmd.PersistentFlags().Lookup("cloud-grpc") == nil {
+		t.Error("missing persistent flag \"cloud-grpc\"")
+	}
+	if cmd.PersistentFlags().Lookup("broker-url") == nil {
+		t.Error("missing persistent flag \"broker-url\"")
+	}
+
+	subCmds := cmd.Commands()
+	subNames := make(map[string]bool)
+	for _, c := range subCmds {
+		subNames[c.Name()] = true
+	}
+
+	expectedSubs := []string{"version", "set-default", "unset-default", "setup", "update", "wifi", "apps"}
+	for _, name := range expectedSubs {
+		if !subNames[name] {
+			t.Errorf("cloud device command missing mirrored subcommand %q", name)
 		}
 	}
 }

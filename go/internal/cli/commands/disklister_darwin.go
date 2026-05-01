@@ -5,7 +5,6 @@ package commands
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,6 +18,7 @@ type drive struct {
 	Size        string // human-readable size
 	SizeBytes   int64  // size in bytes
 	IsRemovable bool
+	StorageType StorageType // underlying storage protocol
 }
 
 // listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
@@ -89,6 +89,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 		size := ""
 		var sizeBytes int64
 		removable := isExternal
+		storageType := StorageUnknown
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
@@ -97,6 +98,9 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			sizeBytes = info.sizeBytes
 			if !isExternal {
 				removable = info.removable || info.ejectable
+			}
+			if strings.EqualFold(info.protocol, "nvme") {
+				storageType = StorageNVMe
 			}
 		}
 
@@ -107,6 +111,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			Size:        size,
 			SizeBytes:   sizeBytes,
 			IsRemovable: removable,
+			StorageType: storageType,
 		})
 	}
 	return drives
@@ -116,8 +121,9 @@ type diskInfo struct {
 	name      string
 	size      string
 	sizeBytes int64
-	removable bool // "Removable Media: Removable"
-	ejectable bool // "Ejectable: Yes"
+	removable bool   // "Removable Media: Removable"
+	ejectable bool   // "Ejectable: Yes"
+	protocol  string // "Protocol:" field, e.g. "NVMe", "USB"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -153,6 +159,9 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 			val := strings.TrimSpace(strings.TrimPrefix(line, "Ejectable:"))
 			info.ejectable = strings.EqualFold(val, "yes")
 		}
+		if strings.HasPrefix(line, "Protocol:") {
+			info.protocol = strings.TrimSpace(strings.TrimPrefix(line, "Protocol:"))
+		}
 	}
 	return info, nil
 }
@@ -171,59 +180,64 @@ func unmountDisk(devPath string) error {
 	return nil
 }
 
-// writeImageToDisk writes an image file to a raw disk device using dd,
-// streaming data via stdin in 4 MiB chunks for progress tracking.
+// writeImageToDisk writes an image file to a raw disk device using dd. dd
+// reads the file directly (rather than via a stdin pipe) so that bs=8m
+// actually produces 8 MiB writes to /dev/rdiskN — pipe input forces dd to
+// issue one write per pipe-buffer-sized read, which is dramatically slower
+// on raw devices. Progress is driven by `status=progress`, which BSD dd
+// has supported since macOS Monterey (12.0); it prints a transfer-stats
+// line to stderr roughly once per second.
+// /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
+// needed after dd exits. NVMe drives in USB enclosures benefit from larger
+// blocks (64 MiB) to reduce per-write overhead over the USB link.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	imgFile, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
+	bs := "8m"
+	if d.StorageType == StorageNVMe {
+		bs = "64m"
 	}
-	defer imgFile.Close()
 
 	// Use rdisk for faster raw writes on macOS.
-	cmd := exec.Command("sudo", "dd", fmt.Sprintf("of=%s", d.RawPath), "bs=4m")
-	stdin, err := cmd.StdinPipe()
+	cmd := exec.Command("sudo", "dd",
+		fmt.Sprintf("if=%s", imagePath),
+		fmt.Sprintf("of=%s", d.RawPath),
+		"bs="+bs,
+		"status=progress",
+	)
+
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("creating stdin pipe: %w", err)
+		return fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting dd: %w", err)
 	}
 
-	buf := make([]byte, 4*1024*1024) // 4 MiB
-	var totalWritten int64
-	for {
-		n, readErr := imgFile.Read(buf)
-		if n > 0 {
-			if _, writeErr := stdin.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing to dd: %w", writeErr)
-			}
-			totalWritten += int64(n)
-			if progressFn != nil {
-				progressFn(totalWritten)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading image: %w", readErr)
-		}
+	scannerDone := make(chan struct{})
+	go func() {
+		defer close(scannerDone)
+		scanDDProgress(stderr, progressFn)
+	}()
+
+	waitErr := cmd.Wait()
+	<-scannerDone
+
+	if waitErr != nil {
+		return fmt.Errorf("writing image: %w", waitErr)
 	}
 
-	stdin.Close()
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("writing image: %w", err)
-	}
-
-	// Sync to flush any remaining writes, then eject.
-	exec.Command("sync").Run()                            //nolint:errcheck
-	exec.Command("diskutil", "eject", d.DevicePath).Run() //nolint:errcheck
+	// Sync to flush any remaining writes.
+	exec.Command("sync").Run() //nolint:errcheck
 
 	return nil
+}
+
+// ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
+// Called by the caller after all post-flash operations are complete.
+func ejectDisk(devPath string) {
+	exec.Command("diskutil", "eject", devPath).Run() //nolint:errcheck
 }

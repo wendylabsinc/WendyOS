@@ -141,6 +141,7 @@ func parseAvahiResolveLine(line string) (models.LANDevice, bool) {
 		Hostname:      hostname,
 		IPAddress:     ipAddr,
 		Port:          port,
+		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
 	}, true

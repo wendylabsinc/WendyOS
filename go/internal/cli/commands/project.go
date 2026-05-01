@@ -19,7 +19,7 @@ import (
 var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNetwork:   "Access network interfaces",
 	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
-	appconfig.EntitlementVideo:     "Access video cameras",
+	appconfig.EntitlementVideo:     "Deprecated: use camera instead",
 	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
 	appconfig.EntitlementPersist:   "Persist data across restarts",
 	appconfig.EntitlementAudio:     "Access audio input/output devices",
@@ -147,7 +147,7 @@ func newEntitlementsAddCmd() *cobra.Command {
 					}
 				}
 				if len(items) == 0 {
-					fmt.Println("All entitlement types are already added.")
+					cliLogln("All entitlement types are already added.")
 					return nil
 				}
 
@@ -182,7 +182,7 @@ func newEntitlementsAddCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Added %q entitlement\n", entType)
+			cliSuccess("Added %q entitlement", entType)
 			return nil
 		},
 	}
@@ -204,7 +204,7 @@ func newEntitlementsRemoveCmd() *cobra.Command {
 				entType = args[0]
 			} else {
 				if len(cfg.Entitlements) == 0 {
-					fmt.Println("No entitlements configured.")
+					cliLogln("No entitlements configured.")
 					return nil
 				}
 
@@ -238,7 +238,7 @@ func newEntitlementsRemoveCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Removed %q entitlement\n", entType)
+			cliSuccess("Removed %q entitlement", entType)
 			return nil
 		},
 	}

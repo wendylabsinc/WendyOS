@@ -150,6 +150,35 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 	var port int
 	txtRecords := make(map[string]string)
 
+	// parseTXT extracts key=value pairs from a dns-sd TXT record line.
+	// dns-sd escapes spaces inside values as "\ "; we split on unescaped
+	// whitespace so that values like "Dynamic\ Cosmos" round-trip correctly.
+	parseTXT := func(line string) {
+		var fields []string
+		var cur strings.Builder
+		for i := 0; i < len(line); i++ {
+			if line[i] == '\\' && i+1 < len(line) && (line[i+1] == ' ' || line[i+1] == '\t') {
+				cur.WriteByte(line[i+1])
+				i++
+			} else if line[i] == ' ' || line[i] == '\t' {
+				if cur.Len() > 0 {
+					fields = append(fields, cur.String())
+					cur.Reset()
+				}
+			} else {
+				cur.WriteByte(line[i])
+			}
+		}
+		if cur.Len() > 0 {
+			fields = append(fields, cur.String())
+		}
+		for _, field := range fields {
+			if k, v, ok := strings.Cut(field, "="); ok {
+				txtRecords[k] = v
+			}
+		}
+	}
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -168,15 +197,14 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 				}
 			}
 
-			// Also grab TXT from this same line or subsequent content.
-			// Parse any key=value pairs on the line.
-			for _, field := range parts {
-				if k, v, ok := strings.Cut(field, "="); ok {
-					txtRecords[k] = v
-				}
+			// TXT records on the same line (some versions).
+			parseTXT(line)
+
+			// TXT records are typically on the next line indented with a space.
+			if scanner.Scan() {
+				parseTXT(scanner.Text())
 			}
 
-			// Got what we need, kill the process early.
 			_ = cmd.Process.Kill()
 			break
 		}
@@ -208,6 +236,7 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 		DisplayName:   displayName,
 		Hostname:      hostname,
 		Port:          port,
+		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
 	}, nil
@@ -227,8 +256,14 @@ func isValidHostnameLabel(s string) bool {
 	return hostnameLabelRegexp.MatchString(s)
 }
 
+// unescapeDNSSDName converts dns-sd's backslash-escaped spaces ("\ ") back to
+// regular spaces, matching the display form of an mDNS service instance name.
+func unescapeDNSSDName(s string) string {
+	return strings.ReplaceAll(s, `\ `, " ")
+}
+
 func deviceFromBrowse(inst browseResult) models.LANDevice {
-	displayName := inst.instanceName
+	displayName := unescapeDNSSDName(inst.instanceName)
 
 	var (
 		id       string

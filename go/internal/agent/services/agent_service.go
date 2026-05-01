@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -67,7 +68,145 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 		resp.OsVersion = &v
 	}
 
+	// Read hardware platform identifier if available.
+	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
+		deviceType, storageMedium := parseDeviceType(string(data))
+		if deviceType != "" {
+			resp.DeviceType = &deviceType
+		}
+		if storageMedium != "" {
+			resp.StorageMedium = &storageMedium
+		}
+	}
+
+	// Detect GPU presence and details.
+	gpuInfo := detectGPUInfo()
+	resp.HasGpu = &gpuInfo.hasGPU
+	if gpuInfo.vendor != "" {
+		resp.GpuVendor = &gpuInfo.vendor
+	}
+	if gpuInfo.jetpackVersion != "" {
+		resp.JetpackVersion = &gpuInfo.jetpackVersion
+	}
+	if gpuInfo.cudaVersion != "" {
+		resp.CudaVersion = &gpuInfo.cudaVersion
+	}
+
 	return resp, nil
+}
+
+type gpuInfo struct {
+	hasGPU         bool
+	vendor         string
+	jetpackVersion string
+	cudaVersion    string
+}
+
+// detectGPUInfo probes the system for GPU presence and NVIDIA-specific details.
+func detectGPUInfo() gpuInfo {
+	info := gpuInfo{}
+
+	// /etc/nv_tegra_release is the definitive indicator of an NVIDIA Tegra/Jetson
+	// device. Check it first because /dev/nvidia0 is absent on many Jetson configs
+	// where the GPU is an integrated Tegra (e.g. JetPack 5/6 on Orin).
+	if _, err := os.Stat("/etc/nv_tegra_release"); err == nil {
+		info.hasGPU = true
+		info.vendor = "nvidia"
+	} else if _, err := os.Stat("/dev/nvidia0"); err == nil {
+		// Discrete NVIDIA GPU (no Tegra release file).
+		info.hasGPU = true
+		info.vendor = "nvidia"
+	} else if entries, _ := os.ReadDir("/dev/dri"); len(entries) > 0 {
+		// Generic GPU via DRM — vendor unknown.
+		info.hasGPU = true
+	}
+
+	if info.vendor == "nvidia" {
+		info.jetpackVersion = detectJetPackVersion()
+		info.cudaVersion = detectCUDAVersion()
+	}
+
+	return info
+}
+
+var tegraReleaseRe = regexp.MustCompile(`R(\d+)\s+\([^)]+\),\s+REVISION:\s+([\d.]+)`)
+
+// detectJetPackVersion returns the JetPack version (e.g. "6.1") by parsing
+// /etc/nv_tegra_release and mapping the L4T version via a known table.
+// Falls back to "L4T {version}" when no mapping is found.
+func detectJetPackVersion() string {
+	data, err := os.ReadFile("/etc/nv_tegra_release")
+	if err != nil {
+		return ""
+	}
+	m := tegraReleaseRe.FindSubmatch(data)
+	if len(m) < 3 {
+		return ""
+	}
+	major := string(m[1])
+	revision := string(m[2]) // e.g. "4.4"
+
+	// Use major.minor for the table key (e.g. "36.4").
+	minor := strings.SplitN(revision, ".", 2)[0]
+	key := major + "." + minor
+
+	// L4T → JetPack version table.
+	// https://developer.nvidia.com/embedded/jetpack-archive
+	jetpack := map[string]string{
+		"36.4": "6.1",
+		"36.3": "6.0",
+		"36.2": "6.0",
+		"35.5": "5.1.3",
+		"35.4": "5.1.2",
+		"35.3": "5.1.1",
+		"35.2": "5.1",
+		"35.1": "5.0.2",
+		"34.1": "5.0.1",
+		"32.7": "4.6",
+		"32.6": "4.6",
+		"32.5": "4.5",
+		"32.4": "4.4",
+		"32.3": "4.3",
+		"32.2": "4.2",
+		"32.1": "4.1",
+	}
+	if jp, ok := jetpack[key]; ok {
+		return jp
+	}
+	return "L4T " + major + "." + revision
+}
+
+var cudaVersionFileRe = regexp.MustCompile(`(?i)CUDA[^0-9]*([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+
+// detectCUDAVersion reads the CUDA version from well-known paths or nvcc.
+func detectCUDAVersion() string {
+	// Try /usr/local/cuda/version.txt: "CUDA Version 12.2.0"
+	if data, err := os.ReadFile("/usr/local/cuda/version.txt"); err == nil {
+		if m := cudaVersionFileRe.FindSubmatch(data); len(m) > 1 {
+			return string(m[1])
+		}
+	}
+
+	// Try /usr/local/cuda/version.json: {"cuda": {"version": "12.2.0"}}
+	if data, err := os.ReadFile("/usr/local/cuda/version.json"); err == nil {
+		if m := cudaVersionFileRe.FindSubmatch(data); len(m) > 1 {
+			return string(m[1])
+		}
+	}
+
+	// Fall back to nvcc --version with a timeout so detection cannot block an RPC handler.
+	if nvcc, err := exec.LookPath("nvcc"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, nvcc, "--version").Output()
+		if err == nil {
+			if m := cudaVersionFileRe.FindSubmatch(out); len(m) > 1 {
+				return string(m[1])
+			}
+		}
+	}
+
+	return ""
 }
 
 // detectFeatureset probes the system for available hardware capabilities.
@@ -110,7 +249,37 @@ func detectFeatureset() []string {
 		features = append(features, "camera")
 	}
 
+	// Mender OTA: check for mender-update binary.
+	if _, found := resolveMenderBinary(); found {
+		features = append(features, "mender")
+	}
+
 	return features
+}
+
+// parseDeviceType parses /etc/wendyos/device-type, which may be either a plain
+// string (legacy) or a KEY=VALUE file (new format).
+// Returns (deviceType, storageMedium); either may be empty.
+// MACHINE and BOARD are treated as the same thing (board identifier).
+func parseDeviceType(content string) (deviceType, storageMedium string) {
+	content = strings.TrimSpace(content)
+	if !strings.Contains(content, "=") {
+		return content, ""
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "MACHINE", "BOARD":
+			deviceType = strings.TrimSpace(v)
+		case "STORAGE":
+			storageMedium = strings.TrimSpace(v)
+		}
+	}
+	return deviceType, storageMedium
 }
 
 // RunContainer is deprecated. Clients should use WendyContainerService.RunContainer
@@ -255,11 +424,59 @@ func (s *AgentService) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectTo
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.ConnectToWiFi(ctx, req.GetSsid(), req.GetPassword()); err != nil {
+	if err := s.networkManager.ConnectToWiFi(ctx, req); err != nil {
 		errMsg := err.Error()
 		return &agentpb.ConnectToWiFiResponse{Success: false, ErrorMessage: &errMsg}, nil
 	}
 	return &agentpb.ConnectToWiFiResponse{Success: true}, nil
+}
+
+// ListKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ListKnownWiFiNetworks(ctx context.Context, _ *agentpb.ListKnownWiFiNetworksRequest) (*agentpb.ListKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	known, err := s.networkManager.ListKnownWiFiNetworks(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list known WiFi networks: %v", err)
+	}
+	return &agentpb.ListKnownWiFiNetworksResponse{Networks: known}, nil
+}
+
+// SetWiFiNetworkPriority delegates to the NetworkManager.
+func (s *AgentService) SetWiFiNetworkPriority(ctx context.Context, req *agentpb.SetWiFiNetworkPriorityRequest) (*agentpb.SetWiFiNetworkPriorityResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.SetWiFiNetworkPriority(ctx, req.GetSsid(), req.GetPriority()); err != nil {
+		msg := err.Error()
+		return &agentpb.SetWiFiNetworkPriorityResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.SetWiFiNetworkPriorityResponse{Success: true}, nil
+}
+
+// ReorderKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ReorderKnownWiFiNetworks(ctx context.Context, req *agentpb.ReorderKnownWiFiNetworksRequest) (*agentpb.ReorderKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ReorderKnownWiFiNetworks(ctx, req.GetOrderSsids()); err != nil {
+		msg := err.Error()
+		return &agentpb.ReorderKnownWiFiNetworksResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ReorderKnownWiFiNetworksResponse{Success: true}, nil
+}
+
+// ForgetWiFiNetwork delegates to the NetworkManager.
+func (s *AgentService) ForgetWiFiNetwork(ctx context.Context, req *agentpb.ForgetWiFiNetworkRequest) (*agentpb.ForgetWiFiNetworkResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ForgetWiFiNetwork(ctx, req.GetSsid()); err != nil {
+		msg := err.Error()
+		return &agentpb.ForgetWiFiNetworkResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ForgetWiFiNetworkResponse{Success: true}, nil
 }
 
 // GetWiFiStatus delegates to the NetworkManager.
@@ -351,6 +568,68 @@ func (s *AgentService) ForgetBluetoothPeripheral(ctx context.Context, req *agent
 // "  10%" or "50% 5120 kB" or "Installing:  75%".
 var menderProgressRe = regexp.MustCompile(`(\d{1,3})%`)
 
+// enableJetsonRootfsAB ensures rootfs A/B redundancy is configured on NVIDIA
+// Jetson devices by writing the required UEFI EFI variables. It is a no-op on
+// non-Jetson hardware (detected by the absence of nvbootctrl).
+//
+// The caller must be running as root; the function returns an error if the
+// device appears to be a Jetson but the prerequisite APP_b partition is absent.
+func enableJetsonRootfsAB(logger *zap.Logger) error {
+	const guid = "781e084c-a330-417c-b678-38e696380cb9"
+	const efivarsDir = "/sys/firmware/efi/efivars"
+
+	nvbootctrl, err := exec.LookPath("nvbootctrl")
+	if err != nil {
+		// Not a Jetson device — nothing to do.
+		return nil
+	}
+
+	if _, err := os.Stat(efivarsDir); err != nil {
+		return fmt.Errorf("EFI vars not accessible at %s: %w", efivarsDir, err)
+	}
+
+	if _, err := os.Stat("/dev/disk/by-partlabel/APP_b"); err != nil {
+		return fmt.Errorf("APP_b partition not found — device needs reflashing for rootfs A/B support")
+	}
+
+	// Exit code 0 means A/B is NOT yet enabled; non-zero means already enabled.
+	checkCmd := exec.Command(nvbootctrl, "-t", "rootfs", "is-rootfs-ab-enabled")
+	if err := checkCmd.Run(); err != nil {
+		logger.Info("Jetson rootfs A/B already enabled, skipping EFI var setup")
+		return nil
+	}
+
+	logger.Info("Enabling Jetson rootfs A/B redundancy")
+
+	writeVar := func(name string, value []byte) error {
+		path := fmt.Sprintf("%s/%s-%s", efivarsDir, name, guid)
+		if _, err := os.Stat(path); err == nil {
+			logger.Info("EFI var already exists, skipping", zap.String("name", name))
+			return nil
+		}
+		// EFI variable format: 4-byte attributes header + value bytes.
+		// Attributes: 0x07 = NV|BS|RT (non-volatile, boot-service, runtime-service).
+		data := append([]byte{0x07, 0x00, 0x00, 0x00}, value...)
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return fmt.Errorf("writing EFI var %s: %w", name, err)
+		}
+		logger.Info("EFI var written", zap.String("name", name))
+		return nil
+	}
+
+	// RootfsRedundancyLevel = 1, RootfsRetryCountMax = 3.
+	if err := writeVar("RootfsRedundancyLevel", []byte{0x01, 0x00, 0x00, 0x00}); err != nil {
+		return err
+	}
+	if err := writeVar("RootfsRetryCountMax", []byte{0x03, 0x00, 0x00, 0x00}); err != nil {
+		return err
+	}
+
+	out, _ := exec.Command(nvbootctrl, "-t", "rootfs", "dump-slots-info").CombinedOutput()
+	logger.Info("Jetson rootfs A/B enabled", zap.String("slots_info", strings.TrimSpace(string(out))))
+	return nil
+}
+
 // UpdateOS streams OS update progress using mender.
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started", zap.String("artifact_url", req.GetArtifactUrl()))
@@ -366,9 +645,30 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 		})
 	}
 
-	sendProgress("downloading", 0)
+	if err := enableJetsonRootfsAB(s.logger); err != nil {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: fmt.Sprintf("Jetson A/B setup failed: %v", err),
+				},
+			},
+		})
+	}
 
-	cmd := exec.CommandContext(stream.Context(), "mender", "install", req.GetArtifactUrl())
+	sendProgress("downloading", 0)
+	cmdName, found := resolveMenderBinary()
+	if !found {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: "mender-update binary not found",
+				},
+			},
+		})
+	}
+
+	cmd := exec.CommandContext(stream.Context(), cmdName, "install", req.GetArtifactUrl())
+	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -414,6 +714,7 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 
 	scanLines := func(r io.Reader) {
 		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			lower := strings.ToLower(line)
@@ -452,6 +753,9 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			s.logger.Warn("mender output scan error", zap.Error(err))
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -474,13 +778,93 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 
 	sendProgress("finalizing", 100)
 
-	return stream.Send(&agentpb.UpdateOSResponse{
+	if err := stream.Send(&agentpb.UpdateOSResponse{
 		ResponseType: &agentpb.UpdateOSResponse_Completed_{
 			Completed: &agentpb.UpdateOSResponse_Completed{
 				RebootRequired: true,
 			},
 		},
-	})
+	}); err != nil {
+		return err
+	}
+
+	if err := rebootSystem(); err != nil {
+		s.logger.Error("Failed to reboot after OS update", zap.Error(err))
+	}
+
+	return nil
+}
+
+// envWithPath returns os.Environ() with the PATH entry replaced by the given value.
+// This ensures PATH is set exactly once (not duplicated), which matters because
+// getenv on Linux returns the first match — appending would leave the original in place.
+func envWithPath(path string) []string {
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + path
+			return env
+		}
+	}
+	return append(env, "PATH="+path)
+}
+
+// resolveMenderBinary finds the mender-update binary. It checks PATH via
+// exec.LookPath and then probes absolute paths directly. The os.Stat fallback
+// is restricted to absolute paths to avoid accidentally executing a file from
+// the current working directory. mender-update is preferred over legacy mender.
+func resolveMenderBinary() (string, bool) {
+	candidates := []string{
+		"mender-update",
+		"/usr/local/sbin/mender-update",
+		"/usr/local/bin/mender-update",
+		"/usr/sbin/mender-update",
+		"/usr/bin/mender-update",
+		"/sbin/mender-update",
+		"/bin/mender-update",
+		"mender",
+		"/usr/local/sbin/mender",
+		"/usr/local/bin/mender",
+		"/usr/sbin/mender",
+		"/usr/bin/mender",
+		"/sbin/mender",
+		"/bin/mender",
+	}
+	for _, c := range candidates {
+		if path, err := exec.LookPath(c); err == nil {
+			return path, true
+		}
+		if filepath.IsAbs(c) {
+			if _, err := os.Stat(c); err == nil {
+				return c, true
+			}
+		}
+	}
+	return "", false
+}
+
+// CommitMenderUpdate runs "mender-update commit" on startup to confirm a
+// pending Mender A/B update. If not committed, Mender rolls back on next reboot.
+// This is a no-op if mender-update is not installed.
+func CommitMenderUpdate(logger *zap.Logger) {
+	binary, found := resolveMenderBinary()
+	if !found {
+		return
+	}
+	cmd := exec.Command(binary, "commit")
+	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+			// Exit code 2 means "nothing to commit" — not an error.
+			logger.Debug("mender-update commit: nothing to commit", zap.String("output", strings.TrimSpace(string(out))))
+			return
+		}
+		logger.Warn("mender-update commit failed", zap.String("output", strings.TrimSpace(string(out))), zap.Error(err))
+		return
+	}
+	logger.Info("Committed Mender update", zap.String("output", strings.TrimSpace(string(out))))
 }
 
 // CleanupOldBackups removes agent binary backups older than 48 hours.

@@ -49,6 +49,16 @@
     },
     "python": {
       "$ref": "#/$defs/python"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "files": {
+      "type": "array",
+      "description": "Files or directories to sync to the device before the app starts.",
+      "items": {
+        "$ref": "#/$defs/fileSyncEntry"
+      }
     }
   },
   "$defs": {
@@ -81,8 +91,14 @@
           "additionalProperties": false
         },
         {
+          "deprecated": true,
+          "description": "Deprecated: use the camera entitlement instead.",
           "properties": {
-            "type": { "const": "video" },
+            "type": {
+              "const": "video",
+              "deprecated": true,
+              "description": "Deprecated: use \"camera\" instead."
+            },
             "mode": {
               "type": "string",
               "description": "Video access mode."
@@ -132,11 +148,20 @@
         },
         {
           "properties": {
-            "type": { "const": "camera" }
+            "type": { "const": "camera" },
+            "mode": {
+              "type": "string",
+              "description": "Camera access mode. Accepted for compatibility with the deprecated video entitlement."
+            },
+            "allowlist": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowed camera device paths. Accepted for compatibility with the deprecated video entitlement."
+            }
           },
           "required": ["type"],
           "additionalProperties": false,
-          "description": "Camera device access."
+          "description": "Camera/V4L2 device access. Legacy video entitlement keys remain accepted for compatibility."
         },
         {
           "properties": {
@@ -245,6 +270,26 @@
         }
       }
     },
+    "fileSyncEntry": {
+      "type": "object",
+      "description": "A file or directory to sync to the device's app working directory.",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\.\\./|.*\\/\\.\\.$|^\\.\\.$)",
+          "description": "Source path relative to wendy.json (file or directory)."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\.\\./|.*\\/\\.\\.$|^\\.\\.$)",
+          "description": "Destination path relative to the app working directory. Defaults to path with any leading ./ stripped."
+        }
+      }
+    },
     "python": {
       "type": "object",
       "description": "Python-specific configuration.",
@@ -253,6 +298,20 @@
         "sourceRoot": {
           "type": "string",
           "description": "Path to the Python source root directory."
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "description": "Runtime configuration applied when the app is started.",
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "type": "array",
+          "description": "Command-line arguments passed directly to the app executable.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

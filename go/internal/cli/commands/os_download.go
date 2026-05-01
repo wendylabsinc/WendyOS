@@ -5,7 +5,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"sort"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -39,7 +38,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 	// Resolve version — use flag, or pick interactively from available versions.
 	version := flagVersion
 	if version == "" {
-		version, err = pickVersion(dev)
+		version, err = pickManifestVersion("Select a version", dev.Manifest)
 		if err != nil {
 			return err
 		}
@@ -59,7 +58,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
 		sizeMB := float64(info.Size()) / (1024 * 1024)
-		fmt.Printf("\nImage already cached: %s (%.1f MB)\n", cached, sizeMB)
+		cliLogln("\nImage already cached: %s (%.1f MB)", cached, sizeMB)
 
 		if !overwrite {
 			confirmed, err := tui.Confirm("Re-download and overwrite?")
@@ -67,7 +66,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 				return err
 			}
 			if !confirmed {
-				fmt.Println("Keeping existing cached image.")
+				cliLogln("Keeping existing cached image.")
 				return nil
 			}
 		}
@@ -78,45 +77,12 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		}
 	}
 
-	fmt.Printf("\nDownloading %s %s...\n", dev.Name, version)
+	cliLogln("\nDownloading %s %s...", dev.Name, version)
 	path, err := resolveOSImage(selectedKey, imgInfo)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("\nCached at: %s\n", path)
+	cliSuccess("\nCached at: %s", path)
 	return nil
-}
-
-// pickVersion presents an interactive picker for available versions of a device.
-func pickVersion(dev deviceInfo) (string, error) {
-	if dev.Manifest == nil || len(dev.Manifest.Versions) == 0 {
-		return "", fmt.Errorf("no versions available for %s", dev.Name)
-	}
-
-	// Collect and sort versions (newest first by string sort, reversed).
-	var versions []string
-	for v := range dev.Manifest.Versions {
-		versions = append(versions, v)
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
-
-	var items []tui.PickerItem
-	for _, v := range versions {
-		ver := dev.Manifest.Versions[v]
-		desc := ""
-		if ver.IsLatest {
-			desc = "latest"
-		} else if ver.IsNightly {
-			desc = "nightly"
-		}
-		items = append(items, tui.PickerItem{
-			Name:        v,
-			Description: desc,
-			Value:       v,
-		})
-	}
-
-	fmt.Println()
-	return pickFromItems("Select a version", items)
 }

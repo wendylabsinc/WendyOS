@@ -48,7 +48,7 @@ func newAppsCmd() *cobra.Command {
 func newAppsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List running applications",
+		Short: "List deployed applications",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
@@ -123,7 +123,7 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications running.")
+		cliLogln("No applications deployed.")
 		return nil
 	}
 	headers := []string{"", "Name", "Version", "Failures"}
@@ -142,7 +142,7 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 
 // streamAppLogs streams logs for a single app to stdout after the dashboard exits.
 func streamAppLogs(ctx context.Context, conn *grpcclient.AgentConnection, appName string) error {
-	fmt.Printf("Streaming logs for %s (Ctrl+C to stop)…\n", appName)
+	cliLogln("Streaming logs for %s (Ctrl+C to stop)…", appName)
 	req := &agentpb.StreamLogsRequest{AppName: &appName}
 	stream, err := conn.TelemetryService.StreamLogs(ctx, req)
 	if err != nil {
@@ -219,7 +219,7 @@ func appsListProvider(ctx context.Context, cm providers.ContainerManager) error 
 	}
 
 	if len(containers) == 0 {
-		fmt.Println("No applications found.")
+		cliLogln("No applications deployed.")
 		return nil
 	}
 
@@ -256,7 +256,7 @@ func newAppsStartCmd() *cobra.Command {
 			}
 
 			if target.Agent != nil {
-				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName)
+				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
 				if err != nil {
 					return err
 				}
@@ -289,7 +289,7 @@ func newAppsStartCmd() *cobra.Command {
 						os.Stderr.Write(out.GetData())
 					}
 				}
-				fmt.Printf("Application %s stopped.\n", appName)
+				cliSuccess("Application %s stopped.", appName)
 				return nil
 			}
 
@@ -301,7 +301,7 @@ func newAppsStartCmd() *cobra.Command {
 				if err := cm.StartContainer(ctx, appName); err != nil {
 					return err
 				}
-				fmt.Printf("Application %s started.\n", appName)
+				cliSuccess("Application %s started.", appName)
 				return nil
 			}
 
@@ -340,7 +340,7 @@ func newAppsStopCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("stopping container: %w", err)
 				}
-				fmt.Printf("Application %s stopped.\n", appName)
+				cliSuccess("Application %s stopped.", appName)
 				return nil
 			}
 
@@ -352,7 +352,7 @@ func newAppsStopCmd() *cobra.Command {
 				if err := cm.StopContainer(ctx, appName); err != nil {
 					return err
 				}
-				fmt.Printf("Application %s stopped.\n", appName)
+				cliSuccess("Application %s stopped.", appName)
 				return nil
 			}
 
@@ -398,7 +398,7 @@ func newAppsRemoveCmd() *cobra.Command {
 					return err
 				}
 				if !confirmed {
-					fmt.Println("Cancelled.")
+					cliNotice("Cancelled.")
 					return nil
 				}
 			}
@@ -438,12 +438,12 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("removing container: %w", err)
 				}
-				fmt.Printf("Application %s removed.\n", appName)
+				cliSuccess("Application %s removed.", appName)
 				if cleanup {
-					fmt.Println("  Container image cleanup requested.")
+					cliLogln("  Container image cleanup requested.")
 				}
 				if deleteVolumes {
-					fmt.Println("  Persistent volume deletion requested.")
+					cliLogln("  Persistent volume deletion requested.")
 				}
 				return nil
 			}
@@ -456,7 +456,7 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err := cm.RemoveContainer(ctx, appName); err != nil {
 					return err
 				}
-				fmt.Printf("Application %s removed.\n", appName)
+				cliSuccess("Application %s removed.", appName)
 				return nil
 			}
 

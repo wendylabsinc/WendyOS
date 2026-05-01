@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
@@ -20,6 +22,11 @@ const (
 
 	// microWendyServiceType is the mDNS service type advertised by ESP32 Wendy devices.
 	microWendyServiceType = "_wendy._tcp"
+
+	// Currently supported SDK for WASI on Wendy Lite.
+	// This also works for older projects that expected to build for wasm32-unknown-none-wasm
+	microWendyEmbeddedSDK = "-embedded"
+	microWendySwiftTarget = "wasm32-unknown-wasip1"
 )
 
 // microWendyBuildContext is stored in BuiltApp.Context for WASM builds.
@@ -87,26 +94,57 @@ func (p *MicroWendyProvider) CanBuild(projectPath string) bool {
 }
 
 func (p *MicroWendyProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
-	args := []string{
-		"run", "+6.2.3", "swift", "build",
-		"--triple", "wasm32-unknown-none-wasm",
+	if err := swifttoolchain.EnsureSwiftVersion(ctx, os.Stdout, os.Stderr); err != nil {
+		return nil, err
 	}
+
+	sdk, err := swifttoolchain.FindSwiftSDK(ctx, "wasm32", os.Stdout, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(sdk, microWendyEmbeddedSDK) {
+		sdk += microWendyEmbeddedSDK
+	}
+
+	args := []string{"build", "--swift-sdk", sdk, "--triple", microWendySwiftTarget}
 	if !debug {
 		args = append(args, "-c", "release")
 	}
-	cmd := exec.CommandContext(ctx, "swiftly", args...)
+	cmd := swifttoolchain.SwiftCommandContext(ctx, args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("swift build (wasm): %w", err)
+		return nil, fmt.Errorf("swift build (wasi): %w", err)
 	}
 
-	config := "debug"
-	if !debug {
-		config = "release"
+	binArgs := []string{
+		"build",
+		"--swift-sdk", sdk,
+		"--triple", microWendySwiftTarget,
+		"--product", product,
+		"--show-bin-path",
 	}
-	wasmPath := filepath.Join(projectPath, ".build", "wasm32-unknown-none-wasm", config, product+".wasm")
+	if !debug {
+		binArgs = append(binArgs, "-c", "release")
+	}
+	binCmd := swifttoolchain.SwiftCommandContext(ctx, binArgs...)
+	binCmd.Dir = projectPath
+	binCmd.Stderr = os.Stderr
+	out, err := binCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("swift build --show-bin-path: %w", err)
+	}
+
+	binDir := strings.TrimSpace(string(out))
+	if binDir == "" {
+		return nil, fmt.Errorf("swift build --show-bin-path returned an empty path for %s", product)
+	}
+
+	wasmPath := filepath.Join(binDir, product+".wasm")
+	if _, err := os.Stat(wasmPath); err != nil {
+		return nil, fmt.Errorf("expected WASM output at %s: %w", wasmPath, err)
+	}
 
 	// Collect IPs of all known devices for unicast delivery.
 	var targetIPs []string

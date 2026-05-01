@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -49,6 +50,13 @@ func hasEnv(spec *Spec, envPrefix string) bool {
 		}
 	}
 	return false
+}
+
+func hasCapability(spec *Spec, cap string) bool {
+	if spec.Process.Capabilities == nil {
+		return false
+	}
+	return slices.Contains(spec.Process.Capabilities.Bounding, cap)
 }
 
 func hasAllowAllDeviceRule(spec *Spec) bool {
@@ -204,13 +212,48 @@ func TestApplyEntitlements_Audio(t *testing.T) {
 		t.Error("audio entitlement did not add /dev/snd mount")
 	}
 
-	// Should mount PipeWire socket.
-	if !hasMountDest(spec, "/run/pipewire") {
-		t.Error("audio entitlement did not add /run/pipewire mount")
+	// PipeWire mount is conditional — only added when a real socket exists
+	// on the host at either /run/pipewire/pipewire-0 (system) or
+	// /run/user/*/pipewire-0 (user session).
+	isSocket := func(path string) bool {
+		fi, err := os.Lstat(path)
+		return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
 	}
-
-	if !hasEnv(spec, "PIPEWIRE_RUNTIME_DIR") {
-		t.Error("audio entitlement did not set PIPEWIRE_RUNTIME_DIR")
+	// Mirror applyAudio's socket detection: system path first, then user session.
+	var pipewireSocketSource string
+	if isSocket("/run/pipewire/pipewire-0") {
+		pipewireSocketSource = "/run/pipewire/pipewire-0"
+	} else {
+		userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
+		for _, s := range userSockets {
+			if isSocket(s) {
+				pipewireSocketSource = s
+				break
+			}
+		}
+	}
+	if pipewireSocketSource != "" {
+		if !hasMountDest(spec, "/run/pipewire/pipewire-0") {
+			t.Error("audio entitlement did not add /run/pipewire/pipewire-0 mount")
+		}
+		if !hasEnv(spec, "PIPEWIRE_RUNTIME_DIR") {
+			t.Error("audio entitlement did not set PIPEWIRE_RUNTIME_DIR")
+		}
+		// Derive pulse path from the same source directory as applyAudio does.
+		sourceDir := filepath.Dir(pipewireSocketSource)
+		pulseNative := filepath.Join(sourceDir, "pulse", "native")
+		if isSocket(pulseNative) {
+			if !hasMountDest(spec, "/run/pipewire/pulse-native") {
+				t.Error("audio entitlement did not add /run/pipewire/pulse-native mount")
+			}
+			if !hasEnv(spec, "PULSE_SERVER") {
+				t.Error("audio entitlement did not set PULSE_SERVER when pulse socket exists")
+			}
+		}
+	} else {
+		if hasMountDest(spec, "/run/pipewire/pipewire-0") || hasMountDest(spec, "/run/pipewire/pulse-native") {
+			t.Error("audio entitlement should not mount /run/pipewire when socket is absent")
+		}
 	}
 
 	// Audio should remain constrained to explicit sound-device rules even
@@ -374,6 +417,48 @@ func TestBluetoothEntitlementDoesNotExposeNetworkManager(t *testing.T) {
 	}
 }
 
+func assertCameraEntitlement(t *testing.T, spec *Spec, entType string) {
+	t.Helper()
+
+	if !hasGID(spec, 44) {
+		t.Errorf("%s entitlement did not add GID 44", entType)
+	}
+
+	foundV4L2Rule := false
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Major != nil && *d.Major == 81 && d.Allow {
+			foundV4L2Rule = true
+			break
+		}
+	}
+	if !foundV4L2Rule {
+		t.Errorf("%s entitlement did not add V4L2 cgroup device rule (major 81)", entType)
+	}
+	if hasAllowAllDeviceRule(spec) {
+		t.Errorf("%s entitlement should not add a generic allow-all device cgroup rule", entType)
+	}
+
+	devMount, ok := mountForDest(spec, "/dev")
+	if !ok {
+		t.Fatalf("%s entitlement did not define /dev mount", entType)
+	}
+	if devMount.Source != "/dev" || devMount.Type != "bind" {
+		t.Fatalf("%s entitlement /dev mount = %+v, want bind mount from host /dev", entType, devMount)
+	}
+	if !slices.Contains(devMount.Options, "rbind") {
+		t.Errorf("%s entitlement /dev mount missing rbind option", entType)
+	}
+	if !slices.Contains(devMount.Options, "rw") {
+		t.Errorf("%s entitlement /dev mount missing rw option", entType)
+	}
+	if !slices.Contains(devMount.Options, "noexec") {
+		t.Errorf("%s entitlement /dev mount missing noexec option", entType)
+	}
+	if !hasCapability(spec, "CAP_SYS_PTRACE") {
+		t.Errorf("%s entitlement did not add device capability wiring", entType)
+	}
+}
+
 func TestApplyEntitlements_Video(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
@@ -387,42 +472,23 @@ func TestApplyEntitlements_Video(t *testing.T) {
 		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
-	// Should add video group GID 44.
-	if !hasGID(spec, 44) {
-		t.Error("video entitlement did not add GID 44")
+	assertCameraEntitlement(t, spec, "video")
+}
+
+func TestApplyEntitlements_Camera(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementCamera},
+		},
 	}
 
-	// Should add a cgroup rule for V4L2 devices (major 81).
-	foundV4L2Rule := false
-	for _, d := range spec.Linux.Resources.Devices {
-		if d.Major != nil && *d.Major == 81 && d.Allow {
-			foundV4L2Rule = true
-			break
-		}
-	}
-	if !foundV4L2Rule {
-		t.Error("video entitlement did not add V4L2 cgroup device rule (major 81)")
-	}
-	if hasAllowAllDeviceRule(spec) {
-		t.Error("video entitlement should not add a generic allow-all device cgroup rule")
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
 	}
 
-	devMount, ok := mountForDest(spec, "/dev")
-	if !ok {
-		t.Fatal("video entitlement did not define /dev mount")
-	}
-	if devMount.Source != "/dev" || devMount.Type != "bind" {
-		t.Fatalf("/dev mount = %+v, want bind mount from host /dev", devMount)
-	}
-	if !slices.Contains(devMount.Options, "rbind") {
-		t.Error("video entitlement /dev mount missing rbind option")
-	}
-	if !slices.Contains(devMount.Options, "rw") {
-		t.Error("video entitlement /dev mount missing rw option")
-	}
-	if !slices.Contains(devMount.Options, "noexec") {
-		t.Error("video entitlement /dev mount missing noexec option")
-	}
+	assertCameraEntitlement(t, spec, "camera")
 }
 
 func TestApplyEntitlements_Multiple(t *testing.T) {

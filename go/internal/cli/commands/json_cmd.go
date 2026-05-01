@@ -76,9 +76,7 @@ func newJSONValidateCmd() *cobra.Command {
 			}
 
 			warnings := appconfig.ValidateJSON(data)
-			for _, w := range warnings {
-				fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
-			}
+			printAppConfigWarnings(os.Stderr, warnings)
 
 			if len(warnings) > 0 {
 				fmt.Println("wendy.json is valid (with warnings).")

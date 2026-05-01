@@ -4,20 +4,30 @@ import (
 	"context"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 )
+
+func mustDetectProjectType(t *testing.T, dir string) string {
+	t.Helper()
+	got, err := detectProjectType(dir)
+	if err != nil {
+		t.Fatalf("detectProjectType unexpected error: %v", err)
+	}
+	return got
+}
 
 func TestDetectProjectType_Dockerfile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "docker" {
+	if got := mustDetectProjectType(t, dir); got != "docker" {
 		t.Errorf("detectProjectType = %q; want %q", got, "docker")
 	}
 }
@@ -27,8 +37,7 @@ func TestDetectProjectType_PackageSwift(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte("// swift"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "swift" {
+	if got := mustDetectProjectType(t, dir); got != "swift" {
 		t.Errorf("detectProjectType = %q; want %q", got, "swift")
 	}
 }
@@ -38,8 +47,7 @@ func TestDetectProjectType_RequirementsTxt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
@@ -49,8 +57,7 @@ func TestDetectProjectType_SetupPy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "setup.py"), []byte("setup()"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
@@ -60,16 +67,14 @@ func TestDetectProjectType_PyprojectToml(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.poetry]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := detectProjectType(dir)
-	if got != "python" {
+	if got := mustDetectProjectType(t, dir); got != "python" {
 		t.Errorf("detectProjectType = %q; want %q", got, "python")
 	}
 }
 
 func TestDetectProjectType_Unknown(t *testing.T) {
 	dir := t.TempDir()
-	got := detectProjectType(dir)
-	if got != "unknown" {
+	if got := mustDetectProjectType(t, dir); got != "unknown" {
 		t.Errorf("detectProjectType = %q; want %q", got, "unknown")
 	}
 }
@@ -82,9 +87,237 @@ func TestDetectProjectType_DockerfileTakesPrecedence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := detectProjectType(dir)
-	if got != "docker" {
+	if got := mustDetectProjectType(t, dir); got != "docker" {
 		t.Errorf("detectProjectType = %q; want %q (Dockerfile should take precedence)", got, "docker")
+	}
+}
+
+func TestDetectProjectType_XcodeOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustDetectProjectType(t, dir); got != "xcode" {
+		t.Errorf("detectProjectType = %q; want %q", got, "xcode")
+	}
+}
+
+func TestDetectProjectType_SwiftPMWinsOverXcode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Package.swift"), []byte("// swift"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustDetectProjectType(t, dir); got != "swift" {
+		t.Errorf("detectProjectType = %q; want %q (Package.swift should take precedence)", got, "swift")
+	}
+}
+
+func TestDetectProjectType_MultipleXcodeprojs_Error(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"First.xcodeproj", "Second.xcodeproj"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := detectProjectType(dir)
+	if err == nil {
+		t.Fatal("detectProjectType expected error for multiple .xcodeproj dirs, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple .xcodeproj") {
+		t.Errorf("expected 'multiple .xcodeproj' in error, got: %v", err)
+	}
+}
+
+func TestResolveDetectedBuildOption_PrefersDockerfileOverSwift(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
+func TestResolveDetectedBuildOption_PrefersDockerfileOverPython(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "requirements.txt (Python)", Type: "python", File: "requirements.txt"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.Type != "docker" || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile docker option", got)
+	}
+}
+
+func TestPreferredBuildOption_InteractiveMultipleDockerfilesDoesNotAutoPrefer(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got := preferredBuildOption(options, true)
+	if got != nil {
+		t.Fatalf("got %+v, want nil so the picker can choose among Dockerfiles", got)
+	}
+}
+
+func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := buildOptionForType(options, "docker", false)
+	if err != nil {
+		t.Fatalf("buildOptionForType: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want Dockerfile", got)
+	}
+}
+
+func TestResolveRunProjectType_DefaultPrefersDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "docker" {
+		t.Fatalf("got %q, want docker", got)
+	}
+}
+
+func TestResolveRunProjectType_SwiftOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Package.swift"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "swift")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "swift" {
+		t.Fatalf("got %q, want swift", got)
+	}
+}
+
+func TestResolveRegistryForAgentUsesConnectionDialer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var dialedPort int
+	conn := &grpcclient.AgentConnection{
+		Host: "cloud-device-name",
+		RegistryDialer: func(_ context.Context, port int) (net.Conn, error) {
+			dialedPort = port
+			proxySide, registrySide := net.Pipe()
+			go func() {
+				defer registrySide.Close()
+				buf := make([]byte, 16)
+				n, err := registrySide.Read(buf)
+				if err == nil && n > 0 {
+					_, _ = registrySide.Write(buf[:n])
+				}
+			}()
+			return proxySide, nil
+		},
+	}
+
+	registryAddr, cleanup, err := resolveRegistryForAgent(ctx, conn, 5000)
+	if err != nil {
+		t.Fatalf("resolveRegistryForAgent: %v", err)
+	}
+	defer cleanup()
+
+	_, port, err := net.SplitHostPort(registryAddr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", registryAddr, err)
+	}
+	tcpConn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer tcpConn.Close()
+
+	if _, err := tcpConn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := tcpConn.Read(buf); err != nil {
+		t.Fatalf("read proxy: %v", err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("proxy echoed %q, want ping", string(buf))
+	}
+	if dialedPort != 5000 {
+		t.Fatalf("dialed port = %d, want 5000", dialedPort)
+	}
+}
+
+func TestResolveRunProjectType_PythonOverride(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "requirements.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunProjectType(dir, "python")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "python" {
+		t.Fatalf("got %q, want python", got)
+	}
+}
+
+func TestResolveRunProjectType_InvalidOverride(t *testing.T) {
+	dir := t.TempDir()
+	_, err := resolveRunProjectType(dir, "ruby")
+	if err == nil {
+		t.Fatal("expected error for invalid run build type override")
+	}
+	if !strings.Contains(err.Error(), `invalid value "ruby" for --build-type`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveRunProjectType_PropagatesMarkerStatErrors(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := resolveRunProjectType(notDir, "docker")
+	if err == nil {
+		t.Fatal("expected stat error for invalid project path")
+	}
+	if !strings.Contains(err.Error(), "checking for") {
+		t.Fatalf("expected wrapped stat error, got %v", err)
 	}
 }
 
@@ -319,108 +552,4 @@ func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
 	// commands and read the host's neighbor tables, making it environment-dependent.
 	// Skip it to avoid flakiness/timeouts in unit test environments.
 	t.Skip("disabled: findIPv4ViaNeighborTable depends on host neighbor tables and OS commands")
-}
-
-func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
-	original := execCommandContext
-	t.Cleanup(func() { execCommandContext = original })
-
-	var calls [][]string
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		calls = append(calls, append([]string{name}, args...))
-		return exec.CommandContext(ctx, "true")
-	}
-
-	if err := ensureSwiftVersion(context.Background()); err != nil {
-		t.Fatalf("ensureSwiftVersion() unexpected error: %v", err)
-	}
-
-	// When "swiftly which" succeeds, no install should happen.
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 call (which), got %d: %v", len(calls), calls)
-	}
-	if calls[0][0] != "swiftly" || calls[0][1] != "which" || calls[0][2] != defaultSwiftVersion {
-		t.Errorf("expected [swiftly which %s], got %v", defaultSwiftVersion, calls[0])
-	}
-}
-
-func TestEnsureSwiftVersion_InstallsWhenMissing(t *testing.T) {
-	original := execCommandContext
-	t.Cleanup(func() { execCommandContext = original })
-
-	var calls [][]string
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		call := append([]string{name}, args...)
-		calls = append(calls, call)
-		// "swiftly which" fails (version not installed), "swiftly install" succeeds.
-		if len(args) > 0 && args[0] == "which" {
-			return exec.CommandContext(ctx, "false")
-		}
-		return exec.CommandContext(ctx, "true")
-	}
-
-	if err := ensureSwiftVersion(context.Background()); err != nil {
-		t.Fatalf("ensureSwiftVersion() unexpected error: %v", err)
-	}
-
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 calls (which + install), got %d: %v", len(calls), calls)
-	}
-	if calls[0][1] != "which" {
-		t.Errorf("first call should be which, got %v", calls[0])
-	}
-	if calls[1][1] != "install" || calls[1][2] != defaultSwiftVersion {
-		t.Errorf("expected [swiftly install %s], got %v", defaultSwiftVersion, calls[1])
-	}
-}
-
-func TestEnsureSwiftVersion_SwiftlyNotFound(t *testing.T) {
-	original := execCommandContext
-	t.Cleanup(func() { execCommandContext = original })
-
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "nonexistent-binary-that-does-not-exist")
-	}
-
-	err := ensureSwiftVersion(context.Background())
-	if err == nil {
-		t.Fatal("ensureSwiftVersion() expected error when swiftly not found, got nil")
-	}
-	if !strings.Contains(err.Error(), "swiftly is required but not installed") {
-		t.Errorf("expected actionable error message, got: %v", err)
-	}
-}
-
-func TestEnsureSwiftVersion_InstallFails(t *testing.T) {
-	original := execCommandContext
-	t.Cleanup(func() { execCommandContext = original })
-
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "false")
-	}
-
-	err := ensureSwiftVersion(context.Background())
-	if err == nil {
-		t.Fatal("ensureSwiftVersion() expected error on install failure, got nil")
-	}
-	if !strings.Contains(err.Error(), "installing Swift") {
-		t.Errorf("expected install error message, got: %v", err)
-	}
-}
-
-func TestEnsureSwiftVersion_Cancellation(t *testing.T) {
-	original := execCommandContext
-	t.Cleanup(func() { execCommandContext = original })
-
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "true")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := ensureSwiftVersion(ctx)
-	if err == nil {
-		t.Fatal("ensureSwiftVersion() expected error on cancelled context, got nil")
-	}
 }

@@ -15,7 +15,7 @@ import (
 
 type networkOps interface {
 	ListWiFiNetworks(ctx context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error)
-	ConnectToWiFi(ctx context.Context, ssid, password string) error
+	ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error
 	GetWiFiStatus(ctx context.Context) (connected bool, ssid string, err error)
 	DisconnectWiFi(ctx context.Context) error
 }
@@ -136,7 +136,7 @@ func (d *Dispatcher) wifiConnect(ctx context.Context, cmd *agentpb.WifiConnectCo
 	if isNil(d.network) {
 		return errResp("network manager unavailable")
 	}
-	if err := d.network.ConnectToWiFi(ctx, cmd.GetSsid(), cmd.GetPassword()); err != nil {
+	if err := d.network.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{Ssid: cmd.GetSsid(), Password: cmd.GetPassword()}); err != nil {
 		return errResp(err.Error())
 	}
 	return &agentpb.BluetoothResponse{

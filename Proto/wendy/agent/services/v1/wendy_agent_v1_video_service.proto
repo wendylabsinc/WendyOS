@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package wendy.agent.services.v1;
+
+service WendyVideoService {
+    rpc ListVideoDevices(ListVideoDevicesRequest) returns (ListVideoDevicesResponse);
+    rpc StreamVideo(StreamVideoRequest) returns (stream VideoFrame);
+}
+
+message VideoDevice {
+    uint32 id          = 1; // numeric suffix of /dev/videoN
+    string name        = 2; // human-readable name from sysfs
+    string path        = 3; // e.g. "/dev/video0"
+}
+
+message ListVideoDevicesRequest {}
+
+message ListVideoDevicesResponse {
+    repeated VideoDevice devices = 1;
+}
+
+message StreamVideoRequest {
+    uint32 device_id  = 1; // numeric suffix N in /dev/videoN; 0 maps to /dev/video0
+    uint32 width      = 2; // pixels; 0 = device default
+    uint32 height     = 3; // pixels; 0 = device default
+    uint32 framerate  = 4; // fps; 0 = device default
+}
+
+enum VideoCodec {
+    VIDEO_CODEC_H264 = 0; // raw H.264 annexb NAL units (default)
+    VIDEO_CODEC_VP8  = 1; // VP8 inside a WebM container (webmmux streamable=true)
+}
+
+message VideoFrame {
+    bytes      data         = 1; // chunk of encoded video; concatenate chunks in order; format described by codec
+    uint64     timestamp_ns = 2; // wall-clock timestamp in nanoseconds
+    VideoCodec codec        = 3; // codec used; default 0 = H264
+}

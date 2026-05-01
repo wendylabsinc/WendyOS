@@ -3,6 +3,7 @@ package commands
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/analytics"
@@ -62,7 +63,16 @@ func NewRootCmd() *cobra.Command {
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			select {
 			case latest := <-cliUpdateNoticeCh:
-				cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: brew upgrade wendy\n", latest, version.Version)
+				var updateCmd string
+				switch runtime.GOOS {
+				case "windows":
+					updateCmd = "winget upgrade WendyLabs.Wendy"
+				case "darwin":
+					updateCmd = "brew upgrade wendy"
+				default:
+					updateCmd = "curl -fsSL https://install.wendy.sh/cli.sh | bash"
+				}
+				cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n", latest, version.Version, updateCmd)
 			default:
 			}
 			return nil
@@ -94,6 +104,8 @@ func NewRootCmd() *cobra.Command {
 	// Cloud Commands
 	authCmd := newAuthCmd()
 	authCmd.GroupID = "cloud"
+	cloudCmd := newCloudCmd()
+	cloudCmd.GroupID = "cloud"
 
 	// Device Commands
 	deviceCmd := newDeviceCmd()
@@ -102,12 +114,6 @@ func NewRootCmd() *cobra.Command {
 	discoverCmd.GroupID = "devices"
 	osCmd := newOSCmd()
 	osCmd.GroupID = "devices"
-	audioCmd := newAudioCmd()
-	audioCmd.GroupID = "devices"
-	bluetoothCmd := newBluetoothCmd()
-	bluetoothCmd.GroupID = "devices"
-	hardwareCmd := newHardwareCmd()
-	hardwareCmd.GroupID = "devices"
 	// Misc Commands
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "misc"
@@ -117,6 +123,10 @@ func NewRootCmd() *cobra.Command {
 	analyticsCmd.GroupID = "misc"
 	utilsCmd := newUtilsCmd()
 	utilsCmd.GroupID = "misc"
+	tourCmd := newTourCmd()
+	tourCmd.GroupID = "misc"
+	mcpCmd := newMCPCmd()
+	mcpCmd.GroupID = "misc"
 
 	// Hidden command used by a subprocess to test CoreBluetooth access.
 	// The main process spawns a child process that runs this command so
@@ -138,16 +148,16 @@ func NewRootCmd() *cobra.Command {
 		projectCmd,
 		jsonCmd,
 		authCmd,
+		cloudCmd,
 		deviceCmd,
 		discoverCmd,
 		osCmd,
-		audioCmd,
-		bluetoothCmd,
-		hardwareCmd,
 		cacheCmd,
 		infoCmd,
 		analyticsCmd,
 		utilsCmd,
+		tourCmd,
+		mcpCmd,
 	)
 
 	root.SetHelpCommandGroupID("misc")

@@ -15,6 +15,7 @@ type ProgressUpdateMsg struct {
 	Percent float64
 	Written int64
 	Total   int64
+	Title   string
 }
 
 // ProgressDoneMsg signals that the progress operation is complete.
@@ -31,6 +32,7 @@ type ProgressModel struct {
 	total    int64
 	done     bool
 	err      error
+	showErr  bool
 }
 
 // NewProgress creates a new ProgressModel with the given title.
@@ -40,7 +42,16 @@ func NewProgress(title string) ProgressModel {
 	return ProgressModel{
 		progress: p,
 		title:    title,
+		showErr:  true,
 	}
+}
+
+// WithoutErrorView suppresses inline error rendering in View. This is useful
+// when the caller will surface the returned error separately and would
+// otherwise print it twice.
+func (m ProgressModel) WithoutErrorView() ProgressModel {
+	m.showErr = false
+	return m
 }
 
 // Init implements tea.Model.
@@ -63,6 +74,9 @@ func (m ProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.percent = msg.Percent
 		m.written = msg.Written
 		m.total = msg.Total
+		if msg.Title != "" {
+			m.title = msg.Title
+		}
 		cmd := m.progress.SetPercent(msg.Percent)
 		return m, cmd
 
@@ -83,13 +97,20 @@ func (m ProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (m ProgressModel) View() string {
-	if m.done && m.err != nil {
-		return fmt.Sprintf("Error: %v\n", m.err)
-	}
-
 	byteInfo := ""
 	if m.written > 0 && m.total > 0 {
 		byteInfo = fmt.Sprintf("  (%s / %s)", formatBytes(m.written), formatBytes(m.total))
+	}
+
+	if m.done && m.err != nil {
+		if !m.showErr {
+			percent := m.percent
+			if percent >= 1.0 {
+				percent = 0.99
+			}
+			return fmt.Sprintf("%s (failed)\n%s%s\n", m.title, m.progress.ViewAs(percent), byteInfo)
+		}
+		return fmt.Sprintf("Error: %v\n", m.err)
 	}
 
 	if m.done {

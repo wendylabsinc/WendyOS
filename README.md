@@ -47,6 +47,8 @@ CGO_ENABLED=1 go build -o wendy ./cmd/wendy
 
 ### Agent (Go)
 
+To build and run the agent locally:
+
 ```sh
 cd go
 go build -o wendy-agent ./cmd/wendy-agent
