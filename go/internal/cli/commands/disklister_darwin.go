@@ -18,6 +18,7 @@ type drive struct {
 	Size        string // human-readable size
 	SizeBytes   int64  // size in bytes
 	IsRemovable bool
+	StorageType StorageType // underlying storage protocol
 }
 
 // listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
@@ -88,6 +89,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 		size := ""
 		var sizeBytes int64
 		removable := isExternal
+		storageType := StorageUnknown
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
@@ -96,6 +98,9 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			sizeBytes = info.sizeBytes
 			if !isExternal {
 				removable = info.removable || info.ejectable
+			}
+			if strings.EqualFold(info.protocol, "nvme") {
+				storageType = StorageNVMe
 			}
 		}
 
@@ -106,6 +111,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			Size:        size,
 			SizeBytes:   sizeBytes,
 			IsRemovable: removable,
+			StorageType: storageType,
 		})
 	}
 	return drives
@@ -115,8 +121,9 @@ type diskInfo struct {
 	name      string
 	size      string
 	sizeBytes int64
-	removable bool // "Removable Media: Removable"
-	ejectable bool // "Ejectable: Yes"
+	removable bool   // "Removable Media: Removable"
+	ejectable bool   // "Ejectable: Yes"
+	protocol  string // "Protocol:" field, e.g. "NVMe", "USB"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -152,6 +159,9 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 			val := strings.TrimSpace(strings.TrimPrefix(line, "Ejectable:"))
 			info.ejectable = strings.EqualFold(val, "yes")
 		}
+		if strings.HasPrefix(line, "Protocol:") {
+			info.protocol = strings.TrimSpace(strings.TrimPrefix(line, "Protocol:"))
+		}
 	}
 	return info, nil
 }
@@ -177,16 +187,24 @@ func unmountDisk(devPath string) error {
 // on raw devices. Progress is driven by `status=progress`, which BSD dd
 // has supported since macOS Monterey (12.0); it prints a transfer-stats
 // line to stderr roughly once per second.
+// /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
+// needed after dd exits. NVMe drives in USB enclosures benefit from larger
+// blocks (64 MiB) to reduce per-write overhead over the USB link.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
+	}
+
+	bs := "8m"
+	if d.StorageType == StorageNVMe {
+		bs = "64m"
 	}
 
 	// Use rdisk for faster raw writes on macOS.
 	cmd := exec.Command("sudo", "dd",
 		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.RawPath),
-		"bs=8m",
+		"bs="+bs,
 		"status=progress",
 	)
 
