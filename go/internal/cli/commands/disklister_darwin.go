@@ -18,7 +18,7 @@ type drive struct {
 	Size        string      // human-readable size
 	SizeBytes   int64       // size in bytes
 	IsRemovable bool
-	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
+	StorageType StorageType // underlying storage protocol
 }
 
 // listAllDrives lists external physical drives (NVMe, USB, SD cards) on macOS.
@@ -89,6 +89,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 		size := ""
 		var sizeBytes int64
 		removable := isExternal
+		storageType := StorageUnknown
 		if infoErr == nil {
 			if info.name != "" {
 				name = info.name
@@ -98,11 +99,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			if !isExternal {
 				removable = info.removable || info.ejectable
 			}
-		}
-
-		st := StorageUnknown
-		if infoErr == nil {
-			st = detectStorageTypeDarwin(info.protocol, info.name)
+			storageType = detectStorageTypeDarwin(info.protocol, info.name)
 		}
 
 		drives = append(drives, drive{
@@ -112,7 +109,7 @@ func parseDiskutilOutput(out []byte, seen map[string]bool, isExternal bool) []dr
 			Size:        size,
 			SizeBytes:   sizeBytes,
 			IsRemovable: removable,
-			StorageType: st,
+			StorageType: storageType,
 		})
 	}
 	return drives
@@ -124,7 +121,7 @@ type diskInfo struct {
 	sizeBytes int64
 	removable bool   // "Removable Media: Removable"
 	ejectable bool   // "Ejectable: Yes"
-	protocol  string // e.g. "SD", "USB", "SATA"
+	protocol  string // "Protocol:" field, e.g. "NVMe", "USB"
 }
 
 func getDiskInfo(devPath string) (*diskInfo, error) {
@@ -219,16 +216,24 @@ func unmountDisk(devPath string) error {
 // on raw devices. Progress is driven by `status=progress`, which BSD dd
 // has supported since macOS Monterey (12.0); it prints a transfer-stats
 // line to stderr roughly once per second.
+// /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
+// needed after dd exits. NVMe drives in USB enclosures benefit from larger
+// blocks (64 MiB) to reduce per-write overhead over the USB link.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
+	}
+
+	bs := "8m"
+	if d.StorageType == StorageNVMe {
+		bs = "64m"
 	}
 
 	// Use rdisk for faster raw writes on macOS.
 	cmd := exec.Command("sudo", "dd",
 		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.RawPath),
-		"bs=8m",
+		"bs="+bs,
 		"status=progress",
 	)
 

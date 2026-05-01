@@ -41,7 +41,7 @@ type drive struct {
 	Size        string      // human-readable size
 	SizeBytes   int64       // size in bytes
 	IsRemovable bool
-	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
+	StorageType StorageType // underlying storage protocol
 }
 
 // lsblkOutput is the JSON output from lsblk.
@@ -135,6 +135,10 @@ func listDrivesLinux() ([]drive, error) {
 			sizeBytes = n
 		}
 
+		storageType := StorageUnknown
+		if dev.Transport == "nvme" {
+			storageType = StorageNVMe
+		}
 		drives = append(drives, drive{
 			DevicePath: devPath,
 			RawPath:    devPath,
@@ -144,7 +148,7 @@ func listDrivesLinux() ([]drive, error) {
 			// IsRemovable reflects our external-ness predicate so downstream code
 			// sees the same classification used to include this device.
 			IsRemovable: isExternal,
-			StorageType: detectStorageTypeLinux(dev.Transport, dev.Model, bool(dev.Removable)),
+			StorageType: storageType,
 		})
 	}
 
@@ -183,17 +187,30 @@ func unmountLsblkDevice(dev lsblkDevice) {
 // produces 4 MiB writes to the device — pipe input forces dd to issue a write
 // per pipe-buffer-sized read, which is dramatically slower on raw devices.
 // Progress is driven by parsing dd's status=progress output on stderr.
+//
+// For NVMe drives we use a 64 MiB block size and oflag=direct to bypass the
+// page cache; large buffered writes cause RAM pressure and a multi-second
+// global sync stall after dd exits. conv=fdatasync ensures dd flushes the
+// target device before exiting (runs as root, only flushes this device).
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("sudo", "dd",
+	ddArgs := []string{
+		"dd",
 		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.DevicePath),
 		"bs=4M",
 		"status=progress",
-	)
+		"conv=fdatasync",
+	}
+	if d.StorageType == StorageNVMe {
+		ddArgs[3] = "bs=64M"
+		ddArgs = append(ddArgs, "oflag=direct")
+	}
+
+	cmd := exec.Command("sudo", ddArgs...)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
