@@ -116,6 +116,7 @@ func l2capTimeval(t time.Time) unix.Timeval {
 	return unix.NsecToTimeval(d.Nanoseconds())
 }
 
+
 // startL2CAPServer binds an LE CoC L2CAP socket and dispatches protobuf-framed
 // commands over mTLS. tlsConfig must be non-nil; the server refuses to start
 // without a provisioned certificate so the BLE channel is never open without auth.
@@ -135,8 +136,7 @@ func startL2CAPServer(ctx context.Context, logger *zap.Logger, d *Dispatcher, tl
 	}
 
 	// PSM=128 (0x0080) is the Wendy LE CoC PSM; AddrType=BDADDR_LE_PUBLIC tells
-	// BlueZ this is an LE CoC socket (not Classic BT), which is required for
-	// CoreBluetooth's openL2CAPChannel: to get a response.
+	// BlueZ this is an LE CoC socket (not Classic BT).
 	sa := &unix.SockaddrL2{PSM: wendyL2CAPPSM, AddrType: unix.BDADDR_LE_PUBLIC}
 	if err := unix.Bind(fd, sa); err != nil {
 		unix.Close(fd)
@@ -153,7 +153,6 @@ func startL2CAPServer(ctx context.Context, logger *zap.Logger, d *Dispatcher, tl
 	go func() {
 		defer unix.Close(fd)
 		for {
-			// Poll the listener fd with a 1 s timeout so we notice ctx cancellation.
 			pfd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 			n, err := unix.Poll(pfd, 1000)
 			if err != nil {
@@ -204,7 +203,6 @@ func serveL2CAPConn(ctx context.Context, fd int, logger *zap.Logger, d *Dispatch
 		logger.Warn("BLE mTLS handshake failed", zap.Error(err))
 		return
 	}
-
 
 	for {
 		select {
