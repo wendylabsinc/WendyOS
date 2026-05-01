@@ -153,9 +153,19 @@ func TestExtractTemplateArchive_IgnoresOtherLanguages(t *testing.T) {
 }
 
 func TestTemplateLanguagesForTemplate_ProbesRepoLayout(t *testing.T) {
+	handlerErrs := make(chan string, 2)
+	recordHandlerErr := func(msg string) {
+		select {
+		case handlerErrs <- msg:
+		default:
+		}
+	}
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead {
-			t.Fatalf("method = %s, want HEAD", r.Method)
+			recordHandlerErr("method = " + r.Method + ", want HEAD")
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
 		}
 		switch r.URL.Path {
 		case "/wendylabsinc/templates/main/python/realsense-camera/template.json":
@@ -163,7 +173,8 @@ func TestTemplateLanguagesForTemplate_ProbesRepoLayout(t *testing.T) {
 		case "/wendylabsinc/templates/main/swift/realsense-camera/template.json":
 			w.WriteHeader(http.StatusNotFound)
 		default:
-			t.Fatalf("unexpected probe path %q", r.URL.Path)
+			recordHandlerErr("unexpected probe path " + strconv.Quote(r.URL.Path))
+			http.Error(w, "unexpected path", http.StatusInternalServerError)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -188,6 +199,11 @@ func TestTemplateLanguagesForTemplate_ProbesRepoLayout(t *testing.T) {
 	languages, err := templateLanguagesForTemplate(context.Background(), meta, "realsense-camera", "")
 	if err != nil {
 		t.Fatalf("templateLanguagesForTemplate: %v", err)
+	}
+	select {
+	case msg := <-handlerErrs:
+		t.Fatal(msg)
+	default:
 	}
 	if len(languages) != 1 || languages[0].Key != langPython {
 		t.Fatalf("languages = %+v, want only python", languages)
