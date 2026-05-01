@@ -154,9 +154,13 @@ func (d *Dispatcher) wifiStatus(ctx context.Context, _ *agentpb.WifiStatusComman
 	if err != nil {
 		return errResp(err.Error())
 	}
+	var ssidPtr *string
+	if connected && ssid != "" {
+		ssidPtr = &ssid
+	}
 	return &agentpb.BluetoothResponse{
 		Response: &agentpb.BluetoothResponse_WifiStatus{
-			WifiStatus: &agentpb.WifiStatusResponse{Connected: connected, Ssid: &ssid},
+			WifiStatus: &agentpb.WifiStatusResponse{Connected: connected, Ssid: ssidPtr},
 		},
 	}
 }
@@ -268,7 +272,7 @@ func (d *Dispatcher) hardwareList(ctx context.Context, cmd *agentpb.HardwareList
 
 // ── Bluetooth handlers ────────────────────────────────────────────────────────
 
-func (d *Dispatcher) bluetoothList(ctx context.Context, _ *agentpb.BluetoothListCommand) *agentpb.BluetoothResponse {
+func (d *Dispatcher) bluetoothList(ctx context.Context, cmd *agentpb.BluetoothListCommand) *agentpb.BluetoothResponse {
 	if isNil(d.bluetooth) {
 		return errResp("bluetooth manager unavailable")
 	}
@@ -285,6 +289,9 @@ loop:
 				break loop
 			}
 			for _, p := range batch {
+				if cmd.GetPairedOnly() && !p.GetPaired() {
+					continue
+				}
 				devices = append(devices, &agentpb.BluetoothDeviceInfo{
 					Name:    p.GetName(),
 					Address: p.GetAddress(),

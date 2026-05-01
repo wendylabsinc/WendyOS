@@ -19,7 +19,7 @@ const (
 )
 
 func startL2CAPServer(ctx context.Context, logger *zap.Logger, d *Dispatcher) error {
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET, unix.BTPROTO_L2CAP)
+	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, unix.BTPROTO_L2CAP)
 	if err != nil {
 		return fmt.Errorf("l2cap socket: %w", err)
 	}
@@ -68,7 +68,7 @@ func startL2CAPServer(ctx context.Context, logger *zap.Logger, d *Dispatcher) er
 				continue
 			}
 
-			connFd, _, err := unix.Accept(fd)
+			connFd, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
 			if err != nil {
 				select {
 				case <-ctx.Done():
@@ -162,8 +162,18 @@ func writeFrame(fd int, data []byte) error {
 	frame := make([]byte, 2+len(data))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(data)))
 	copy(frame[2:], data)
-	_, err := unix.Write(fd, frame)
-	return err
+	written := 0
+	for written < len(frame) {
+		n, err := unix.Write(fd, frame[written:])
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("write: no progress")
+		}
+		written += n
+	}
+	return nil
 }
 
 // writeErrFrame sends an error response frame and returns.

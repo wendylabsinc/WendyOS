@@ -4,6 +4,7 @@ package ble
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -22,7 +23,7 @@ func Connect(peripheralAddress string, _ int) (*Connection, error) {
 		return nil, fmt.Errorf("parse BT address: %w", err)
 	}
 
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET, unix.BTPROTO_L2CAP)
+	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, unix.BTPROTO_L2CAP)
 	if err != nil {
 		return nil, fmt.Errorf("create L2CAP socket: %w", err)
 	}
@@ -38,8 +39,9 @@ func (c *Connection) OpenL2CAP(psm uint16, timeoutSeconds int) error {
 	}
 
 	sa := &unix.SockaddrL2{
-		PSM:  psm,
-		Addr: c.addr,
+		PSM:      psm,
+		Addr:     c.addr,
+		AddrType: unix.BDADDR_LE_PUBLIC,
 	}
 
 	err := unix.Connect(c.fd, sa)
@@ -79,8 +81,18 @@ func (c *Connection) OpenL2CAP(psm uint16, timeoutSeconds int) error {
 // L2CAPSend sends raw bytes over the L2CAP channel.
 // Framing (length prefix) is handled by the caller (agent_client.go).
 func (c *Connection) L2CAPSend(data []byte) error {
-	_, err := unix.Write(c.fd, data)
-	return err
+	written := 0
+	for written < len(data) {
+		n, err := unix.Write(c.fd, data[written:])
+		if err != nil {
+			return fmt.Errorf("write: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("write: no progress")
+		}
+		written += n
+	}
+	return nil
 }
 
 // L2CAPRecv receives one L2CAP SDU with a timeout.
@@ -101,6 +113,9 @@ func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
 	nRead, err := unix.Read(c.fd, buf)
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
+	}
+	if nRead == 0 {
+		return nil, fmt.Errorf("connection closed by peer")
 	}
 	result := make([]byte, nRead)
 	copy(result, buf[:nRead])
@@ -156,10 +171,14 @@ func (c *Connection) ListServices() string { return "" }
 // (Bluetooth byte order: the first byte in the array is the least significant).
 func parseBTAddr(s string) ([6]byte, error) {
 	var addr [6]byte
+	s = strings.ToUpper(s)
 	if len(s) != 17 {
 		return addr, fmt.Errorf("invalid BT address length: %q", s)
 	}
 	for i, offset := range []int{15, 12, 9, 6, 3, 0} {
+		if i > 0 && s[offset-1] != ':' {
+			return addr, fmt.Errorf("invalid BT address separator at position %d: %q", offset-1, s)
+		}
 		var b byte
 		if _, err := fmt.Sscanf(s[offset:offset+2], "%02X", &b); err != nil {
 			return addr, fmt.Errorf("invalid BT address byte at position %d: %w", offset, err)

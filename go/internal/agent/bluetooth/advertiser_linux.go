@@ -14,13 +14,20 @@ import (
 )
 
 const (
-	wendyServiceUUID = "7565e9eb-4c20-4b67-9272-d708b397b631"
-	advObjectPath    = dbus.ObjectPath("/org/wendy/advertisement0")
-	bluezService     = "org.bluez"
-	bluezHCI0        = "/org/bluez/hci0"
-	advManagerIface  = "org.bluez.LEAdvertisingManager1"
-	advIface         = "org.bluez.LEAdvertisement1"
+	wendyServiceUUID    = "7565e9eb-4c20-4b67-9272-d708b397b631"
+	advObjectPath       = dbus.ObjectPath("/org/wendy/advertisement0")
+	bluezService        = "org.bluez"
+	defaultBluezAdapter = "/org/bluez/hci0"
+	advManagerIface     = "org.bluez.LEAdvertisingManager1"
+	advIface            = "org.bluez.LEAdvertisement1"
 )
+
+func bluezAdapterPath() string {
+	if p := os.Getenv("WENDY_BT_ADAPTER"); p != "" {
+		return p
+	}
+	return defaultBluezAdapter
+}
 
 // advertisement implements org.bluez.LEAdvertisement1 on D-Bus.
 type advertisement struct{}
@@ -61,7 +68,7 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 		return fmt.Errorf("export advertisement properties: %w", err)
 	}
 
-	hci := conn.Object(bluezService, bluezHCI0)
+	hci := conn.Object(bluezService, dbus.ObjectPath(bluezAdapterPath()))
 
 	// Ensure the adapter is powered on. The call is a no-op if it already is,
 	// but it also clears Command Disallowed state that lingers after a previous

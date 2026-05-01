@@ -21,7 +21,9 @@ type mockNet struct {
 func (m *mockNet) ListWiFiNetworks(_ context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
 	return m.networks, m.err
 }
-func (m *mockNet) ConnectToWiFi(_ context.Context, _, _ string) error { return m.err }
+func (m *mockNet) ConnectToWiFi(_ context.Context, _ *agentpb.ConnectToWiFiRequest) error {
+	return m.err
+}
 func (m *mockNet) GetWiFiStatus(_ context.Context) (bool, string, error) {
 	return m.connected, m.ssid, m.err
 }
