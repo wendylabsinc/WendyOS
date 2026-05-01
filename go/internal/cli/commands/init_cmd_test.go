@@ -135,6 +135,47 @@ func TestTemplateRunCommand(t *testing.T) {
 	}
 }
 
+func TestTemplateNextSteps(t *testing.T) {
+	tests := []struct {
+		name    string
+		cwd     string
+		destDir string
+		appID   string
+		want    []string
+	}{
+		{
+			name:    "current directory",
+			cwd:     "/tmp/demo-app",
+			destDir: "/tmp/demo-app",
+			appID:   "demo-app",
+			want:    []string{"wendy run"},
+		},
+		{
+			name:    "new subdirectory",
+			cwd:     "/tmp/workspace",
+			destDir: "/tmp/workspace/demo-app",
+			appID:   "demo-app",
+			want:    []string{"cd 'demo-app'", "wendy run"},
+		},
+		{
+			name:    "new subdirectory with apostrophe",
+			cwd:     "/tmp/workspace",
+			destDir: "/tmp/workspace/demo'app",
+			appID:   "demo'app",
+			want:    []string{"cd 'demo'\"'\"'app'", "wendy run"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := templateNextSteps(tt.cwd, tt.destDir, tt.appID)
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Fatalf("templateNextSteps(%q, %q, %q) = %#v, want %#v", tt.cwd, tt.destDir, tt.appID, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveTemplateLanguage_RejectsUnavailableTemplateLanguage(t *testing.T) {
 	meta := &repoMeta{
 		Templates: []repoMetaTemplate{
