@@ -35,11 +35,11 @@ func (f *flexBool) UnmarshalJSON(data []byte) error {
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
-	DevicePath  string      // e.g. /dev/sdb
-	RawPath     string      // same as DevicePath on Linux
-	Name        string      // human-readable name
-	Size        string      // human-readable size
-	SizeBytes   int64       // size in bytes
+	DevicePath  string // e.g. /dev/sdb
+	RawPath     string // same as DevicePath on Linux
+	Name        string // human-readable name
+	Size        string // human-readable size
+	SizeBytes   int64  // size in bytes
 	IsRemovable bool
 	StorageType StorageType // detected medium: StorageSD, StorageNVMe, or StorageUnknown
 }
