@@ -135,6 +135,52 @@ func TestTemplateRunCommand(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateLanguage_RejectsUnavailableTemplateLanguage(t *testing.T) {
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{
+			{Name: "realsense-camera", Languages: []string{langPython}},
+		},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	_, err := resolveTemplateLanguage(targetWendyOS, "realsense-camera", meta, initOptions{
+		language:    langSwift,
+		languageSet: true,
+	})
+	if err == nil {
+		t.Fatal("expected unavailable template language to fail")
+	}
+	if got, want := err.Error(), `template "realsense-camera" is not available for language "swift" (available: python)`; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestResolveTemplateLanguage_AcceptsAvailableTemplateLanguage(t *testing.T) {
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{
+			{Name: "realsense-camera", Languages: []string{langPython}},
+		},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	language, err := resolveTemplateLanguage(targetWendyOS, "realsense-camera", meta, initOptions{
+		language:    langPython,
+		languageSet: true,
+	})
+	if err != nil {
+		t.Fatalf("resolveTemplateLanguage: %v", err)
+	}
+	if language != langPython {
+		t.Fatalf("language = %q, want %q", language, langPython)
+	}
+}
+
 func TestBuildInitEntitlementsFromFlags_RejectsEmptyEntitlementFlag(t *testing.T) {
 	_, err := buildInitEntitlementsFromFlags(targetWendyOS, initOptions{
 		entitlementsSet: true,

@@ -152,6 +152,66 @@ func TestExtractTemplateArchive_IgnoresOtherLanguages(t *testing.T) {
 	}
 }
 
+func TestTemplateLanguagesForTemplate_ProbesRepoLayout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			t.Fatalf("method = %s, want HEAD", r.Method)
+		}
+		switch r.URL.Path {
+		case "/wendylabsinc/templates/main/python/realsense-camera/template.json":
+			w.WriteHeader(http.StatusOK)
+		case "/wendylabsinc/templates/main/swift/realsense-camera/template.json":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Fatalf("unexpected probe path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	origBaseURL := templateRawBaseURL
+	origClient := templateLanguageProbeClient
+	templateRawBaseURL = srv.URL
+	templateLanguageProbeClient = srv.Client()
+	t.Cleanup(func() {
+		templateRawBaseURL = origBaseURL
+		templateLanguageProbeClient = origClient
+	})
+
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{{Name: "realsense-camera"}},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, "realsense-camera", "")
+	if err != nil {
+		t.Fatalf("templateLanguagesForTemplate: %v", err)
+	}
+	if len(languages) != 1 || languages[0].Key != langPython {
+		t.Fatalf("languages = %+v, want only python", languages)
+	}
+}
+
+func TestTemplateLanguagesForTemplate_UsesMetadataLanguages(t *testing.T) {
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{{Name: "realsense-camera", Languages: []string{langPython}}},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, "realsense-camera", "")
+	if err != nil {
+		t.Fatalf("templateLanguagesForTemplate: %v", err)
+	}
+	if len(languages) != 1 || languages[0].Key != langPython {
+		t.Fatalf("languages = %+v, want only python", languages)
+	}
+}
+
 func TestDownloadTemplateArchiveFromURL_InvokesProgressCallback(t *testing.T) {
 	archive := buildTestTarball(t, "templates-main", "rust", "simple-api", map[string]string{
 		"template.json": `{"name":"simple-api"}`,

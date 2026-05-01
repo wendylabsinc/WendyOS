@@ -438,13 +438,28 @@ func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) 
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
-// Wendy Lite always uses Swift; WendyOS offers the full language picker.
-func resolveTemplateLanguage(target string, meta *repoMeta, opts initOptions) (string, error) {
+// Wendy Lite always uses Swift; WendyOS offers the languages available for the selected template.
+func resolveTemplateLanguage(target, tmpl string, meta *repoMeta, opts initOptions) (string, error) {
 	if target == targetWendyLite {
 		if opts.languageSet && normalizeInitChoice(opts.language) != langSwift {
 			return "", fmt.Errorf("%s templates require %s", targetWendyLite, langSwift)
 		}
+		languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
+		if err != nil {
+			return "", err
+		}
+		if !templateLanguageAvailable(langSwift, languages) {
+			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, langSwift, repoMetaLanguageKeys(languages))
+		}
 		return langSwift, nil
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
+	if err != nil {
+		return "", err
+	}
+	if len(languages) == 0 {
+		return "", fmt.Errorf("template %q is not available for any registered language", tmpl)
 	}
 
 	if opts.languageSet {
@@ -456,18 +471,38 @@ func resolveTemplateLanguage(target string, meta *repoMeta, opts initOptions) (s
 			}
 			return "", fmt.Errorf("invalid language %q for templates (available: %s)", opts.language, strings.Join(names, ", "))
 		}
+		if !templateLanguageAvailable(lang, languages) {
+			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, opts.language, repoMetaLanguageKeys(languages))
+		}
 		return lang, nil
 	}
 
 	fmt.Println()
 	var items []tui.PickerItem
-	for _, l := range meta.Languages {
+	for _, l := range languages {
 		items = append(items, tui.PickerItem{
 			Name:  l.Name,
 			Value: l.Key,
 		})
 	}
 	return pickFromItems("What language will you use?", items)
+}
+
+func templateLanguageAvailable(language string, languages []repoMetaLanguage) bool {
+	for _, available := range languages {
+		if available.Key == language {
+			return true
+		}
+	}
+	return false
+}
+
+func repoMetaLanguageKeys(languages []repoMetaLanguage) string {
+	keys := make([]string, len(languages))
+	for i, language := range languages {
+		keys[i] = language.Key
+	}
+	return strings.Join(keys, ", ")
 }
 
 func metaTemplateNames(meta *repoMeta) string {
@@ -585,7 +620,7 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	language, err := resolveTemplateLanguage(target, meta, opts)
+	language, err := resolveTemplateLanguage(target, tmpl, meta, opts)
 	if err != nil {
 		return err
 	}
