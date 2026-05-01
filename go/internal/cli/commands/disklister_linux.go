@@ -83,6 +83,8 @@ func listExternalDrives() ([]drive, error) {
 //   - "usb" transport without SD/eMMC indicators is treated as an NVMe enclosure.
 func detectStorageTypeLinux(transport, model string, removable bool) StorageType {
 	switch strings.ToLower(transport) {
+	case "nvme":
+		return StorageNVMe
 	case "mmc", "sd":
 		if !removable {
 			return StorageEMMC
@@ -183,17 +185,30 @@ func unmountLsblkDevice(dev lsblkDevice) {
 // produces 4 MiB writes to the device — pipe input forces dd to issue a write
 // per pipe-buffer-sized read, which is dramatically slower on raw devices.
 // Progress is driven by parsing dd's status=progress output on stderr.
+//
+// For NVMe drives we use a 64 MiB block size and oflag=direct to bypass the
+// page cache; large buffered writes cause RAM pressure and a multi-second
+// global sync stall after dd exits. conv=fdatasync ensures dd flushes the
+// target device before exiting (runs as root, only flushes this device).
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("sudo", "dd",
+	ddArgs := []string{
+		"dd",
 		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.DevicePath),
 		"bs=4M",
 		"status=progress",
-	)
+		"conv=fdatasync",
+	}
+	if d.StorageType == StorageNVMe {
+		ddArgs[3] = "bs=64M"
+		ddArgs = append(ddArgs, "oflag=direct")
+	}
+
+	cmd := exec.Command("sudo", ddArgs...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("creating stderr pipe: %w", err)
@@ -215,9 +230,6 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	if waitErr != nil {
 		return fmt.Errorf("writing image: %w", waitErr)
 	}
-
-	// Sync to flush writes.
-	exec.Command("sync").Run() //nolint:errcheck
 
 	return nil
 }

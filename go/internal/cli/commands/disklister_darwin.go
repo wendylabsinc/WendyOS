@@ -219,16 +219,24 @@ func unmountDisk(devPath string) error {
 // on raw devices. Progress is driven by `status=progress`, which BSD dd
 // has supported since macOS Monterey (12.0); it prints a transfer-stats
 // line to stderr roughly once per second.
+// /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
+// needed after dd exits. NVMe drives in USB enclosures benefit from larger
+// blocks (64 MiB) to reduce per-write overhead over the USB link.
 func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
+	}
+
+	bs := "8m"
+	if d.StorageType == StorageNVMe {
+		bs = "64m"
 	}
 
 	// Use rdisk for faster raw writes on macOS.
 	cmd := exec.Command("sudo", "dd",
 		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.RawPath),
-		"bs=8m",
+		"bs="+bs,
 		"status=progress",
 	)
 

@@ -91,6 +91,8 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
+			promptWifiIfNeeded(ctx, conn)
+
 			auth, err := pickAuthEntry(cloudGRPC)
 			if err != nil {
 				return err
