@@ -116,7 +116,6 @@ func l2capTimeval(t time.Time) unix.Timeval {
 	return unix.NsecToTimeval(d.Nanoseconds())
 }
 
-
 // startL2CAPServer binds an LE CoC L2CAP socket and dispatches protobuf-framed
 // commands over mTLS. tlsConfig must be non-nil; the server refuses to start
 // without a provisioned certificate so the BLE channel is never open without auth.
