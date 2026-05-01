@@ -93,18 +93,48 @@ func newDeviceVersionCmd() *cobra.Command {
 		Short:   "Show agent version, OS, architecture, GPU, and hardware info for the target device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
+			target, err := resolveTarget(ctx)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
 
-			resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-			if err != nil {
-				return fmt.Errorf("getting agent version: %w", err)
+			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion string
+			var hasGPU bool
+
+			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
+				cliLogln("Connecting to %s via Bluetooth...", target.Bluetooth.DisplayName)
+				bleClient, bleErr := connectBLEAgent(target.Bluetooth)
+				if bleErr != nil {
+					return bleErr
+				}
+				defer bleClient.Close()
+				bleResp, bleErr := bleClient.AgentVersion()
+				if bleErr != nil {
+					return fmt.Errorf("getting agent version: %w", bleErr)
+				}
+				agentVersion = bleResp.GetVersion()
+				osName = bleResp.GetOs()
+				osVersion = bleResp.GetOsVersion()
+				cpuArch = bleResp.GetCpuArchitecture()
+			} else if target.Agent != nil {
+				resp, respErr := target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+				if respErr != nil {
+					return fmt.Errorf("getting agent version: %w", respErr)
+				}
+				agentVersion = resp.GetVersion()
+				osName = resp.GetOs()
+				osVersion = resp.GetOsVersion()
+				cpuArch = resp.GetCpuArchitecture()
+				deviceType = resp.GetDeviceType()
+				storageMedium = resp.GetStorageMedium()
+				hasGPU = resp.GetHasGpu()
+				gpuVendor = resp.GetGpuVendor()
+				jetpackVersion = resp.GetJetpackVersion()
+				cudaVersion = resp.GetCudaVersion()
+			} else {
+				return fmt.Errorf("selected device does not support this command")
 			}
-
-			agentVersion := resp.GetVersion()
 
 			var latestVersion string
 			if checkUpdates {
@@ -118,24 +148,24 @@ func newDeviceVersionCmd() *cobra.Command {
 			if jsonOutput {
 				out := map[string]any{
 					"version":         agentVersion,
-					"os":              resp.GetOs(),
-					"osVersion":       resp.GetOsVersion(),
-					"cpuArchitecture": resp.GetCpuArchitecture(),
-					"deviceType":      resp.GetDeviceType(),
+					"os":              osName,
+					"osVersion":       osVersion,
+					"cpuArchitecture": cpuArch,
+					"deviceType":      deviceType,
 					"cliVersion":      version.Version,
-					"hasGpu":          resp.GetHasGpu(),
+					"hasGpu":          hasGPU,
 				}
-				if sm := resp.GetStorageMedium(); sm != "" {
-					out["storageMedium"] = sm
+				if storageMedium != "" {
+					out["storageMedium"] = storageMedium
 				}
-				if v := resp.GetGpuVendor(); v != "" {
-					out["gpuVendor"] = v
+				if gpuVendor != "" {
+					out["gpuVendor"] = gpuVendor
 				}
-				if jv := resp.GetJetpackVersion(); jv != "" {
-					out["jetpackVersion"] = jv
+				if jetpackVersion != "" {
+					out["jetpackVersion"] = jetpackVersion
 				}
-				if cv := resp.GetCudaVersion(); cv != "" {
-					out["cudaVersion"] = cv
+				if cudaVersion != "" {
+					out["cudaVersion"] = cudaVersion
 				}
 				if checkUpdates {
 					out["latestVersion"] = latestVersion
@@ -150,25 +180,25 @@ func newDeviceVersionCmd() *cobra.Command {
 			}
 
 			cliLogln("Agent Version: %s", agentVersion)
-			cliLogln("OS: %s %s", resp.GetOs(), resp.GetOsVersion())
-			cliLogln("Architecture: %s", resp.GetCpuArchitecture())
-			if dt := resp.GetDeviceType(); dt != "" {
-				cliLogln("Device Type: %s", dt)
+			cliLogln("OS: %s %s", osName, osVersion)
+			cliLogln("Architecture: %s", cpuArch)
+			if deviceType != "" {
+				cliLogln("Device Type: %s", deviceType)
 			}
-			if sm := resp.GetStorageMedium(); sm != "" {
-				cliLogln("Storage: %s", sm)
+			if storageMedium != "" {
+				cliLogln("Storage: %s", storageMedium)
 			}
-			if resp.GetHasGpu() {
-				vendor := resp.GetGpuVendor()
+			if hasGPU {
+				vendor := gpuVendor
 				if vendor == "" {
 					vendor = "unknown"
 				}
 				cliLogln("GPU: %s", vendor)
-				if jv := resp.GetJetpackVersion(); jv != "" {
-					cliLogln("JetPack: %s", jv)
+				if jetpackVersion != "" {
+					cliLogln("JetPack: %s", jetpackVersion)
 				}
-				if cv := resp.GetCudaVersion(); cv != "" {
-					cliLogln("CUDA: %s", cv)
+				if cudaVersion != "" {
+					cliLogln("CUDA: %s", cudaVersion)
 				}
 			}
 			cliLogln("CLI Version: %s", version.Version)

@@ -280,6 +280,113 @@ func (c *AgentClient) WifiReorder(order []string) error {
 	return nil
 }
 
+// AgentVersion returns the agent version and device info over BLE.
+func (c *AgentClient) AgentVersion() (*agentpb.AgentVersionResponse, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_AgentVersion{
+			AgentVersion: &agentpb.AgentVersionCommand{},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	inner := resp.GetAgentVersion()
+	if inner == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return inner, nil
+}
+
+// AppsList returns the list of deployed apps over BLE.
+func (c *AgentClient) AppsList() ([]*agentpb.AppInfo, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_AppsList{
+			AppsList: &agentpb.AppsListCommand{},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	inner := resp.GetAppsList()
+	if inner == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return inner.GetApps(), nil
+}
+
+// AppsStop stops an app by name over BLE.
+func (c *AgentClient) AppsStop(appName string) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_AppsStop{
+			AppsStop: &agentpb.AppsStopCommand{AppName: appName},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+	inner := resp.GetAppsStop()
+	if inner == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !inner.GetSuccess() {
+		msg := inner.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("apps stop failed: %s", msg)
+	}
+	return nil
+}
+
+// AppsRemove removes an app over BLE. purgeImage removes the container image.
+func (c *AgentClient) AppsRemove(appName string, purgeImage bool) error {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_AppsRemove{
+			AppsRemove: &agentpb.AppsRemoveCommand{
+				AppName:    appName,
+				PurgeImage: purgeImage,
+			},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return err
+	}
+	inner := resp.GetAppsRemove()
+	if inner == nil {
+		return fmt.Errorf("unexpected response type")
+	}
+	if !inner.GetSuccess() {
+		msg := inner.GetErrorMessage()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("apps remove failed: %s", msg)
+	}
+	return nil
+}
+
+// HardwareList returns hardware capabilities over BLE.
+func (c *AgentClient) HardwareList() ([]*agentpb.HardwareInfo, error) {
+	cmd := &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_HardwareList{
+			HardwareList: &agentpb.HardwareListCommand{},
+		},
+	}
+	resp, err := c.sendCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	inner := resp.GetHardwareList()
+	if inner == nil {
+		return nil, fmt.Errorf("unexpected response type")
+	}
+	return inner.GetCapabilities(), nil
+}
+
 // WifiForget removes a saved WiFi profile by SSID.
 func (c *AgentClient) WifiForget(ssid string) error {
 	cmd := &agentpb.BluetoothCommand{

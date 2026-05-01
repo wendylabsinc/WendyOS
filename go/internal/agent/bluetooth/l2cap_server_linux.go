@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
@@ -22,6 +21,100 @@ const (
 	wendyL2CAPPSM = 128
 	maxFrameSize  = 65536
 )
+
+// l2capStreamConn wraps a raw LE CoC L2CAP file descriptor as a net.Conn with
+// stream semantics. LE CoC sockets are SOCK_SEQPACKET (message-based), so each
+// unix.Read returns exactly one complete L2CAP SDU. TLS expects stream semantics
+// and reads arbitrary byte counts, so we buffer received SDUs to allow partial
+// reads without discarding data.
+//
+// net.FileConn cannot be used: it calls getsockname internally, which fails for
+// AF_BLUETOOTH with "address family not supported by protocol".
+type l2capStreamConn struct {
+	fd   int
+	rbuf []byte // bytes remaining from the last received SDU
+}
+
+func (c *l2capStreamConn) Read(b []byte) (int, error) {
+	if len(c.rbuf) > 0 {
+		n := copy(b, c.rbuf)
+		c.rbuf = c.rbuf[n:]
+		return n, nil
+	}
+	msg := make([]byte, 65536)
+	n, err := unix.Read(c.fd, msg)
+	if err != nil {
+		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+			return 0, &net.OpError{Op: "read", Net: "l2cap", Err: &l2capTimeoutError{}}
+		}
+		return 0, &net.OpError{Op: "read", Net: "l2cap", Err: err}
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	copied := copy(b, msg[:n])
+	if copied < n {
+		c.rbuf = make([]byte, n-copied)
+		copy(c.rbuf, msg[copied:n])
+	}
+	return copied, nil
+}
+
+func (c *l2capStreamConn) Write(b []byte) (int, error) {
+	n, err := unix.Write(c.fd, b)
+	if err != nil {
+		return n, &net.OpError{Op: "write", Net: "l2cap", Err: err}
+	}
+	return n, nil
+}
+
+func (c *l2capStreamConn) Close() error { return unix.Close(c.fd) }
+
+func (c *l2capStreamConn) LocalAddr() net.Addr  { return l2capAddr("local") }
+func (c *l2capStreamConn) RemoteAddr() net.Addr { return l2capAddr("remote") }
+
+func (c *l2capStreamConn) SetDeadline(t time.Time) error {
+	re := c.SetReadDeadline(t)
+	we := c.SetWriteDeadline(t)
+	if re != nil {
+		return re
+	}
+	return we
+}
+
+func (c *l2capStreamConn) SetReadDeadline(t time.Time) error {
+	tv := l2capTimeval(t)
+	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+}
+
+func (c *l2capStreamConn) SetWriteDeadline(t time.Time) error {
+	tv := l2capTimeval(t)
+	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_SNDTIMEO, &tv)
+}
+
+type l2capAddr string
+
+func (a l2capAddr) Network() string { return "l2cap" }
+func (a l2capAddr) String() string  { return string(a) }
+
+type l2capTimeoutError struct{}
+
+func (e *l2capTimeoutError) Error() string   { return "i/o timeout" }
+func (e *l2capTimeoutError) Timeout() bool   { return true }
+func (e *l2capTimeoutError) Temporary() bool { return true }
+
+// l2capTimeval converts an absolute deadline to a SO_RCVTIMEO/SO_SNDTIMEO
+// timeval. A zero time clears the timeout.
+func l2capTimeval(t time.Time) unix.Timeval {
+	if t.IsZero() {
+		return unix.Timeval{}
+	}
+	d := time.Until(t)
+	if d <= 0 {
+		return unix.Timeval{Sec: 0, Usec: 1}
+	}
+	return unix.NsecToTimeval(d.Nanoseconds())
+}
 
 // startL2CAPServer binds an LE CoC L2CAP socket and dispatches protobuf-framed
 // commands over mTLS. tlsConfig must be non-nil; the server refuses to start
@@ -95,16 +188,12 @@ func startL2CAPServer(ctx context.Context, logger *zap.Logger, d *Dispatcher, tl
 }
 
 func serveL2CAPConn(ctx context.Context, fd int, logger *zap.Logger, d *Dispatcher, tlsConfig *tls.Config) {
-	// Wrap the raw fd as a net.Conn so the TLS library can use it.
-	// net.FileConn dups the fd and registers it with the runtime poller, giving
-	// proper SetDeadline support. We close the os.File to release the original fd.
-	f := os.NewFile(uintptr(fd), "l2cap")
-	rawConn, err := net.FileConn(f)
-	f.Close()
-	if err != nil {
-		logger.Warn("BLE l2cap conn wrap failed", zap.Error(err))
-		return
-	}
+	// Wrap the raw fd as a stream-like net.Conn for TLS.
+	// net.FileConn cannot be used here: it calls getsockname internally, which
+	// returns EAFNOSUPPORT for AF_BLUETOOTH sockets. l2capStreamConn bypasses
+	// that and also converts SEQPACKET message semantics to stream semantics by
+	// buffering received SDUs so TLS partial reads don't discard data.
+	rawConn := &l2capStreamConn{fd: fd}
 
 	tlsConn := tls.Server(rawConn, tlsConfig)
 	defer tlsConn.Close()

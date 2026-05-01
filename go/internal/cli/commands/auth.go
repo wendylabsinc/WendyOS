@@ -2,13 +2,16 @@ package commands
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -35,6 +38,7 @@ func newAuthCmd() *cobra.Command {
 		newAuthLoginCmd(),
 		newAuthLogoutCmd(),
 		newAuthRefreshCertsCmd(),
+		newAuthStatusCmd(),
 	)
 
 	return cmd
@@ -524,6 +528,69 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 	}
 
 	return nil
+}
+
+func newAuthStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show current authentication status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+
+			if len(cfg.Auth) == 0 {
+				fmt.Println(tui.WarningMessage("Not logged in. Run 'wendy auth login' to authenticate."))
+				return nil
+			}
+
+			for _, auth := range cfg.Auth {
+				endpoint := auth.CloudDashboard
+				if endpoint == "" {
+					endpoint = auth.CloudGRPC
+				}
+				fmt.Printf("Cloud:  %s\n", endpoint)
+				if auth.CloudGRPC != "" && auth.CloudGRPC != endpoint {
+					fmt.Printf("  gRPC: %s\n", auth.CloudGRPC)
+				}
+
+				if len(auth.Certificates) == 0 {
+					fmt.Println(tui.WarningMessage("  No certificates stored."))
+					continue
+				}
+
+				cert := auth.Certificates[0]
+				if cert.UserID != "" {
+					fmt.Printf("  User: %s\n", cert.UserID)
+				}
+				if cert.OrganizationID != 0 {
+					fmt.Printf("  Org:  %d\n", cert.OrganizationID)
+				}
+
+				if cert.PemCertificate != "" {
+					block, _ := pem.Decode([]byte(cert.PemCertificate))
+					if block != nil {
+						if x509Cert, parseErr := x509.ParseCertificate(block.Bytes); parseErr == nil {
+							expiry := x509Cert.NotAfter
+							remaining := time.Until(expiry).Round(time.Hour)
+							expiryStr := expiry.Format("2006-01-02 15:04 UTC")
+							switch {
+							case time.Now().After(expiry):
+								fmt.Println(tui.ErrorMessage(fmt.Sprintf("  Certificate expired on %s", expiryStr)))
+							case remaining < 7*24*time.Hour:
+								fmt.Println(tui.WarningMessage(fmt.Sprintf("  Certificate expires %s (in %s)", expiryStr, remaining)))
+							default:
+								fmt.Println(tui.SuccessMessage(fmt.Sprintf("  Certificate valid until %s", expiryStr)))
+							}
+						}
+					}
+				}
+			}
+
+			return nil
+		},
+	}
 }
 
 // openBrowser opens the given URL in the default browser.

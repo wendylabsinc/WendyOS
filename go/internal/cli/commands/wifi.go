@@ -3,7 +3,6 @@ package commands
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -726,16 +725,6 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 
 // ── BLE WendyOS Agent / Lite helpers retained for status/disconnect ──
 
-// bleTLSConfig loads the CLI certificate and builds a *tls.Config for mTLS
-// over BLE L2CAP. Returns an error if the user is not logged in.
-func bleTLSConfig() (*tls.Config, error) {
-	auth := loadCLIAuth()
-	if auth == nil || len(auth.Certificates) == 0 {
-		return nil, fmt.Errorf("not logged in; run 'wendy auth login' to authenticate")
-	}
-	cert := auth.Certificates[0]
-	return ble.NewClientTLSConfig(cert.PemCertificate, cert.PemPrivateKey)
-}
 
 func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
 	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)

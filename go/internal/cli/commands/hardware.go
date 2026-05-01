@@ -28,22 +28,62 @@ func newHardwareListCmd() *cobra.Command {
 		Short: "List hardware capabilities",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
+			target, err := resolveTarget(ctx)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
+
+			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
+				cliLogln("Connecting to %s via Bluetooth...", target.Bluetooth.DisplayName)
+				bleClient, bleErr := connectBLEAgent(target.Bluetooth)
+				if bleErr != nil {
+					return bleErr
+				}
+				defer bleClient.Close()
+				bleCaps, bleErr := bleClient.HardwareList()
+				if bleErr != nil {
+					return fmt.Errorf("listing hardware capabilities: %w", bleErr)
+				}
+				if jsonOutput {
+					data, jsonErr := json.MarshalIndent(bleCaps, "", "  ")
+					if jsonErr != nil {
+						return jsonErr
+					}
+					fmt.Println(string(data))
+					return nil
+				}
+				if len(bleCaps) == 0 {
+					fmt.Println("No hardware capabilities found.")
+					return nil
+				}
+				headers := []string{"Type", "Name", "Available"}
+				var rows [][]string
+				for _, c := range bleCaps {
+					avail := "no"
+					if c.GetAvailable() {
+						avail = "yes"
+					}
+					rows = append(rows, []string{c.GetType(), c.GetName(), avail})
+				}
+				fmt.Print(tui.RenderTable(headers, rows))
+				return nil
+			}
+
+			if target.Agent == nil {
+				return fmt.Errorf("selected device does not support this command")
+			}
 
 			req := &agentpb.ListHardwareCapabilitiesRequest{}
 			if category != "" {
 				req.CategoryFilter = &category
 			}
-			resp, err := conn.AgentService.ListHardwareCapabilities(ctx, req)
-			if err != nil {
-				return fmt.Errorf("listing hardware capabilities: %w", err)
+			resp, respErr := target.Agent.AgentService.ListHardwareCapabilities(ctx, req)
+			if respErr != nil {
+				return fmt.Errorf("listing hardware capabilities: %w", respErr)
 			}
-
 			caps := resp.GetCapabilities()
+
 			if jsonOutput {
 				data, err := json.MarshalIndent(caps, "", "  ")
 				if err != nil {
