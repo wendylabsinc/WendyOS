@@ -14,16 +14,17 @@ import (
 // startMCPProxy starts a local TCP listener that proxies each incoming connection
 // to the named container's MCP server via StreamMCP. Returns the listener address
 // (e.g. "127.0.0.1:52341") and a close function.
-func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appName string) (addr string, close func(), err error) {
+func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appName string) (addr string, closeFn func(), err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, fmt.Errorf("starting MCP proxy for %q: %w", appName, err)
 	}
 
 	pctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 
 	go func() {
-		defer ln.Close()
+		defer func() { close(done) }()
 		for {
 			tcpConn, err := ln.Accept()
 			if err != nil {
@@ -33,7 +34,11 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 		}
 	}()
 
-	return ln.Addr().String(), func() { cancel(); ln.Close() }, nil
+	return ln.Addr().String(), func() {
+		cancel()
+		ln.Close()
+		<-done
+	}, nil
 }
 
 func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, appName string, tcpConn net.Conn) {
@@ -86,5 +91,4 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	case <-ctx.Done():
 	case <-errc:
 	}
-	_ = stream.CloseSend()
 }
