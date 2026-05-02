@@ -601,7 +601,9 @@ func (s *ContainerService) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCP
 
 	// Verify the container is running before attempting to dial its MCP port.
 	containers, listErr := s.containerd.ListContainers(ctx)
-	if listErr == nil {
+	if listErr != nil {
+		s.logger.Warn("failed to list containers for running check in StreamMCP", zap.Error(listErr))
+	} else {
 		running := false
 		for _, c := range containers {
 			if c.GetAppName() == appName && c.GetRunningState() == agentpb.AppRunningState_RUNNING {
