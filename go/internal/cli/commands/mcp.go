@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -37,6 +38,9 @@ func newMCPServeCmd() *cobra.Command {
 				address = cfg.DefaultDevice
 			}
 			if address != "" {
+				if _, _, err := net.SplitHostPort(address); err != nil {
+					address = hostPort(address, defaultAgentPort)
+				}
 				if err := srv.ConnectTo(ctx, address); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not connect to %s: %v\n", address, err)
 				}
