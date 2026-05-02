@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -576,6 +578,95 @@ func (s *ContainerService) ListContainers(_ *agentpb.ListContainersRequest, stre
 		}
 	}
 	return nil
+}
+
+// StreamMCP proxies a bidirectional gRPC stream to the container's MCP TCP port.
+// The caller must supply an "app-name" metadata key identifying the target container.
+func (s *ContainerService) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCPChunk, agentpb.MCPChunk]) error {
+	ctx := stream.Context()
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("app-name")
+	if len(vals) == 0 || vals[0] == "" {
+		return status.Errorf(codes.InvalidArgument, "app-name metadata is required")
+	}
+	appName := vals[0]
+
+	mcpPort, err := s.containerd.GetContainerMCPPort(ctx, appName)
+	if err != nil {
+		return status.Errorf(codes.NotFound, "container %q: %v", appName, err)
+	}
+	if mcpPort == 0 {
+		return status.Errorf(codes.NotFound, "container %q has no mcp entitlement", appName)
+	}
+
+	// Verify the container is running before attempting to dial its MCP port.
+	containers, listErr := s.containerd.ListContainers(ctx)
+	if listErr == nil {
+		running := false
+		for _, c := range containers {
+			if c.GetAppName() == appName && c.GetRunningState() == agentpb.AppRunningState_RUNNING {
+				running = true
+				break
+			}
+		}
+		if !running {
+			return status.Errorf(codes.FailedPrecondition, "container %q is not running", appName)
+		}
+	}
+
+	tcpConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", mcpPort))
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "connecting to MCP server for %q on port %d: %v", appName, mcpPort, err)
+	}
+	defer tcpConn.Close()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errc := make(chan error, 2)
+
+	// gRPC → TCP
+	go func() {
+		for {
+			chunk, err := stream.Recv()
+			if err != nil {
+				errc <- err
+				return
+			}
+			if _, err := tcpConn.Write(chunk.Data); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	// TCP → gRPC
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := tcpConn.Read(buf)
+			if n > 0 {
+				if sendErr := stream.Send(&agentpb.MCPChunk{Data: buf[:n]}); sendErr != nil {
+					errc <- sendErr
+					return
+				}
+			}
+			if readErr != nil {
+				errc <- readErr
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errc:
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
 }
 
 // parseAppConfig parses the wendy.json app config bytes.

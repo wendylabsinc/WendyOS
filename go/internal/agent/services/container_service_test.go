@@ -11,8 +11,10 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -37,6 +39,8 @@ type mockContainerdClient struct {
 	startErr       error
 	statsResult    []*agentpb.ContainerStats
 	statsErr       error
+	mcpPort        uint32
+	mcpPortErr     error
 }
 
 func (m *mockContainerdClient) ListContainers(_ context.Context) ([]*agentpb.AppContainer, error) {
@@ -93,6 +97,10 @@ func (m *mockContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.
 
 func (m *mockContainerdClient) GetContainerMetrics(_ context.Context, _ string) (ContainerMetrics, error) {
 	return ContainerMetrics{}, nil
+}
+
+func (m *mockContainerdClient) GetContainerMCPPort(_ context.Context, _ string) (uint32, error) {
+	return m.mcpPort, m.mcpPortErr
 }
 
 // attachTestMock embeds mockContainerdClient and overrides StartContainerWithStdin
@@ -639,5 +647,103 @@ func TestListContainerStats_Error(t *testing.T) {
 	_, err := client.ListContainerStats(context.Background(), &agentpb.ListContainerStatsRequest{})
 	if err == nil {
 		t.Fatal("expected error from ListContainerStats")
+	}
+}
+
+// ---------- StreamMCP tests ----------
+
+func TestStreamMCP(t *testing.T) {
+	// Start a real TCP server that echoes bytes back, acting as a fake MCP server.
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("starting echo listener: %v", err)
+	}
+	defer echoLn.Close()
+	echoPort := echoLn.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		conn, err := echoLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		io.Copy(conn, conn)
+	}()
+
+	mock := &mockContainerdClient{
+		mcpPort: uint32(echoPort),
+		containers: []*agentpb.AppContainer{
+			{AppName: "test-app", RunningState: agentpb.AppRunningState_RUNNING, McpPort: uint32(echoPort)},
+		},
+	}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	md := metadata.Pairs("app-name", "test-app")
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	stream, err := client.StreamMCP(ctx)
+	if err != nil {
+		t.Fatalf("StreamMCP: %v", err)
+	}
+
+	payload := []byte("hello mcp")
+	if err := stream.Send(&agentpb.MCPChunk{Data: payload}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if string(resp.Data) != string(payload) {
+		t.Fatalf("expected %q, got %q", payload, resp.Data)
+	}
+	_ = stream.CloseSend()
+}
+
+func TestStreamMCP_NoEntitlement(t *testing.T) {
+	mock := &mockContainerdClient{mcpPort: 0}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	md := metadata.Pairs("app-name", "test-app")
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	stream, err := client.StreamMCP(ctx)
+	if err != nil {
+		t.Fatalf("StreamMCP: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected error for container with no MCP entitlement")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+func TestStreamMCP_ContainerNotRunning(t *testing.T) {
+	mock := &mockContainerdClient{
+		mcpPort: 3000,
+		containers: []*agentpb.AppContainer{
+			{AppName: "test-app", RunningState: agentpb.AppRunningState_STOPPED, McpPort: 3000},
+		},
+	}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	md := metadata.Pairs("app-name", "test-app")
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	stream, err := client.StreamMCP(ctx)
+	if err != nil {
+		t.Fatalf("StreamMCP: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected error for stopped container")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
 	}
 }

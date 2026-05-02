@@ -52,6 +52,7 @@ type ContainerdClient interface {
 	ListContainers(ctx context.Context) ([]*agentpb.AppContainer, error)
 	GetContainerStats(ctx context.Context) ([]*agentpb.ContainerStats, error)
 	GetContainerMetrics(ctx context.Context, appName string) (ContainerMetrics, error)
+	GetContainerMCPPort(ctx context.Context, appName string) (uint32, error)
 }
 
 // ContainerOutput represents a chunk of output from a running container.
