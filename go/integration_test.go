@@ -204,6 +204,10 @@ func (m *statefulContainerdClient) GetContainerMetrics(_ context.Context, _ stri
 	return services.ContainerMetrics{}, nil
 }
 
+func (s *statefulContainerdClient) GetContainerMCPPort(_ context.Context, _ string) (uint32, error) {
+	return 0, nil
+}
+
 // getLayerData returns the data stored for a given digest, for test assertions.
 func (m *statefulContainerdClient) getLayerData(digest string) ([]byte, bool) {
 	m.mu.Lock()
