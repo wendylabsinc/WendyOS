@@ -24,6 +24,7 @@ const (
 	EntitlementGPIO      = "gpio"
 	EntitlementSPI       = "spi"
 	EntitlementInput     = "input"
+	EntitlementMCP       = "mcp"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -40,6 +41,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementGPIO,
 	EntitlementSPI,
 	EntitlementInput,
+	EntitlementMCP,
 }
 
 var deprecatedEntitlementReplacements = map[string]string{
@@ -60,6 +62,7 @@ var allowedKeys = map[string][]string{
 	EntitlementGPIO:      {"type", "pins"},
 	EntitlementSPI:       {"type"},
 	EntitlementInput:     {"type"},
+	EntitlementMCP:       {"type", "port"},
 }
 
 // Platform constants identify the target hardware family.
@@ -149,6 +152,7 @@ type Entitlement struct {
 	Device string        `json:"device,omitempty"` // I2C
 	Pins   []int         `json:"pins,omitempty"`   // GPIO
 	Ports  []PortMapping `json:"ports,omitempty"`  // Network
+	Port   int           `json:"port,omitempty"`   // MCP
 }
 
 // DeprecatedEntitlementReplacement reports the preferred replacement for a deprecated entitlement type.
@@ -217,7 +221,21 @@ func (c *AppConfig) Validate() error {
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementMCP:
+			if e.Port < 1 || e.Port > 65535 {
+				return fmt.Errorf("entitlement[%d]: mcp port must be between 1 and 65535, got %d", i, e.Port)
+			}
 		}
+	}
+
+	mcpCount := 0
+	for _, e := range c.Entitlements {
+		if e.Type == EntitlementMCP {
+			mcpCount++
+		}
+	}
+	if mcpCount > 1 {
+		return fmt.Errorf("at most one mcp entitlement is allowed, found %d", mcpCount)
 	}
 
 	for i, f := range c.Files {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -719,5 +720,60 @@ func TestValidateJSON_UnknownKeys(t *testing.T) {
 	// Should have warnings for entitlement[0] (foobar) and entitlement[2] (unknownField)
 	if len(warnings) != 2 {
 		t.Errorf("ValidateJSON() got %d warnings, want 2", len(warnings))
+	}
+}
+
+func TestMCPEntitlementValid(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 3000},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestMCPEntitlementPortRequired(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 0},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing port")
+	}
+	if !strings.Contains(err.Error(), "port") {
+		t.Fatalf("expected error to mention port, got: %v", err)
+	}
+}
+
+func TestMCPEntitlementDuplicateRejected(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 3000},
+			{Type: EntitlementMCP, Port: 4000},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for duplicate mcp entitlement")
+	}
+}
+
+func TestMCPEntitlementPortOutOfRange(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 99999},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for out-of-range port")
 	}
 }
