@@ -145,7 +145,11 @@ type wifiClient struct {
 func newWifiClient(target *SelectedDevice) (*wifiClient, error) {
 	switch {
 	case target.Bluetooth != nil && target.Bluetooth.IsWendyAgent():
-		client, err := ble.ConnectAgent(target.Bluetooth)
+		tlsCfg, err := bleTLSConfig()
+		if err != nil {
+			return nil, err
+		}
+		client, err := ble.ConnectAgent(target.Bluetooth, tlsCfg)
 		if err != nil {
 			return nil, fmt.Errorf("connecting to %s: %w", target.Bluetooth.DisplayName, err)
 		}
@@ -631,7 +635,11 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 	switch {
 	case target.Bluetooth != nil && target.Bluetooth.IsWendyAgent():
 		cliLogln("Scanning for WiFi networks on %s...", target.Bluetooth.DisplayName)
-		client, err := ble.ConnectAgent(target.Bluetooth)
+		tlsCfg, err := bleTLSConfig()
+		if err != nil {
+			return "", err
+		}
+		client, err := ble.ConnectAgent(target.Bluetooth, tlsCfg)
 		if err != nil {
 			return "", fmt.Errorf("connecting to device: %w", err)
 		}
@@ -719,7 +727,11 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 
 func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
 	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
-	client, err := ble.ConnectAgent(device)
+	tlsCfg, err := bleTLSConfig()
+	if err != nil {
+		return err
+	}
+	client, err := ble.ConnectAgent(device, tlsCfg)
 	if err != nil {
 		return err
 	}
@@ -752,7 +764,11 @@ func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
 
 func wifiDisconnectViaBLEAgent(device *models.BluetoothDevice) error {
 	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
-	client, err := ble.ConnectAgent(device)
+	tlsCfg, err := bleTLSConfig()
+	if err != nil {
+		return err
+	}
+	client, err := ble.ConnectAgent(device, tlsCfg)
 	if err != nil {
 		return err
 	}

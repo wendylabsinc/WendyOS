@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/wendylabsinc/wendy/internal/cli/ble"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
@@ -749,6 +751,27 @@ func loadCLIAuth() *config.AuthConfig {
 		}
 	}
 	return nil
+}
+
+// bleTLSConfig loads the CLI certificate and returns a *tls.Config for mTLS
+// over BLE L2CAP. Returns an error if the user is not logged in.
+func bleTLSConfig() (*tls.Config, error) {
+	auth := loadCLIAuth()
+	if auth == nil || len(auth.Certificates) == 0 {
+		return nil, fmt.Errorf("not logged in; run 'wendy auth login' to authenticate")
+	}
+	cert := auth.Certificates[0]
+	return ble.NewClientTLSConfig(cert.PemCertificate, cert.PemPrivateKey)
+}
+
+// connectBLEAgent builds a TLS config and connects to the given Bluetooth
+// device over BLE L2CAP mTLS. Callers must Close() the returned client.
+func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
+	tlsCfg, err := bleTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	return ble.ConnectAgent(device, tlsCfg)
 }
 
 // resolveOption configures resolveTarget behaviour.

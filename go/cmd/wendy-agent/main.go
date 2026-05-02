@@ -133,6 +133,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	bleDispatcher := bluetooth.NewDispatcher(networkMgr, containerdClient, hwDiscoverer, btManager)
+
 	// registryTLSConfig builds the HTTPS/mTLS config for the embedded registry.
 	// Returns nil if the PEM data is invalid, which causes the registry to stay HTTP.
 	registryTLSConfig := func(certPEM, chainPEM, keyPEM string) *tls.Config {
@@ -298,6 +300,17 @@ func main() {
 	}
 	mtlsPortNum := agentPortNum + 1
 
+	// startBLEPeripheral starts BLE advertising and the mTLS-protected L2CAP server.
+	// Only called after the device is provisioned so the cert is available.
+	startBLEPeripheral := func(certPEM, chainPEM, keyPEM string) {
+		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM)
+		if err != nil {
+			logger.Error("Failed to build BLE TLS config", zap.Error(err))
+			return
+		}
+		bluetooth.StartBLEPeripheral(ctx, logger, bleDispatcher, tlsConfig)
+	}
+
 	// Check if already provisioned and start mTLS server and tunnel broker if certificates exist.
 	certPEM, chainPEM, keyPEM := provisioningSvc.ProvisioningCerts()
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
@@ -306,6 +319,7 @@ func main() {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
 		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
+		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 	}
 
 	// Start the embedded dev container registry (Linux only, best-effort).
@@ -350,6 +364,7 @@ func main() {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
 		configpartition.UpdateAvahiForProvisioning(logger, mtlsPortNum)
+		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 		if agentServer != nil {
 			logger.Info("Device provisioned — shutting down plaintext gRPC port", zap.String("port", agentPort))
 			go agentServer.GracefulStop()
