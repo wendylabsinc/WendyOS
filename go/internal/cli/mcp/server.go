@@ -82,7 +82,12 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
 	s.registerCloudTools(srv)
-	s.registerContainerMCPTools(ctx, srv)
+	cleanups := s.registerContainerMCPTools(ctx, srv)
+	defer func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}()
 	return server.ServeStdio(srv)
 }
 
@@ -112,18 +117,20 @@ func intParam(req mcpgo.CallToolRequest, name string, defaultVal int) int {
 // registerContainerMCPTools scans running containers for mcp_port > 0 and
 // registers each container's tools on srv, prefixed with the app name.
 // Errors per-container are warnings; they do not prevent the session from starting.
-func (s *mcpServer) registerContainerMCPTools(ctx context.Context, srv *server.MCPServer) {
+// It returns a slice of cleanup functions that must be called when the server stops.
+func (s *mcpServer) registerContainerMCPTools(ctx context.Context, srv *server.MCPServer) []func() {
 	conn := s.GetConn()
 	if conn == nil {
-		return
+		return nil
 	}
 
 	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: listing containers for MCP tools: %v\n", err)
-		return
+		return nil
 	}
 
+	var cleanups []func()
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
@@ -131,31 +138,35 @@ func (s *mcpServer) registerContainerMCPTools(ctx context.Context, srv *server.M
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: reading container list: %v\n", err)
-			return
+			return cleanups
 		}
 		c := resp.GetContainer()
 		if c == nil || c.GetMcpPort() == 0 || c.GetRunningState() != agentpb.AppRunningState_RUNNING {
 			continue
 		}
-		s.connectContainerMCPTools(ctx, srv, c.GetAppName())
+		if cleanup := s.connectContainerMCPTools(ctx, srv, conn, c.GetAppName()); cleanup != nil {
+			cleanups = append(cleanups, cleanup)
+		}
 	}
+	return cleanups
 }
 
 // connectContainerMCPTools proxies a single container's MCP server into srv.
 // It retries Initialize up to 4 times with exponential backoff (2s, 4s, 8s).
-func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MCPServer, appName string) {
-	conn := s.GetConn()
+// On success it returns a cleanup function that closes the proxy; on failure it
+// returns nil (after cleaning up internally).
+func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName string) func() {
 	addr, closeProxy, err := startMCPProxy(ctx, conn, appName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: MCP proxy for %s: %v\n", appName, err)
-		return
+		return nil
 	}
 
 	mcpCli, err := mcpclient.NewStreamableHttpClient("http://" + addr)
 	if err != nil {
 		closeProxy()
 		fmt.Fprintf(os.Stderr, "Warning: MCP client for %s: %v\n", appName, err)
-		return
+		return nil
 	}
 
 	var initErr error
@@ -164,7 +175,7 @@ func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MC
 			select {
 			case <-ctx.Done():
 				closeProxy()
-				return
+				return nil
 			case <-time.After(time.Duration(1<<attempt) * time.Second):
 			}
 		}
@@ -176,14 +187,14 @@ func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MC
 	if initErr != nil {
 		closeProxy()
 		fmt.Fprintf(os.Stderr, "Warning: MCP init for %s: %v\n", appName, initErr)
-		return
+		return nil
 	}
 
 	result, err := mcpCli.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		closeProxy()
 		fmt.Fprintf(os.Stderr, "Warning: listing MCP tools for %s: %v\n", appName, err)
-		return
+		return nil
 	}
 
 	prefix := sanitizeMCPPrefix(appName)
@@ -198,6 +209,7 @@ func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MC
 			return mcpCli.CallTool(ctx, inner)
 		})
 	}
+	return closeProxy
 }
 
 // sanitizeMCPPrefix converts an app name to a valid MCP tool name prefix
