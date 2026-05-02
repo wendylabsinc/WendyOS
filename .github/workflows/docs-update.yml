@@ -1,0 +1,147 @@
+name: Docs Update
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  docs-update:
+    name: Update wendylabsinc/docs
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} > pr.diff
+
+      - name: Check out docs
+        uses: actions/checkout@v4
+        with:
+          repository: wendylabsinc/docs
+          token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
+          path: docs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Anthropic SDK
+        run: pip install --quiet anthropic==0.97.0
+
+      - name: Update docs with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          python3 << 'PYEOF'
+          import anthropic
+          import os
+          import re
+          import pathlib
+
+          client = anthropic.Anthropic()
+
+          with open('pr.diff') as f:
+              diff = f.read()
+
+          # Static mapping from source paths to doc sections
+          PATH_MAP = {
+              'Sources/': 'api-reference/',
+              'src/': 'api-reference/',
+              'lib/': 'api-reference/',
+              'cmd/': 'api-reference/',
+              'README.md': 'overview/',
+              'docs/': 'guides/',
+          }
+
+          relevant_docs = []
+          for line in diff.split('\n'):
+              if not line.startswith('diff --git'):
+                  continue
+              changed = line.split(' b/')[-1]
+              for src, doc_dir in PATH_MAP.items():
+                  if changed.startswith(src):
+                      p = pathlib.Path('docs') / doc_dir
+                      if p.exists():
+                          for md in p.glob('*.md'):
+                              content = md.read_text()
+                              if content.strip():
+                                  relevant_docs.append({'path': str(md), 'content': content})
+
+          if not relevant_docs:
+              print('No relevant doc pages found — skipping')
+              raise SystemExit(0)
+
+          docs_context = '\n\n'.join(
+              f'### {d["path"]}\n{d["content"]}' for d in relevant_docs
+          )
+
+          message = client.messages.create(
+              model='claude-sonnet-4-6',
+              max_tokens=8096,
+              system=[
+                  {
+                      'type': 'text',
+                      'text': (
+                          'You are a technical writer for WendyOS. '
+                          'Given a PR diff and existing documentation, update the docs to accurately reflect the changes. '
+                          'Be concise. Do not invent features not shown in the diff. '
+                          'Output ONLY changed files using this format: '
+                          '<file path="path/to/file.md">updated content</file>. '
+                          'Omit unchanged files entirely.'
+                      ),
+                      'cache_control': {'type': 'ephemeral'},
+                  }
+              ],
+              messages=[{
+                  'role': 'user',
+                  'content': (
+                      f'PR #{os.environ["PR_NUMBER"]}: {os.environ["PR_TITLE"]}\n\n'
+                      f'{os.environ["PR_BODY"]}\n\n'
+                      f'## Diff\n{diff[:20000]}\n\n'
+                      f'## Current docs\n{docs_context[:20000]}'
+                  ),
+              }],
+          )
+
+          docs_root = pathlib.Path('docs').resolve()
+          updated = 0
+          for match in re.finditer(
+              r'<file path="([^"]+)">(.*?)</file>',
+              message.content[0].text,
+              re.DOTALL,
+          ):
+              fpath = (docs_root / match.group(1)).resolve()
+              if not str(fpath).startswith(str(docs_root) + '/'):
+                  print(f'Skipping unsafe path: {match.group(1)}')
+                  continue
+              fpath.write_text(match.group(2).strip() + '\n')
+              print(f'Updated: {fpath.relative_to(docs_root)}')
+              updated += 1
+
+          if updated == 0:
+              print('Claude found no doc changes needed')
+          PYEOF
+
+      - name: Open PR to docs
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
+          path: docs
+          branch: docs-update/${{ github.event.repository.name }}-${{ github.event.pull_request.number }}
+          title: "docs: update for ${{ github.event.repository.name }}#${{ github.event.pull_request.number }}"
+          body: |
+            Automated docs update triggered by ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+          commit-message: "docs: sync from ${{ github.repository }}#${{ github.event.pull_request.number }}"
+          base: main
