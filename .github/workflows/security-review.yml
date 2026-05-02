@@ -18,12 +18,26 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - name: Verify origin repo
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Fork PRs are not permitted to trigger this workflow."
+            exit 1
+          fi
+
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} > pr.diff
+
+      - name: Export PR metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
+            --jq '{title, body, number}' > pr_meta.json
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,13 +50,10 @@ jobs:
       - name: Run security review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 << 'PYEOF'
           import anthropic
-          import os
+          import json
           import pathlib
 
           client = anthropic.Anthropic()
@@ -54,6 +65,11 @@ jobs:
               print('Empty diff — skipping')
               pathlib.Path('review.md').write_text('_No diff to review._\n')
               raise SystemExit(0)
+
+          meta = json.load(open('pr_meta.json'))
+          pr_number = meta['number']
+          pr_title = meta['title']
+          pr_body = meta['body'] or ''
 
           message = client.messages.create(
               model='claude-sonnet-4-6',
@@ -124,8 +140,8 @@ jobs:
                   'role': 'user',
                   'content': (
                       '<untrusted_pr_content>\n'
-                      f'PR #{os.environ["PR_NUMBER"]}: {os.environ["PR_TITLE"]}\n\n'
-                      f'{os.environ["PR_BODY"]}\n\n'
+                      f'PR #{pr_number}: {pr_title}\n\n'
+                      f'{pr_body}\n\n'
                       f'## Diff\n```diff\n{diff[:40000]}\n```\n'
                       '</untrusted_pr_content>'
                   ),
@@ -138,6 +154,7 @@ jobs:
           PYEOF
 
       - name: Post review as PR comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
