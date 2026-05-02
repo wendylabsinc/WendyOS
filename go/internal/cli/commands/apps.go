@@ -268,7 +268,9 @@ func appsListProvider(ctx context.Context, cm providers.ContainerManager) error 
 }
 
 func newAppsStartCmd() *cobra.Command {
-	return &cobra.Command{
+	var detach bool
+
+	cmd := &cobra.Command{
 		Use:   "start [app-name]",
 		Short: "Start an application",
 		Args:  cobra.MaximumNArgs(1),
@@ -291,6 +293,15 @@ func newAppsStartCmd() *cobra.Command {
 			}
 
 			if target.Agent != nil {
+				if detach {
+					if _, err := target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+						AppName: appName,
+					}); err != nil {
+						return fmt.Errorf("starting container: %w", err)
+					}
+					cliSuccess("Application %s started.", appName)
+					return nil
+				}
 				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
 				if err != nil {
 					return err
@@ -343,6 +354,9 @@ func newAppsStartCmd() *cobra.Command {
 			return fmt.Errorf("selected device does not support this command")
 		},
 	}
+
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start without streaming output")
+	return cmd
 }
 
 func newAppsStopCmd() *cobra.Command {

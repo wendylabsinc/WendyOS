@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
@@ -171,6 +172,14 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	if err := openBrowser(loginURL); err != nil {
 		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
 		fmt.Printf("  %s\n", loginURL)
+	}
+
+	// Show a QR code the user can scan with the Wendy iOS app to log in on their phone.
+	mobileRedirect := url.QueryEscape("wendy://cloud-login")
+	mobileLoginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, mobileRedirect)
+	if qr, qrErr := qrcode.New(mobileLoginURL, qrcode.Medium); qrErr == nil {
+		fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
+		fmt.Println(qr.ToSmallString(false))
 	}
 
 	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
