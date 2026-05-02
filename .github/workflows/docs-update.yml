@@ -61,21 +61,31 @@ jobs:
 
           docs_root = pathlib.Path('docs').resolve()
 
-          # Collect every markdown file in the docs repo
+          # Collect markdown files up to a byte budget to avoid unbounded memory use
+          DOCS_BUDGET = 50000
           all_docs = []
+          total_bytes = 0
           for md in sorted(docs_root.rglob('*.md')):
               rel = md.relative_to(docs_root)
               if any(part.startswith('.') for part in rel.parts):
                   continue
               content = md.read_text()
-              if content.strip():
-                  all_docs.append({'path': str(rel), 'content': content})
+              if not content.strip():
+                  continue
+              if total_bytes + len(content) > DOCS_BUDGET:
+                  print(f'Doc budget reached at {total_bytes} chars, skipping remaining files')
+                  break
+              all_docs.append({'path': str(rel), 'content': content})
+              total_bytes += len(content)
 
-          # Build a compact file-tree so Claude knows what already exists
+          # Build a compact file-tree limited to 3 levels deep
+          MAX_TREE_DEPTH = 3
           tree_lines = []
           for item in sorted(docs_root.rglob('*')):
               rel = item.relative_to(docs_root)
               if any(part.startswith('.') for part in rel.parts):
+                  continue
+              if len(rel.parts) > MAX_TREE_DEPTH:
                   continue
               indent = '  ' * (len(rel.parts) - 1)
               tree_lines.append(f'{indent}{rel.name}{"/" if item.is_dir() else ""}')
@@ -128,8 +138,13 @@ jobs:
               re.DOTALL,
           ):
               fpath = (docs_root / match.group(1)).resolve()
-              if not str(fpath).startswith(str(docs_root) + '/'):
+              try:
+                  fpath.relative_to(docs_root)
+              except ValueError:
                   print(f'Skipping unsafe path: {match.group(1)}')
+                  continue
+              if fpath.suffix.lower() != '.md':
+                  print(f'Skipping non-markdown path: {match.group(1)}')
                   continue
               is_new = not fpath.exists()
               fpath.parent.mkdir(parents=True, exist_ok=True)
