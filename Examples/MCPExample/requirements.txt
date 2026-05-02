@@ -1,0 +1,2 @@
+mcp[cli]>=1.9.4
+uvicorn[standard]>=0.27.0

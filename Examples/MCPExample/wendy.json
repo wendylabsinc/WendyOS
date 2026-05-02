@@ -1,0 +1,14 @@
+{
+  "appId": "com.wendylabs.examples.mcp-example",
+  "version": "1.0.0",
+  "language": "python",
+  "python": {
+    "container": {
+      "sourceRoot": "/app"
+    }
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "mcp", "port": 3000 }
+  ]
+}
