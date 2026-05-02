@@ -18,6 +18,7 @@ service WendyContainerService {
     rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
     rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
     rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
+    rpc StreamMCP(stream MCPChunk) returns (stream MCPChunk);
 }
 
 message ListContainersRequest {}
@@ -194,4 +195,8 @@ message ListContainerStatsRequest {}
 
 message ListContainerStatsResponse {
     repeated ContainerStats stats = 1;
+}
+
+message MCPChunk {
+    bytes data = 1;
 }
