@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -516,7 +517,14 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
 
 	// Build labels for the container.
-	labels := wendyLabels(appName, version, req.GetRestartPolicy())
+	var mcpPort uint32
+	for _, e := range appCfg.Entitlements {
+		if e.Type == appconfig.EntitlementMCP {
+			mcpPort = uint32(e.Port)
+			break
+		}
+	}
+	labels := wendyLabels(appName, version, req.GetRestartPolicy(), mcpPort)
 
 	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
 	specJSON, err := json.Marshal(spec)
@@ -1086,15 +1094,46 @@ func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, e
 			_ = maxRetries
 		}
 
+		var mcpPort uint32
+		if portStr, ok := info.Labels[labelKeyMCPPort]; ok && portStr != "" {
+			if p, err := strconv.ParseUint(portStr, 10, 32); err == nil {
+				mcpPort = uint32(p)
+			}
+		}
+
 		result = append(result, &agentpb.AppContainer{
 			AppName:      ctr.ID(),
 			AppVersion:   appVersion,
 			RunningState: runningState,
 			FailureCount: failureCount,
+			McpPort:      mcpPort,
 		})
 	}
 
 	return result, nil
+}
+
+// GetContainerMCPPort returns the MCP server port for the named container,
+// or 0 if the container has no mcp entitlement.
+func (c *Client) GetContainerMCPPort(ctx context.Context, appName string) (uint32, error) {
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return 0, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+	info, err := ctr.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting container info for %q: %w", appName, err)
+	}
+	portStr, ok := info.Labels[labelKeyMCPPort]
+	if !ok || portStr == "" {
+		return 0, nil
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing mcp port label for %q: %w", appName, err)
+	}
+	return uint32(p), nil
 }
 
 // GetContainerStats collects memory and image-size stats for all Wendy-managed containers.
