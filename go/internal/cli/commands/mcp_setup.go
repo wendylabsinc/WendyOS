@@ -123,10 +123,13 @@ func claudeDesktopConfigPath() string {
 // wendyBinaryPath returns the absolute path to the currently running wendy
 // binary, falling back to PATH lookup.
 func wendyBinaryPath() string {
-	if p, err := exec.LookPath("wendy"); err == nil {
+	if p, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return resolved
+		}
 		return p
 	}
-	if p, err := os.Executable(); err == nil {
+	if p, err := exec.LookPath("wendy"); err == nil {
 		return p
 	}
 	return "wendy"
