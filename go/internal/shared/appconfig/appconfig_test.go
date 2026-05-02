@@ -184,6 +184,7 @@ func TestValidate_AllEntitlementTypes(t *testing.T) {
 			{Type: EntitlementI2C, Device: "i2c-1"},
 			{Type: EntitlementGPIO, Pins: []int{7}},
 			{Type: EntitlementInput},
+			{Type: EntitlementMCP, Port: 3000},
 		},
 	}
 
@@ -230,6 +231,34 @@ func TestValidateJSON_InputUnknownKeys(t *testing.T) {
 	warnings := ValidateJSON(data)
 	if len(warnings) == 0 {
 		t.Fatal("ValidateJSON() expected warning for unknown key on input entitlement, got none")
+	}
+}
+
+func TestValidateJSON_MCPNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "mcp", "port": 3000}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Errorf("ValidateJSON() got %d warnings for valid mcp entitlement, want 0", len(warnings))
+	}
+}
+
+func TestValidateJSON_MCPUnknownKeys(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "mcp", "port": 3000, "typo": 1}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for unknown key on mcp entitlement, got none")
 	}
 }
 
