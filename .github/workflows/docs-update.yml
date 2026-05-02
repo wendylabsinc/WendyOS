@@ -55,51 +55,56 @@ jobs:
           with open('pr.diff') as f:
               diff = f.read()
 
-          # Static mapping from source paths to doc sections
-          PATH_MAP = {
-              'Sources/': 'api-reference/',
-              'src/': 'api-reference/',
-              'lib/': 'api-reference/',
-              'cmd/': 'api-reference/',
-              'README.md': 'overview/',
-              'docs/': 'guides/',
-          }
-
-          relevant_docs = []
-          for line in diff.split('\n'):
-              if not line.startswith('diff --git'):
-                  continue
-              changed = line.split(' b/')[-1]
-              for src, doc_dir in PATH_MAP.items():
-                  if changed.startswith(src):
-                      p = pathlib.Path('docs') / doc_dir
-                      if p.exists():
-                          for md in p.glob('*.md'):
-                              content = md.read_text()
-                              if content.strip():
-                                  relevant_docs.append({'path': str(md), 'content': content})
-
-          if not relevant_docs:
-              print('No relevant doc pages found — skipping')
+          if not diff.strip():
+              print('Empty diff — skipping')
               raise SystemExit(0)
 
+          docs_root = pathlib.Path('docs').resolve()
+
+          # Collect every markdown file in the docs repo
+          all_docs = []
+          for md in sorted(docs_root.rglob('*.md')):
+              rel = md.relative_to(docs_root)
+              if any(part.startswith('.') for part in rel.parts):
+                  continue
+              content = md.read_text()
+              if content.strip():
+                  all_docs.append({'path': str(rel), 'content': content})
+
+          # Build a compact file-tree so Claude knows what already exists
+          tree_lines = []
+          for item in sorted(docs_root.rglob('*')):
+              rel = item.relative_to(docs_root)
+              if any(part.startswith('.') for part in rel.parts):
+                  continue
+              indent = '  ' * (len(rel.parts) - 1)
+              tree_lines.append(f'{indent}{rel.name}{"/" if item.is_dir() else ""}')
+          file_tree = '\n'.join(tree_lines)
+
           docs_context = '\n\n'.join(
-              f'### {d["path"]}\n{d["content"]}' for d in relevant_docs
+              f'### {d["path"]}\n{d["content"]}' for d in all_docs
           )
 
           message = client.messages.create(
               model='claude-sonnet-4-6',
-              max_tokens=8096,
+              max_tokens=16000,
               system=[
                   {
                       'type': 'text',
                       'text': (
-                          'You are a technical writer for WendyOS. '
-                          'Given a PR diff and existing documentation, update the docs to accurately reflect the changes. '
-                          'Be concise. Do not invent features not shown in the diff. '
-                          'Output ONLY changed files using this format: '
-                          '<file path="path/to/file.md">updated content</file>. '
-                          'Omit unchanged files entirely.'
+                          'You are a technical writer for WendyOS.\n'
+                          'Given a PR diff and the current documentation, update the docs to accurately reflect every change.\n\n'
+                          'Rules:\n'
+                          '- Be thorough: touch every doc page that is affected by the diff.\n'
+                          '- Update existing files in place with accurate, complete content.\n'
+                          '- Create new files (and intermediate directories) for features that are not yet documented.\n'
+                          '- Do not invent features absent from the diff.\n'
+                          '- Do not delete existing documentation unless the diff explicitly removes the feature.\n\n'
+                          'Output ONLY files that need to change, using this exact format:\n'
+                          '<file path="path/to/file.md">full file content</file>\n\n'
+                          'Paths are relative to the docs repo root. '
+                          'Omit files that require no changes. '
+                          'If nothing needs updating, output nothing.'
                       ),
                       'cache_control': {'type': 'ephemeral'},
                   }
@@ -109,13 +114,13 @@ jobs:
                   'content': (
                       f'PR #{os.environ["PR_NUMBER"]}: {os.environ["PR_TITLE"]}\n\n'
                       f'{os.environ["PR_BODY"]}\n\n'
-                      f'## Diff\n{diff[:20000]}\n\n'
-                      f'## Current docs\n{docs_context[:20000]}'
+                      f'## Diff\n```diff\n{diff[:30000]}\n```\n\n'
+                      f'## Docs file tree\n```\n{file_tree}\n```\n\n'
+                      f'## Current docs\n{docs_context[:50000]}'
                   ),
               }],
           )
 
-          docs_root = pathlib.Path('docs').resolve()
           updated = 0
           for match in re.finditer(
               r'<file path="([^"]+)">(.*?)</file>',
@@ -126,8 +131,10 @@ jobs:
               if not str(fpath).startswith(str(docs_root) + '/'):
                   print(f'Skipping unsafe path: {match.group(1)}')
                   continue
+              is_new = not fpath.exists()
+              fpath.parent.mkdir(parents=True, exist_ok=True)
               fpath.write_text(match.group(2).strip() + '\n')
-              print(f'Updated: {fpath.relative_to(docs_root)}')
+              print(f'{"Created" if is_new else "Updated"}: {fpath.relative_to(docs_root)}')
               updated += 1
 
           if updated == 0:
@@ -145,3 +152,4 @@ jobs:
             Automated docs update triggered by ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
           commit-message: "docs: sync from ${{ github.repository }}#${{ github.event.pull_request.number }}"
           base: main
+          reviewers: ${{ github.event.pull_request.user.login }}
