@@ -725,7 +725,6 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 
 // ── BLE WendyOS Agent / Lite helpers retained for status/disconnect ──
 
-
 func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
 	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
 	tlsCfg, err := bleTLSConfig()
