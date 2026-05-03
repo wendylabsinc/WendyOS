@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -215,9 +216,18 @@ func (c *AppConfig) Validate() error {
 			if e.Path == "" {
 				return fmt.Errorf("entitlement[%d]: persist entitlement requires a path", i)
 			}
+			if !filepath.IsAbs(e.Path) {
+				return fmt.Errorf("entitlement[%d]: persist path must be absolute, got %q", i, e.Path)
+			}
+			if containsDotDot(e.Path) {
+				return fmt.Errorf("entitlement[%d]: persist path must not contain '..' components", i)
+			}
 		case EntitlementI2C:
 			if e.Device == "" {
 				return fmt.Errorf("entitlement[%d]: i2c entitlement requires a device", i)
+			}
+			if !isValidI2CDevice(e.Device) {
+				return fmt.Errorf("entitlement[%d]: i2c device must be in i2c-N format, got %q", i, e.Device)
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
@@ -281,6 +291,23 @@ func containsDotDot(p string) bool {
 		}
 	}
 	return false
+}
+
+// isValidI2CDevice reports whether device is a safe I2C device name (i2c-N).
+func isValidI2CDevice(device string) bool {
+	if !strings.HasPrefix(device, "i2c-") {
+		return false
+	}
+	suffix := device[len("i2c-"):]
+	if suffix == "" {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateJSON checks raw JSON data for unknown keys in entitlements and returns warnings.

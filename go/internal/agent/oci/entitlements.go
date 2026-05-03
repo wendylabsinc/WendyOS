@@ -375,6 +375,18 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 	if name == "." || name == ".." || name == "/" || name == "" {
 		return
 	}
+	// Validate the container destination: must be absolute with no dot-dot
+	// components. Check the original before cleaning so "a/../b" is rejected
+	// even though Clean would resolve it to a valid absolute path.
+	if !filepath.IsAbs(ent.Path) {
+		return
+	}
+	for _, component := range strings.Split(ent.Path, "/") {
+		if component == ".." {
+			return
+		}
+	}
+	dest := filepath.Clean(ent.Path)
 	hostPath := filepath.Join("/var/lib/wendy/volumes", name)
 	if err := os.MkdirAll(hostPath, 0o755); err != nil {
 		// Best-effort: the container will fail to start with a clear mount error
@@ -382,7 +394,7 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 		_ = err
 	}
 	spec.Mounts = append(spec.Mounts, Mount{
-		Destination: ent.Path,
+		Destination: dest,
 		Source:      hostPath,
 		Type:        "bind",
 		Options:     []string{"rbind", "nosuid", "noexec"},
@@ -437,7 +449,20 @@ func applyUSB(spec *Spec) {
 
 // applyI2C adds I2C device access for a specific bus.
 func applyI2C(spec *Spec, ent appconfig.Entitlement) {
-	devPath := fmt.Sprintf("/dev/%s", ent.Device)
+	// Validate device name is i2c-N before constructing a path from it.
+	if !strings.HasPrefix(ent.Device, "i2c-") {
+		return
+	}
+	suffix := ent.Device[len("i2c-"):]
+	if suffix == "" {
+		return
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return
+		}
+	}
+	devPath := filepath.Clean(fmt.Sprintf("/dev/%s", ent.Device))
 	spec.Mounts = append(spec.Mounts, Mount{
 		Destination: devPath,
 		Source:      devPath,

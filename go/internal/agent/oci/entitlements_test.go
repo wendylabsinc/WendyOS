@@ -704,3 +704,110 @@ func TestApplyEntitlements_Empty(t *testing.T) {
 			originalNSCount, len(spec.Linux.Namespaces))
 	}
 }
+
+// TestApplyI2C_PathTraversal verifies that a crafted device name cannot escape /dev/i2c-
+// (WDY-1015).
+func TestApplyI2C_PathTraversal(t *testing.T) {
+	traversalCases := []string{
+		"../sda",
+		"../mem",
+		"../../etc/passwd",
+		"i2c-1/../sda",
+		"sda",
+		"i2c-",
+		"i2c-1a",
+	}
+	for _, device := range traversalCases {
+		t.Run(device, func(t *testing.T) {
+			spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+			cfg := &appconfig.AppConfig{
+				AppID: "test-app",
+				Entitlements: []appconfig.Entitlement{
+					{Type: appconfig.EntitlementI2C, Device: device},
+				},
+			}
+			if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+				t.Fatalf("ApplyEntitlements() error = %v", err)
+			}
+			for _, m := range spec.Mounts {
+				if !slices.Contains([]string{"/dev/snd", "/dev/input", "/dev/bus/usb"}, m.Destination) &&
+					len(m.Destination) >= 9 && m.Destination[:9] != "/dev/i2c-" {
+					if m.Destination == "/dev/sda" || m.Destination == "/dev/mem" ||
+						m.Destination == "/etc/passwd" {
+						t.Errorf("path traversal via device=%q mounted %q", device, m.Destination)
+					}
+				}
+				if m.Destination == "/dev/"+device {
+					t.Errorf("unsanitized device=%q was mounted as %q", device, m.Destination)
+				}
+			}
+		})
+	}
+}
+
+// TestApplyI2C_ValidDevice verifies that a legitimate i2c-N device is still mounted.
+func TestApplyI2C_ValidDevice(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementI2C, Device: "i2c-1"},
+		},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+	if !hasMountDest(spec, "/dev/i2c-1") {
+		t.Error("valid i2c-1 device was not mounted")
+	}
+}
+
+// TestApplyPersist_PathTraversalDestination verifies that a crafted mount destination
+// cannot escape the container path validation (WDY-1016).
+func TestApplyPersist_PathTraversalDestination(t *testing.T) {
+	traversalCases := []string{
+		"relative/path",
+		"../escape",
+		"data",
+	}
+	for _, path := range traversalCases {
+		t.Run(path, func(t *testing.T) {
+			spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+			cfg := &appconfig.AppConfig{
+				AppID: "test-app",
+				Entitlements: []appconfig.Entitlement{
+					{Type: appconfig.EntitlementPersist, Name: "vol", Path: path},
+				},
+			}
+			if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+				t.Fatalf("ApplyEntitlements() error = %v", err)
+			}
+			if hasMountDest(spec, path) {
+				t.Errorf("relative/traversal path=%q was added as a mount destination", path)
+			}
+		})
+	}
+}
+
+// TestApplyPersist_DotDotInDestination verifies that dot-dot components in the
+// mount destination are rejected (WDY-1016).
+func TestApplyPersist_DotDotInDestination(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID: "test-app",
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementPersist, Name: "vol", Path: "/data/../etc"},
+		},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+	// filepath.Clean resolves /data/../etc → /etc, so the cleaned path must not
+	// be added as a mount destination when the original contained dot-dot.
+	if hasMountDest(spec, "/etc") {
+		t.Error("dot-dot in persist destination was silently resolved to /etc and mounted")
+	}
+	if hasMountDest(spec, "/data/../etc") {
+		t.Error("raw dot-dot persist destination was mounted unchanged")
+	}
+}
