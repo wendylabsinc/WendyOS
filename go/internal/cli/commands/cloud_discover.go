@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
@@ -9,6 +10,7 @@ import (
 
 func newCloudDiscoverCmd() *cobra.Command {
 	var cloudGRPC string
+	var all bool
 
 	cmd := &cobra.Command{
 		Use:   "discover",
@@ -36,21 +38,31 @@ func newCloudDiscoverCmd() *cobra.Command {
 				OrganizationId:  int32(cert.OrganizationID),
 				IsComputeDevice: boolPtr(true),
 			}
+			if !all {
+				req.OnlineOnly = boolPtr(true)
+			}
+			stream, err := assetClient.ListAssets(cloudContext(ctx, auth), req)
+			if err != nil {
+				return fmt.Errorf("listing devices: %w", err)
+			}
 			var assets []*cloudpb.Asset
 			for {
-				resp, err := assetClient.ListAssets(cloudContext(ctx, auth), req)
+				resp, err := stream.Recv()
+				if err == io.EOF {
+					break
+				}
 				if err != nil {
 					return fmt.Errorf("listing devices: %w", err)
 				}
-				assets = append(assets, resp.GetAssets()...)
-				if resp.GetNextPageToken() == "" {
-					break
-				}
-				req.PageToken = resp.GetNextPageToken()
+				assets = append(assets, resp.GetAsset())
 			}
 
 			if len(assets) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No enrolled devices found.")
+				if all {
+					fmt.Fprintln(cmd.OutOrStdout(), "No enrolled devices found.")
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "No online devices found. Use --all to include offline devices.")
+				}
 				return nil
 			}
 
@@ -64,5 +76,6 @@ func newCloudDiscoverCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (required when multiple auth sessions exist)")
+	cmd.Flags().BoolVar(&all, "all", false, "Include offline devices")
 	return cmd
 }

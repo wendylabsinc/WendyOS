@@ -111,6 +111,7 @@ message ListAssetsRequest {
   optional int32 offset = 3;
   optional int32 limit = 4;
   optional string filter = 5;  // Filter by name, details, asset_type, device_type, or tags
+  optional bool online_only = 6;  // If true, only return assets with active broker presence
 }
 
 message ListAssetsResponse {
