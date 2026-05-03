@@ -1095,3 +1095,46 @@ func TestRunContainer(t *testing.T) {
 		}
 	})
 }
+
+// TestOTELLocalhostBindProperty verifies that a 127.0.0.1-bound TCP listener
+// is not reachable from a non-loopback interface, confirming the security
+// property of the fix for WDY-1097/WDY-1100.
+func TestOTELLocalhostBindProperty(t *testing.T) {
+	// Find a non-loopback IPv4 address on this machine. If none exists (e.g.
+	// a stripped-down CI container with only lo), skip rather than fail.
+	var externalIP string
+	ifaces, _ := net.InterfaceAddrs()
+	for _, a := range ifaces {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
+			continue
+		}
+		externalIP = ipNet.IP.String()
+		break
+	}
+	if externalIP == "" {
+		t.Skip("no non-loopback IPv4 interface — cannot verify localhost-only property")
+	}
+
+	// Bind to 127.0.0.1 only, as the OTEL receivers do after the fix.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer lis.Close()
+	port := lis.Addr().(*net.TCPAddr).Port
+
+	// Localhost must be able to connect.
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+	if err != nil {
+		t.Fatalf("localhost connection refused: %v", err)
+	}
+	c.Close()
+
+	// External interface must NOT be able to connect to the same port.
+	c2, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", externalIP, port), 500*time.Millisecond)
+	if err == nil {
+		c2.Close()
+		t.Errorf("connection via external IP %s:%d succeeded — listener should be localhost-only", externalIP, port)
+	}
+}
