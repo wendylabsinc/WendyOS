@@ -45,7 +45,8 @@ func newCloudDiscoverCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("listing devices: %w", err)
 			}
-			var assets []*cloudpb.Asset
+			var count int
+			var headerPrinted bool
 			for {
 				resp, err := stream.Recv()
 				if err == io.EOF {
@@ -54,22 +55,24 @@ func newCloudDiscoverCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("listing devices: %w", err)
 				}
-				assets = append(assets, resp.GetAsset())
+				if count >= maxCloudAssets {
+					return fmt.Errorf("cloud returned more than %d devices", maxCloudAssets)
+				}
+				if !headerPrinted {
+					fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %s\n", "ID", "Name")
+					fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %s\n", "--------", "----")
+					headerPrinted = true
+				}
+				a := resp.GetAsset()
+				fmt.Fprintf(cmd.OutOrStdout(), "%-8d  %s\n", a.GetId(), a.GetName())
+				count++
 			}
-
-			if len(assets) == 0 {
+			if !headerPrinted {
 				if all {
 					fmt.Fprintln(cmd.OutOrStdout(), "No enrolled devices found.")
 				} else {
 					fmt.Fprintln(cmd.OutOrStdout(), "No online devices found. Use --all to include offline devices.")
 				}
-				return nil
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %s\n", "ID", "Name")
-			fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %s\n", "--------", "----")
-			for _, a := range assets {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-8d  %s\n", a.GetId(), a.GetName())
 			}
 			return nil
 		},
