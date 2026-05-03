@@ -501,6 +501,7 @@ func mcpListCloudAssets(ctx context.Context, auth *config.AuthConfig, filter str
 	if err != nil {
 		return nil, fmt.Errorf("listing devices: %w", err)
 	}
+	const maxAssets = 10_000
 	var assets []*cloudpb.Asset
 	for {
 		resp, err := stream.Recv()
@@ -509,6 +510,9 @@ func mcpListCloudAssets(ctx context.Context, auth *config.AuthConfig, filter str
 		}
 		if err != nil {
 			return nil, fmt.Errorf("listing devices: %w", err)
+		}
+		if len(assets) >= maxAssets {
+			return nil, fmt.Errorf("cloud returned more than %d devices", maxAssets)
 		}
 		assets = append(assets, resp.GetAsset())
 	}

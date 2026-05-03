@@ -22,7 +22,10 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const defaultBrokerPort = "50052"
+const (
+	defaultBrokerPort = "50052"
+	maxCloudAssets    = 10_000
+)
 
 type closeFunc func()
 
@@ -256,6 +259,9 @@ func fetchCloudAssets(ctx context.Context, auth *config.AuthConfig) ([]*cloudpb.
 		}
 		if err != nil {
 			return nil, fmt.Errorf("listing devices: %w", err)
+		}
+		if len(assets) >= maxCloudAssets {
+			return nil, fmt.Errorf("cloud returned more than %d devices", maxCloudAssets)
 		}
 		assets = append(assets, resp.GetAsset())
 	}
