@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -262,6 +262,11 @@ jobs:
             IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
+              # Skip swift tests on Linux
+              if [[ "$t" == swift-* ]]; then
+                echo "Skipping Swift test $t on Linux"
+                continue
+              fi
               TEST_ARGS="$TEST_ARGS -t $t"
               HAS_TESTS=true
             done
@@ -270,8 +275,7 @@ jobs:
               exit 0
             fi
           else
-            # Linux: omit swift-* tests (Swift container builds require macOS)
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -299,9 +303,13 @@ jobs:
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
             device="${DEVICES[$i]}"
-            echo "==> Starting tests on $device"
+            BUILDER="wendy-$i"
+            echo "==> Starting tests on $device (builder: $BUILDER)"
             (
-              scripts/test-ci.sh $TEST_ARGS -h "$device"
+              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
+              rc=$?
+              docker buildx rm "$BUILDER" --force 2>/dev/null || true
+              exit $rc
             ) &
             PIDS[$i]=$!
           done
