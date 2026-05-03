@@ -409,7 +409,7 @@ func main() {
 	otelpb.RegisterMetricsServiceServer(otelServer, otelMetricReceiver)
 	otelpb.RegisterTraceServiceServer(otelServer, otelTraceReceiver)
 
-	otelLis, err := net.Listen("tcp", "[::]:"+otelPort)
+	otelLis, err := net.Listen("tcp", "127.0.0.1:"+otelPort)
 	if err != nil {
 		logger.Fatal("Failed to listen on OTEL port", zap.String("port", otelPort), zap.Error(err))
 	}
@@ -430,7 +430,7 @@ func main() {
 	}
 
 	otelHTTPReceiver := services.NewOTELHTTPReceiver(logger, broadcaster)
-	otelHTTPLis, err := net.Listen("tcp", "[::]:"+otelHTTPPort)
+	otelHTTPLis, err := net.Listen("tcp", "127.0.0.1:"+otelHTTPPort)
 	if err != nil {
 		logger.Fatal("Failed to listen on OTEL HTTP port", zap.String("port", otelHTTPPort), zap.Error(err))
 	}
