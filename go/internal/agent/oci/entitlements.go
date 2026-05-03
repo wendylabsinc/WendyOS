@@ -93,10 +93,8 @@ func SetDeviceCapabilities(spec *Spec, appName string) {
 		"CAP_SETFCAP",
 		"CAP_SETPCAP",
 		"CAP_NET_BIND_SERVICE",
-		"CAP_SYS_CHROOT",
 		"CAP_KILL",
 		"CAP_AUDIT_WRITE",
-		"CAP_SYS_PTRACE",
 	}
 
 	if spec.Process.Capabilities == nil {

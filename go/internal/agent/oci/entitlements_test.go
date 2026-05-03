@@ -68,6 +68,59 @@ func hasAllowAllDeviceRule(spec *Spec) bool {
 	return false
 }
 
+func TestDefaultSpec_NoDangerousCapabilities(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	if hasCapability(spec, "CAP_SYS_CHROOT") {
+		t.Error("default spec must not grant CAP_SYS_CHROOT (WDY-1099)")
+	}
+	if hasCapability(spec, "CAP_SYS_PTRACE") {
+		t.Error("default spec must not grant CAP_SYS_PTRACE (WDY-1099)")
+	}
+}
+
+func TestDefaultSpec_SeccompProfile(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	if spec.Linux.Seccomp == nil {
+		t.Fatal("default spec must have a seccomp profile (WDY-1099)")
+	}
+	if spec.Linux.Seccomp.DefaultAction != ActAllow {
+		t.Errorf("seccomp DefaultAction = %q, want %q", spec.Linux.Seccomp.DefaultAction, ActAllow)
+	}
+
+	deniedSyscalls := make(map[string]bool)
+	for _, sc := range spec.Linux.Seccomp.Syscalls {
+		if sc.Action == ActErrno {
+			for _, name := range sc.Names {
+				deniedSyscalls[name] = true
+			}
+		}
+	}
+	for _, required := range []string{"ptrace", "unshare"} {
+		if !deniedSyscalls[required] {
+			t.Errorf("seccomp profile must deny syscall %q (WDY-1099)", required)
+		}
+	}
+
+	// clone must be restricted for CLONE_NEWUSER (0x10000000).
+	const cloneNewuser = uint64(0x10000000)
+	for _, sc := range spec.Linux.Seccomp.Syscalls {
+		if sc.Action != ActErrno {
+			continue
+		}
+		for _, name := range sc.Names {
+			if name != "clone" {
+				continue
+			}
+			for _, arg := range sc.Args {
+				if arg.Op == OpMaskedEqual && arg.Value == cloneNewuser {
+					return
+				}
+			}
+		}
+	}
+	t.Error("seccomp profile must deny clone with CLONE_NEWUSER (WDY-1099)")
+}
+
 func TestApplyEntitlements_GPU(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
@@ -454,8 +507,11 @@ func assertCameraEntitlement(t *testing.T, spec *Spec, entType string) {
 	if !slices.Contains(devMount.Options, "noexec") {
 		t.Errorf("%s entitlement /dev mount missing noexec option", entType)
 	}
-	if !hasCapability(spec, "CAP_SYS_PTRACE") {
-		t.Errorf("%s entitlement did not add device capability wiring", entType)
+	if hasCapability(spec, "CAP_SYS_PTRACE") {
+		t.Errorf("%s entitlement must not grant CAP_SYS_PTRACE (WDY-1099)", entType)
+	}
+	if hasCapability(spec, "CAP_SYS_CHROOT") {
+		t.Errorf("%s entitlement must not grant CAP_SYS_CHROOT (WDY-1099)", entType)
 	}
 }
 
