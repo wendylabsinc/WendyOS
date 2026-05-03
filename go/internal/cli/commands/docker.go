@@ -689,9 +689,6 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 	if out, err := bootstrapAfterRestart.CombinedOutput(); err != nil {
 		return fmt.Errorf("waiting for builder after restart: %s: %w", string(out), err)
 	}
-	fmt.Fprintf(os.Stderr, "[buildx] buildkitd ready, sleeping 3s to stabilize proxy\n")
-
-	time.Sleep(3 * time.Second)
 	fmt.Fprintf(os.Stderr, "[buildx] builder ready\n")
 
 	return nil
