@@ -18,9 +18,14 @@ type fakeCloudAssetServer struct {
 	req    *cloudpb.ListAssetsRequest
 }
 
-func (s *fakeCloudAssetServer) ListAssets(_ context.Context, req *cloudpb.ListAssetsRequest) (*cloudpb.ListAssetsResponse, error) {
+func (s *fakeCloudAssetServer) ListAssets(req *cloudpb.ListAssetsRequest, stream grpc.ServerStreamingServer[cloudpb.ListAssetsResponse]) error {
 	s.req = req
-	return &cloudpb.ListAssetsResponse{Assets: s.assets}, nil
+	for _, a := range s.assets {
+		if err := stream.Send(&cloudpb.ListAssetsResponse{Asset: a}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func startFakeCloudAssetServer(t *testing.T, svc *fakeCloudAssetServer) string {

@@ -750,9 +750,10 @@ type ListAssetsRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId  int32                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	IsComputeDevice *bool                  `protobuf:"varint,2,opt,name=is_compute_device,json=isComputeDevice,proto3,oneof" json:"is_compute_device,omitempty"`
-	PageSize        int32                  `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken       string                 `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	Filter          *string                `protobuf:"bytes,5,opt,name=filter,proto3,oneof" json:"filter,omitempty"` // Filter by name, details, asset_type, device_type, or tags
+	Offset          *int32                 `protobuf:"varint,3,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
+	Limit           *int32                 `protobuf:"varint,4,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
+	Filter          *string                `protobuf:"bytes,5,opt,name=filter,proto3,oneof" json:"filter,omitempty"`                            // Filter by name, details, asset_type, device_type, or tags
+	OnlineOnly      *bool                  `protobuf:"varint,6,opt,name=online_only,json=onlineOnly,proto3,oneof" json:"online_only,omitempty"` // If true, only return assets with active broker presence
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -801,18 +802,18 @@ func (x *ListAssetsRequest) GetIsComputeDevice() bool {
 	return false
 }
 
-func (x *ListAssetsRequest) GetPageSize() int32 {
-	if x != nil {
-		return x.PageSize
+func (x *ListAssetsRequest) GetOffset() int32 {
+	if x != nil && x.Offset != nil {
+		return *x.Offset
 	}
 	return 0
 }
 
-func (x *ListAssetsRequest) GetPageToken() string {
-	if x != nil {
-		return x.PageToken
+func (x *ListAssetsRequest) GetLimit() int32 {
+	if x != nil && x.Limit != nil {
+		return *x.Limit
 	}
-	return ""
+	return 0
 }
 
 func (x *ListAssetsRequest) GetFilter() string {
@@ -822,10 +823,17 @@ func (x *ListAssetsRequest) GetFilter() string {
 	return ""
 }
 
+func (x *ListAssetsRequest) GetOnlineOnly() bool {
+	if x != nil && x.OnlineOnly != nil {
+		return *x.OnlineOnly
+	}
+	return false
+}
+
 type ListAssetsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Assets        []*Asset               `protobuf:"bytes,1,rep,name=assets,proto3" json:"assets,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	Asset         *Asset                 `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
+	Total         int32                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -860,25 +868,25 @@ func (*ListAssetsResponse) Descriptor() ([]byte, []int) {
 	return file_cloud_assets_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *ListAssetsResponse) GetAssets() []*Asset {
+func (x *ListAssetsResponse) GetAsset() *Asset {
 	if x != nil {
-		return x.Assets
+		return x.Asset
 	}
 	return nil
 }
 
-func (x *ListAssetsResponse) GetNextPageToken() string {
+func (x *ListAssetsResponse) GetTotal() int32 {
 	if x != nil {
-		return x.NextPageToken
+		return x.Total
 	}
-	return ""
+	return 0
 }
 
 type ListAssetChildrenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ParentAssetId int32                  `protobuf:"varint,1,opt,name=parent_asset_id,json=parentAssetId,proto3" json:"parent_asset_id,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Offset        *int32                 `protobuf:"varint,2,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
+	Limit         *int32                 `protobuf:"varint,3,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -920,24 +928,24 @@ func (x *ListAssetChildrenRequest) GetParentAssetId() int32 {
 	return 0
 }
 
-func (x *ListAssetChildrenRequest) GetPageSize() int32 {
-	if x != nil {
-		return x.PageSize
+func (x *ListAssetChildrenRequest) GetOffset() int32 {
+	if x != nil && x.Offset != nil {
+		return *x.Offset
 	}
 	return 0
 }
 
-func (x *ListAssetChildrenRequest) GetPageToken() string {
-	if x != nil {
-		return x.PageToken
+func (x *ListAssetChildrenRequest) GetLimit() int32 {
+	if x != nil && x.Limit != nil {
+		return *x.Limit
 	}
-	return ""
+	return 0
 }
 
 type ListAssetChildrenResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Assets        []*Asset               `protobuf:"bytes,1,rep,name=assets,proto3" json:"assets,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	Asset         *Asset                 `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
+	Total         int32                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -972,18 +980,18 @@ func (*ListAssetChildrenResponse) Descriptor() ([]byte, []int) {
 	return file_cloud_assets_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ListAssetChildrenResponse) GetAssets() []*Asset {
+func (x *ListAssetChildrenResponse) GetAsset() *Asset {
 	if x != nil {
-		return x.Assets
+		return x.Asset
 	}
 	return nil
 }
 
-func (x *ListAssetChildrenResponse) GetNextPageToken() string {
+func (x *ListAssetChildrenResponse) GetTotal() int32 {
 	if x != nil {
-		return x.NextPageToken
+		return x.Total
 	}
-	return ""
+	return 0
 }
 
 type GetAssetLineageRequest struct {
@@ -1241,27 +1249,32 @@ const file_cloud_assets_proto_rawDesc = "" +
 	"\x12DeleteAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\"/\n" +
 	"\x13DeleteAssetResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xe7\x01\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xae\x02\n" +
 	"\x11ListAssetsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12/\n" +
 	"\x11is_compute_device\x18\x02 \x01(\bH\x00R\x0fisComputeDevice\x88\x01\x01\x12\x1b\n" +
-	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
-	"\n" +
-	"page_token\x18\x04 \x01(\tR\tpageToken\x12\x1b\n" +
-	"\x06filter\x18\x05 \x01(\tH\x01R\x06filter\x88\x01\x01B\x14\n" +
+	"\x06offset\x18\x03 \x01(\x05H\x01R\x06offset\x88\x01\x01\x12\x19\n" +
+	"\x05limit\x18\x04 \x01(\x05H\x02R\x05limit\x88\x01\x01\x12\x1b\n" +
+	"\x06filter\x18\x05 \x01(\tH\x03R\x06filter\x88\x01\x01\x12$\n" +
+	"\vonline_only\x18\x06 \x01(\bH\x04R\n" +
+	"onlineOnly\x88\x01\x01B\x14\n" +
 	"\x12_is_compute_deviceB\t\n" +
-	"\a_filter\"j\n" +
-	"\x12ListAssetsResponse\x12,\n" +
-	"\x06assets\x18\x01 \x03(\v2\x14.wendycloud.v1.AssetR\x06assets\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"~\n" +
+	"\a_offsetB\b\n" +
+	"\x06_limitB\t\n" +
+	"\a_filterB\x0e\n" +
+	"\f_online_only\"V\n" +
+	"\x12ListAssetsResponse\x12*\n" +
+	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x05R\x05total\"\x8f\x01\n" +
 	"\x18ListAssetChildrenRequest\x12&\n" +
 	"\x0fparent_asset_id\x18\x01 \x01(\x05R\rparentAssetId\x12\x1b\n" +
-	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
-	"\n" +
-	"page_token\x18\x03 \x01(\tR\tpageToken\"q\n" +
-	"\x19ListAssetChildrenResponse\x12,\n" +
-	"\x06assets\x18\x01 \x03(\v2\x14.wendycloud.v1.AssetR\x06assets\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"3\n" +
+	"\x06offset\x18\x02 \x01(\x05H\x00R\x06offset\x88\x01\x01\x12\x19\n" +
+	"\x05limit\x18\x03 \x01(\x05H\x01R\x05limit\x88\x01\x01B\t\n" +
+	"\a_offsetB\b\n" +
+	"\x06_limit\"]\n" +
+	"\x19ListAssetChildrenResponse\x12*\n" +
+	"\x05asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\x05asset\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x05R\x05total\"3\n" +
 	"\x16GetAssetLineageRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\x05R\aassetId\"\xb1\x01\n" +
 	"\x17GetAssetLineageResponse\x123\n" +
@@ -1269,15 +1282,15 @@ const file_cloud_assets_proto_rawDesc = "" +
 	"root_asset\x18\x01 \x01(\v2\x14.wendycloud.v1.AssetR\trootAsset\x123\n" +
 	"\n" +
 	"all_assets\x18\x02 \x03(\v2\x14.wendycloud.v1.AssetR\tallAssets\x12,\n" +
-	"\x12requested_asset_id\x18\x03 \x01(\x05R\x10requestedAssetId2\xd3\x04\n" +
+	"\x12requested_asset_id\x18\x03 \x01(\x05R\x10requestedAssetId2\xd7\x04\n" +
 	"\fAssetService\x12F\n" +
 	"\vCreateAsset\x12!.wendycloud.v1.CreateAssetRequest\x1a\x14.wendycloud.v1.Asset\x12@\n" +
 	"\bGetAsset\x12\x1e.wendycloud.v1.GetAssetRequest\x1a\x14.wendycloud.v1.Asset\x12F\n" +
 	"\vUpdateAsset\x12!.wendycloud.v1.UpdateAssetRequest\x1a\x14.wendycloud.v1.Asset\x12T\n" +
-	"\vDeleteAsset\x12!.wendycloud.v1.DeleteAssetRequest\x1a\".wendycloud.v1.DeleteAssetResponse\x12Q\n" +
+	"\vDeleteAsset\x12!.wendycloud.v1.DeleteAssetRequest\x1a\".wendycloud.v1.DeleteAssetResponse\x12S\n" +
 	"\n" +
-	"ListAssets\x12 .wendycloud.v1.ListAssetsRequest\x1a!.wendycloud.v1.ListAssetsResponse\x12f\n" +
-	"\x11ListAssetChildren\x12'.wendycloud.v1.ListAssetChildrenRequest\x1a(.wendycloud.v1.ListAssetChildrenResponse\x12`\n" +
+	"ListAssets\x12 .wendycloud.v1.ListAssetsRequest\x1a!.wendycloud.v1.ListAssetsResponse0\x01\x12h\n" +
+	"\x11ListAssetChildren\x12'.wendycloud.v1.ListAssetChildrenRequest\x1a(.wendycloud.v1.ListAssetChildrenResponse0\x01\x12`\n" +
 	"\x0fGetAssetLineage\x12%.wendycloud.v1.GetAssetLineageRequest\x1a&.wendycloud.v1.GetAssetLineageResponseb\x06proto3"
 
 var (
@@ -1315,8 +1328,8 @@ var file_cloud_assets_proto_depIdxs = []int32{
 	13, // 2: wendycloud.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
 	12, // 3: wendycloud.v1.CreateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
 	12, // 4: wendycloud.v1.UpdateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
-	0,  // 5: wendycloud.v1.ListAssetsResponse.assets:type_name -> wendycloud.v1.Asset
-	0,  // 6: wendycloud.v1.ListAssetChildrenResponse.assets:type_name -> wendycloud.v1.Asset
+	0,  // 5: wendycloud.v1.ListAssetsResponse.asset:type_name -> wendycloud.v1.Asset
+	0,  // 6: wendycloud.v1.ListAssetChildrenResponse.asset:type_name -> wendycloud.v1.Asset
 	0,  // 7: wendycloud.v1.GetAssetLineageResponse.root_asset:type_name -> wendycloud.v1.Asset
 	0,  // 8: wendycloud.v1.GetAssetLineageResponse.all_assets:type_name -> wendycloud.v1.Asset
 	1,  // 9: wendycloud.v1.AssetService.CreateAsset:input_type -> wendycloud.v1.CreateAssetRequest
@@ -1349,6 +1362,7 @@ func file_cloud_assets_proto_init() {
 	file_cloud_assets_proto_msgTypes[1].OneofWrappers = []any{}
 	file_cloud_assets_proto_msgTypes[3].OneofWrappers = []any{}
 	file_cloud_assets_proto_msgTypes[6].OneofWrappers = []any{}
+	file_cloud_assets_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
