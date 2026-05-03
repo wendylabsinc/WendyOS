@@ -60,23 +60,49 @@ jobs:
               raise SystemExit(0)
 
           docs_root = pathlib.Path('docs').resolve()
+          repo_name = os.environ['REPO_NAME']
+          pr_title = os.environ['PR_TITLE']
+          pr_body = os.environ['PR_BODY']
 
-          # Collect markdown files up to a byte budget to avoid unbounded memory use
+          # Files managed by dedicated workflows — never touch these
+          PROTECTED = {'THREAT_MODEL.md', 'threat-model.md'}
+
+          # Score docs by keyword overlap with the diff + PR title so the most
+          # relevant files fill the context budget rather than alphabetical-first ones.
+          def _keywords(text):
+              return set(re.findall(r'[a-zA-Z][a-zA-Z0-9_]{3,}', text.lower()))
+
+          pr_keywords = _keywords(pr_title) | _keywords(diff[:8000])
+
+          def _relevance(doc):
+              path_hits = len(_keywords(doc['path']) & pr_keywords) * 3
+              body_hits = len(_keywords(doc['content'][:1500]) & pr_keywords)
+              return path_hits + body_hits
+
           DOCS_BUDGET = 50000
-          all_docs = []
-          total_bytes = 0
+          candidate_docs = []
           for md in sorted(docs_root.rglob('*.md')):
               rel = md.relative_to(docs_root)
               if any(part.startswith('.') for part in rel.parts):
                   continue
+              if rel.name in PROTECTED:
+                  continue
               content = md.read_text()
               if not content.strip():
                   continue
-              if total_bytes + len(content) > DOCS_BUDGET:
+              candidate_docs.append({'path': str(rel), 'content': content})
+
+          # Sort by relevance descending so the budget favours the most pertinent files
+          candidate_docs.sort(key=_relevance, reverse=True)
+
+          all_docs = []
+          total_bytes = 0
+          for doc in candidate_docs:
+              if total_bytes + len(doc['content']) > DOCS_BUDGET:
                   print(f'Doc budget reached at {total_bytes} chars, skipping remaining files')
                   break
-              all_docs.append({'path': str(rel), 'content': content})
-              total_bytes += len(content)
+              all_docs.append(doc)
+              total_bytes += len(doc['content'])
 
           # Build a compact file-tree limited to 3 levels deep
           MAX_TREE_DEPTH = 3
@@ -103,13 +129,19 @@ jobs:
                       'type': 'text',
                       'text': (
                           'You are a technical writer for WendyOS.\n'
-                          'Given a PR diff and the current documentation, update the docs to accurately reflect every change.\n\n'
+                          'The docs are the single source of truth for all of WendyOS — write them as authoritative facts, never as a record of what a PR did.\n\n'
+                          'Given a PR diff and the current documentation, make the minimal changes needed to keep the docs accurate.\n\n'
                           'Rules:\n'
-                          '- Be thorough: touch every doc page that is affected by the diff.\n'
-                          '- Update existing files in place with accurate, complete content.\n'
-                          '- Create new files (and intermediate directories) for features that are not yet documented.\n'
+                          '- Only touch content that is directly wrong or missing as a result of the diff: '
+                          'added behaviour, removed behaviour, or changed behaviour. Nothing else.\n'
+                          '- Make surgical edits: change the specific sentence, paragraph, or section. '
+                          'Leave everything else exactly as-is.\n'
+                          '- Write in timeless present tense ("X does Y", not "this PR adds X" or "as of version N").\n'
+                          '- Create new files only for features that are completely undocumented.\n'
                           '- Do not invent features absent from the diff.\n'
-                          '- Do not delete existing documentation unless the diff explicitly removes the feature.\n\n'
+                          '- Do not remove documentation unless the diff explicitly deletes the feature.\n'
+                          '- Never create or modify THREAT_MODEL.md or any threat model file — '
+                          'these accumulate history across many PRs and are managed by a dedicated security workflow.\n\n'
                           'Output ONLY files that need to change, using this exact format:\n'
                           '<file path="path/to/file.md">full file content</file>\n\n'
                           'Paths are relative to the docs repo root. '
@@ -122,11 +154,12 @@ jobs:
               messages=[{
                   'role': 'user',
                   'content': (
-                      f'PR #{os.environ["PR_NUMBER"]}: {os.environ["PR_TITLE"]}\n\n'
-                      f'{os.environ["PR_BODY"]}\n\n'
+                      f'Source repo: {repo_name}\n'
+                      f'PR #{os.environ["PR_NUMBER"]}: {pr_title}\n\n'
+                      f'{pr_body}\n\n'
                       f'## Diff\n```diff\n{diff[:30000]}\n```\n\n'
                       f'## Docs file tree\n```\n{file_tree}\n```\n\n'
-                      f'## Current docs\n{docs_context[:50000]}'
+                      f'## Current docs (most relevant first)\n{docs_context[:50000]}'
                   ),
               }],
           )
@@ -145,6 +178,9 @@ jobs:
                   continue
               if fpath.suffix.lower() != '.md':
                   print(f'Skipping non-markdown path: {match.group(1)}')
+                  continue
+              if fpath.name in PROTECTED:
+                  print(f'Skipping protected path: {match.group(1)}')
                   continue
               is_new = not fpath.exists()
               fpath.parent.mkdir(parents=True, exist_ok=True)
