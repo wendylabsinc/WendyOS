@@ -21,6 +21,8 @@ Tests:
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
   python-bluetooth      Python with bluetooth entitlement
+  python-persist        Python with persist entitlement (volume mount R/W)
+  python-i2c            Python with i2c entitlement (device node present)
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
   compose-hello         docker-compose multi-service deployment with build: Dockerfiles
@@ -182,6 +184,8 @@ ALL_TESTS=(
     python-network
     python-gpu
     python-bluetooth
+    python-persist
+    python-i2c
     python-no-network
     python-no-bluetooth
     compose-hello
@@ -246,67 +250,4 @@ for test_name in "${TESTS[@]}"; do
         # on PyYAML (not in stdlib and not installed on most CI hosts).
         service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
 
-        # Pre-cleanup: remove leftover service containers.
-        for svc in $service_names; do
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-
-        # Deploy and run.
-        pushd "$test_dir" > /dev/null
-        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-        popd > /dev/null
-
-        # Post-cleanup.
-        for svc in $service_names; do
-            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-        continue
-    fi
-
-    # ── Standard single-container tests (wendy.json) ───────────────────
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-done
-
-echo ""
-
-# ── Summary ──────────────────────────────────────────────────────────
-
-TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
-echo -e "${BOLD}========================================${RESET}"
-echo -e "${BOLD}Results:${RESET} $TOTAL tests"
-echo -e "  ${GREEN}Passed:  $PASS_COUNT${RESET}"
-echo -e "  ${RED}Failed:  $FAIL_COUNT${RESET}"
-if [[ $SKIP_COUNT -gt 0 ]]; then
-    echo -e "  ${YELLOW}Skipped: $SKIP_COUNT${RESET}"
-fi
-echo -e "${BOLD}========================================${RESET}"
-
-if [[ $FAIL_COUNT -gt 0 ]]; then
-    exit 1
-fi
-exit 0
+        # Pre-cleanup: remove leftover service conta
