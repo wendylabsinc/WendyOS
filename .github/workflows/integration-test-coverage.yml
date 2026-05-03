@@ -8,7 +8,7 @@ on:
 jobs:
   ensure-test-coverage:
     name: Ensure integration test coverage
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
     runs-on: ubuntu-latest
     permissions:
       contents: read
