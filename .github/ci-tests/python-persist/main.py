@@ -2,8 +2,8 @@
 """Persist entitlement test for Wendy CI.
 
 Verifies that the declared /data volume is mounted and writable inside the
-container.  A file written on one run should survive; on a fresh first run the
-directory must at least exist and accept writes.
+container: the mount point must exist and the container must be able to write
+and read back a probe file.
 """
 
 import os
