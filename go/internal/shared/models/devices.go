@@ -59,6 +59,7 @@ type LANDevice struct {
 	InterfaceType   string `json:"interfaceType"`
 	IsWendyDevice   bool   `json:"isWendyDevice"`
 	AgentVersion    string `json:"agentVersion,omitempty"`
+	DeviceType      string `json:"deviceType,omitempty"`
 	OS              string `json:"os,omitempty"`
 	OSVersion       string `json:"osVersion,omitempty"`
 	CPUArchitecture string `json:"cpuArchitecture,omitempty"`

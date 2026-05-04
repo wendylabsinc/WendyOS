@@ -162,7 +162,7 @@ func TestRenderDeviceTable(t *testing.T) {
 	}
 
 	output := renderDeviceTable(collection)
-	for _, want := range []string{"Name", "Type", "Address", "Version", "wendy-alpha", "LAN", "192.168.1.10", "1.2.3"} {
+	for _, want := range []string{"Name", "Device Type", "Address", "Version", "wendy-alpha", "192.168.1.10", "1.2.3"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, output)
 		}

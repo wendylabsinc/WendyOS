@@ -228,6 +228,7 @@ func resolveLANVersions(ctx context.Context, devices []models.LANDevice) []model
 		r := <-ch
 		if r != nil && r.resp != nil {
 			devices[r.index].AgentVersion = r.resp.GetVersion()
+			devices[r.index].DeviceType = r.resp.GetDeviceType()
 			devices[r.index].OS = r.resp.GetOs()
 			devices[r.index].OSVersion = r.resp.GetOsVersion()
 			devices[r.index].CPUArchitecture = r.resp.GetCpuArchitecture()
@@ -244,6 +245,7 @@ func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDev
 		return dev, false, err
 	}
 	dev.AgentVersion = resp.GetVersion()
+	dev.DeviceType = resp.GetDeviceType()
 	dev.OS = resp.GetOs()
 	dev.OSVersion = resp.GetOsVersion()
 	dev.CPUArchitecture = resp.GetCpuArchitecture()
