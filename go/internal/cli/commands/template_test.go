@@ -152,6 +152,82 @@ func TestExtractTemplateArchive_IgnoresOtherLanguages(t *testing.T) {
 	}
 }
 
+func TestTemplateLanguagesForTemplate_ProbesRepoLayout(t *testing.T) {
+	handlerErrs := make(chan string, 2)
+	recordHandlerErr := func(msg string) {
+		select {
+		case handlerErrs <- msg:
+		default:
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			recordHandlerErr("method = " + r.Method + ", want HEAD")
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		switch r.URL.Path {
+		case "/wendylabsinc/templates/main/python/realsense-camera/template.json":
+			w.WriteHeader(http.StatusOK)
+		case "/wendylabsinc/templates/main/swift/realsense-camera/template.json":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			recordHandlerErr("unexpected probe path " + strconv.Quote(r.URL.Path))
+			http.Error(w, "unexpected path", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	origBaseURL := templateRawBaseURL
+	origClient := templateLanguageProbeClient
+	templateRawBaseURL = srv.URL
+	templateLanguageProbeClient = srv.Client()
+	t.Cleanup(func() {
+		templateRawBaseURL = origBaseURL
+		templateLanguageProbeClient = origClient
+	})
+
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{{Name: "realsense-camera"}},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, "realsense-camera", "")
+	if err != nil {
+		t.Fatalf("templateLanguagesForTemplate: %v", err)
+	}
+	select {
+	case msg := <-handlerErrs:
+		t.Fatal(msg)
+	default:
+	}
+	if len(languages) != 1 || languages[0].Key != langPython {
+		t.Fatalf("languages = %+v, want only python", languages)
+	}
+}
+
+func TestTemplateLanguagesForTemplate_UsesMetadataLanguages(t *testing.T) {
+	meta := &repoMeta{
+		Templates: []repoMetaTemplate{{Name: "realsense-camera", Languages: []string{langPython}}},
+		Languages: []repoMetaLanguage{
+			{Key: langPython, Name: "Python"},
+			{Key: langSwift, Name: "Swift"},
+		},
+	}
+
+	languages, err := templateLanguagesForTemplate(context.Background(), meta, "realsense-camera", "")
+	if err != nil {
+		t.Fatalf("templateLanguagesForTemplate: %v", err)
+	}
+	if len(languages) != 1 || languages[0].Key != langPython {
+		t.Fatalf("languages = %+v, want only python", languages)
+	}
+}
+
 func TestDownloadTemplateArchiveFromURL_InvokesProgressCallback(t *testing.T) {
 	archive := buildTestTarball(t, "templates-main", "rust", "simple-api", map[string]string{
 		"template.json": `{"name":"simple-api"}`,
@@ -451,6 +527,91 @@ func TestProgressReader_TracksBytes(t *testing.T) {
 	}
 }
 
+func TestExtractTemplateArchive_ParsesSchema(t *testing.T) {
+	schema := `{
+		"phases":[{
+			"id":"p1","title":"Phase 1",
+			"questions":[
+				{"id":"MODE","label":"Mode?","type":"radio","required":true,
+				 "options":[{"value":"local","label":"Local"},{"value":"cloud","label":"Cloud"}]}
+			]
+		}]
+	}`
+	files := map[string]string{
+		"template.json":        `{"name":"with-schema"}`,
+		"template.schema.json": schema,
+		"main.py":              "print('hi')\n",
+	}
+	archive := buildTestTarball(t, "templates-main", "python", "with-schema", files)
+
+	_, manifest, err := extractTemplateArchive(bytes.NewReader(archive), "python", "with-schema")
+	if err != nil {
+		t.Fatalf("extractTemplateArchive: %v", err)
+	}
+	if manifest.Schema == nil {
+		t.Fatal("expected Schema to be populated from template.schema.json")
+	}
+	if len(manifest.Schema.Phases) != 1 {
+		t.Fatalf("Schema.Phases len = %d, want 1", len(manifest.Schema.Phases))
+	}
+	phase := manifest.Schema.Phases[0]
+	if phase.ID != "p1" {
+		t.Errorf("phase.ID = %q, want %q", phase.ID, "p1")
+	}
+	if len(phase.Questions) != 1 || phase.Questions[0].ID != "MODE" {
+		t.Errorf("phase.Questions = %+v, want one MODE question", phase.Questions)
+	}
+}
+
+func TestExtractTemplateArchive_NoSchema_SchemaIsNil(t *testing.T) {
+	files := map[string]string{
+		"template.json": `{"name":"no-schema"}`,
+		"main.py":       "print('hi')\n",
+	}
+	archive := buildTestTarball(t, "templates-main", "python", "no-schema", files)
+
+	_, manifest, err := extractTemplateArchive(bytes.NewReader(archive), "python", "no-schema")
+	if err != nil {
+		t.Fatalf("extractTemplateArchive: %v", err)
+	}
+	if manifest.Schema != nil {
+		t.Error("expected Schema to be nil when template.schema.json is absent")
+	}
+}
+
+func TestEvaluateSchemaCondition(t *testing.T) {
+	eq := func(s string) *string { return &s }
+
+	vals := map[string]interface{}{
+		"MODE":     "local",
+		"FEATURES": "gps,camera",
+	}
+
+	cases := []struct {
+		name string
+		cond *templateSchemaCondition
+		want bool
+	}{
+		{"nil condition", nil, true},
+		{"equals match", &templateSchemaCondition{QuestionID: "MODE", Equals: eq("local")}, true},
+		{"equals no match", &templateSchemaCondition{QuestionID: "MODE", Equals: eq("cloud")}, false},
+		{"in match", &templateSchemaCondition{QuestionID: "MODE", In: []string{"cloud", "local"}}, true},
+		{"in no match", &templateSchemaCondition{QuestionID: "MODE", In: []string{"cloud"}}, false},
+		{"contains match", &templateSchemaCondition{QuestionID: "FEATURES", Contains: eq("gps")}, true},
+		{"contains no match", &templateSchemaCondition{QuestionID: "FEATURES", Contains: eq("lidar")}, false},
+		{"missing questionId", &templateSchemaCondition{QuestionID: "UNKNOWN", Equals: eq("x")}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evaluateSchemaCondition(tc.cond, vals)
+			if got != tc.want {
+				t.Errorf("evaluateSchemaCondition = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // keys returns the sorted keys of a map[string][]byte — used in test failure
 // messages so the output is deterministic.
 func keys(m map[string][]byte) []string {
@@ -557,5 +718,137 @@ func TestRenderTemplateContentExecuteError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Dockerfile") {
 		t.Errorf("error should mention the file path, got: %v", err)
+	}
+}
+
+// TestCollectSchemaAnswers_NonInteractiveDefaults verifies that in non-interactive
+// mode, schema questions are answered using their declared defaults without
+// launching TUI prompts.
+func TestCollectSchemaAnswers_NonInteractiveDefaults(t *testing.T) {
+	origFn := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = origFn })
+
+	schema := &templateSchema{
+		Phases: []templateSchemaPhase{
+			{
+				Title: "Project Type",
+				Questions: []templateSchemaQuestion{
+					{ID: "project_type", Label: "Project Type", Type: "radio", Default: "cloud", Options: []templateSchemaOption{
+						{Value: "cloud", Label: "Cloud"},
+						{Value: "edge", Label: "Edge"},
+					}},
+					{ID: "name", Label: "Name", Type: "input", Default: "my-app"},
+					{ID: "features", Label: "Features", Type: "checkbox", Default: "a,b", Options: []templateSchemaOption{
+						{Value: "a", Label: "A"},
+						{Value: "b", Label: "B"},
+						{Value: "c", Label: "C"},
+					}},
+				},
+			},
+		},
+	}
+
+	vals := map[string]interface{}{}
+	if err := collectSchemaAnswers(schema, vals); err != nil {
+		t.Fatalf("collectSchemaAnswers: %v", err)
+	}
+
+	if vals["project_type"] != "cloud" {
+		t.Errorf("project_type = %v, want cloud", vals["project_type"])
+	}
+	if vals["name"] != "my-app" {
+		t.Errorf("name = %v, want my-app", vals["name"])
+	}
+	if vals["features"] != "a,b" {
+		t.Errorf("features = %v, want a,b", vals["features"])
+	}
+	if vals["features_a"] != true {
+		t.Errorf("features_a = %v, want true", vals["features_a"])
+	}
+	if vals["features_b"] != true {
+		t.Errorf("features_b = %v, want true", vals["features_b"])
+	}
+	if vals["features_c"] != false {
+		t.Errorf("features_c = %v, want false", vals["features_c"])
+	}
+}
+
+// TestCollectSchemaAnswers_NonInteractiveNoDefaultUsesFirstOption verifies
+// that a radio question with no default falls back to the first option value.
+func TestCollectSchemaAnswers_NonInteractiveNoDefaultUsesFirstOption(t *testing.T) {
+	origFn := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = origFn })
+
+	schema := &templateSchema{
+		Phases: []templateSchemaPhase{
+			{Questions: []templateSchemaQuestion{
+				{ID: "mode", Label: "Mode", Type: "radio", Options: []templateSchemaOption{
+					{Value: "first", Label: "First"},
+					{Value: "second", Label: "Second"},
+				}},
+			}},
+		},
+	}
+
+	vals := map[string]interface{}{}
+	if err := collectSchemaAnswers(schema, vals); err != nil {
+		t.Fatalf("collectSchemaAnswers: %v", err)
+	}
+	if vals["mode"] != "first" {
+		t.Errorf("mode = %v, want first (first option fallback)", vals["mode"])
+	}
+}
+
+// TestCollectSchemaAnswers_SkipsPreAnswered verifies that questions already
+// present in vals (e.g. pre-supplied via --var) are not overwritten.
+func TestCollectSchemaAnswers_SkipsPreAnswered(t *testing.T) {
+	origFn := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = origFn })
+
+	schema := &templateSchema{
+		Phases: []templateSchemaPhase{
+			{Questions: []templateSchemaQuestion{
+				{ID: "project_type", Label: "Project Type", Type: "radio", Default: "cloud", Options: []templateSchemaOption{
+					{Value: "cloud", Label: "Cloud"},
+					{Value: "edge", Label: "Edge"},
+				}},
+			}},
+		},
+	}
+
+	vals := map[string]interface{}{"project_type": "edge"}
+	if err := collectSchemaAnswers(schema, vals); err != nil {
+		t.Fatalf("collectSchemaAnswers: %v", err)
+	}
+	if vals["project_type"] != "edge" {
+		t.Errorf("project_type = %v, want edge (pre-supplied value must not be overwritten)", vals["project_type"])
+	}
+}
+
+// TestCollectSchemaAnswers_RequiredNoDefaultErrors verifies that a required
+// input question with no default returns an error in non-interactive mode.
+func TestCollectSchemaAnswers_RequiredNoDefaultErrors(t *testing.T) {
+	origFn := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = origFn })
+
+	schema := &templateSchema{
+		Phases: []templateSchemaPhase{
+			{Questions: []templateSchemaQuestion{
+				{ID: "api_key", Label: "API Key", Type: "input", Required: true},
+			}},
+		},
+	}
+
+	vals := map[string]interface{}{}
+	err := collectSchemaAnswers(schema, vals)
+	if err == nil {
+		t.Fatal("expected error for required question with no default, got nil")
+	}
+	if !strings.Contains(err.Error(), "--var") {
+		t.Errorf("error = %q, want it to mention --var for supplying the value", err.Error())
 	}
 }

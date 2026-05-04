@@ -23,14 +23,12 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
     private let appsBase: URL
     private let logger = Logger(label: "sh.wendy.agent.filesync")
 
-    /// Default storage root: ~/Library/Application Support/wendy-agent/apps
+    /// Default storage root: ~/Library/Application Support/<bundle-id>/apps
     init(appsBase: URL? = nil) {
         if let base = appsBase {
             self.appsBase = base
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.appsBase =
-                home.appendingPathComponent("Library/Application Support/wendy-agent/apps")
+            self.appsBase = WendyAgentPaths.stateDirectory.appendingPathComponent("apps")
         }
     }
 

@@ -184,46 +184,53 @@ so the device can download it directly.`,
 				return fmt.Errorf("starting OS update: %w", err)
 			}
 
-			spin := tui.NewSpinner("Downloading update...")
-			p := tea.NewProgram(spin)
+			if isInteractiveTerminal() {
+				spin := tui.NewSpinner("Downloading update...")
+				p := tea.NewProgram(spin)
 
-			go func() {
-				for {
-					resp, err := stream.Recv()
-					if err == io.EOF {
-						p.Send(tui.SpinnerDoneMsg{})
-						return
+				go func() {
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							p.Send(tui.SpinnerDoneMsg{})
+							return
+						}
+						if err != nil {
+							p.Send(tui.SpinnerDoneMsg{Err: err})
+							return
+						}
+						if progress := resp.GetProgress(); progress != nil {
+							p.Send(tui.SpinnerUpdateMsg{Label: phaseLabel(progress.GetPhase())})
+						}
+						if completed := resp.GetCompleted(); completed != nil {
+							p.Send(tui.SpinnerDoneMsg{})
+							return
+						}
+						if failed := resp.GetFailed(); failed != nil {
+							p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
+							return
+						}
 					}
-					if err != nil {
-						p.Send(tui.SpinnerDoneMsg{Err: err})
-						return
-					}
+				}()
 
-					if progress := resp.GetProgress(); progress != nil {
-						label := phaseLabel(progress.GetPhase())
-						p.Send(tui.SpinnerUpdateMsg{Label: label})
-					}
-
-					if completed := resp.GetCompleted(); completed != nil {
-						p.Send(tui.SpinnerDoneMsg{})
-						return
-					}
-
-					if failed := resp.GetFailed(); failed != nil {
-						p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
-						return
-					}
+				finalModel, err := p.Run()
+				if err != nil {
+					return fmt.Errorf("TUI error: %w", err)
 				}
-			}()
-
-			finalModel, err := p.Run()
-			if err != nil {
-				return fmt.Errorf("TUI error: %w", err)
-			}
-
-			_, spinErr := finalModel.(tui.SpinnerModel).Result()
-			if spinErr != nil {
-				return spinErr
+				spinModel, ok := finalModel.(tui.SpinnerModel)
+				if !ok {
+					return fmt.Errorf("TUI error: unexpected model type %T", finalModel)
+				}
+				if !spinModel.Done() {
+					return ErrUserCancelled
+				}
+				if _, spinErr := spinModel.Result(); spinErr != nil {
+					return spinErr
+				}
+			} else {
+				if err := drainOSUpdateStream(stream); err != nil {
+					return err
+				}
 			}
 
 			deviceHost := conn.Host
@@ -356,45 +363,57 @@ func pickOTAArtifactURL() (string, error) {
 	return getOTAUpdateURL(dev.Manifest, ver)
 }
 
+// pollDeviceOnline blocks until the device at addr responds to
+// GetAgentVersion or the context deadline is reached.
+func pollDeviceOnline(ctx context.Context, addr string) error {
+	// Give the device a few seconds to begin rebooting before polling.
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timed out waiting for device to come back online")
+	case <-time.After(5 * time.Second):
+	}
+	for {
+		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+		conn, err := connectWithAutoTLS(probeCtx, addr)
+		probeCancel()
+		if err == nil {
+			probeCtx2, probeCancel2 := context.WithTimeout(ctx, 3*time.Second)
+			_, probeErr := conn.AgentService.GetAgentVersion(probeCtx2, &agentpb.GetAgentVersionRequest{})
+			probeCancel2()
+			conn.Close()
+			if probeErr == nil {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for device to come back online")
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
 // waitForDeviceOnline polls the device until it responds to GetAgentVersion,
-// or until a 5-minute timeout expires. Shows a spinner while waiting.
+// or until a 5-minute timeout expires. Shows a spinner when running
+// interactively; polls silently otherwise.
 func waitForDeviceOnline(ctx context.Context, host string) error {
 	addr := hostPort(host, defaultAgentPort)
-
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	if !isInteractiveTerminal() {
+		return pollDeviceOnline(ctx, addr)
+	}
+
 	spin := tui.NewSpinner("Waiting for device to come back online...")
 	p := tea.NewProgram(spin)
-
 	go func() {
-		// Give the device a few seconds to begin rebooting before polling.
-		time.Sleep(5 * time.Second)
-
-		for {
-			probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
-			conn, err := connectWithAutoTLS(probeCtx, addr)
-			probeCancel()
-			if err == nil {
-				probeCtx2, probeCancel2 := context.WithTimeout(ctx, 3*time.Second)
-				_, probeErr := conn.AgentService.GetAgentVersion(probeCtx2, &agentpb.GetAgentVersionRequest{})
-				probeCancel2()
-				conn.Close()
-				if probeErr == nil {
-					p.Send(tui.SpinnerDoneMsg{})
-					return
-				}
-			}
-
-			select {
-			case <-ctx.Done():
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("timed out waiting for device to come back online")})
-				return
-			case <-time.After(3 * time.Second):
-			}
+		if err := pollDeviceOnline(ctx, addr); err != nil {
+			p.Send(tui.SpinnerDoneMsg{Err: err})
+		} else {
+			p.Send(tui.SpinnerDoneMsg{})
 		}
 	}()
-
 	finalModel, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
@@ -478,6 +497,33 @@ func ipForURL(ip string) string {
 		return ip[:i] + "%25" + ip[i+1:]
 	}
 	return ip
+}
+
+// drainOSUpdateStream reads all messages from an UpdateOS stream without a
+// TUI, printing phase label changes to stderr. Used when stdout is not a TTY.
+func drainOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
+	var lastLabel string
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if progress := resp.GetProgress(); progress != nil {
+			if label := phaseLabel(progress.GetPhase()); label != lastLabel {
+				fmt.Fprintln(os.Stderr, label)
+				lastLabel = label
+			}
+		}
+		if resp.GetCompleted() != nil {
+			return nil
+		}
+		if failed := resp.GetFailed(); failed != nil {
+			return fmt.Errorf("update failed: %s", failed.GetErrorMessage())
+		}
+	}
 }
 
 // phaseLabel converts a Mender phase string to a user-friendly spinner label.

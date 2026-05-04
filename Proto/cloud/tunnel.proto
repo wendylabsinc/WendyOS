@@ -1,0 +1,55 @@
+// TunnelBrokerService brokers mTLS-authenticated TCP tunnels between wendy-agent
+// (device) and wendy CLI through the cloud relay.
+//
+// Authentication: all three RPCs require a valid mTLS client certificate.
+//   - Agent RPCs (RegisterPresence, AgentTunnel): asset certificate (org_id + asset_id in SAN)
+//   - CLI RPC (ClientTunnel): user certificate (org_id + user_id in SAN)
+
+syntax = "proto3";
+package wendycloud.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service TunnelBrokerService {
+  // Agent: persistent control stream. Agent sends heartbeats; broker sends dial requests.
+  rpc RegisterPresence(stream AgentHeartbeat) returns (stream DialRequest);
+
+  // Agent: open a data stream for one tunnel session. session_id in first message; payload empty.
+  rpc AgentTunnel(stream TunnelData) returns (stream TunnelData);
+
+  // CLI: open a tunnel to a device. First message must be ClientTunnelOpen, then TunnelData.
+  rpc ClientTunnel(stream ClientTunnelMessage) returns (stream TunnelData);
+}
+
+message AgentHeartbeat {
+  // Informational; broker records its own server-side heartbeat time via NOW().
+  // Clients may omit this field; it is available for client-side diagnostics only.
+  google.protobuf.Timestamp timestamp = 1;
+}
+
+message DialRequest {
+  string session_id = 1;
+  string host       = 2;
+  uint32 port       = 3;
+}
+
+message TunnelData {
+  // session_id is required only in AgentTunnel's first (join) message so the broker
+  // can match the stream to a pending session. In all other contexts it is ignored.
+  string session_id = 1;
+  bytes  payload    = 2;
+  bool   half_close = 3;
+}
+
+message ClientTunnelOpen {
+  int32  asset_id = 1;
+  string host     = 2;
+  uint32 port     = 3;
+}
+
+message ClientTunnelMessage {
+  oneof content {
+    ClientTunnelOpen open = 1;
+    TunnelData       data = 2;
+  }
+}

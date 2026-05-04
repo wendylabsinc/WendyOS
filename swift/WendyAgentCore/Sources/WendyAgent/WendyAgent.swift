@@ -9,6 +9,19 @@ import WendyAgentGRPC
 public final class WendyAgent {
     private typealias PosixGRPCServer = GRPCServer<HTTP2ServerTransport.Posix>
 
+    /// The Wendy Agent version from the main bundle Info.plist.
+    public nonisolated static let version: String = {
+        guard
+            let version = Bundle.main.object(forInfoDictionaryKey: "WLWendyAgentVersion")
+                as? String,
+            !version.isEmpty
+        else {
+            fatalError("Missing WLWendyAgentVersion in the main bundle Info.plist")
+        }
+
+        return version
+    }()
+
     public let configuration: WendyAgentConfiguration
     public private(set) var status: WendyAgentStatus = .idle
     public private(set) var apps: [WendyAppInfo] = []
@@ -38,10 +51,10 @@ public final class WendyAgent {
         let broadcaster = TelemetryBroadcaster()
 
         do {
-            let dockerAvailable = await self.prepareDockerIfNeeded()
+            let dockerAvailability = await self.prepareDockerIfNeeded()
 
             try await self.startMainServer(
-                dockerAvailable: dockerAvailable,
+                dockerAvailability: dockerAvailability,
                 broadcaster: broadcaster
             )
             try await self.startOTelServer(broadcaster: broadcaster)
@@ -156,31 +169,25 @@ public final class WendyAgent {
     )
     private var appsObservationTasks:
         [WendyObservationRegistry<[WendyAppInfo]>.ObservationID: Task<Void, Never>] = [:]
+    private static let linuxContainersUnsupportedMessage =
+        "Linux containers aren't supported on Macs yet. Support is planned for a future release."
 
-    private func prepareDockerIfNeeded() async -> Bool {
-        let docker = DockerCLI()
-        let dockerAvailable = await docker.checkAvailable()
-        if dockerAvailable {
-            do {
-                try await docker.ensureRegistry()
-            } catch {
-                self.logger.warning(
-                    "Failed to start Docker registry: \(String(describing: error)). Linux container support disabled."
-                )
-            }
-        } else {
-            self.logger.info("Docker not available, Linux container support disabled")
-        }
-
-        return dockerAvailable
+    private func prepareDockerIfNeeded() async -> DockerCLI.AvailabilityCheckResult {
+        self.logger.info(
+            "Linux container support disabled on macOS",
+            metadata: ["reason": "\(Self.linuxContainersUnsupportedMessage)"]
+        )
+        return DockerCLI.AvailabilityCheckResult(
+            isAvailable: false,
+            failureMessage: Self.linuxContainersUnsupportedMessage
+        )
     }
 
     private func startMainServer(
-        dockerAvailable: Bool,
+        dockerAvailability: DockerCLI.AvailabilityCheckResult,
         broadcaster: TelemetryBroadcaster
     ) async throws {
-        let stateDirectory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/wendy-agent")
+        let stateDirectory = WendyAgentPaths.stateDirectory
         let appsBase = stateDirectory.appendingPathComponent("apps")
 
         let containerService = ContainerService(
@@ -191,7 +198,8 @@ public final class WendyAgent {
                 : self.configuration.sandboxProfile,
             stateDirectory: stateDirectory,
             appsBase: appsBase,
-            dockerAvailable: dockerAvailable,
+            dockerAvailable: dockerAvailability.isAvailable,
+            dockerUnavailableMessage: dockerAvailability.failureMessage,
             onAppsChanged: { [weak self] apps in
                 await self?.updateApps(apps)
             }
@@ -211,7 +219,12 @@ public final class WendyAgent {
         let server = PosixGRPCServer(
             transport: HTTP2ServerTransport.Posix(
                 address: .ipv6(host: "::", port: self.configuration.port),
-                transportSecurity: .plaintext
+                transportSecurity: .plaintext,
+                config: .defaults {
+                    $0.http2.maxFrameSize = 256 * 1024
+                    $0.http2.targetWindowSize = 8 * 1024 * 1024
+                    $0.rpc.maxRequestPayloadSize = 16 * 1024 * 1024
+                }
             ),
             services: services
         )

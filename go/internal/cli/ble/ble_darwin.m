@@ -46,6 +46,16 @@
 @property (strong) dispatch_semaphore_t l2capRecvSema;
 @property (strong) NSLock *l2capRecvLock;
 
+// L2CAP I/O thread — runs a real NSRunLoop so NSStreamDelegate events are delivered.
+// Required in CLI binaries where the main run loop is never started.
+@property (strong) NSThread *l2capIOThread;
+@property BOOL l2capIORunning;
+@property BOOL l2capOutputReady; // YES once outputStream fires NSStreamEventHasSpaceAvailable
+
+// Write dispatch: wendy_ble_l2cap_send uses performSelector:onThread:waitUntilDone:YES
+// so writes always happen on the I/O thread that owns the stream's run loop.
+@property NSInteger l2capWriteResult;
+
 // Target peripheral UUID for scanning
 @property (strong) NSString *targetUUID;
 
@@ -76,7 +86,23 @@
 
 - (void)centralManagerDidUpdateState:(CBCentralManager *)central {
     if (central.state == CBManagerStatePoweredOn && self.targetUUID) {
-        // Scan for the specific peripheral
+        // Check the OS peripheral cache first. CoreBluetooth shares peripheral
+        // knowledge across all CBCentralManager instances in the same process, so
+        // the peripheral seen during discovery is already known here — no re-scan
+        // needed. This avoids a 10-second timeout when the device stops advertising
+        // between discovery and the connect call.
+        NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:self.targetUUID];
+        if (uuid) {
+            NSArray<CBPeripheral *> *known = [central retrievePeripheralsWithIdentifiers:@[uuid]];
+            if (known.count > 0) {
+                CBPeripheral *p = known[0];
+                self.peripheral = p;
+                p.delegate = self;
+                [central connectPeripheral:p options:nil];
+                return;
+            }
+        }
+        // Not in cache — fall back to scanning.
         [central scanForPeripheralsWithServices:nil options:@{
             CBCentralManagerScanOptionAllowDuplicatesKey: @NO
         }];
@@ -112,6 +138,7 @@ didFailToConnectPeripheral:(CBPeripheral *)peripheral
 didDisconnectPeripheral:(CBPeripheral *)peripheral
                  error:(NSError *)error {
     self.connected = NO;
+    self.l2capIORunning = NO; // wake the I/O thread so it exits
     // Signal any blocked operations
     dispatch_semaphore_signal(self.readSema);
     dispatch_semaphore_signal(self.writeSema);
@@ -201,21 +228,79 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
              error:(NSError *)error {
     if (error || !channel) {
         self.l2capError = YES;
-    } else {
-        self.l2capChannel = channel;
-        channel.inputStream.delegate = (id<NSStreamDelegate>)self;
-        channel.outputStream.delegate = (id<NSStreamDelegate>)self;
-        [channel.inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-        [channel.outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-        [channel.inputStream open];
-        [channel.outputStream open];
+        dispatch_semaphore_signal(self.l2capSema);
+        return;
     }
-    dispatch_semaphore_signal(self.l2capSema);
+    self.l2capChannel = channel;
+    // Both streams are scheduled and opened on the I/O thread's run loop.
+    // CBL2CAP output stream writes MUST come from the thread that owns the run
+    // loop — writing from a foreign thread (e.g. the Go TLS goroutine) returns
+    // -1 even when streamStatus is NSStreamStatusOpen.
+    channel.inputStream.delegate = (id<NSStreamDelegate>)self;
+    channel.outputStream.delegate = (id<NSStreamDelegate>)self;
+    self.l2capIORunning = YES;
+    self.l2capIOThread = [[NSThread alloc] initWithTarget:self
+                                                 selector:@selector(l2capIOThreadMain)
+                                                   object:nil];
+    [self.l2capIOThread start];
 }
 
-// ── NSStreamDelegate (L2CAP streams) ────────────────────────────────
+// Runs on the dedicated L2CAP I/O thread.
+// Schedules and opens BOTH streams so all NSStreamDelegate events are delivered
+// here. Waits for NSStreamEventHasSpaceAvailable on the output stream before
+// signalling l2capSema — that event confirms the BLE stack is ready for writes.
+// All subsequent writes from wendy_ble_l2cap_send are dispatched here via
+// performSelector:onThread:withObject:waitUntilDone:YES.
+- (void)l2capIOThreadMain {
+    @autoreleasepool {
+        NSRunLoop *rl = [NSRunLoop currentRunLoop];
+
+        [self.l2capChannel.inputStream scheduleInRunLoop:rl forMode:NSDefaultRunLoopMode];
+        [self.l2capChannel.outputStream scheduleInRunLoop:rl forMode:NSDefaultRunLoopMode];
+        [self.l2capChannel.inputStream open];
+        [self.l2capChannel.outputStream open];
+
+        // Wait until the output stream fires NSStreamEventHasSpaceAvailable,
+        // which is the BLE stack's confirmation that writes are accepted.
+        NSDate *readyDeadline = [NSDate dateWithTimeIntervalSinceNow:5.0];
+        while (!self.l2capOutputReady && !self.l2capError) {
+            if ([[NSDate date] compare:readyDeadline] != NSOrderedAscending) {
+                self.l2capError = YES;
+                break;
+            }
+            [rl runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        }
+        dispatch_semaphore_signal(self.l2capSema);
+
+        while (self.l2capIORunning) {
+            [rl runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        }
+        [self.l2capChannel.inputStream close];
+        [self.l2capChannel.inputStream removeFromRunLoop:rl forMode:NSDefaultRunLoopMode];
+        [self.l2capChannel.outputStream close];
+        [self.l2capChannel.outputStream removeFromRunLoop:rl forMode:NSDefaultRunLoopMode];
+    }
+}
+
+// Performs a single write on the I/O thread, called via performSelector:onThread:waitUntilDone:YES.
+- (void)performL2CAPWrite:(NSData *)data {
+    self.l2capWriteResult = [self.l2capChannel.outputStream write:data.bytes maxLength:data.length];
+}
+
+// ── NSStreamDelegate (both L2CAP streams) ───────────────────────────
 
 - (void)stream:(NSStream *)aStream handleEvent:(NSStreamEvent)eventCode {
+    if (aStream == self.l2capChannel.outputStream) {
+        if (eventCode == NSStreamEventHasSpaceAvailable) {
+            self.l2capOutputReady = YES;
+        } else if (eventCode == NSStreamEventErrorOccurred || eventCode == NSStreamEventEndEncountered) {
+            self.l2capError = YES;
+            self.l2capIORunning = NO;
+            dispatch_semaphore_signal(self.l2capRecvSema);
+        }
+        return;
+    }
+
     if (eventCode == NSStreamEventHasBytesAvailable && aStream == self.l2capChannel.inputStream) {
         uint8_t buf[4096];
         NSInteger bytesRead = [(NSInputStream *)aStream read:buf maxLength:sizeof(buf)];
@@ -226,6 +311,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
             dispatch_semaphore_signal(self.l2capRecvSema);
         }
     } else if (eventCode == NSStreamEventEndEncountered || eventCode == NSStreamEventErrorOccurred) {
+        self.l2capIORunning = NO;
         dispatch_semaphore_signal(self.l2capRecvSema);
     }
 }
@@ -443,21 +529,23 @@ WendyBLEError wendy_ble_open_l2cap(WendyBLEConn handle, uint16_t psm, int timeou
     if (result != 0) return WENDY_BLE_ERR_TIMEOUT;
     if (conn.l2capError || !conn.l2capChannel) return WENDY_BLE_ERR_L2CAP_FAILED;
 
-    // Schedule the L2CAP streams on the BLE queue's run loop
-    dispatch_sync(conn.bleQueue, ^{
-        [conn.l2capChannel.inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-        [conn.l2capChannel.outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
-    });
-
     return WENDY_BLE_OK;
 }
 
 WendyBLEError wendy_ble_l2cap_send(WendyBLEConn handle, const uint8_t *data, int length) {
     WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
-    if (!conn.connected || !conn.l2capChannel) return WENDY_BLE_ERR_DISCONNECTED;
+    if (!conn.connected || !conn.l2capChannel || !conn.l2capIORunning) return WENDY_BLE_ERR_DISCONNECTED;
 
-    NSInteger written = [conn.l2capChannel.outputStream write:data maxLength:length];
-    if (written < 0) return WENDY_BLE_ERR_WRITE_FAILED;
+    // Dispatch the write to the I/O thread that owns the output stream's run loop.
+    // CBL2CAP NSOutputStream writes must come from the owning run loop thread;
+    // calling write:maxLength: from any other thread returns -1.
+    NSData *writeData = [NSData dataWithBytes:data length:length];
+    [conn performSelector:@selector(performL2CAPWrite:)
+                 onThread:conn.l2capIOThread
+               withObject:writeData
+            waitUntilDone:YES];
+
+    if (conn.l2capWriteResult < 0) return WENDY_BLE_ERR_WRITE_FAILED;
     return WENDY_BLE_OK;
 }
 
@@ -523,10 +611,8 @@ void wendy_ble_disconnect(WendyBLEConn handle) {
     if (!handle) return;
     WendyBLEConnection *conn = (__bridge_transfer WendyBLEConnection *)handle;
 
-    if (conn.l2capChannel) {
-        [conn.l2capChannel.inputStream close];
-        [conn.l2capChannel.outputStream close];
-    }
+    conn.l2capIORunning = NO; // stop the I/O thread's run loop
+    // Both streams are closed and unscheduled by the I/O thread when l2capIORunning goes NO.
 
     if (conn.peripheral && conn.connected) {
         [conn.centralManager cancelPeripheralConnection:conn.peripheral];

@@ -68,12 +68,12 @@ func newBuildCmd() *cobra.Command {
 					}
 				}
 
-				fmt.Printf("Building with %s provider...\n", target.Provider.DisplayName())
+				cliLogln("Building with %s provider...", target.Provider.DisplayName())
 				app, err := target.Provider.Build(cmd.Context(), *target.External, cwd, product, false)
 				if err != nil {
 					return fmt.Errorf("provider build: %w", err)
 				}
-				fmt.Printf("Build completed successfully (%s).\n", app.ProviderKey)
+				cliSuccess("Build completed successfully (%s).", app.ProviderKey)
 				return nil
 			}
 
@@ -275,7 +275,7 @@ func buildOptionLabels(options []BuildOption) []string {
 
 func normalizeBuildType(buildType string) string {
 	switch strings.ToLower(strings.TrimSpace(buildType)) {
-	case "docker", "swift", "python":
+	case "docker", "swift", "python", "compose":
 		return strings.ToLower(strings.TrimSpace(buildType))
 	default:
 		return ""
@@ -315,6 +315,8 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	imageName := strings.ToLower(appID) + ":latest"
 
 	switch option.Type {
+	case "compose":
+		return buildComposeProject(dir)
 	case "docker":
 		return buildDockerProject(dir, imageName, platform, option.File)
 	case "python":
@@ -324,12 +326,25 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	case "xcode":
 		return buildXcodeProject(ctx, dir, option.File)
 	default:
-		return fmt.Errorf("unknown project type; add a Dockerfile, Package.swift, or requirements.txt")
+		return fmt.Errorf("unknown project type; add a Dockerfile, a Compose file (docker-compose.yml, docker-compose.yaml, compose.yml, or compose.yaml), Package.swift, or requirements.txt")
 	}
 }
 
+func buildComposeProject(dir string) error {
+	cliLogln("Building Compose services...")
+	cmd := exec.Command("docker", "compose", "build")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker compose build: %w", err)
+	}
+	cliSuccess("Build completed successfully.")
+	return nil
+}
+
 func buildDockerProject(dir, imageName, platform, dockerfile string) error {
-	fmt.Printf("Building Docker image %s for %s...\n", imageName, platform)
+	cliLogln("Building Docker image %s for %s...", imageName, platform)
 
 	cmd := exec.Command("docker", "buildx", "build",
 		"--platform", platform,
@@ -345,7 +360,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		if err := cmd.Run(); err != nil {
 			return err
 		}
-		fmt.Println("Build completed successfully.")
+		cliSuccess("Build completed successfully.")
 		return nil
 	}
 
@@ -370,7 +385,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		return buildErr
 	}
 
-	fmt.Println("Build completed successfully.")
+	cliSuccess("Build completed successfully.")
 	return nil
 }
 
@@ -378,12 +393,12 @@ func buildPythonProject(dir, imageName, platform string) error {
 	dockerfilePath := filepath.Join(dir, "Dockerfile")
 	generatedDockerfile := false
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
-		fmt.Println("No Dockerfile found. Generating one for Python project...")
+		cliLogln("No Dockerfile found. Generating one for Python project...")
 		if _, genErr := generatePythonDockerfile(dir); genErr != nil {
 			return fmt.Errorf("generating Dockerfile: %w", genErr)
 		}
 		generatedDockerfile = true
-		fmt.Println("Generated Dockerfile.")
+		cliSuccess("Generated Dockerfile.")
 	}
 
 	err := buildDockerProject(dir, imageName, platform, "Dockerfile")
@@ -409,7 +424,7 @@ func buildXcodeProject(ctx context.Context, dir, xcodeproj string) error {
 		}
 	}
 
-	fmt.Printf("Building Xcode project %s (scheme: %s)...\n", xcodeproj, scheme)
+	cliLogln("Building Xcode project %s (scheme: %s)...", xcodeproj, scheme)
 	if err := runXcodebuild(ctx, dir,
 		"-project", xcodeproj,
 		"-scheme", scheme,
@@ -418,12 +433,12 @@ func buildXcodeProject(ctx context.Context, dir, xcodeproj string) error {
 	); err != nil {
 		return err
 	}
-	fmt.Println("Build completed successfully.")
+	cliSuccess("Build completed successfully.")
 	return nil
 }
 
 func buildSwiftProject(dir, appID, platform string) error {
-	fmt.Println("Building Swift project locally...")
+	cliLogln("Building Swift project locally...")
 
 	cmd := exec.Command("swift", "build")
 	cmd.Dir = dir
@@ -434,7 +449,7 @@ func buildSwiftProject(dir, appID, platform string) error {
 		if err := cmd.Run(); err != nil {
 			return err
 		}
-		fmt.Println("Build completed successfully.")
+		cliSuccess("Build completed successfully.")
 		return nil
 	}
 
@@ -459,6 +474,6 @@ func buildSwiftProject(dir, appID, platform string) error {
 		return buildErr
 	}
 
-	fmt.Println("Build completed successfully.")
+	cliSuccess("Build completed successfully.")
 	return nil
 }

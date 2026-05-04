@@ -70,8 +70,13 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 
 	// Read hardware platform identifier if available.
 	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		v := strings.TrimSpace(string(data))
-		resp.DeviceType = &v
+		deviceType, storageMedium := parseDeviceType(string(data))
+		if deviceType != "" {
+			resp.DeviceType = &deviceType
+		}
+		if storageMedium != "" {
+			resp.StorageMedium = &storageMedium
+		}
 	}
 
 	// Detect GPU presence and details.
@@ -252,6 +257,31 @@ func detectFeatureset() []string {
 	return features
 }
 
+// parseDeviceType parses /etc/wendyos/device-type, which may be either a plain
+// string (legacy) or a KEY=VALUE file (new format).
+// Returns (deviceType, storageMedium); either may be empty.
+// MACHINE and BOARD are treated as the same thing (board identifier).
+func parseDeviceType(content string) (deviceType, storageMedium string) {
+	content = strings.TrimSpace(content)
+	if !strings.Contains(content, "=") {
+		return content, ""
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "MACHINE", "BOARD":
+			deviceType = strings.TrimSpace(v)
+		case "STORAGE":
+			storageMedium = strings.TrimSpace(v)
+		}
+	}
+	return deviceType, storageMedium
+}
+
 // RunContainer is deprecated. Clients should use WendyContainerService.RunContainer
 // or WendyContainerService.CreateContainer + StartContainer instead.
 func (s *AgentService) RunContainer(stream grpc.BidiStreamingServer[agentpb.RunContainerRequest, agentpb.RunContainerResponse]) error {
@@ -394,11 +424,59 @@ func (s *AgentService) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectTo
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.ConnectToWiFi(ctx, req.GetSsid(), req.GetPassword()); err != nil {
+	if err := s.networkManager.ConnectToWiFi(ctx, req); err != nil {
 		errMsg := err.Error()
 		return &agentpb.ConnectToWiFiResponse{Success: false, ErrorMessage: &errMsg}, nil
 	}
 	return &agentpb.ConnectToWiFiResponse{Success: true}, nil
+}
+
+// ListKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ListKnownWiFiNetworks(ctx context.Context, _ *agentpb.ListKnownWiFiNetworksRequest) (*agentpb.ListKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	known, err := s.networkManager.ListKnownWiFiNetworks(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list known WiFi networks: %v", err)
+	}
+	return &agentpb.ListKnownWiFiNetworksResponse{Networks: known}, nil
+}
+
+// SetWiFiNetworkPriority delegates to the NetworkManager.
+func (s *AgentService) SetWiFiNetworkPriority(ctx context.Context, req *agentpb.SetWiFiNetworkPriorityRequest) (*agentpb.SetWiFiNetworkPriorityResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.SetWiFiNetworkPriority(ctx, req.GetSsid(), req.GetPriority()); err != nil {
+		msg := err.Error()
+		return &agentpb.SetWiFiNetworkPriorityResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.SetWiFiNetworkPriorityResponse{Success: true}, nil
+}
+
+// ReorderKnownWiFiNetworks delegates to the NetworkManager.
+func (s *AgentService) ReorderKnownWiFiNetworks(ctx context.Context, req *agentpb.ReorderKnownWiFiNetworksRequest) (*agentpb.ReorderKnownWiFiNetworksResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ReorderKnownWiFiNetworks(ctx, req.GetOrderSsids()); err != nil {
+		msg := err.Error()
+		return &agentpb.ReorderKnownWiFiNetworksResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ReorderKnownWiFiNetworksResponse{Success: true}, nil
+}
+
+// ForgetWiFiNetwork delegates to the NetworkManager.
+func (s *AgentService) ForgetWiFiNetwork(ctx context.Context, req *agentpb.ForgetWiFiNetworkRequest) (*agentpb.ForgetWiFiNetworkResponse, error) {
+	if s.networkManager == nil {
+		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
+	}
+	if err := s.networkManager.ForgetWiFiNetwork(ctx, req.GetSsid()); err != nil {
+		msg := err.Error()
+		return &agentpb.ForgetWiFiNetworkResponse{Success: false, ErrorMessage: &msg}, nil
+	}
+	return &agentpb.ForgetWiFiNetworkResponse{Success: true}, nil
 }
 
 // GetWiFiStatus delegates to the NetworkManager.

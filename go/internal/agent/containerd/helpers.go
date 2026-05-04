@@ -9,14 +9,38 @@ import (
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
+
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
+
+// normalizeImageName canonicalises a Docker short reference (e.g.
+// "python:3.11-slim", "nginx") to a fully-qualified form
+// ("docker.io/library/python:3.11-slim") that containerd's reference parser
+// accepts. References that already include a registry, tag, or digest pass
+// through unchanged. When the input cannot be parsed as a valid Docker
+// reference, the original string is returned so existing error paths still
+// surface a meaningful diagnostic.
+func normalizeImageName(image string) string {
+	trimmed := strings.TrimSpace(image)
+	if trimmed == "" {
+		return image
+	}
+	named, err := reference.ParseNormalizedNamed(trimmed)
+	if err != nil {
+		return image
+	}
+	return reference.TagNameOnly(named).String()
+}
 
 // labelKeyAppVersion is the containerd label key that marks Wendy-managed containers.
 const labelKeyAppVersion = "sh.wendy/app.version"
 
 // labelKeyRestartPolicy stores the restart policy (e.g. "on-failure:5").
 const labelKeyRestartPolicy = "sh.wendy/restart.policy"
+
+// labelKeyMCPPort stores the MCP server port for containers with an mcp entitlement.
+const labelKeyMCPPort = "sh.wendy/mcp.port"
 
 // labelKeyGCRoot prevents garbage collection of content blobs.
 const labelKeyGCRoot = "containerd.io/gc.root"
@@ -52,9 +76,11 @@ func parseRestartPolicyLabel(label string) (string, int) {
 	return policy, maxRetries
 }
 
-// shouldRefreshImageFromRegistry reports whether CreateContainer should refresh
-// the image from the device-local registry before using any cached manifest.
-func shouldRefreshImageFromRegistry(imageName string) bool {
+// isLocalRegistryImage reports whether the image reference points at the
+// device-local HTTP registry. Such pulls must use a PlainHTTP resolver, but
+// they should be a fallback only — the registry shares containerd's content
+// store, so a successful GetImage avoids round-tripping bytes over loopback.
+func isLocalRegistryImage(imageName string) bool {
 	return strings.HasPrefix(imageName, "localhost:5000/") ||
 		strings.HasPrefix(imageName, "127.0.0.1:5000/") ||
 		strings.HasPrefix(imageName, "[::1]:5000/") ||
@@ -71,7 +97,7 @@ func gcTimestamp() string {
 
 // wendyLabels builds the standard set of containerd labels for a Wendy-managed
 // container. These labels are used to identify, filter, and manage containers.
-func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy) map[string]string {
+func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, mcpPort uint32) map[string]string {
 	labels := map[string]string{
 		labelKeyAppVersion: version,
 	}
@@ -81,6 +107,10 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy) 
 		if policyStr != "" {
 			labels[labelKeyRestartPolicy] = policyStr
 		}
+	}
+
+	if mcpPort > 0 {
+		labels[labelKeyMCPPort] = strconv.FormatUint(uint64(mcpPort), 10)
 	}
 
 	return labels

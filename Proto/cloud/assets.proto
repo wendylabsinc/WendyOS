@@ -10,8 +10,8 @@ service AssetService {
   rpc GetAsset(GetAssetRequest) returns (Asset);
   rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
   rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);
-  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
-  rpc ListAssetChildren(ListAssetChildrenRequest) returns (ListAssetChildrenResponse);
+  rpc ListAssets(ListAssetsRequest) returns (stream ListAssetsResponse);
+  rpc ListAssetChildren(ListAssetChildrenRequest) returns (stream ListAssetChildrenResponse);
   rpc GetAssetLineage(GetAssetLineageRequest) returns (GetAssetLineageResponse);
 }
 
@@ -108,25 +108,26 @@ message DeleteAssetResponse {
 message ListAssetsRequest {
   int32 organization_id = 1;
   optional bool is_compute_device = 2;
-  int32 page_size = 3;
-  string page_token = 4;
+  optional int32 offset = 3;
+  optional int32 limit = 4;
   optional string filter = 5;  // Filter by name, details, asset_type, device_type, or tags
+  optional bool online_only = 6;  // If true, only return assets with active broker presence
 }
 
 message ListAssetsResponse {
-  repeated Asset assets = 1;
-  string next_page_token = 2;
+  Asset asset = 1;
+  int32 total = 2;
 }
 
 message ListAssetChildrenRequest {
   int32 parent_asset_id = 1;
-  int32 page_size = 2;
-  string page_token = 3;
+  optional int32 offset = 2;
+  optional int32 limit = 3;
 }
 
 message ListAssetChildrenResponse {
-  repeated Asset assets = 1;
-  string next_page_token = 2;
+  Asset asset = 1;
+  int32 total = 2;
 }
 
 message GetAssetLineageRequest {

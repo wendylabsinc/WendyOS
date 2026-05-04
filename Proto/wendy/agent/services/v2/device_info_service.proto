@@ -1,0 +1,39 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyDeviceInfoService {
+    rpc GetDeviceInfo(GetDeviceInfoRequest) returns (GetDeviceInfoResponse);
+    rpc ListHardwareCapabilities(ListHardwareCapabilitiesRequest) returns (ListHardwareCapabilitiesResponse);
+}
+
+message GetDeviceInfoRequest {}
+
+message GetDeviceInfoResponse {
+    string version = 1;
+    optional string os_version = 2;
+    string os = 3;
+    string cpu_architecture = 4;
+    optional string public_key = 5;
+    repeated string featureset = 6;
+    optional string device_type = 7;
+    optional bool has_gpu = 8;
+    optional string gpu_vendor = 9;
+    optional string jetpack_version = 10;
+    optional string cuda_version = 11;
+}
+
+message ListHardwareCapabilitiesRequest {
+    optional string category_filter = 1;
+}
+
+message ListHardwareCapabilitiesResponse {
+    repeated HardwareCapability capabilities = 1;
+
+    message HardwareCapability {
+        string category = 1;
+        string device_path = 2;
+        string description = 3;
+        map<string, string> properties = 4;
+    }
+}

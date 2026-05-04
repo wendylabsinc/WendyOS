@@ -1,0 +1,6 @@
+services:
+  greeter:
+    build: ./greeter
+
+  reporter:
+    build: ./reporter

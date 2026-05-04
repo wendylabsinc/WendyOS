@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -24,6 +25,7 @@ const (
 	EntitlementGPIO      = "gpio"
 	EntitlementSPI       = "spi"
 	EntitlementInput     = "input"
+	EntitlementMCP       = "mcp"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -40,6 +42,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementGPIO,
 	EntitlementSPI,
 	EntitlementInput,
+	EntitlementMCP,
 }
 
 var deprecatedEntitlementReplacements = map[string]string{
@@ -60,6 +63,7 @@ var allowedKeys = map[string][]string{
 	EntitlementGPIO:      {"type", "pins"},
 	EntitlementSPI:       {"type"},
 	EntitlementInput:     {"type"},
+	EntitlementMCP:       {"type", "port"},
 }
 
 // Platform constants identify the target hardware family.
@@ -119,6 +123,10 @@ type HooksConfig struct {
 	PostStart *HookCommand `json:"postStart,omitempty"`
 }
 
+// PostStartAgentHookMetadataKey carries hooks.postStart.agent on start RPCs
+// that should run the agent-side postStart hook.
+const PostStartAgentHookMetadataKey = "wendy-post-start-agent-command"
+
 // HookCommand holds CLI and agent-side commands for a lifecycle hook.
 type HookCommand struct {
 	CLI   string `json:"cli,omitempty"`   // Command to run on the developer's machine
@@ -145,6 +153,7 @@ type Entitlement struct {
 	Device string        `json:"device,omitempty"` // I2C
 	Pins   []int         `json:"pins,omitempty"`   // GPIO
 	Ports  []PortMapping `json:"ports,omitempty"`  // Network
+	Port   int           `json:"port,omitempty"`   // MCP
 }
 
 // DeprecatedEntitlementReplacement reports the preferred replacement for a deprecated entitlement type.
@@ -207,13 +216,36 @@ func (c *AppConfig) Validate() error {
 			if e.Path == "" {
 				return fmt.Errorf("entitlement[%d]: persist entitlement requires a path", i)
 			}
+			if !filepath.IsAbs(e.Path) {
+				return fmt.Errorf("entitlement[%d]: persist path must be absolute, got %q", i, e.Path)
+			}
+			if containsDotDot(e.Path) {
+				return fmt.Errorf("entitlement[%d]: persist path must not contain '..' components", i)
+			}
 		case EntitlementI2C:
 			if e.Device == "" {
 				return fmt.Errorf("entitlement[%d]: i2c entitlement requires a device", i)
 			}
+			if !isValidI2CDevice(e.Device) {
+				return fmt.Errorf("entitlement[%d]: i2c device must be in i2c-N format, got %q", i, e.Device)
+			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementMCP:
+			if e.Port < 1 || e.Port > 65535 {
+				return fmt.Errorf("entitlement[%d]: mcp port must be between 1 and 65535, got %d", i, e.Port)
+			}
 		}
+	}
+
+	mcpCount := 0
+	for _, e := range c.Entitlements {
+		if e.Type == EntitlementMCP {
+			mcpCount++
+		}
+	}
+	if mcpCount > 1 {
+		return fmt.Errorf("at most one mcp entitlement is allowed, found %d", mcpCount)
 	}
 
 	for i, f := range c.Files {
@@ -259,6 +291,23 @@ func containsDotDot(p string) bool {
 		}
 	}
 	return false
+}
+
+// isValidI2CDevice reports whether device is a safe I2C device name (i2c-N).
+func isValidI2CDevice(device string) bool {
+	if !strings.HasPrefix(device, "i2c-") {
+		return false
+	}
+	suffix := device[len("i2c-"):]
+	if suffix == "" {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateJSON checks raw JSON data for unknown keys in entitlements and returns warnings.

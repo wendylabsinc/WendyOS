@@ -2,6 +2,7 @@ package configpartition
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,11 +11,12 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/internal/agent/network"
+	"github.com/wendylabsinc/wendy/internal/agent/services"
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
 // elfMachineByArch maps GOARCH values to ELF e_machine field values (little-endian uint16).
@@ -168,9 +170,11 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	return true
 }
 
-// applyWendyConf reads /config/wendy.conf, applies WiFi config ([wifi] section)
-// and device name ([device] section), then deletes the file regardless of outcome
-// so bad values are not retried on every boot.
+// applyWendyConf reads /config/wendy.conf, registers every `[wifi]` /
+// `[wifi.N]` profile via NetworkManager, activates the highest-priority one
+// that is in range, applies the device name from the `[device]` section if
+// present, then deletes the file regardless of outcome (bad values should
+// not be retried on every boot).
 func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	confPath := cfgDir + "/wendy.conf"
 	data, err := os.ReadFile(confPath)
@@ -188,20 +192,39 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	}
 
 	sections := parseINI(data)
-
-	if wifi, ok := sections["wifi"]; ok {
-		ssid := wifi["ssid"]
-		if ssid == "" {
-			logger.Warn("wendy.conf [wifi] section has no ssid, skipping WiFi provisioning")
-		} else {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := network.Connect(ctx, ssid, wifi["password"]); err != nil {
-				logger.Error("Failed to connect to WiFi from config partition",
-					zap.String("ssid", ssid), zap.Error(err))
-			} else {
-				logger.Info("Connected to WiFi from config partition", zap.String("ssid", ssid))
+	creds := wendyconf.UnmarshalWiFi(sections)
+	if len(creds) == 0 {
+		logger.Warn("wendy.conf has no usable WiFi credentials, skipping WiFi provisioning")
+	} else {
+		ctx := context.Background()
+		for _, c := range creds {
+			err := network.AddOrUpdateProfile(ctx, network.SavedCredential{
+				SSID:     c.SSID,
+				Password: c.Password,
+				Priority: c.Priority,
+				Hidden:   c.Hidden,
+				Security: c.Security,
+			})
+			if err != nil {
+				logger.Error("Failed to register WiFi profile from config partition",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				continue
 			}
+			logger.Info("Registered WiFi profile from config partition",
+				zap.String("ssid", c.SSID),
+				zap.Int32("priority", c.Priority))
+		}
+		// Try to bring up the first (highest-priority) credential so the
+		// device is online immediately when it's in range. Lower-priority
+		// profiles stay saved for future locations.
+		for _, c := range creds {
+			if err := network.ActivateProfile(ctx, c.SSID); err != nil {
+				logger.Warn("Could not activate WiFi profile",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				continue
+			}
+			logger.Info("Activated WiFi profile from config partition", zap.String("ssid", c.SSID))
+			break
 		}
 	}
 
@@ -212,7 +235,6 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 		}
 	}
 
-	// Always delete so we don't retry on the next boot.
 	if err := os.Remove(confPath); err != nil {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
@@ -328,6 +350,98 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 	}
 }
 
+// UpdateAvahiForProvisioning rewrites the _wendyos._udp service block in the
+// avahi service file to advertise the mTLS port and a tls=true TXT record,
+// then restarts avahi-daemon so the mDNS advertisement reflects that the
+// device is now provisioned.
+//
+// The service file name varies by image (e.g. wendyos-mdns.service or
+// wendy-agent.service), so we scan all files in /etc/avahi/services/ and
+// update the first one that contains a _wendyos._udp block.
+func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int) {
+	const serviceDir = "/etc/avahi/services"
+
+	entries, err := os.ReadDir(serviceDir)
+	if err != nil {
+		logger.Warn("Could not read avahi services dir", zap.String("path", serviceDir), zap.Error(err))
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".service") {
+			continue
+		}
+		serviceFile := filepath.Join(serviceDir, e.Name())
+		data, err := os.ReadFile(serviceFile)
+		if err != nil {
+			continue
+		}
+		if !strings.Contains(string(data), "_wendyos._udp") {
+			continue
+		}
+
+		content := updateWendyOSServicePort(string(data), mtlsPort)
+		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+			logger.Warn("Could not write avahi service file",
+				zap.String("path", serviceFile), zap.Error(err))
+			return
+		}
+
+		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+		if out, err := restart.CombinedOutput(); err != nil {
+			logger.Warn("systemctl restart avahi-daemon failed after provisioning",
+				zap.Error(err), zap.String("output", string(out)))
+		} else {
+			logger.Info("Updated avahi advertisement for mTLS",
+				zap.String("file", e.Name()), zap.Int("port", mtlsPort))
+		}
+		return
+	}
+
+	logger.Warn("No avahi service file with _wendyos._udp found; mDNS not updated")
+}
+
+// updateWendyOSServicePort finds the _wendyos._udp service block and updates
+// its port to mtlsPort and adds/updates a tls=true TXT record. Other service
+// blocks (SSH, HTTP, etc.) are left untouched.
+func updateWendyOSServicePort(content string, mtlsPort int) string {
+	const typeTag = "<type>_wendyos._udp</type>"
+	portRe := regexp.MustCompile(`<port>\d+</port>`)
+
+	typeIdx := strings.Index(content, typeTag)
+	if typeIdx < 0 {
+		return content
+	}
+
+	// Walk back to find the opening <service tag for this block.
+	serviceStart := strings.LastIndex(content[:typeIdx], "<service")
+	if serviceStart < 0 {
+		serviceStart = typeIdx
+	}
+
+	// Walk forward to find the closing </service> tag for this block.
+	closeOffset := strings.Index(content[typeIdx:], "</service>")
+	if closeOffset < 0 {
+		return content
+	}
+	serviceEnd := typeIdx + closeOffset + len("</service>")
+
+	block := content[serviceStart:serviceEnd]
+
+	// Update port only within this block.
+	block = portRe.ReplaceAllString(block, fmt.Sprintf("<port>%d</port>", mtlsPort))
+
+	// Add or update the tls=true TXT record.
+	if strings.Contains(block, "<txt-record>tls=") {
+		block = replaceTXTRecord(block, "tls", "true")
+	} else {
+		block = strings.Replace(block, "</service>",
+			"    <txt-record>tls=true</txt-record>\n  </service>", 1)
+	}
+
+	return content[:serviceStart] + block + content[serviceEnd:]
+}
+
 // replaceTXTRecord replaces the value in a <txt-record>key=...</txt-record> line.
 func replaceTXTRecord(content, key, value string) string {
 	re := regexp.MustCompile(`(<txt-record>` + regexp.QuoteMeta(key) + `=)[^<]*(</txt-record>)`)
@@ -345,10 +459,77 @@ func avahiDisplayName(name string) string {
 	return strings.Join(words, " ")
 }
 
-// Apply checks the config partition for a pending agent binary and WiFi config,
-// applying them in order. If a binary update is installed, the process exits
-// so systemd can restart it with the new binary.
-func Apply(logger *zap.Logger) {
+// preProvisionedState is the provisioning state written by the CLI during imaging.
+// JSON tags must match provisioningState in internal/agent/services.
+type preProvisionedState struct {
+	Enrolled  bool   `json:"enrolled"`
+	CloudHost string `json:"cloudHost,omitempty"`
+	OrgID     int32  `json:"orgId,omitempty"`
+	AssetID   int32  `json:"assetId,omitempty"`
+	KeyPEM    string `json:"keyPem,omitempty"`
+	CertPEM   string `json:"certPem,omitempty"`
+	ChainPEM  string `json:"chainPem,omitempty"`
+}
+
+// applyPreProvisioning checks cfgDir for a provisioning.json written by the CLI
+// at imaging time. If present and valid, it copies the state to configPath so
+// ProvisioningService.loadState() picks it up on first boot, then deletes the source.
+func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
+	srcPath := filepath.Join(cfgDir, "provisioning.json")
+	data, err := os.ReadFile(srcPath)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		logger.Error("Failed to read pre-provisioning state from config partition",
+			zap.String("path", srcPath), zap.Error(err))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	var state preProvisionedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		logger.Error("Failed to parse pre-provisioning state, removing",
+			zap.String("path", srcPath), zap.Error(err))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	if !state.Enrolled || state.KeyPEM == "" || state.CertPEM == "" || state.CloudHost == "" {
+		logger.Error("Pre-provisioning state is incomplete, removing",
+			zap.String("path", srcPath))
+		os.Remove(srcPath) //nolint:errcheck
+		return
+	}
+
+	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
+		logger.Error("Failed to write PEM files from config partition",
+			zap.String("configPath", configPath), zap.Error(err))
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(configPath, "provisioning.json"), data, 0o600); err != nil {
+		logger.Error("Failed to write provisioning.json from config partition", zap.Error(err))
+		return
+	}
+
+	if err := os.Remove(srcPath); err != nil {
+		logger.Warn("Failed to remove pre-provisioning state from config partition",
+			zap.String("path", srcPath), zap.Error(err))
+	}
+
+	logger.Info("Applied pre-provisioned state from config partition",
+		zap.String("cloudHost", state.CloudHost),
+		zap.Int32("orgId", state.OrgID),
+		zap.Int32("assetId", state.AssetID),
+	)
+}
+
+// Apply checks the config partition for a pending agent binary, WiFi config, and
+// pre-provisioning state, applying them in order. If a binary update is installed,
+// the process exits so systemd can restart it with the new binary.
+// configPath is the agent's configuration directory (e.g. /etc/wendy-agent).
+func Apply(logger *zap.Logger, configPath string) {
 	installPath := defaultInstallPath
 	if exe, err := os.Executable(); err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
@@ -359,4 +540,5 @@ func Apply(logger *zap.Logger) {
 		os.Exit(0)
 	}
 	applyWendyConf(logger, configDir)
+	applyPreProvisioning(logger, configDir, configPath)
 }

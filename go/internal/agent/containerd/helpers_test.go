@@ -87,7 +87,7 @@ func TestParseRestartPolicyLabel_Simple(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshImageFromRegistry(t *testing.T) {
+func TestIsLocalRegistryImage(t *testing.T) {
 	tests := []struct {
 		name      string
 		imageName string
@@ -122,8 +122,40 @@ func TestShouldRefreshImageFromRegistry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldRefreshImageFromRegistry(tt.imageName); got != tt.want {
-				t.Errorf("shouldRefreshImageFromRegistry(%q) = %v; want %v", tt.imageName, got, tt.want)
+			if got := isLocalRegistryImage(tt.imageName); got != tt.want {
+				t.Errorf("isLocalRegistryImage(%q) = %v; want %v", tt.imageName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeImageName(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"python", "docker.io/library/python:latest"},
+		{"python:3.11-slim", "docker.io/library/python:3.11-slim"},
+		{"library/nginx:1.27", "docker.io/library/nginx:1.27"},
+		{"bitnami/redis:7", "docker.io/bitnami/redis:7"},
+		// Already-qualified refs pass through (the localhost path needs
+		// isLocalRegistryImage to keep working unchanged).
+		{"localhost:5000/foo:bar", "localhost:5000/foo:bar"},
+		{"127.0.0.1:5000/example:latest", "127.0.0.1:5000/example:latest"},
+		{"ghcr.io/wendylabsinc/example:latest", "ghcr.io/wendylabsinc/example:latest"},
+		{"gcr.io/google-containers/pause:3.9", "gcr.io/google-containers/pause:3.9"},
+		// Digest references.
+		{"python@sha256:0000000000000000000000000000000000000000000000000000000000000000", "docker.io/library/python@sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+		// Whitespace trimmed.
+		{"  python:3.11-slim  ", "docker.io/library/python:3.11-slim"},
+		// Empty input → unchanged.
+		{"", ""},
+		// Malformed → unchanged so the caller's error message stays useful.
+		{"not a ref", "not a ref"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizeImageName(tt.in); got != tt.want {
+				t.Errorf("normalizeImageName(%q) = %q; want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -159,7 +191,7 @@ func TestGCTimestamp_IsUTC(t *testing.T) {
 }
 
 func TestWendyLabels_Basic(t *testing.T) {
-	labels := wendyLabels("myapp", "1.0.0", nil)
+	labels := wendyLabels("myapp", "1.0.0", nil, 0)
 
 	if v, ok := labels[labelKeyAppVersion]; !ok {
 		t.Error("missing app version label")
@@ -175,7 +207,7 @@ func TestWendyLabels_Basic(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyUnlessStopped(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED}
-	labels := wendyLabels("app", "2.0", rp)
+	labels := wendyLabels("app", "2.0", rp, 0)
 
 	if v, ok := labels[labelKeyRestartPolicy]; !ok {
 		t.Error("missing restart policy label")
@@ -189,7 +221,7 @@ func TestWendyLabels_WithRestartPolicyOnFailure(t *testing.T) {
 		Mode:                agentpb.RestartPolicyMode_ON_FAILURE,
 		OnFailureMaxRetries: 3,
 	}
-	labels := wendyLabels("app", "1.0", rp)
+	labels := wendyLabels("app", "1.0", rp, 0)
 
 	if v := labels[labelKeyRestartPolicy]; v != "on-failure:3" {
 		t.Errorf("restart policy = %q; want %q", v, "on-failure:3")
@@ -198,7 +230,7 @@ func TestWendyLabels_WithRestartPolicyOnFailure(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyNo(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_NO}
-	labels := wendyLabels("app", "1.0", rp)
+	labels := wendyLabels("app", "1.0", rp, 0)
 
 	if v := labels[labelKeyRestartPolicy]; v != "no" {
 		t.Errorf("restart policy = %q; want %q", v, "no")
@@ -207,10 +239,26 @@ func TestWendyLabels_WithRestartPolicyNo(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyDefault(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_DEFAULT}
-	labels := wendyLabels("app", "1.0", rp)
+	labels := wendyLabels("app", "1.0", rp, 0)
 
 	if v := labels[labelKeyRestartPolicy]; v != "unless-stopped" {
 		t.Errorf("restart policy = %q; want %q (DEFAULT maps to unless-stopped)", v, "unless-stopped")
+	}
+}
+
+func TestWendyLabels_WithMCPPort(t *testing.T) {
+	labels := wendyLabels("app", "1.0", nil, 3000)
+	if v, ok := labels[labelKeyMCPPort]; !ok {
+		t.Error("missing mcp port label")
+	} else if v != "3000" {
+		t.Errorf("mcp port label = %q; want %q", v, "3000")
+	}
+}
+
+func TestWendyLabels_WithMCPPortZero(t *testing.T) {
+	labels := wendyLabels("app", "1.0", nil, 0)
+	if _, ok := labels[labelKeyMCPPort]; ok {
+		t.Error("should not have mcp port label when port is 0")
 	}
 }
 

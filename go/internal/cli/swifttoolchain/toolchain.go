@@ -23,8 +23,8 @@ const (
 )
 
 var wendySDKChecksums = map[string]string{
-	"x86_64":  "982bb4f1a3632e628d63cf5f7478e7ec12264dd13755b709f6dd40853b56ab92",
-	"aarch64": "506a6f002f3c434af79fb1396c3e13adbd18d8e2b294c7627b93d6fc51f29a34",
+	"x86_64":  "8b1e13f35b06fec17cb72ca64257ed51969d1ab1acd8d891251e28bb96ad4e9d",
+	"aarch64": "a0155f222bf741e8a4a894c1282941b3a86846fe9d27ac53f94a07d84f897981",
 }
 
 var ErrUserCancelled = errors.New("cancelled")

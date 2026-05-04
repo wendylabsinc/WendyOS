@@ -141,6 +141,7 @@ func newAudioMonitorCmd() *cobra.Command {
 			fmt.Println("Audio Monitor (Ctrl+C to stop)")
 			fmt.Println(strings.Repeat("-", 60))
 
+			var received int
 			for {
 				update, err := stream.Recv()
 				if err == io.EOF {
@@ -149,6 +150,7 @@ func newAudioMonitorCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("receiving audio levels: %w", err)
 				}
+				received++
 
 				// Simple VU meter visualization.
 				peakDb := update.GetPeakDb()
@@ -168,6 +170,9 @@ func newAudioMonitorCmd() *cobra.Command {
 			}
 
 			fmt.Println()
+			if received == 0 {
+				return fmt.Errorf("no audio data received — check that a microphone is available on the device")
+			}
 			return nil
 		},
 	}
@@ -182,6 +187,7 @@ func newAudioListenCmd() *cobra.Command {
 	var deviceID uint32
 	var sampleRate uint32
 	var channels uint32
+	var stdout bool
 
 	cmd := &cobra.Command{
 		Use:   "listen",
@@ -205,28 +211,30 @@ func newAudioListenCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Streaming audio (Ctrl+C to stop)...\n")
 
-			for {
-				chunk, err := stream.Recv()
-				if err == io.EOF {
-					break
+			if stdout {
+				for {
+					chunk, err := stream.Recv()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						return fmt.Errorf("receiving audio: %w", err)
+					}
+					if _, err := cmd.OutOrStdout().Write(chunk.GetPcmData()); err != nil {
+						return fmt.Errorf("writing audio data: %w", err)
+					}
 				}
-				if err != nil {
-					return fmt.Errorf("receiving audio: %w", err)
-				}
-
-				// Write raw PCM data to stdout.
-				if _, err := cmd.OutOrStdout().Write(chunk.GetPcmData()); err != nil {
-					return fmt.Errorf("writing audio data: %w", err)
-				}
+				return nil
 			}
 
-			return nil
+			return playRealtimeAudio(ctx, stream, sampleRate, channels)
 		},
 	}
 
 	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Audio device ID")
 	cmd.Flags().Uint32Var(&sampleRate, "sample-rate", 16000, "Sample rate in Hz")
 	cmd.Flags().Uint32Var(&channels, "channels", 1, "Number of audio channels")
+	cmd.Flags().BoolVar(&stdout, "stdout", false, "Write raw PCM to stdout instead of playing")
 
 	return cmd
 }

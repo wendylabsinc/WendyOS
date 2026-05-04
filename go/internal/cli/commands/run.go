@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
@@ -33,6 +34,8 @@ import (
 var cliStyle = lipgloss.NewStyle().Foreground(tui.ColorDim)
 var cliNoticeStyle = lipgloss.NewStyle().Foreground(tui.ColorNotice)
 var execCommandContext = exec.CommandContext
+
+const linuxContainersOnMacsUnsupportedMessage = "Linux containers aren't supported on Macs yet. Support is planned for a future release. For now, deploy a native macOS app (platform: darwin) or target a Linux/WendyOS device."
 
 // dimWriter writes each line rendered through cliStyle (dim/background).
 // Incomplete lines are buffered until a newline or Flush is called.
@@ -70,8 +73,9 @@ type containerOutputStream interface {
 // be opened (e.g. the agent is too old and returns Unimplemented), it logs a
 // notice and falls back to a plain StartContainer stream. Returns the output
 // stream and whether stdin is being forwarded.
-func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) (containerOutputStream, bool, error) {
-	attachStream, attachErr := svc.AttachContainer(ctx)
+func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string, appCfg *appconfig.AppConfig) (containerOutputStream, bool, error) {
+	startCtx := contextWithPostStartAgentHook(ctx, appCfg)
+	attachStream, attachErr := svc.AttachContainer(startCtx)
 	if attachErr == nil {
 		attachErr = attachStream.Send(&agentpb.AttachContainerRequest{
 			RequestType: &agentpb.AttachContainerRequest_AppName{AppName: appName},
@@ -82,7 +86,7 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 	}
 	if attachErr != nil {
 		cliNotice("Notice: stdin not attached (%v)", attachErr)
-		startStream, startErr := svc.StartContainer(ctx, &agentpb.StartContainerRequest{
+		startStream, startErr := svc.StartContainer(startCtx, &agentpb.StartContainerRequest{
 			AppName: appName,
 		})
 		if startErr != nil {
@@ -112,6 +116,21 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 	return attachStream, true, nil
 }
 
+func postStartAgentHook(appCfg *appconfig.AppConfig) string {
+	if appCfg == nil || appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil {
+		return ""
+	}
+	return appCfg.Hooks.PostStart.Agent
+}
+
+func contextWithPostStartAgentHook(ctx context.Context, appCfg *appconfig.AppConfig) context.Context {
+	hook := postStartAgentHook(appCfg)
+	if hook == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, appconfig.PostStartAgentHookMetadataKey, hook)
+}
+
 func cliLog(format string, args ...any) {
 	fmt.Print(cliStyle.Render(fmt.Sprintf(format, args...)))
 }
@@ -122,6 +141,12 @@ func cliLogln(format string, args ...any) {
 
 func cliNotice(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
+}
+
+var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
+
+func cliSuccess(format string, args ...any) {
+	fmt.Println(cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
@@ -201,13 +226,34 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 	return nil
 }
 
+func isUnimplementedRPCError(err error) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if status.Code(current) == codes.Unimplemented {
+			return true
+		}
+	}
+	return false
+}
+
+func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	if _, err := svc.CreateContainer(ctx, req); err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	return nil
+}
+
+func fallbackCreateContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
+	cliLogln("Info: progress reporting is currently not available on this agent; continuing without progress")
+	return createContainerWithoutProgress(ctx, svc, req)
+}
+
 func progressModelUserCancelled(model tea.Model) bool {
 	pm, ok := model.(tui.ProgressModel)
 	return ok && pm.Err() == context.Canceled
 }
 
 func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
-	prog := tea.NewProgram(tui.NewProgress("Pulling image on device..."))
+	prog := tea.NewProgram(tui.NewProgress("Pulling image on device...").WithoutErrorView())
 
 	var (
 		createErr error
@@ -298,13 +344,22 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 
 // createContainerWithProgress calls CreateContainerWithProgress and prints
 // phase updates so the user sees feedback during long image pulls/unpacks.
+// Older agents may not implement the streaming RPC yet, so fall back to the
+// legacy unary CreateContainer call when the server reports Unimplemented.
 func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
 	if !isInteractiveTerminal() {
 		stream, err := svc.CreateContainerWithProgress(ctx, req)
 		if err != nil {
+			if isUnimplementedRPCError(err) {
+				return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+			}
 			return fmt.Errorf("creating container: %w", err)
 		}
-		return createContainerWithProgressPlain(stream)
+		err = createContainerWithProgressPlain(stream)
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
 	}
 
 	progressCtx, cancel := context.WithCancel(ctx)
@@ -312,9 +367,18 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 
 	stream, err := svc.CreateContainerWithProgress(progressCtx, req)
 	if err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
 		return fmt.Errorf("creating container: %w", err)
 	}
-	return createContainerWithProgressTUI(cancel, stream)
+	if err := createContainerWithProgressTUI(cancel, stream); err != nil {
+		if isUnimplementedRPCError(err) {
+			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
+		}
+		return err
+	}
+	return nil
 }
 
 // runOptions holds the parsed flags for the run command.
@@ -364,6 +428,18 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	cwd, err := resolveRunWorkingDir(opts)
 	if err != nil {
 		return fmt.Errorf("resolving working directory: %w", err)
+	}
+
+	// Compose projects don't use wendy.json — each service carries its own config.
+	// Detect this early so we don't prompt to create an unneeded file. Surfacing
+	// resolveRunProjectType errors here also catches invalid --build-type values
+	// before we try to load wendy.json.
+	projectType, err := resolveRunProjectType(cwd, opts.buildType)
+	if err != nil {
+		return err
+	}
+	if projectType == "compose" {
+		return runComposeCommand(ctx, cwd, opts)
 	}
 
 	cfgPath := filepath.Join(cwd, "wendy.json")
@@ -438,6 +514,37 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	return runWithAgent(ctx, target.Agent, cwd, appCfg, opts)
 }
 
+// runComposeCommand handles the full device-selection + execution flow for
+// docker-compose projects, bypassing the wendy.json requirement.
+func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
+	var resolveOpts []resolveOption
+	if opts.yes {
+		resolveOpts = append(resolveOpts, NonInteractive())
+	}
+	target, err := resolveTarget(ctx, resolveOpts...)
+	if err != nil {
+		return err
+	}
+
+	if target.External != nil && target.Provider != nil {
+		// Docker Desktop provider: use docker compose directly.
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), opts)
+	}
+
+	if target.Agent == nil {
+		if target.Bluetooth != nil {
+			if target.Bluetooth.IsWendyAgent() {
+				return fmt.Errorf("selected device is currently reachable only over Bluetooth. Connect it to WiFi and retry 'wendy run'")
+			}
+			return fmt.Errorf("selected device is a Wendy Lite device, which does not support 'wendy run'")
+		}
+		return fmt.Errorf("selected device does not have a reachable WendyOS agent and cannot run 'wendy run'")
+	}
+
+	defer target.Agent.Close()
+	return runComposeWithAgent(ctx, target.Agent, cwd, opts)
+}
+
 func resolveRunWorkingDir(opts runOptions) (string, error) {
 	prefix := strings.TrimSpace(opts.prefix)
 	if prefix == "" {
@@ -481,7 +588,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	cliLogln("Container %s created.", appCfg.AppID)
 
 	if opts.detach {
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.AppID,
 		})
 		if err != nil {
@@ -497,7 +604,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	stream, err := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+	stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(runCtx, appCfg), &agentpb.StartContainerRequest{
 		AppName: appCfg.AppID,
 	})
 	if err != nil {
@@ -574,7 +681,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistryForSwift(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForSwiftAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -693,11 +800,17 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	}
 
 	buildType := normalizeBuildType(requestedType)
-	if buildType != "docker" && buildType != "swift" && buildType != "python" {
-		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, or python", requestedType)
+	if buildType != "docker" && buildType != "swift" && buildType != "python" && buildType != "compose" {
+		return "", fmt.Errorf("invalid value %q for --build-type: must be one of docker, swift, python, or compose", requestedType)
 	}
 
 	switch buildType {
+	case "compose":
+		for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return "compose", nil
+			}
+		}
 	case "docker":
 		marker := filepath.Join(dir, "Dockerfile")
 		if _, err := os.Stat(marker); err == nil {
@@ -776,7 +889,13 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if app == nil {
 		cliLogln("Building with %s provider...", p.DisplayName())
 		var err error
-		app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		// Pass the resolved project type to providers that can disambiguate
+		// between buildable markers (e.g. Docker vs Compose).
+		if tb, ok := p.(providers.TypedBuilder); ok {
+			app, err = tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
+		} else {
+			app, err = p.Build(ctx, device, projectPath, product, opts.debug)
+		}
 		if err != nil {
 			return fmt.Errorf("provider build: %w", err)
 		}
@@ -855,6 +974,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	if agentOS == "darwin" && platformOS(platform) == "linux" {
+		return errors.New(linuxContainersOnMacsUnsupportedMessage)
+	}
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {
@@ -885,6 +1007,8 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	switch projectType {
 	case "docker":
 		// Dockerfile already exists.
+	case "compose":
+		return runComposeWithAgent(ctx, conn, cwd, opts)
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			cliLogln("No Dockerfile found. Generating one for Python project...")
@@ -934,7 +1058,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
 	// to the host so buildx can reach the device.
-	registryAddr, proxyCleanup, err := resolveRegistry(ctx, conn.Host, regPort)
+	registryAddr, proxyCleanup, err := resolveRegistryForAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
@@ -944,7 +1068,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -952,7 +1076,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, false); err != nil {
+		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("injecting debugpy: %w", err)
 		}
 	}
@@ -998,7 +1122,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	cliLogln("Container %s created.", appCfg.AppID)
 
 	if opts.detach {
-		stream, err := conn.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.AppID,
 		})
 		if err != nil {
@@ -1021,7 +1145,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID)
+	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.AppID, appCfg)
 	if err != nil {
 		return err
 	}
@@ -1064,7 +1188,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			// the container was never started — fall back silently to StartContainer.
 			if stdinAttempted && !gotFirstResponse && status.Code(recvErr) == codes.Unimplemented {
 				cliNotice("Notice: stdin not attached (not supported by agent)")
-				startStream, startErr := conn.ContainerService.StartContainer(runCtx, &agentpb.StartContainerRequest{
+				startStream, startErr := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(runCtx, appCfg), &agentpb.StartContainerRequest{
 					AppName: appCfg.AppID,
 				})
 				if startErr != nil {

@@ -1,7 +1,10 @@
 .DS_Store
+build
+.worktrees
 .build
 .wendy-build
 .edge-build
+.xcode
 /Packages
 xcuserdata/
 DerivedData/
@@ -31,3 +34,7 @@ go/wendy
 
 # Git worktrees
 .worktrees/
+go/local-pki-test
+
+# Superpowers planning docs (local dev tooling)
+docs/superpowers/

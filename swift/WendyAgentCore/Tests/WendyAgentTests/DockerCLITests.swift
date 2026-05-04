@@ -4,8 +4,8 @@ import Testing
 @testable import WendyAgentCore
 
 struct DockerCLITests {
-    @Test("checkAvailable returns false when the docker probe times out")
-    func checkAvailableReturnsFalseWhenProbeTimesOut() async throws {
+    @Test("checkAvailability returns false when the docker probe times out")
+    func checkAvailabilityReturnsFalseWhenProbeTimesOut() async throws {
         let scriptURL = try Self.makeExecutableScript(
             name: "fake-docker-timeout.sh",
             contents: """
@@ -21,13 +21,14 @@ struct DockerCLITests {
             startupCommandTimeout: .milliseconds(100)
         )
 
-        let available = await docker.checkAvailable()
+        let availability = await docker.checkAvailability()
 
-        #expect(available == false)
+        #expect(availability.isAvailable == false)
+        #expect(availability.failureMessage?.contains("timed out") == true)
     }
 
-    @Test("checkAvailable returns true when the docker probe completes")
-    func checkAvailableReturnsTrueWhenProbeCompletes() async throws {
+    @Test("checkAvailability returns true when the docker probe completes")
+    func checkAvailabilityReturnsTrueWhenProbeCompletes() async throws {
         let scriptURL = try Self.makeExecutableScript(
             name: "fake-docker-ok.sh",
             contents: """
@@ -43,9 +44,41 @@ struct DockerCLITests {
             startupCommandTimeout: .seconds(2)
         )
 
-        let available = await docker.checkAvailable()
+        let availability = await docker.checkAvailability()
 
-        #expect(available == true)
+        #expect(availability.isAvailable == true)
+        #expect(availability.failureMessage == nil)
+    }
+
+    @Test("checkAvailability reports the paths searched when docker is missing")
+    func checkAvailabilityReportsSearchedPathsWhenDockerIsMissing() async throws {
+        let executable = "missing-docker-\(UUID().uuidString)"
+        let docker = DockerCLI(
+            executable: executable,
+            startupCommandTimeout: .milliseconds(100),
+            environment: ["PATH": "/tmp:/bin"]
+        )
+
+        let availability = await docker.checkAvailability()
+        let resolution = docker.resolveExecutableForTesting()
+
+        #expect(availability.isAvailable == false)
+        #expect(
+            availability.failureMessage?.contains("Could not find \(executable) executable") == true
+        )
+        #expect(availability.failureMessage?.contains("/tmp/\(executable)") == true)
+        #expect(
+            availability.failureMessage?.contains(
+                "/Applications/Docker.app/Contents/Resources/bin/\(executable)"
+            ) == true
+        )
+        #expect(resolution.resolvedPath == nil)
+        #expect(resolution.searchedPaths.contains("/tmp/\(executable)"))
+        #expect(
+            resolution.searchedPaths.contains(
+                "/Applications/Docker.app/Contents/Resources/bin/\(executable)"
+            )
+        )
     }
 
     private static func makeExecutableScript(name: String, contents: String) throws -> URL {

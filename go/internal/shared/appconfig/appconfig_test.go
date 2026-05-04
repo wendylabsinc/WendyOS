@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,7 @@ func TestValidate_AllEntitlementTypes(t *testing.T) {
 			{Type: EntitlementI2C, Device: "i2c-1"},
 			{Type: EntitlementGPIO, Pins: []int{7}},
 			{Type: EntitlementInput},
+			{Type: EntitlementMCP, Port: 3000},
 		},
 	}
 
@@ -229,6 +231,34 @@ func TestValidateJSON_InputUnknownKeys(t *testing.T) {
 	warnings := ValidateJSON(data)
 	if len(warnings) == 0 {
 		t.Fatal("ValidateJSON() expected warning for unknown key on input entitlement, got none")
+	}
+}
+
+func TestValidateJSON_MCPNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "mcp", "port": 3000}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Errorf("ValidateJSON() got %d warnings for valid mcp entitlement, want 0", len(warnings))
+	}
+}
+
+func TestValidateJSON_MCPUnknownKeys(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "mcp", "port": 3000, "typo": 1}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for unknown key on mcp entitlement, got none")
 	}
 }
 
@@ -719,5 +749,60 @@ func TestValidateJSON_UnknownKeys(t *testing.T) {
 	// Should have warnings for entitlement[0] (foobar) and entitlement[2] (unknownField)
 	if len(warnings) != 2 {
 		t.Errorf("ValidateJSON() got %d warnings, want 2", len(warnings))
+	}
+}
+
+func TestMCPEntitlementValid(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 3000},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestMCPEntitlementPortRequired(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 0},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing port")
+	}
+	if !strings.Contains(err.Error(), "port") {
+		t.Fatalf("expected error to mention port, got: %v", err)
+	}
+}
+
+func TestMCPEntitlementDuplicateRejected(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 3000},
+			{Type: EntitlementMCP, Port: 4000},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for duplicate mcp entitlement")
+	}
+}
+
+func TestMCPEntitlementPortOutOfRange(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementMCP, Port: 99999},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for out-of-range port")
 	}
 }

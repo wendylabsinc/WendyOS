@@ -23,6 +23,11 @@ Tests:
   python-bluetooth      Python with bluetooth entitlement
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
+  python-no-ptrace      Verify ptrace is blocked by default seccomp profile (WDY-1099)
+  python-no-unshare     Verify unshare is blocked by default seccomp profile (WDY-1099)
+  compose-hello         docker-compose multi-service deployment with build: Dockerfiles
+  compose-images        docker-compose multi-service deployment using public images
+  otel-localhost-only   Verify OTEL receivers (4317/4318) are not reachable from the network
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -182,6 +187,11 @@ ALL_TESTS=(
     python-bluetooth
     python-no-network
     python-no-bluetooth
+    python-no-ptrace
+    python-no-unshare
+    compose-hello
+    compose-images
+    otel-localhost-only
 )
 
 # If specific tests were requested via -t, filter the list.
@@ -220,54 +230,21 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
+    # ── Security: OTEL ports must not be reachable from the network ──────
+    if [[ "$test_name" == "otel-localhost-only" ]]; then
+        otel_grpc_closed() { ! nc -z -w 3 "$HOSTNAME" 4317 2>/dev/null; }
+        otel_http_closed() { ! nc -z -w 3 "$HOSTNAME" 4318 2>/dev/null; }
+        run_test "otel-localhost-only (gRPC 4317 not reachable)" otel_grpc_closed
+        run_test "otel-localhost-only (HTTP 4318 not reachable)" otel_http_closed
+        continue
+    fi
+
     # Verify directory exists
     if [[ ! -d "$test_dir" ]]; then
         skip_test "$test_name" "no directory"
         continue
     fi
 
-    # Verify wendy.json exists
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-done
-
-echo ""
-
-# ── Summary ──────────────────────────────────────────────────────────
-
-TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
-echo -e "${BOLD}========================================${RESET}"
-echo -e "${BOLD}Results:${RESET} $TOTAL tests"
-echo -e "  ${GREEN}Passed:  $PASS_COUNT${RESET}"
-echo -e "  ${RED}Failed:  $FAIL_COUNT${RESET}"
-if [[ $SKIP_COUNT -gt 0 ]]; then
-    echo -e "  ${YELLOW}Skipped: $SKIP_COUNT${RESET}"
-fi
-echo -e "${BOLD}========================================${RESET}"
-
-if [[ $FAIL_COUNT -gt 0 ]]; then
-    exit 1
-fi
-exit 0
+    # ── Compose tests (docker-compose.{yml,yaml}, compose.{yml,yaml}, no wendy.json) ──
+    compose_file=""
+    for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do

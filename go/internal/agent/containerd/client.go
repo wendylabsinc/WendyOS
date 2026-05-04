@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -346,7 +350,10 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	ctx = c.withNamespace(ctx)
 	appName := req.GetAppName()
-	imageName := req.GetImageName()
+	// Canonicalise the image reference so older CLIs sending Docker short
+	// names like "python:3.11-slim" still resolve correctly under containerd's
+	// strict parser, which would otherwise read "3.11-slim" as a port.
+	imageName := normalizeImageName(req.GetImageName())
 
 	report := func(p *agentpb.CreateContainerProgress) {
 		if onProgress != nil {
@@ -398,31 +405,28 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}()
 	}
 
-	// For local-registry images, always pull from the embedded HTTP registry
-	// so containerd properly resolves manifest lists and unpacks layers.
-	// For remote images, try the local store first, then pull.
+	// Try the local image store first. The device-local registry shares
+	// containerd's content store, so anything just pushed to it is already
+	// available via GetImage — pulling would just round-trip bytes over
+	// loopback. Fall back to a pull only on miss; use PlainHTTP for the
+	// local-registry case.
 	var image containerd.Image
 	var err error
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	if shouldRefreshImageFromRegistry(imageName) {
-		resolver := docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})
-		image, err = c.client.Pull(ctx, imageName,
-			containerd.WithPullUnpack,
-			containerd.WithResolver(resolver),
+	image, err = c.client.GetImage(ctx, imageName)
+	if err != nil {
+		c.logger.Info("Image not in local store, attempting pull from registry",
+			zap.String("image", imageName),
 		)
+		pullOpts := []containerd.RemoteOpt{containerd.WithPullUnpack}
+		if isLocalRegistryImage(imageName) {
+			pullOpts = append(pullOpts,
+				containerd.WithResolver(docker.NewResolver(docker.ResolverOptions{PlainHTTP: true})),
+			)
+		}
+		image, err = c.client.Pull(ctx, imageName, pullOpts...)
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-		}
-	} else {
-		image, err = c.client.GetImage(ctx, imageName)
-		if err != nil {
-			c.logger.Info("Image not in local store, attempting pull from registry",
-				zap.String("image", imageName),
-			)
-			image, err = c.client.Pull(ctx, imageName, containerd.WithPullUnpack)
-			if err != nil {
-				return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
-			}
 		}
 	}
 
@@ -433,7 +437,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if _, err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+		if err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
 			if mapped := toCreateContainerProgress(progress); mapped != nil {
 				report(mapped)
 			}
@@ -513,7 +517,14 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
 
 	// Build labels for the container.
-	labels := wendyLabels(appName, version, req.GetRestartPolicy())
+	var mcpPort uint32
+	for _, e := range appCfg.Entitlements {
+		if e.Type == appconfig.EntitlementMCP {
+			mcpPort = uint32(e.Port)
+			break
+		}
+	}
+	labels := wendyLabels(appName, version, req.GetRestartPolicy(), mcpPort)
 
 	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
 	specJSON, err := json.Marshal(spec)
@@ -578,7 +589,7 @@ func (c *Client) applyCDIGPU(spec *localoci.Spec) {
 // StartContainer starts the task for a named container and returns a channel
 // that streams stdout/stderr output. When the container exits, a final
 // ContainerOutput with Done=true is sent and the channel is closed.
-func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -642,6 +653,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	}
 
 	c.logger.Info("Container started", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
@@ -652,7 +664,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 
 // StartContainerWithStdin is like StartContainer but attaches the provided
 // stdin reader to the container's standard input.
-func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -708,11 +720,69 @@ func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, st
 	}
 
 	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 
 	return outputCh, nil
+}
+
+func shellCommand() (string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd.exe", "/C"
+	}
+	return "sh", "-c"
+}
+
+func expandAgentHook(command, appName string) string {
+	return os.Expand(command, func(key string) string {
+		switch key {
+		case "WENDY_HOSTNAME":
+			return "localhost"
+		case "WENDY_APP_ID":
+			return appName
+		default:
+			return os.Getenv(key)
+		}
+	})
+}
+
+var startPostStartHookCommand = func(shell, flag, command string) (func() error, error) {
+	cmd := exec.Command(shell, flag, command)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd.Wait, nil
+}
+
+func (c *Client) startPostStartAgentHook(command, appName string) bool {
+	if command == "" {
+		return false
+	}
+
+	expanded := expandAgentHook(command, appName)
+	shell, flag := shellCommand()
+	wait, err := startPostStartHookCommand(shell, flag, expanded)
+	if err != nil {
+		c.logger.Warn("Failed to start postStart agent hook",
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+		return false
+	}
+	go func() {
+		if err := wait(); err != nil {
+			c.logger.Warn("postStart agent hook exited with error",
+				zap.String("app_name", appName),
+				zap.Error(err),
+			)
+		}
+	}()
+	c.logger.Info("Started postStart agent hook",
+		zap.String("app_name", appName),
+	)
+	return true
 }
 
 // deleteStaleTask attempts to load and force-delete any existing task for the
@@ -1024,15 +1094,46 @@ func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, e
 			_ = maxRetries
 		}
 
+		var mcpPort uint32
+		if portStr, ok := info.Labels[labelKeyMCPPort]; ok && portStr != "" {
+			if p, err := strconv.ParseUint(portStr, 10, 32); err == nil {
+				mcpPort = uint32(p)
+			}
+		}
+
 		result = append(result, &agentpb.AppContainer{
 			AppName:      ctr.ID(),
 			AppVersion:   appVersion,
 			RunningState: runningState,
 			FailureCount: failureCount,
+			McpPort:      mcpPort,
 		})
 	}
 
 	return result, nil
+}
+
+// GetContainerMCPPort returns the MCP server port for the named container,
+// or 0 if the container has no mcp entitlement.
+func (c *Client) GetContainerMCPPort(ctx context.Context, appName string) (uint32, error) {
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return 0, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+	info, err := ctr.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting container info for %q: %w", appName, err)
+	}
+	portStr, ok := info.Labels[labelKeyMCPPort]
+	if !ok || portStr == "" {
+		return 0, nil
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing mcp port label for %q: %w", appName, err)
+	}
+	return uint32(p), nil
 }
 
 // GetContainerStats collects memory and image-size stats for all Wendy-managed containers.
@@ -1068,6 +1169,60 @@ func (c *Client) GetContainerStats(ctx context.Context) ([]*agentpb.ContainerSta
 		result = append(result, stat)
 	}
 	return result, nil
+}
+
+// GetContainerMetrics returns a point-in-time CPU and memory snapshot for a named container.
+// Returns an error if the container or its task cannot be found.
+func (c *Client) GetContainerMetrics(ctx context.Context, appName string) (services.ContainerMetrics, error) {
+	ctx = c.withNamespace(ctx)
+	container, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	metric, err := task.Metrics(ctx)
+	if err != nil {
+		return services.ContainerMetrics{}, err
+	}
+	return extractContainerMetrics(metric), nil
+}
+
+// extractContainerMetrics decodes cgroup v1 or v2 task metrics into a ContainerMetrics snapshot.
+func extractContainerMetrics(metric *types.Metric) services.ContainerMetrics {
+	switch {
+	case typeurl.Is(metric.Data, (*cgroupv1.Metrics)(nil)):
+		m := &cgroupv1.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return services.ContainerMetrics{}
+		}
+		var result services.ContainerMetrics
+		if m.CPU != nil && m.CPU.Usage != nil {
+			result.UserCPUNanos = int64(m.CPU.Usage.User)
+			result.SysCPUNanos = int64(m.CPU.Usage.Kernel)
+		}
+		if m.Memory != nil && m.Memory.Usage != nil {
+			result.MemBytes = int64(m.Memory.Usage.Usage)
+		}
+		return result
+	case typeurl.Is(metric.Data, (*cgroupv2.Metrics)(nil)):
+		m := &cgroupv2.Metrics{}
+		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
+			return services.ContainerMetrics{}
+		}
+		var result services.ContainerMetrics
+		if m.CPU != nil {
+			result.UserCPUNanos = int64(m.CPU.UserUsec) * 1000
+			result.SysCPUNanos = int64(m.CPU.SystemUsec) * 1000
+		}
+		if m.Memory != nil {
+			result.MemBytes = int64(m.Memory.Usage)
+		}
+		return result
+	}
+	return services.ContainerMetrics{}
 }
 
 // extractMemoryBytes decodes cgroup v1 or v2 task metrics and returns memory usage in bytes.

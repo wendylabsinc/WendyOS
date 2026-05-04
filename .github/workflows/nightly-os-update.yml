@@ -1,0 +1,119 @@
+name: Nightly OS Update
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 02:00 UTC daily
+  workflow_dispatch: {}
+
+# All wendy CLI invocations in this workflow run via "ssh localhost" rather than
+# directly. The self-hosted runner runs as a macOS LaunchAgent which does not
+# hold the Local Network TCC permission that macOS requires for mDNS (.local)
+# resolution and link-local connections. SSHing to localhost spawns a shell
+# under the logged-in user session, which does have that permission.
+# See integration-tests.yml for the same pattern with more context.
+
+jobs:
+  discover:
+    name: Discover devices
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, macOS, ARM64]
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Clear cache and scan for WendyOS devices
+        id: scan
+        run: |
+          SSH="ssh -o StrictHostKeyChecking=no localhost"
+          WORKDIR="$(pwd)"
+          SSH_ENV="export PATH='$PATH'"
+
+          $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy os cache clear"
+
+          RESULT=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy discover --json --type lan --timeout 10s")
+          echo "$RESULT" | jq '[.lanDevices[] | select(.isWendyDevice) | {name: .displayName, address: (.hostname // .ipAddress)}]'
+
+          MATRIX=$(echo "$RESULT" | jq -c \
+            '[.lanDevices[] | select(.isWendyDevice and (.hostname // .ipAddress)) | .hostname // .ipAddress]')
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+          COUNT=$(echo "$MATRIX" | jq 'length')
+          echo "Found $COUNT device(s)."
+          [ "$COUNT" -gt 0 ] || { echo "No WendyOS devices found — nothing to update."; }
+
+  update:
+    name: ${{ matrix.hostname }}
+    needs: discover
+    if: needs.discover.outputs.matrix != '[]'
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, macOS, ARM64]
+    concurrency:
+      group: update-${{ matrix.hostname }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        hostname: ${{ fromJson(needs.discover.outputs.matrix) }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: go
+    env:
+      DEVICE_HOSTNAME: ${{ matrix.hostname }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build CLI
+        run: make build-cli
+
+      - name: Current version
+        id: version
+        run: |
+          SSH="ssh -o StrictHostKeyChecking=no localhost"
+          WORKDIR="$(pwd)"
+          SSH_ENV="export PATH='$PATH'"
+
+          INFO=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" || true)
+          echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}' || true
+          DEVICE_TYPE=$(echo "$INFO" | jq -r '.deviceType // ""' 2>/dev/null || true)
+          echo "device_type=$DEVICE_TYPE" >> "$GITHUB_OUTPUT"
+          if [[ -z "$DEVICE_TYPE" ]]; then
+            echo "No device type reported — skipping OS update."
+          fi
+
+      - name: Flash OS update, confirm online, and run template tests
+        if: steps.version.outputs.device_type != ''
+        run: |
+          SSH="ssh -o StrictHostKeyChecking=no localhost"
+          WORKDIR="$(pwd)"
+          SSH_ENV="export PATH='$PATH'"
+
+          # wendy os update blocks until the device reboots and comes back
+          # online, with a 5-minute internal timeout.
+          $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy os update --device '$DEVICE_HOSTNAME'"
+
+          $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
+            | jq '{osVersion, agentVersion: .version}'
+
+          $SSH "$SSH_ENV && cd '$WORKDIR' && scripts/test-templates.sh -w ./bin/wendy -h '$DEVICE_HOSTNAME'"

@@ -32,6 +32,8 @@ var (
 	templateArchiveAttemptTimeout = 2 * time.Minute
 	templateArchiveMaxAttempts    = 3
 	templateArchiveRetryDelay     = 750 * time.Millisecond
+	templateRawBaseURL            = "https://raw.githubusercontent.com"
+	templateLanguageProbeClient   = &http.Client{Timeout: 10 * time.Second}
 )
 
 // resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
@@ -51,7 +53,8 @@ type repoMeta struct {
 type repoMetaTemplate struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Targets     []string `json:"targets"` // optional; empty means all targets
+	Targets     []string `json:"targets"`   // optional; empty means all targets
+	Languages   []string `json:"languages"` // optional; empty means discover from repo layout
 }
 
 type repoMetaLanguage struct {
@@ -64,6 +67,50 @@ type templateManifest struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	Variables   []templateVariable `json:"variables"`
+	Schema      *templateSchema    `json:"-"` // populated from template.schema.json
+}
+
+// templateSchema is the parsed template.schema.json — defines multi-phase
+// configuration questions whose answers become template variables.
+type templateSchema struct {
+	Phases []templateSchemaPhase `json:"phases"`
+}
+
+// templateSchemaPhase groups a set of questions under an optional condition.
+type templateSchemaPhase struct {
+	ID        string                   `json:"id"`
+	Title     string                   `json:"title"`
+	Questions []templateSchemaQuestion `json:"questions"`
+	When      *templateSchemaCondition `json:"when,omitempty"`
+}
+
+// templateSchemaQuestion is a single question shown to the user.
+// Type is one of "radio", "checkbox", or "input".
+type templateSchemaQuestion struct {
+	ID       string                   `json:"id"`
+	Label    string                   `json:"label"`
+	Type     string                   `json:"type"`
+	Options  []templateSchemaOption   `json:"options,omitempty"`
+	When     *templateSchemaCondition `json:"when,omitempty"`
+	Required bool                     `json:"required"`
+	Default  string                   `json:"default,omitempty"`
+	Secret   bool                     `json:"secret,omitempty"`
+}
+
+// templateSchemaOption is a single selectable choice in a radio or checkbox question.
+type templateSchemaOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// templateSchemaCondition controls whether a phase or question is shown,
+// based on a previously answered question's value.
+// Exactly one of Equals, In, or Contains should be set.
+type templateSchemaCondition struct {
+	QuestionID string   `json:"questionId"`
+	Equals     *string  `json:"equals,omitempty"`
+	In         []string `json:"in,omitempty"`
+	Contains   *string  `json:"contains,omitempty"`
 }
 
 // templateVariable declares a single template variable.
@@ -119,6 +166,99 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 		}
 	}
 	return false
+}
+
+func templateByName(meta *repoMeta, templateName string) (*repoMetaTemplate, bool) {
+	if meta == nil {
+		return nil, false
+	}
+	for i := range meta.Templates {
+		if meta.Templates[i].Name == templateName {
+			return &meta.Templates[i], true
+		}
+	}
+	return nil, false
+}
+
+func templateLanguagesForTemplate(ctx context.Context, meta *repoMeta, templateName, branch string) ([]repoMetaLanguage, error) {
+	tmpl, ok := templateByName(meta, templateName)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", templateName)
+	}
+
+	if len(tmpl.Languages) > 0 {
+		return repoMetaLanguagesForKeys(meta, tmpl.Languages), nil
+	}
+
+	return probeTemplateLanguages(ctx, meta.Languages, templateName, branch)
+}
+
+func repoMetaLanguagesForKeys(meta *repoMeta, keys []string) []repoMetaLanguage {
+	if meta == nil || len(keys) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
+
+	languages := make([]repoMetaLanguage, 0, len(keys))
+	for _, language := range meta.Languages {
+		if _, ok := allowed[language.Key]; ok {
+			languages = append(languages, language)
+		}
+	}
+	return languages
+}
+
+func probeTemplateLanguages(ctx context.Context, languages []repoMetaLanguage, templateName, branch string) ([]repoMetaLanguage, error) {
+	branch = resolveTemplateBranch(branch)
+
+	available := make([]repoMetaLanguage, 0, len(languages))
+	for _, language := range languages {
+		ok, err := probeTemplateLanguage(ctx, branch, language.Key, templateName)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			available = append(available, language)
+		}
+	}
+	return available, nil
+}
+
+func probeTemplateLanguage(ctx context.Context, branch, language, templateName string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, templateLanguageManifestURL(branch, language, templateName), nil)
+	if err != nil {
+		return false, fmt.Errorf("checking template language availability: %w", err)
+	}
+
+	resp, err := templateLanguageProbeClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("checking template language availability (branch %q): %w", branch, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("checking template language availability (branch %q): HTTP %d", branch, resp.StatusCode)
+	}
+}
+
+func templateLanguageManifestURL(branch, language, templateName string) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/template.json",
+		strings.TrimRight(templateRawBaseURL, "/"),
+		templateRepoOwner,
+		templateRepoName,
+		resolveTemplateBranch(branch),
+		language,
+		templateName,
+	)
 }
 
 // progressCallback reports download progress. total is the expected content
@@ -256,7 +396,8 @@ func waitForTemplateArchiveRetry(ctx context.Context, delay time.Duration) error
 
 // extractTemplateArchive reads a gzipped tarball from r and extracts files
 // matching {language}/{templateName}/ into a map of relative path -> content.
-// It also returns the parsed template.json manifest.
+// It also returns the parsed template.json manifest (with optional schema
+// from template.schema.json attached).
 func extractTemplateArchive(r io.Reader, language, templateName string) (map[string][]byte, *templateManifest, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -272,6 +413,7 @@ func extractTemplateArchive(r io.Reader, language, templateName string) (map[str
 
 	files := make(map[string][]byte)
 	var manifest *templateManifest
+	var schema *templateSchema
 
 	for {
 		header, err := tr.Next()
@@ -324,6 +466,15 @@ func extractTemplateArchive(r io.Reader, language, templateName string) (map[str
 			continue // don't include template.json in output files
 		}
 
+		if relPath == "template.schema.json" {
+			var s templateSchema
+			if err := json.Unmarshal(content, &s); err != nil {
+				return nil, nil, fmt.Errorf("parsing template.schema.json: %w", err)
+			}
+			schema = &s
+			continue // don't include template.schema.json in output files
+		}
+
 		files[relPath] = content
 	}
 
@@ -331,6 +482,7 @@ func extractTemplateArchive(r io.Reader, language, templateName string) (map[str
 		return nil, nil, fmt.Errorf("template %q not found for language %q (no template.json)", templateName, language)
 	}
 
+	manifest.Schema = schema
 	return files, manifest, nil
 }
 
@@ -622,6 +774,191 @@ func isTextFile(path string) bool {
 		return true
 	}
 	return false
+}
+
+// collectSchemaAnswers walks a templateSchema and collects answers for each
+// applicable phase and question, storing results in vals. Phase and question
+// conditions are evaluated against the already-collected vals, so earlier
+// answers can gate later questions.
+//
+// For "radio" questions, vals[q.ID] is set to the selected option value.
+// For "input" questions, vals[q.ID] is set to the entered string.
+// For "checkbox" questions, vals[q.ID] is a comma-separated list of selected
+// values, and vals[q.ID+"_"+optionValue] is true/false for each option.
+//
+// In non-interactive mode, questions already answered in vals (e.g. via --var)
+// are skipped, and unanswered questions fall back to their defaults. Required
+// questions with no default and no pre-supplied value return an error.
+func collectSchemaAnswers(schema *templateSchema, vals map[string]interface{}) error {
+	interactive := isInteractiveTerminal()
+	for _, phase := range schema.Phases {
+		if !evaluateSchemaCondition(phase.When, vals) {
+			continue
+		}
+
+		if phase.Title != "" {
+			fmt.Printf("\n%s\n", phase.Title)
+		}
+
+		for _, q := range phase.Questions {
+			if !evaluateSchemaCondition(q.When, vals) {
+				continue
+			}
+			if _, answered := vals[q.ID]; answered {
+				continue
+			}
+			if !interactive {
+				if err := applySchemaDefault(q, vals); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := promptSchemaQuestion(q, vals); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// applySchemaDefault sets a schema question's answer in vals using its declared
+// default. For radio questions with no default, the first option is used. For
+// required questions that have no fallback, an error is returned directing the
+// user to supply the answer via --var.
+func applySchemaDefault(q templateSchemaQuestion, vals map[string]interface{}) error {
+	switch q.Type {
+	case "radio":
+		if q.Default != "" {
+			vals[q.ID] = q.Default
+		} else if len(q.Options) > 0 {
+			vals[q.ID] = q.Options[0].Value
+		} else if q.Required {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		}
+	case "checkbox":
+		if q.Required && q.Default == "" && len(q.Options) == 0 {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		}
+		selectedSet := map[string]bool{}
+		if q.Default != "" {
+			for _, p := range strings.Split(q.Default, ",") {
+				selectedSet[strings.TrimSpace(p)] = true
+			}
+		}
+		vals[q.ID] = q.Default
+		for _, opt := range q.Options {
+			vals[q.ID+"_"+opt.Value] = selectedSet[opt.Value]
+		}
+	default: // "input"
+		if q.Default != "" {
+			vals[q.ID] = q.Default
+		} else if q.Required {
+			return fmt.Errorf("schema question %q requires input in non-interactive mode (use --var %s=VALUE)", q.Label, q.ID)
+		} else {
+			vals[q.ID] = ""
+		}
+	}
+	return nil
+}
+
+// evaluateSchemaCondition returns true when cond is nil (no condition) or when
+// the condition matches the current vals.
+func evaluateSchemaCondition(cond *templateSchemaCondition, vals map[string]interface{}) bool {
+	if cond == nil {
+		return true
+	}
+
+	raw, ok := vals[cond.QuestionID]
+	if !ok {
+		return false
+	}
+	answer := fmt.Sprintf("%v", raw)
+
+	if cond.Equals != nil {
+		return answer == *cond.Equals
+	}
+
+	if len(cond.In) > 0 {
+		for _, v := range cond.In {
+			if answer == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	if cond.Contains != nil {
+		parts := strings.Split(answer, ",")
+		for _, p := range parts {
+			if strings.TrimSpace(p) == *cond.Contains {
+				return true
+			}
+		}
+		return false
+	}
+
+	return true
+}
+
+// promptSchemaQuestion shows the appropriate TUI prompt for a single question
+// and writes the result into vals.
+func promptSchemaQuestion(q templateSchemaQuestion, vals map[string]interface{}) error {
+	fmt.Println()
+
+	switch q.Type {
+	case "radio":
+		items := make([]tui.PickerItem, len(q.Options))
+		for i, opt := range q.Options {
+			items[i] = tui.PickerItem{Name: opt.Label, Value: opt.Value}
+		}
+		val, err := pickFromItems(q.Label, items)
+		if err != nil {
+			return err
+		}
+		vals[q.ID] = val
+
+	case "checkbox":
+		items := make([]tui.ChecklistItem, len(q.Options))
+		for i, opt := range q.Options {
+			items[i] = tui.ChecklistItem{Label: opt.Label, Value: opt.Value}
+		}
+		selected, err := tui.RunChecklist(q.Label, items)
+		if err != nil {
+			return err
+		}
+		// Build comma-separated list and per-option booleans.
+		selectedSet := make(map[string]bool, len(selected))
+		selectedValues := make([]string, 0, len(selected))
+		for _, item := range selected {
+			selectedSet[item.Value] = true
+			selectedValues = append(selectedValues, item.Value)
+		}
+		vals[q.ID] = strings.Join(selectedValues, ",")
+		for _, opt := range q.Options {
+			vals[q.ID+"_"+opt.Value] = selectedSet[opt.Value]
+		}
+
+	default: // "input"
+		validate := func(input string) error {
+			if q.Required && strings.TrimSpace(input) == "" {
+				return fmt.Errorf("%s cannot be empty", q.Label)
+			}
+			return nil
+		}
+		var val string
+		var err error
+		if q.Default != "" {
+			val, err = tui.PromptTextWithDefault(q.Label, "", q.Default, validate)
+		} else {
+			val, err = tui.PromptText(q.Label, "", validate)
+		}
+		if err != nil {
+			return err
+		}
+		vals[q.ID] = strings.TrimSpace(val)
+	}
+
+	return nil
 }
 
 // parseVarFlags parses --var KEY=VALUE flags into a map.

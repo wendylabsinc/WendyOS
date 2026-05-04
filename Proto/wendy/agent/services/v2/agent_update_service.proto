@@ -1,0 +1,36 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyAgentUpdateService {
+    rpc UpdateAgent(stream UpdateAgentRequest) returns (stream UpdateAgentResponse);
+}
+
+message UpdateAgentRequest {
+    oneof request_type {
+        Chunk chunk = 1;
+        ControlCommand control = 2;
+    }
+
+    message Chunk {
+        bytes data = 1;
+    }
+
+    message ControlCommand {
+        oneof command {
+            Update update = 1;
+        }
+
+        message Update {
+            string sha256 = 1;
+        }
+    }
+}
+
+message UpdateAgentResponse {
+    oneof response_type {
+        Updated updated = 1;
+    }
+
+    message Updated {}
+}

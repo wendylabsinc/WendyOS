@@ -28,6 +28,8 @@ type fileSyncEntry struct {
 	remotePath string // agent-relative path (full path for file; prefix for dir)
 }
 
+const fileSyncChunkSize = 4 * 1024 * 1024
+
 // buildLocalManifest walks root (a directory) and returns a FileSyncEntry for
 // every regular file found: path relative to root, size, SHA256 bytes, and
 // Unix permission bits as uint32. Symlinks and non-regular files are skipped.
@@ -140,7 +142,7 @@ func diffManifests(local, remote *agentpb.FileSyncManifest) manifestDiff {
 //  1. Builds the combined local manifest from all entries.
 //  2. Exchanges it with the agent (agent replies with its own manifest).
 //  3. Diffs the two manifests.
-//  4. Transfers only what changed, streaming in 256 KiB chunks.
+//  4. Transfers only what changed, streaming in 4 MiB chunks.
 //  5. Waits for FileSyncComplete.
 //
 // Progress is printed to stdout when there is something to transfer.
@@ -227,7 +229,6 @@ func syncFiles(
 	}
 
 	// Transfer each file.
-	const chunkSize = 256 * 1024
 	for _, agentPath := range diff.contentTransfers {
 		localPath, ok := localFiles[agentPath]
 		if !ok {
@@ -245,7 +246,7 @@ func syncFiles(
 		}
 
 		h := sha256.New()
-		buf := make([]byte, chunkSize)
+		buf := make([]byte, fileSyncChunkSize)
 		var fileSent int64
 		var sequence uint64
 		fileDisplayName := agentPath

@@ -111,6 +111,58 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
                 type: .unary
             )
         }
+        /// Namespace for "ListKnownWiFiNetworks" metadata.
+        public enum ListKnownWiFiNetworks: Sendable {
+            /// Request type for "ListKnownWiFiNetworks".
+            public typealias Input = Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest
+            /// Response type for "ListKnownWiFiNetworks".
+            public typealias Output = Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse
+            /// Descriptor for "ListKnownWiFiNetworks".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ListKnownWiFiNetworks",
+                type: .unary
+            )
+        }
+        /// Namespace for "SetWiFiNetworkPriority" metadata.
+        public enum SetWiFiNetworkPriority: Sendable {
+            /// Request type for "SetWiFiNetworkPriority".
+            public typealias Input = Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest
+            /// Response type for "SetWiFiNetworkPriority".
+            public typealias Output = Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse
+            /// Descriptor for "SetWiFiNetworkPriority".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "SetWiFiNetworkPriority",
+                type: .unary
+            )
+        }
+        /// Namespace for "ReorderKnownWiFiNetworks" metadata.
+        public enum ReorderKnownWiFiNetworks: Sendable {
+            /// Request type for "ReorderKnownWiFiNetworks".
+            public typealias Input = Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest
+            /// Response type for "ReorderKnownWiFiNetworks".
+            public typealias Output = Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse
+            /// Descriptor for "ReorderKnownWiFiNetworks".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ReorderKnownWiFiNetworks",
+                type: .unary
+            )
+        }
+        /// Namespace for "ForgetWiFiNetwork" metadata.
+        public enum ForgetWiFiNetwork: Sendable {
+            /// Request type for "ForgetWiFiNetwork".
+            public typealias Input = Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest
+            /// Response type for "ForgetWiFiNetwork".
+            public typealias Output = Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse
+            /// Descriptor for "ForgetWiFiNetwork".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "ForgetWiFiNetwork",
+                type: .unary
+            )
+        }
         /// Namespace for "ListHardwareCapabilities" metadata.
         public enum ListHardwareCapabilities: Sendable {
             /// Request type for "ListHardwareCapabilities".
@@ -198,6 +250,10 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             ConnectToWiFi.descriptor,
             GetWiFiStatus.descriptor,
             DisconnectWiFi.descriptor,
+            ListKnownWiFiNetworks.descriptor,
+            SetWiFiNetworkPriority.descriptor,
+            ReorderKnownWiFiNetworks.descriptor,
+            ForgetWiFiNetwork.descriptor,
             ListHardwareCapabilities.descriptor,
             ScanBluetoothPeripherals.descriptor,
             ConnectBluetoothPeripheral.descriptor,
@@ -347,6 +403,78 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse>
+
+        /// Handle the "ListKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > List only the WiFi networks that have a saved profile on the device.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` messages.
+        func listKnownWiFiNetworks(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>
+
+        /// Handle the "SetWiFiNetworkPriority" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Set the autoconnect priority (rank) of a single known network.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` messages.
+        func setWiFiNetworkPriority(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>
+
+        /// Handle the "ReorderKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` messages.
+        func reorderKnownWiFiNetworks(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>
+
+        /// Handle the "ForgetWiFiNetwork" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Remove a known network (NetworkManager profile) from the device.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` messages.
+        func forgetWiFiNetwork(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>
 
         /// Handle the "ListHardwareCapabilities" method.
         ///
@@ -568,6 +696,78 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse>
 
+        /// Handle the "ListKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > List only the WiFi networks that have a saved profile on the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` message.
+        func listKnownWiFiNetworks(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>
+
+        /// Handle the "SetWiFiNetworkPriority" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Set the autoconnect priority (rank) of a single known network.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` message.
+        func setWiFiNetworkPriority(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>
+
+        /// Handle the "ReorderKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` message.
+        func reorderKnownWiFiNetworks(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>
+
+        /// Handle the "ForgetWiFiNetwork" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Remove a known network (NetworkManager profile) from the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` message.
+        func forgetWiFiNetwork(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>
+
         /// Handle the "ListHardwareCapabilities" method.
         ///
         /// > Source IDL Documentation:
@@ -788,6 +988,78 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_DisconnectWiFiResponse
 
+        /// Handle the "ListKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > List only the WiFi networks that have a saved profile on the device.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` to respond with.
+        func listKnownWiFiNetworks(
+            request: Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse
+
+        /// Handle the "SetWiFiNetworkPriority" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Set the autoconnect priority (rank) of a single known network.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` to respond with.
+        func setWiFiNetworkPriority(
+            request: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse
+
+        /// Handle the "ReorderKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` to respond with.
+        func reorderKnownWiFiNetworks(
+            request: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse
+
+        /// Handle the "ForgetWiFiNetwork" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Remove a known network (NetworkManager profile) from the device.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` to respond with.
+        func forgetWiFiNetwork(
+            request: Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse
+
         /// Handle the "ListHardwareCapabilities" method.
         ///
         /// > Source IDL Documentation:
@@ -966,6 +1238,50 @@ extension Wendy_Agent_Services_V1_WendyAgentService.StreamingServiceProtocol {
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ListKnownWiFiNetworks.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>(),
+            handler: { request, context in
+                try await self.listKnownWiFiNetworks(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.SetWiFiNetworkPriority.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>(),
+            handler: { request, context in
+                try await self.setWiFiNetworkPriority(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ReorderKnownWiFiNetworks.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>(),
+            handler: { request, context in
+                try await self.reorderKnownWiFiNetworks(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ForgetWiFiNetwork.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>(),
+            handler: { request, context in
+                try await self.forgetWiFiNetwork(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.ListHardwareCapabilities.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse>(),
@@ -1086,6 +1402,50 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse> {
         let response = try await self.disconnectWiFi(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func listKnownWiFiNetworks(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse> {
+        let response = try await self.listKnownWiFiNetworks(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func setWiFiNetworkPriority(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse> {
+        let response = try await self.setWiFiNetworkPriority(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func reorderKnownWiFiNetworks(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse> {
+        let response = try await self.reorderKnownWiFiNetworks(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func forgetWiFiNetwork(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse> {
+        let response = try await self.forgetWiFiNetwork(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -1243,6 +1603,58 @@ extension Wendy_Agent_Services_V1_WendyAgentService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse>(
             message: try await self.disconnectWiFi(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func listKnownWiFiNetworks(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>(
+            message: try await self.listKnownWiFiNetworks(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func setWiFiNetworkPriority(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>(
+            message: try await self.setWiFiNetworkPriority(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func reorderKnownWiFiNetworks(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>(
+            message: try await self.reorderKnownWiFiNetworks(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func forgetWiFiNetwork(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>(
+            message: try await self.forgetWiFiNetwork(
                 request: request.message,
                 context: context
             ),
@@ -1498,6 +1910,98 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_DisconnectWiFiResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_DisconnectWiFiResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ListKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > List only the WiFi networks that have a saved profile on the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func listKnownWiFiNetworks<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "SetWiFiNetworkPriority" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Set the autoconnect priority (rank) of a single known network.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func setWiFiNetworkPriority<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ReorderKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func reorderKnownWiFiNetworks<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ForgetWiFiNetwork" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Remove a known network (NetworkManager profile) from the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func forgetWiFiNetwork<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
         /// Call the "ListHardwareCapabilities" method.
@@ -1859,6 +2363,142 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             try await self.client.unary(
                 request: request,
                 descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.DisconnectWiFi.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ListKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > List only the WiFi networks that have a saved profile on the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func listKnownWiFiNetworks<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ListKnownWiFiNetworks.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "SetWiFiNetworkPriority" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Set the autoconnect priority (rank) of a single known network.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func setWiFiNetworkPriority<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.SetWiFiNetworkPriority.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ReorderKnownWiFiNetworks" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func reorderKnownWiFiNetworks<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ReorderKnownWiFiNetworks.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ForgetWiFiNetwork" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Remove a known network (NetworkManager profile) from the device.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func forgetWiFiNetwork<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.ForgetWiFiNetwork.descriptor,
                 serializer: serializer,
                 deserializer: deserializer,
                 options: options,
@@ -2247,6 +2887,122 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
         )
     }
 
+    /// Call the "ListKnownWiFiNetworks" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > List only the WiFi networks that have a saved profile on the device.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listKnownWiFiNetworks<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.listKnownWiFiNetworks(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetWiFiNetworkPriority" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Set the autoconnect priority (rank) of a single known network.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setWiFiNetworkPriority<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.setWiFiNetworkPriority(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReorderKnownWiFiNetworks" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func reorderKnownWiFiNetworks<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.reorderKnownWiFiNetworks(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ForgetWiFiNetwork" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Remove a known network (NetworkManager profile) from the device.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func forgetWiFiNetwork<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.forgetWiFiNetwork(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "ListHardwareCapabilities" method.
     ///
     /// > Source IDL Documentation:
@@ -2621,6 +3377,138 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             metadata: metadata
         )
         return try await self.disconnectWiFi(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ListKnownWiFiNetworks" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > List only the WiFi networks that have a saved profile on the device.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listKnownWiFiNetworks<Result>(
+        _ message: Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.listKnownWiFiNetworks(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetWiFiNetworkPriority" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Set the autoconnect priority (rank) of a single known network.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setWiFiNetworkPriority<Result>(
+        _ message: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.setWiFiNetworkPriority(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReorderKnownWiFiNetworks" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Bulk-reorder known networks by SSID. Earlier SSIDs get higher priority.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func reorderKnownWiFiNetworks<Result>(
+        _ message: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.reorderKnownWiFiNetworks(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ForgetWiFiNetwork" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Remove a known network (NetworkManager profile) from the device.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func forgetWiFiNetwork<Result>(
+        _ message: Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.forgetWiFiNetwork(
             request: request,
             options: options,
             onResponse: handleResponse

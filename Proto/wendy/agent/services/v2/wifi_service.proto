@@ -1,0 +1,108 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyWiFiService {
+    rpc ListWiFiNetworks(ListWiFiNetworksRequest) returns (ListWiFiNetworksResponse);
+    rpc ConnectToWiFi(ConnectToWiFiRequest) returns (ConnectToWiFiResponse);
+    rpc GetWiFiStatus(GetWiFiStatusRequest) returns (GetWiFiStatusResponse);
+    rpc DisconnectWiFi(DisconnectWiFiRequest) returns (DisconnectWiFiResponse);
+    rpc ListKnownWiFiNetworks(ListKnownWiFiNetworksRequest) returns (ListKnownWiFiNetworksResponse);
+    rpc SetWiFiNetworkPriority(SetWiFiNetworkPriorityRequest) returns (SetWiFiNetworkPriorityResponse);
+    rpc ReorderKnownWiFiNetworks(ReorderKnownWiFiNetworksRequest) returns (ReorderKnownWiFiNetworksResponse);
+    rpc ForgetWiFiNetwork(ForgetWiFiNetworkRequest) returns (ForgetWiFiNetworkResponse);
+}
+
+enum WiFiSecurityType {
+    WIFI_SECURITY_TYPE_UNSPECIFIED = 0;
+    WIFI_SECURITY_TYPE_OPEN = 1;
+    WIFI_SECURITY_TYPE_WEP = 2;
+    WIFI_SECURITY_TYPE_WPA_PSK = 3;
+    WIFI_SECURITY_TYPE_WPA2_PSK = 4;
+    WIFI_SECURITY_TYPE_WPA3_SAE = 5;
+    WIFI_SECURITY_TYPE_WPA2_ENTERPRISE = 6;
+}
+
+message ListWiFiNetworksRequest {}
+
+message ListWiFiNetworksResponse {
+    repeated WiFiNetwork networks = 1;
+
+    message WiFiNetwork {
+        string ssid = 1;
+        optional int32 signal_strength = 2;
+        WiFiSecurityType security = 3;
+        bool is_known = 4;
+        bool is_connected = 5;
+        optional int32 priority = 6;
+        optional int32 rssi_dbm = 7;
+    }
+}
+
+message ConnectToWiFiRequest {
+    string ssid = 1;
+    string password = 2;
+    optional WiFiSecurityType security = 3;
+    optional bool hidden = 4;
+}
+
+message ConnectToWiFiResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message GetWiFiStatusRequest {}
+
+message GetWiFiStatusResponse {
+    bool connected = 1;
+    optional string ssid = 2;
+    optional string error_message = 3;
+}
+
+message DisconnectWiFiRequest {}
+
+message DisconnectWiFiResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message ListKnownWiFiNetworksRequest {}
+
+message ListKnownWiFiNetworksResponse {
+    repeated KnownWiFiNetwork networks = 1;
+
+    message KnownWiFiNetwork {
+        string ssid = 1;
+        string uuid = 2;
+        int32 priority = 3;
+        WiFiSecurityType security = 4;
+    }
+}
+
+message SetWiFiNetworkPriorityRequest {
+    string ssid = 1;
+    int32 priority = 2;
+}
+
+message SetWiFiNetworkPriorityResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message ReorderKnownWiFiNetworksRequest {
+    repeated string order_ssids = 1;
+}
+
+message ReorderKnownWiFiNetworksResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message ForgetWiFiNetworkRequest {
+    string ssid = 1;
+}
+
+message ForgetWiFiNetworkResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}

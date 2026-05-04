@@ -1,0 +1,205 @@
+name: Docs Update
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  docs-update:
+    name: Update wendylabsinc/docs
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} > pr.diff
+
+      - name: Check out docs
+        uses: actions/checkout@v4
+        with:
+          repository: wendylabsinc/docs
+          token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
+          path: docs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Anthropic SDK
+        run: pip install --quiet anthropic==0.97.0
+
+      - name: Update docs with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          python3 << 'PYEOF'
+          import anthropic
+          import os
+          import re
+          import pathlib
+
+          client = anthropic.Anthropic()
+
+          with open('pr.diff') as f:
+              diff = f.read()
+
+          if not diff.strip():
+              print('Empty diff — skipping')
+              raise SystemExit(0)
+
+          docs_root = pathlib.Path('docs').resolve()
+          repo_name = os.environ['REPO_NAME']
+          pr_title = os.environ['PR_TITLE']
+          pr_body = os.environ['PR_BODY']
+
+          # Files managed by dedicated workflows — never touch these
+          PROTECTED = {'THREAT_MODEL.md', 'threat-model.md'}
+
+          # Score docs by keyword overlap with the diff + PR title so the most
+          # relevant files fill the context budget rather than alphabetical-first ones.
+          def _keywords(text):
+              return set(re.findall(r'[a-zA-Z][a-zA-Z0-9_]{3,}', text.lower()))
+
+          pr_keywords = _keywords(pr_title) | _keywords(diff[:8000])
+
+          def _relevance(doc):
+              path_hits = len(_keywords(doc['path']) & pr_keywords) * 3
+              body_hits = len(_keywords(doc['content'][:1500]) & pr_keywords)
+              return path_hits + body_hits
+
+          DOCS_BUDGET = 50000
+          candidate_docs = []
+          for md in sorted(docs_root.rglob('*.md')):
+              rel = md.relative_to(docs_root)
+              if any(part.startswith('.') for part in rel.parts):
+                  continue
+              if rel.name in PROTECTED:
+                  continue
+              content = md.read_text()
+              if not content.strip():
+                  continue
+              candidate_docs.append({'path': str(rel), 'content': content})
+
+          # Sort by relevance descending so the budget favours the most pertinent files
+          candidate_docs.sort(key=_relevance, reverse=True)
+
+          all_docs = []
+          total_bytes = 0
+          for doc in candidate_docs:
+              if total_bytes + len(doc['content']) > DOCS_BUDGET:
+                  print(f'Doc budget reached at {total_bytes} chars, skipping remaining files')
+                  break
+              all_docs.append(doc)
+              total_bytes += len(doc['content'])
+
+          # Build a compact file-tree limited to 3 levels deep
+          MAX_TREE_DEPTH = 3
+          tree_lines = []
+          for item in sorted(docs_root.rglob('*')):
+              rel = item.relative_to(docs_root)
+              if any(part.startswith('.') for part in rel.parts):
+                  continue
+              if len(rel.parts) > MAX_TREE_DEPTH:
+                  continue
+              indent = '  ' * (len(rel.parts) - 1)
+              tree_lines.append(f'{indent}{rel.name}{"/" if item.is_dir() else ""}')
+          file_tree = '\n'.join(tree_lines)
+
+          docs_context = '\n\n'.join(
+              f'### {d["path"]}\n{d["content"]}' for d in all_docs
+          )
+
+          message = client.messages.create(
+              model='claude-sonnet-4-6',
+              max_tokens=16000,
+              system=[
+                  {
+                      'type': 'text',
+                      'text': (
+                          'You are a technical writer for WendyOS.\n'
+                          'The docs are the single source of truth for all of WendyOS — write them as authoritative facts, never as a record of what a PR did.\n\n'
+                          'Given a PR diff and the current documentation, make the minimal changes needed to keep the docs accurate.\n\n'
+                          'Rules:\n'
+                          '- Only touch content that is directly wrong or missing as a result of the diff: '
+                          'added behaviour, removed behaviour, or changed behaviour. Nothing else.\n'
+                          '- Make surgical edits: change the specific sentence, paragraph, or section. '
+                          'Leave everything else exactly as-is.\n'
+                          '- Write in timeless present tense ("X does Y", not "this PR adds X" or "as of version N").\n'
+                          '- Create new files only for features that are completely undocumented.\n'
+                          '- Do not invent features absent from the diff.\n'
+                          '- Do not remove documentation unless the diff explicitly deletes the feature.\n'
+                          '- Never create or modify THREAT_MODEL.md or any threat model file — '
+                          'these accumulate history across many PRs and are managed by a dedicated security workflow.\n\n'
+                          'Output ONLY files that need to change, using this exact format:\n'
+                          '<file path="path/to/file.md">full file content</file>\n\n'
+                          'Paths are relative to the docs repo root. '
+                          'Omit files that require no changes. '
+                          'If nothing needs updating, output nothing.'
+                      ),
+                      'cache_control': {'type': 'ephemeral'},
+                  }
+              ],
+              messages=[{
+                  'role': 'user',
+                  'content': (
+                      f'Source repo: {repo_name}\n'
+                      f'PR #{os.environ["PR_NUMBER"]}: {pr_title}\n\n'
+                      f'{pr_body}\n\n'
+                      f'## Diff\n```diff\n{diff[:30000]}\n```\n\n'
+                      f'## Docs file tree\n```\n{file_tree}\n```\n\n'
+                      f'## Current docs (most relevant first)\n{docs_context[:50000]}'
+                  ),
+              }],
+          )
+
+          updated = 0
+          for match in re.finditer(
+              r'<file path="([^"]+)">(.*?)</file>',
+              message.content[0].text,
+              re.DOTALL,
+          ):
+              fpath = (docs_root / match.group(1)).resolve()
+              try:
+                  fpath.relative_to(docs_root)
+              except ValueError:
+                  print(f'Skipping unsafe path: {match.group(1)}')
+                  continue
+              if fpath.suffix.lower() != '.md':
+                  print(f'Skipping non-markdown path: {match.group(1)}')
+                  continue
+              if fpath.name in PROTECTED:
+                  print(f'Skipping protected path: {match.group(1)}')
+                  continue
+              is_new = not fpath.exists()
+              fpath.parent.mkdir(parents=True, exist_ok=True)
+              fpath.write_text(match.group(2).strip() + '\n')
+              print(f'{"Created" if is_new else "Updated"}: {fpath.relative_to(docs_root)}')
+              updated += 1
+
+          if updated == 0:
+              print('Claude found no doc changes needed')
+          PYEOF
+
+      - name: Open PR to docs
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
+          path: docs
+          branch: docs-update/${{ github.event.repository.name }}-${{ github.event.pull_request.number }}
+          title: "docs: update for ${{ github.event.repository.name }}#${{ github.event.pull_request.number }}"
+          body: |
+            Automated docs update triggered by ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+          commit-message: "docs: sync from ${{ github.repository }}#${{ github.event.pull_request.number }}"
+          base: main

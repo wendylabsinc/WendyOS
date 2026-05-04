@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	"google.golang.org/grpc/metadata"
 )
 
 func testPort(t *testing.T, ln net.Listener) int {
@@ -102,13 +103,21 @@ func TestWaitForReadiness_PortBecomesAvailable(t *testing.T) {
 }
 
 func TestWaitForReadiness_Timeout(t *testing.T) {
+	// Grab a free port from the OS, then release it immediately so nothing listens on it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := testPort(t, ln)
+	ln.Close()
+
 	cfg := &appconfig.ReadinessConfig{
-		TCPSocket:      &appconfig.TCPSocketProbe{Port: 19999},
+		TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
 		TimeoutSeconds: 2,
 	}
 
 	start := time.Now()
-	err := waitForReadiness(context.Background(), cfg, "127.0.0.1")
+	err = waitForReadiness(context.Background(), cfg, "127.0.0.1")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -120,8 +129,16 @@ func TestWaitForReadiness_Timeout(t *testing.T) {
 }
 
 func TestWaitForReadiness_ContextCancelled(t *testing.T) {
+	// Grab a free port from the OS, then release it immediately so nothing listens on it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := testPort(t, ln)
+	ln.Close()
+
 	cfg := &appconfig.ReadinessConfig{
-		TCPSocket:      &appconfig.TCPSocketProbe{Port: 19999},
+		TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
 		TimeoutSeconds: 30,
 	}
 
@@ -132,7 +149,7 @@ func TestWaitForReadiness_ContextCancelled(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := waitForReadiness(ctx, cfg, "127.0.0.1")
+	err = waitForReadiness(ctx, cfg, "127.0.0.1")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -165,5 +182,31 @@ func TestStartPostStartHook_EmptyCLI(t *testing.T) {
 	cmd := startPostStartHook(context.Background(), cfg, "localhost")
 	if cmd != nil {
 		t.Error("expected nil cmd when CLI is empty")
+	}
+}
+
+func TestContextWithPostStartAgentHook(t *testing.T) {
+	cfg := &appconfig.AppConfig{
+		AppID: "test",
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{Agent: "wendy-agent utils open-browser http://localhost:3000"},
+		},
+	}
+
+	ctx := contextWithPostStartAgentHook(context.Background(), cfg)
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("expected outgoing metadata")
+	}
+	got := md.Get(appconfig.PostStartAgentHookMetadataKey)
+	if len(got) != 1 || got[0] != "wendy-agent utils open-browser http://localhost:3000" {
+		t.Fatalf("metadata hook = %#v", got)
+	}
+}
+
+func TestContextWithPostStartAgentHookEmpty(t *testing.T) {
+	ctx := contextWithPostStartAgentHook(context.Background(), &appconfig.AppConfig{AppID: "test"})
+	if _, ok := metadata.FromOutgoingContext(ctx); ok {
+		t.Fatal("expected no outgoing metadata for empty agent hook")
 	}
 }

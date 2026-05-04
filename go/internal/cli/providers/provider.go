@@ -63,6 +63,14 @@ type ImageBuilder interface {
 	BuildFromImage(device models.ExternalDevice, product, imageName string) *BuiltApp
 }
 
+// TypedBuilder is optionally implemented by providers that can disambiguate
+// between multiple buildable markers in the same project using the caller's
+// resolved build type (e.g. "docker" vs "compose"). When the build type is
+// empty, the provider should apply its default heuristic.
+type TypedBuilder interface {
+	BuildWithType(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType string, debug bool) (*BuiltApp, error)
+}
+
 // ContainerManager is optionally implemented by providers that support
 // managing container lifecycle (list, start, stop, remove).
 type ContainerManager interface {

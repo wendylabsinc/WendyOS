@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -21,6 +22,7 @@ import (
 type fakeMacRunState struct {
 	fakeSyncServer
 	createReqs []*agentpb.CreateContainerRequest
+	startReqs  []*agentpb.StartContainerRequest
 }
 
 type fakeMacAgentServer struct {
@@ -28,7 +30,7 @@ type fakeMacAgentServer struct {
 }
 
 func (s *fakeMacAgentServer) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
-	return &agentpb.GetAgentVersionResponse{CpuArchitecture: runtime.GOARCH}, nil
+	return &agentpb.GetAgentVersionResponse{Os: "darwin", CpuArchitecture: runtime.GOARCH}, nil
 }
 
 type fakeMacContainerServer struct {
@@ -39,6 +41,11 @@ type fakeMacContainerServer struct {
 func (s *fakeMacContainerServer) CreateContainer(_ context.Context, req *agentpb.CreateContainerRequest) (*agentpb.CreateContainerResponse, error) {
 	s.state.createReqs = append(s.state.createReqs, proto.Clone(req).(*agentpb.CreateContainerRequest))
 	return &agentpb.CreateContainerResponse{}, nil
+}
+
+func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, _ grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
+	s.state.startReqs = append(s.state.startReqs, proto.Clone(req).(*agentpb.StartContainerRequest))
+	return nil
 }
 
 func startFakeMacRunServer(t *testing.T, state *fakeMacRunState) (*grpcclient.AgentConnection, func()) {
@@ -193,5 +200,69 @@ func TestRunMacOSSwiftPMWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	}
 	if len(got.UserArgs) != 2 || got.UserArgs[0] != "--port" || got.UserArgs[1] != "8080" {
 		t.Fatalf("UserArgs = %v, want %v", got.UserArgs, appCfg.Run.Args)
+	}
+}
+
+func TestRunWithAgent_RejectsLinuxContainersOnMacs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile Dockerfile: %v", err)
+	}
+
+	state := &fakeMacRunState{}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	appCfg := &appconfig.AppConfig{
+		AppID:    "sh.wendy.MacLinuxContainer",
+		Platform: "linux/arm64",
+	}
+
+	err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{})
+	if err == nil {
+		t.Fatal("runWithAgent error = nil, want unsupported platform error")
+	}
+	if got := err.Error(); !strings.Contains(got, "Linux containers aren't supported on Macs yet") {
+		t.Fatalf("runWithAgent error = %q, want unsupported Macs message", got)
+	}
+	if len(state.createReqs) != 0 {
+		t.Fatalf("CreateContainer calls = %d, want 0", len(state.createReqs))
+	}
+	if len(state.startReqs) != 0 {
+		t.Fatalf("StartContainer calls = %d, want 0", len(state.startReqs))
+	}
+}
+
+func TestStartAndStreamContainer_FallsBackWhenCreateProgressIsUnimplemented(t *testing.T) {
+	origInteractive := isInteractiveTerminalFn
+	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
+	isInteractiveTerminalFn = func() bool { return false }
+
+	state := &fakeMacRunState{}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	appCfg := &appconfig.AppConfig{AppID: "sh.wendy.LegacyLinuxApp"}
+	createReq := &agentpb.CreateContainerRequest{
+		AppName:   appCfg.AppID,
+		ImageName: "localhost:5000/sh.wendy.legacylinuxapp:latest",
+	}
+
+	err := startAndStreamContainer(context.Background(), conn, appCfg, createReq, runOptions{detach: true})
+	if err != nil {
+		t.Fatalf("startAndStreamContainer: %v", err)
+	}
+
+	if len(state.createReqs) != 1 {
+		t.Fatalf("CreateContainer calls = %d, want 1", len(state.createReqs))
+	}
+	if state.createReqs[0].GetAppName() != appCfg.AppID {
+		t.Fatalf("CreateContainer AppName = %q, want %q", state.createReqs[0].GetAppName(), appCfg.AppID)
+	}
+	if len(state.startReqs) != 1 {
+		t.Fatalf("StartContainer calls = %d, want 1", len(state.startReqs))
+	}
+	if state.startReqs[0].GetAppName() != appCfg.AppID {
+		t.Fatalf("StartContainer AppName = %q, want %q", state.startReqs[0].GetAppName(), appCfg.AppID)
 	}
 }

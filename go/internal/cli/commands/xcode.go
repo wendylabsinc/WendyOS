@@ -118,14 +118,22 @@ func parseXcodeSchemes(data []byte) ([]string, error) {
 func findXcodeScheme(ctx context.Context, dir string) (string, error) {
 	cmd := execCommandContext(ctx, "xcodebuild", "-list", "-json")
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
 		}
-		return "", fmt.Errorf("xcodebuild -list -json failed: %s: %w", strings.TrimSpace(string(out)), err)
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		return "", fmt.Errorf("xcodebuild -list -json failed: %s: %w", msg, err)
 	}
-	schemes, err := parseXcodeSchemes(out)
+	schemes, err := parseXcodeSchemes([]byte(stdout.String()))
 	if err != nil {
 		return "", err
 	}
