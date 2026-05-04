@@ -371,4 +371,3 @@ func TestResolveHome_Default(t *testing.T) {
 		t.Error("expected non-empty home")
 	}
 }
-
