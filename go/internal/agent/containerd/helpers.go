@@ -123,9 +123,21 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 		}
 	}
 
-	for i, e := range entitlements {
+	typeCounts := make(map[string]int)
+	for _, e := range entitlements {
+		typeCounts[e.Type]++
+	}
+	typeIndex := make(map[string]int)
+	for _, e := range entitlements {
+		var key string
+		if typeCounts[e.Type] == 1 {
+			key = labelKeyEntitlementPrefix + e.Type
+		} else {
+			key = fmt.Sprintf("%s%s.%d", labelKeyEntitlementPrefix, e.Type, typeIndex[e.Type])
+			typeIndex[e.Type]++
+		}
 		if data, err := json.Marshal(e); err == nil {
-			labels[fmt.Sprintf("%s%d", labelKeyEntitlementPrefix, i)] = string(data)
+			labels[key] = string(data)
 		}
 	}
 
