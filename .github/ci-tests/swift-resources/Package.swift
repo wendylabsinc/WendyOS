@@ -6,6 +6,9 @@ let package = Package(
     platforms: [
         .macOS(.v13)
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-container-plugin", from: "1.3.0"),
+    ],
     targets: [
         .executableTarget(
             name: "CISwiftResources",
