@@ -70,6 +70,7 @@ func newCompletionInstallCmd() *cobra.Command {
 		shellOverride string
 		outputDir     string
 		printPath     bool
+		toStdout      bool
 	)
 
 	cmd := &cobra.Command{
@@ -77,12 +78,19 @@ func newCompletionInstallCmd() *cobra.Command {
 		Short: "Install shell completions into the user's standard config locations",
 		Long: "Detect the current shell and write its completion script to the conventional " +
 			"location, appending an idempotent sourcing line to your shell rc file when needed.\n\n" +
-			"Use --shell to override shell detection, or --print-path for a dry run.",
+			"Use --shell to override shell detection, --print-path for a dry run, or --stdout " +
+			"to print the script to stdout (useful for `brew install` completion staging).",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if toStdout && printPath {
+				return errors.New("--stdout and --print-path are mutually exclusive")
+			}
 			shell, err := detectShell(shellOverride, runtime.GOOS, os.Getenv)
 			if err != nil {
 				return err
+			}
+			if toStdout {
+				return writeShellScript(c.Root(), shell, c.OutOrStdout())
 			}
 			home, err := resolveHome(outputDir)
 			if err != nil {
@@ -108,6 +116,7 @@ func newCompletionInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&shellOverride, "shell", "", "Override shell (bash|zsh|fish|powershell)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Use this directory as $HOME (for testing)")
 	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print install paths without writing")
+	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Print the completion script to stdout instead of installing")
 	// --output-dir is a test seam, not a user-facing knob; hide from --help.
 	_ = cmd.Flags().MarkHidden("output-dir")
 	return cmd
