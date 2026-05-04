@@ -116,6 +116,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             return entry
         }
 
+        // Pure response builder; callers are responsible for writing the ack.
         func ackResponse(for path: String) -> Wendy_Agent_Services_V1_FileSyncResponse {
             var ackResponse = Wendy_Agent_Services_V1_FileSyncResponse()
             var ack = Wendy_Agent_Services_V1_FileSyncAck()
