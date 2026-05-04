@@ -35,6 +35,8 @@ struct `global flags` {
     func `'--device' overrides the selected target device`() async throws {
         let agent = try await Machine.agent()
 
+        // TODO: this test looks quite convoluted. Make it nice.
+
         try await agent.run("make quit || true")
         do {
             try await agent.run("open Build/WendyAgentMac.app")
