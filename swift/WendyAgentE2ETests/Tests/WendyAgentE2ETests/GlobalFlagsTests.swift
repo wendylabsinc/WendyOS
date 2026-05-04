@@ -15,8 +15,7 @@ struct `global flags` {
         try await self.cli.run("./bin/wendy --json info") { standardOutput, standardError in
             #expect(standardError.isEmpty)
 
-            let data = Data(standardOutput.utf8)
-            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let object = try Helper.jsonObject(from: standardOutput)
 
             #expect(object["version"] as? String == "dev")
             #expect(object["os"] as? String == "darwin")
@@ -56,10 +55,7 @@ struct `global flags` {
                 standardError in
                 #expect(standardError.isEmpty)
 
-                let data = Data(standardOutput.utf8)
-                let object = try #require(
-                    JSONSerialization.jsonObject(with: data) as? [String: Any]
-                )
+                let object = try Helper.jsonObject(from: standardOutput)
 
                 #expect(object["os"] as? String == "darwin")
                 #expect((object["version"] as? String)?.isEmpty == false)

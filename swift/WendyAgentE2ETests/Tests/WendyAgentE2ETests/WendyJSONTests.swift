@@ -13,7 +13,7 @@ struct `wendy json` {
     @Test
     func `'wendy json schema' prints the wendy.json schema`() async throws {
         let expectedSchema = try String(
-            contentsOf: Self.repositoryRootDirectoryURL()
+            contentsOf: Helper.repositoryRootDirectoryURL()
                 .appendingPathComponent("go/internal/shared/appconfig/wendy.schema.json"),
             encoding: .utf8
         )
@@ -22,9 +22,7 @@ struct `wendy json` {
             #expect(standardError.isEmpty)
             #expect(standardOutput == expectedSchema + "\n")
 
-            let data = try #require(standardOutput.data(using: .utf8))
-            let object = try JSONSerialization.jsonObject(with: data)
-            let schema = try #require(object as? [String: Any])
+            let schema = try Helper.jsonObject(from: standardOutput)
             let properties = try #require(schema["properties"] as? [String: Any])
             let required = try #require(schema["required"] as? [Any])
 
@@ -44,9 +42,9 @@ struct `wendy json` {
 
     @Test
     func `'wendy json validate' accepts a valid wendy.json file`() async throws {
-        let directory = try Self.temporaryDirectory(prefix: "wendy-json-valid")
+        let directory = try Helper.temporaryDirectory(prefix: "wendy-json-valid")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let file = try Self.writeWendyJSON(
+        let file = try Helper.writeWendyJSON(
             """
             {
               "appId": "sh.wendy.e2e.valid-json",
@@ -62,7 +60,7 @@ struct `wendy json` {
             to: directory
         )
 
-        try await self.cli.run("./bin/wendy json validate \(Self.shellQuote(file.path))") {
+        try await self.cli.run("./bin/wendy json validate \(Helper.shellQuote(file.path))") {
             standardOutput,
             standardError in
             #expect(standardOutput == "wendy.json is valid.\n")
@@ -76,9 +74,9 @@ struct `wendy json` {
 
     @Test
     func `'wendy json validate' rejects an invalid wendy.json file`() async throws {
-        let directory = try Self.temporaryDirectory(prefix: "wendy-json-invalid")
+        let directory = try Helper.temporaryDirectory(prefix: "wendy-json-invalid")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let file = try Self.writeWendyJSON(
+        let file = try Helper.writeWendyJSON(
             """
             {
               "version": "1.0.0",
@@ -89,7 +87,7 @@ struct `wendy json` {
         )
 
         let record = try await self.cli.run(
-            "./bin/wendy json validate \(Self.shellQuote(file.path))",
+            "./bin/wendy json validate \(Helper.shellQuote(file.path))",
             output: .string(limit: .max),
             error: .string(limit: .max)
         )
@@ -102,31 +100,5 @@ struct `wendy json` {
         // - Failure message clearly identifies the missing required appId field.
         // - Invalid config exits non-zero without printing a success message.
         // - Diagnostics are concise and not noisy.
-    }
-
-    private static func repositoryRootDirectoryURL() -> URL {
-        URL(fileURLWithPath: #filePath, isDirectory: false)
-            .deletingLastPathComponent()  // Tests/WendyAgentE2ETests
-            .deletingLastPathComponent()  // Tests
-            .deletingLastPathComponent()  // swift/WendyAgentE2ETests
-            .deletingLastPathComponent()  // swift
-            .deletingLastPathComponent()  // repository root
-    }
-
-    private static func temporaryDirectory(prefix: String) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
-    }
-
-    private static func writeWendyJSON(_ contents: String, to directory: URL) throws -> URL {
-        let file = directory.appendingPathComponent("wendy.json", isDirectory: false)
-        try contents.write(to: file, atomically: true, encoding: .utf8)
-        return file
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

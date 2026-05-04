@@ -7,7 +7,7 @@ extension Machine {
         let machine = Machine(
             name: "CLI",
             ssh: ssh,
-            workingDirectory: Self.rootDirectoryURL().appendingPathComponent("go").path,
+            workingDirectory: Helper.repositoryRootDirectoryURL().appendingPathComponent("go").path,
             verbose: verbose
         )
 
@@ -24,7 +24,7 @@ extension Machine {
         let machine = Machine(
             name: "Agent",
             ssh: ssh,
-            workingDirectory: Self.rootDirectoryURL().appendingPathComponent("swift").path,
+            workingDirectory: Helper.repositoryRootDirectoryURL().appendingPathComponent("swift").path,
             verbose: verbose
         )
 
@@ -45,13 +45,4 @@ extension Machine {
 
     private static let buildCLIOnce = Once(name: "build CLI")
     private static let buildAgentOnce = Once(name: "build agent")
-
-    private static func rootDirectoryURL() -> URL {
-        URL(fileURLWithPath: #filePath, isDirectory: false)
-            .deletingLastPathComponent()  // Tests/WendyAgentE2ETests
-            .deletingLastPathComponent()  // Tests
-            .deletingLastPathComponent()  // swift/WendyAgentE2ETests
-            .deletingLastPathComponent()  // swift
-            .deletingLastPathComponent()  // repository root
-    }
 }
