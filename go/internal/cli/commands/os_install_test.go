@@ -15,7 +15,7 @@ func TestNewOSInstallCmd_Flags(t *testing.T) {
 		t.Errorf("Use = %q; want %q", cmd.Use, "install [image] [drive]")
 	}
 
-	expectedFlags := []string{"nightly", "force", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name"}
+	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
@@ -225,4 +225,47 @@ func TestResolveWiFiCredentialsListFlags(t *testing.T) {
 	if _, err := resolveWiFiCredentialsList(wifiCLIOptions{Password: "pw"}); err == nil {
 		t.Error("expected error when --wifi-password is passed alone")
 	}
+}
+
+func TestConfirmOverwriteInternalDrive(t *testing.T) {
+	removable := drive{Name: "Sandisk USB", DevicePath: "/dev/disk4", IsRemovable: true}
+	internal := drive{Name: "Internal SSD", DevicePath: "/dev/disk1", IsRemovable: false}
+
+	t.Run("removable + force is fine", func(t *testing.T) {
+		if err := confirmOverwriteInternalDrive(removable, true, false); err != nil {
+			t.Errorf("removable drive should always pass: %v", err)
+		}
+	})
+
+	t.Run("removable interactive is fine", func(t *testing.T) {
+		if err := confirmOverwriteInternalDrive(removable, false, false); err != nil {
+			t.Errorf("removable drive should always pass: %v", err)
+		}
+	})
+
+	t.Run("internal + force without override errors out", func(t *testing.T) {
+		err := confirmOverwriteInternalDrive(internal, true, false)
+		if err == nil {
+			t.Fatal("internal drive with --force and no --yes-overwrite-internal must be rejected")
+		}
+		if !strings.Contains(err.Error(), "yes-overwrite-internal") {
+			t.Errorf("error should mention --yes-overwrite-internal: %v", err)
+		}
+		if !strings.Contains(err.Error(), internal.DevicePath) {
+			t.Errorf("error should name the drive: %v", err)
+		}
+	})
+
+	t.Run("internal + force + override is allowed", func(t *testing.T) {
+		if err := confirmOverwriteInternalDrive(internal, true, true); err != nil {
+			t.Errorf("override flag should permit overwrite: %v", err)
+		}
+	})
+
+	t.Run("internal interactive + override skips typed prompt", func(t *testing.T) {
+		// yesOverwriteInternal = true means we never reach the stdin read.
+		if err := confirmOverwriteInternalDrive(internal, false, true); err != nil {
+			t.Errorf("override flag should bypass typed prompt: %v", err)
+		}
+	})
 }
