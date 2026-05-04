@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/cloudflare/circl v1.6.3
 	github.com/containerd/cgroups/v3 v3.1.3
-	github.com/containerd/containerd/api v1.10.0
+	github.com/containerd/containerd/api v1.11.0
 	github.com/containerd/containerd/v2 v2.2.3
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/typeurl/v2 v2.2.3
