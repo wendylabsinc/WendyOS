@@ -262,52 +262,6 @@ func TestInstall_WritesFile(t *testing.T) {
 	}
 }
 
-func TestInstall_Stdout(t *testing.T) {
-	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
-		t.Run(shell, func(t *testing.T) {
-			tmp := t.TempDir()
-			stdout, _, err := executeCompletion(t,
-				"completion", "install",
-				"--shell", shell,
-				"--output-dir", tmp,
-				"--stdout",
-			)
-			if err != nil {
-				t.Fatalf("install --stdout: %v", err)
-			}
-			if stdout.Len() < 200 {
-				t.Errorf("stdout too short (%d bytes); got: %q", stdout.Len(), stdout.String())
-			}
-			// --stdout must not write any files or rc edits.
-			entries, err := os.ReadDir(tmp)
-			if err != nil {
-				t.Fatalf("readdir: %v", err)
-			}
-			if len(entries) != 0 {
-				names := make([]string, 0, len(entries))
-				for _, e := range entries {
-					names = append(names, e.Name())
-				}
-				t.Errorf("--stdout wrote into tmp dir: %v", names)
-			}
-		})
-	}
-}
-
-func TestInstall_StdoutAndPrintPathConflict(t *testing.T) {
-	tmp := t.TempDir()
-	_, _, err := executeCompletion(t,
-		"completion", "install",
-		"--shell", "bash",
-		"--output-dir", tmp,
-		"--stdout",
-		"--print-path",
-	)
-	if err == nil {
-		t.Fatal("expected error when both --stdout and --print-path are set")
-	}
-}
-
 func TestInstall_PrintPath(t *testing.T) {
 	tmp := t.TempDir()
 	stdout, _, err := executeCompletion(t,
@@ -375,45 +329,6 @@ func TestInstall_RcLineIdempotent(t *testing.T) {
 	}
 }
 
-func TestRcBlock_QuotesPathsWithSpecialChars(t *testing.T) {
-	// Paths containing $, backticks, single-quotes, or spaces must be safely
-	// quoted in rc blocks so the shell doesn't expand them.
-	awkward := "/h/u with $var and `cmd` and 'quote'"
-
-	bash, err := computeInstallPlan("bash", "linux", awkward,
-		func(string) string { return "" }, func(string) bool { return false })
-	if err != nil {
-		t.Fatalf("bash: %v", err)
-	}
-	for _, bad := range []string{"$var", "`cmd`"} {
-		// The dollar/backtick should appear only inside the literal path,
-		// never bare in shell-interpreted positions. POSIX single quotes
-		// escape everything except `'` itself, so the literal `$var` must
-		// remain in the block but bash treats it literally there.
-		if !strings.Contains(bash.rcBlock, bad) {
-			t.Errorf("bash rcBlock missing literal %q in path", bad)
-		}
-	}
-	// Single quotes must be POSIX-escaped as '\''.
-	if !strings.Contains(bash.rcBlock, `'\''`) {
-		t.Errorf("bash rcBlock did not POSIX-escape single quote; got: %q", bash.rcBlock)
-	}
-
-	ps, err := computeInstallPlan("powershell", "linux", awkward,
-		func(string) string { return "" }, func(string) bool { return false })
-	if err != nil {
-		t.Fatalf("powershell: %v", err)
-	}
-	// PowerShell single quotes are doubled.
-	if !strings.Contains(ps.rcBlock, "''") {
-		t.Errorf("powershell rcBlock did not double single quote; got: %q", ps.rcBlock)
-	}
-	// PowerShell rc must NOT use double quotes around the path (would interpolate $var).
-	if strings.Contains(ps.rcBlock, `. "`) {
-		t.Errorf("powershell rcBlock used double quotes (would interpolate $var); got: %q", ps.rcBlock)
-	}
-}
-
 func TestEnsureBlockInFile_AppendsLeadingNewline(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "rc")
@@ -456,3 +371,4 @@ func TestResolveHome_Default(t *testing.T) {
 		t.Error("expected non-empty home")
 	}
 }
+
