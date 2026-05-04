@@ -21,8 +21,38 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 )
+
+func TestProvisioningRequired(t *testing.T) {
+	// Empty inputs: no provisioning data, agent download is the only thing
+	// that would have happened, and a config-partition write failure can
+	// safely degrade to a warning.
+	if provisioningRequired(nil, "", nil) {
+		t.Error("provisioningRequired(nil, \"\", nil) = true; want false")
+	}
+
+	cred := []wendyconf.WifiCredential{{SSID: "Home", Password: "x"}}
+	cases := []struct {
+		name             string
+		creds            []wendyconf.WifiCredential
+		deviceName       string
+		provisioningJSON []byte
+	}{
+		{"creds only", cred, "", nil},
+		{"deviceName only", nil, "brave-dolphin", nil},
+		{"provisioningJSON only", nil, "", []byte(`{"enrolled":true}`)},
+		{"all three", cred, "brave-dolphin", []byte(`{"enrolled":true}`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !provisioningRequired(c.creds, c.deviceName, c.provisioningJSON) {
+				t.Errorf("provisioningRequired(%v, %q, %v) = false; want true (user-supplied data must not be silently dropped)", c.creds, c.deviceName, c.provisioningJSON)
+			}
+		})
+	}
+}
 
 type fakePreEnrollCertService struct {
 	cloudpb.UnimplementedCertificateServiceServer

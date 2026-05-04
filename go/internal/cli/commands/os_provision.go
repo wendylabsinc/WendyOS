@@ -125,6 +125,16 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	return json.Marshal(state)
 }
 
+// provisioningRequired reports whether the user supplied provisioning data
+// that must reach the device's config partition. When this returns true, a
+// failure to write the config partition has dropped user-visible state on
+// the floor and must be treated as fatal — silently printing "successfully
+// installed" hides the lost data (--wifi never reaches the device, the
+// pre-enroll key/cert is discarded, etc.).
+func provisioningRequired(creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) bool {
+	return len(creds) > 0 || deviceName != "" || len(provisioningJSON) > 0
+}
+
 // writeConfigFiles writes the agent binary, optional wendy.conf, and optional
 // provisioning.json to mountPoint.
 func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {

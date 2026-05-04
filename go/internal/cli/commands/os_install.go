@@ -37,6 +37,7 @@ const (
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
+	var yesOverwriteInternal bool
 	var preEnroll bool
 	var deviceType string
 	var versionFlag string
@@ -92,7 +93,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			}
 
 			if len(args) == 2 {
-				return runOSInstallDirect(args[0], args[1], force)
+				return runOSInstallDirect(args[0], args[1], force, yesOverwriteInternal)
 			}
 			mode := preEnrollAuto
 			if cmd.Flags().Changed("pre-enroll") {
@@ -102,12 +103,13 @@ Flags can be provided progressively — omitted values trigger interactive picke
 					mode = preEnrollSkip
 				}
 			}
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, opts, deviceName, mode)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, opts, deviceName, mode)
 		},
 	}
 
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
@@ -122,10 +124,17 @@ Flags can be provided progressively — omitted values trigger interactive picke
 }
 
 // runOSInstallDirect writes a local image file to the specified drive without interactive prompts.
-func runOSInstallDirect(imagePath string, driveID string, force bool) error {
+func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwriteInternal bool) error {
 	// Verify the image file exists.
 	if _, err := os.Stat(imagePath); err != nil {
 		return fmt.Errorf("image file: %w", err)
+	}
+
+	// Authenticate elevation before any disk-listing or write work. On
+	// Windows this offers a UAC re-launch when the current process isn't
+	// elevated; on Unix it pre-caches the sudo timestamp.
+	if err := preAuthElevation(); err != nil {
+		return err
 	}
 
 	// Find the target drive.
@@ -145,6 +154,10 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 		return fmt.Errorf("drive %s not found", driveID)
 	}
 
+	if err := confirmOverwriteInternalDrive(*targetDrive, force, yesOverwriteInternal); err != nil {
+		return err
+	}
+
 	if !force {
 		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
 		if err != nil {
@@ -157,7 +170,6 @@ func runOSInstallDirect(imagePath string, driveID string, force bool) error {
 	}
 
 	cliLogln("Writing image to %s...", targetDrive.DevicePath)
-	cliNotice("%s", elevationHint())
 	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
@@ -214,7 +226,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	return key, deviceMap[key], nil
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
 	cliLogln("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest.
@@ -313,12 +325,20 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if device.IsESP32 {
 		return installESP32Firmware(ctx, nightly, device.ESP32Chip)
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, wifi, deviceName, mode)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, wifi, deviceName, mode)
 }
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, wifi wifiCLIOptions, deviceName string, mode preEnrollMode) error {
+	// Authenticate elevation up front so we don't pay for the multi-hundred-MB
+	// image download just to discover the user can't write to a raw disk. On
+	// Windows this offers a UAC re-launch when not elevated; on Unix it
+	// pre-caches the sudo timestamp.
+	if err := preAuthElevation(); err != nil {
+		return err
+	}
+
 	// Step 1: Resolve version — use flag, nightly shortcut, or pick interactively.
 	selectedVersion := device.RawVersion // default: latest (or nightly if --nightly)
 	if flagVersion != "" {
@@ -380,6 +400,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	// Step 3: Confirm destructive write (unless --force).
+	if err := confirmOverwriteInternalDrive(targetDrive, force, yesOverwriteInternal); err != nil {
+		return err
+	}
 	if !force {
 		fmt.Println()
 		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
@@ -537,10 +560,31 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("writing image: %w", writeModel.Err())
 	}
 
-	cliLogln("\nWriting provisioning data to config partition...")
-	if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName, provisioningJSON); err != nil {
-		cliNotice("Warning: could not write config partition: %v", err)
-		cliNotice("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+	hasProvisioningData := provisioningRequired(provCreds, provDeviceName, provisioningJSON)
+
+	if !configPartitionSupported {
+		// writeConfigPartition has no implementation on this OS (currently
+		// Windows). Skip the agent download — paying 5–30s of network for a
+		// guaranteed-skipped step is the bug from WDY-1118.
+		if hasProvisioningData {
+			ejectDisk(targetDrive.DevicePath)
+			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not yet supported. Re-run on macOS or Linux to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
+		}
+		cliNotice("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
+	} else {
+		cliLogln("\nWriting provisioning data to config partition...")
+		if err := provisionConfigPartition(targetDrive, provCreds, provDeviceName, provisioningJSON); err != nil {
+			if hasProvisioningData {
+				// User asked for --wifi / --device-name / --pre-enroll. Silently
+				// dropping their input and printing "Successfully installed"
+				// would be a lie — this is the user-visible failure mode the
+				// ticket calls out. Fail loudly so the user knows to retry.
+				ejectDisk(targetDrive.DevicePath)
+				return fmt.Errorf("could not write provisioning data to config partition (--wifi / --device-name / --pre-enroll were requested but not applied): %w", err)
+			}
+			cliNotice("Warning: could not write config partition: %v", err)
+			cliNotice("Device will boot but WiFi and agent auto-update will not be pre-configured.")
+		}
 	}
 
 	ejectDisk(targetDrive.DevicePath)
@@ -1125,6 +1169,34 @@ func resolveDeviceName(flagName string) (string, error) {
 		return "", fmt.Errorf("invalid device name: %w", err)
 	}
 	return name, nil
+}
+
+// confirmOverwriteInternalDrive guards against accidentally wiping internal
+// (non-removable) drives. The OS-level system disk is already filtered out by
+// listAllDrives, but a non-system internal drive (e.g. a secondary SATA SSD
+// on Windows) is still selectable via --drive — the existing y/n confirm is
+// too easy to autopilot through. For those drives we either require an
+// explicit --yes-overwrite-internal flag (non-interactive) or a typed device
+// path (interactive).
+func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal bool) error {
+	if d.IsRemovable {
+		return nil
+	}
+	if yesOverwriteInternal {
+		return nil
+	}
+	if force {
+		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
+	}
+	fmt.Printf("\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
+	fmt.Println("Typically WendyOS is installed to an SD card or USB drive — overwriting an internal drive will destroy whatever filesystem currently lives on it.")
+	fmt.Printf("To proceed, type the device path exactly:\n  %s\n> ", d.DevicePath)
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	if strings.TrimSpace(line) != d.DevicePath {
+		return fmt.Errorf("internal-drive overwrite cancelled (typed value did not match %s)", d.DevicePath)
+	}
+	return nil
 }
 
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary

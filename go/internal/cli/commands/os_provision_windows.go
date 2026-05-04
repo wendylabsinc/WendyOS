@@ -11,7 +11,15 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, _ []byte) error {
+// configPartitionSupported is false on Windows: writeConfigPartition has no
+// implementation, so callers must skip the agent download and refuse to claim
+// success when --wifi/--device-name/--pre-enroll were requested.
+const configPartitionSupported = false
+
+// writeConfigPartition is a stub on Windows. Callers gate on
+// configPartitionSupported and never invoke this; it exists only so the
+// cross-platform call site in provisionConfigPartition compiles.
+func writeConfigPartition(_ drive, _ []byte, _ []wendyconf.WifiCredential, _ string, _ []byte) error {
 	return fmt.Errorf("config partition provisioning is not supported on Windows")
 }
 
