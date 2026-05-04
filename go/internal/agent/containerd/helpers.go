@@ -44,9 +44,10 @@ const labelKeyRestartPolicy = "sh.wendy/restart.policy"
 // labelKeyMCPPort stores the MCP server port for containers with an mcp entitlement.
 const labelKeyMCPPort = "sh.wendy/mcp.port"
 
-// labelKeyEntitlements stores the full entitlement list as a JSON array so it
-// can be codesigned alongside the rest of the container metadata.
-const labelKeyEntitlements = "sh.wendy/entitlements"
+// labelKeyEntitlementPrefix is the prefix for per-entitlement labels; each
+// entitlement is stored as sh.wendy/entitlement.<index> so it can be
+// codesigned alongside the rest of the container metadata.
+const labelKeyEntitlementPrefix = "sh.wendy/entitlement."
 
 // labelKeyGCRoot prevents garbage collection of content blobs.
 const labelKeyGCRoot = "containerd.io/gc.root"
@@ -122,9 +123,9 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 		}
 	}
 
-	if len(entitlements) > 0 {
-		if data, err := json.Marshal(entitlements); err == nil {
-			labels[labelKeyEntitlements] = string(data)
+	for i, e := range entitlements {
+		if data, err := json.Marshal(e); err == nil {
+			labels[fmt.Sprintf("%s%d", labelKeyEntitlementPrefix, i)] = string(data)
 		}
 	}
 
