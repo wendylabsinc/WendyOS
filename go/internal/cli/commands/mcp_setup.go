@@ -124,9 +124,6 @@ func claudeDesktopConfigPath() string {
 // binary, falling back to PATH lookup.
 func wendyBinaryPath() string {
 	if p, err := os.Executable(); err == nil {
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			return resolved
-		}
 		return p
 	}
 	if p, err := exec.LookPath("wendy"); err == nil {
