@@ -159,7 +159,7 @@ func TestRunMacOSSwiftPMWithAgent_UsesRunArgsFromAppConfig(t *testing.T) {
 	if err := os.WriteFile(swiftlyPath, []byte("#!/bin/sh\necho '{\"products\":[{\"name\":\"MySwiftApp\",\"type\":{\"executable\":null}}]}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile swiftly: %v", err)
 	}
-	if err := os.WriteFile(swiftPath, []byte("#!/bin/sh\nif [ \"$1\" = \"build\" ] && [ \"$2\" = \"--show-bin-path\" ]; then\n  echo \"$PWD/.build/debug\"\n  exit 0\nfi\nif [ \"$1\" = \"build\" ]; then\n  mkdir -p \"$PWD/.build/debug/MySwiftApp.bundle\" \"$PWD/.build/debug/MySwiftApp.resources\"\n  printf '#!/bin/sh\\n' > \"$PWD/.build/debug/MySwiftApp\"\n  printf '<plist/>' > \"$PWD/.build/debug/MySwiftApp.bundle/Info.plist\"\n  printf '{}' > \"$PWD/.build/debug/MySwiftApp.resources/config.json\"\n  chmod +x \"$PWD/.build/debug/MySwiftApp\"\n  exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(swiftPath, []byte("#!/bin/sh\nif [ \"$1\" = \"build\" ] && [ \"$2\" = \"-c\" ] && [ \"$3\" = \"release\" ] && [ \"$4\" = \"--show-bin-path\" ]; then\n  echo \"$PWD/.build/release\"\n  exit 0\nfi\nif [ \"$1\" = \"build\" ] && [ \"$2\" = \"-c\" ] && [ \"$3\" = \"release\" ]; then\n  mkdir -p \"$PWD/.build/release/MySwiftApp.bundle\" \"$PWD/.build/release/MySwiftApp.resources\"\n  printf '#!/bin/sh\\n' > \"$PWD/.build/release/MySwiftApp\"\n  printf '<plist/>' > \"$PWD/.build/release/MySwiftApp.bundle/Info.plist\"\n  printf '{}' > \"$PWD/.build/release/MySwiftApp.resources/config.json\"\n  chmod +x \"$PWD/.build/release/MySwiftApp\"\n  exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile swift: %v", err)
 	}
 
