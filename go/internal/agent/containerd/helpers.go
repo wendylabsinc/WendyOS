@@ -4,6 +4,7 @@ package containerd
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/distribution/reference"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -41,6 +43,10 @@ const labelKeyRestartPolicy = "sh.wendy/restart.policy"
 
 // labelKeyMCPPort stores the MCP server port for containers with an mcp entitlement.
 const labelKeyMCPPort = "sh.wendy/mcp.port"
+
+// labelKeyEntitlements stores the full entitlement list as a JSON array so it
+// can be codesigned alongside the rest of the container metadata.
+const labelKeyEntitlements = "sh.wendy/entitlements"
 
 // labelKeyGCRoot prevents garbage collection of content blobs.
 const labelKeyGCRoot = "containerd.io/gc.root"
@@ -97,7 +103,7 @@ func gcTimestamp() string {
 
 // wendyLabels builds the standard set of containerd labels for a Wendy-managed
 // container. These labels are used to identify, filter, and manage containers.
-func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, mcpPort uint32) map[string]string {
+func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, entitlements []appconfig.Entitlement) map[string]string {
 	labels := map[string]string{
 		labelKeyAppVersion: version,
 	}
@@ -109,8 +115,17 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 		}
 	}
 
-	if mcpPort > 0 {
-		labels[labelKeyMCPPort] = strconv.FormatUint(uint64(mcpPort), 10)
+	for _, e := range entitlements {
+		if e.Type == appconfig.EntitlementMCP && e.Port > 0 {
+			labels[labelKeyMCPPort] = strconv.FormatUint(uint64(e.Port), 10)
+			break
+		}
+	}
+
+	if len(entitlements) > 0 {
+		if data, err := json.Marshal(entitlements); err == nil {
+			labels[labelKeyEntitlements] = string(data)
+		}
 	}
 
 	return labels

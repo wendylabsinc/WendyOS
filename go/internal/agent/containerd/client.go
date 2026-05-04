@@ -529,15 +529,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
 
-	// Build labels for the container.
-	var mcpPort uint32
-	for _, e := range appCfg.Entitlements {
-		if e.Type == appconfig.EntitlementMCP {
-			mcpPort = uint32(e.Port)
-			break
-		}
-	}
-	labels := wendyLabels(appName, version, req.GetRestartPolicy(), mcpPort)
+	labels := wendyLabels(appName, version, req.GetRestartPolicy(), appCfg.Entitlements)
 
 	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
 	specJSON, err := json.Marshal(spec)
