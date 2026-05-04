@@ -27,6 +27,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -1328,36 +1329,72 @@ func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostn
 	}
 }
 
-// shellCommand returns the platform-appropriate shell and flag for running a
-// command string. On Windows it uses cmd.exe /C; everywhere else sh -c.
-func shellCommand() (string, string) {
+// shellCommand returns the shell binary and the argument prefix for running a
+// command string. On Windows it returns cmd.exe with /S /C: /S makes quote
+// stripping predictable when the command contains nested quotes (under the
+// default /C rules cmd.exe behavior depends on the count of `"` characters).
+// On Unix it returns sh -c.
+func shellCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
-		return "cmd.exe", "/C"
+		return "cmd.exe", []string{"/S", "/C"}
 	}
-	return "sh", "-c"
+	return "sh", []string{"-c"}
 }
 
-// startPostStartHook expands environment variables in the postStart CLI hook
-// and spawns it as a child process. The returned *exec.Cmd can be used to wait
-// on or kill the process. Returns nil if there is no postStart CLI hook.
-func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname string) *exec.Cmd {
-	if appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil || appCfg.Hooks.PostStart.CLI == "" {
-		return nil
-	}
-
-	expanded := os.Expand(appCfg.Hooks.PostStart.CLI, func(key string) string {
+// expandHookEnv resolves Wendy's documented placeholders in s. Both Unix-style
+// (${VAR}, $VAR) and Windows-style (%WENDY_*%) forms are accepted for the two
+// Wendy-provided placeholders, so the same hook string parses identically in
+// sh and cmd.exe. Other ${VAR} forms fall through to os.Getenv; raw %VAR%
+// forms for non-Wendy variables are left for cmd.exe to expand natively.
+func expandHookEnv(s, hostname, appID string) string {
+	s = strings.ReplaceAll(s, "%WENDY_HOSTNAME%", hostname)
+	s = strings.ReplaceAll(s, "%WENDY_APP_ID%", appID)
+	return os.Expand(s, func(key string) string {
 		switch key {
 		case "WENDY_HOSTNAME":
 			return hostname
 		case "WENDY_APP_ID":
-			return appCfg.AppID
+			return appID
 		default:
 			return os.Getenv(key)
 		}
 	})
+}
 
-	shell, flag := shellCommand()
-	cmd := execCommandContext(ctx, shell, flag, expanded)
+// browserOpen is the cross-platform browser opener used by openURL hooks.
+// Indirected through a var so tests can swap it out.
+var browserOpen = browseropen.Open
+
+// startPostStartHook fires the postStart hook actions for appCfg.
+//
+// If openURL is set, it is expanded and opened in the developer's default
+// browser via the shared browseropen helper — no shell, no quoting. If cli
+// is set, it runs after, expanded for env vars and dispatched through the
+// platform shell; the returned *exec.Cmd is the cli child for the caller to
+// wait on or kill. Returns nil when no cli command is configured (regardless
+// of whether openURL was fired).
+func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname string) *exec.Cmd {
+	if appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil {
+		return nil
+	}
+	hook := appCfg.Hooks.PostStart
+
+	if hook.OpenURL != "" {
+		url := expandHookEnv(hook.OpenURL, hostname, appCfg.AppID)
+		if err := browserOpen(url); err != nil {
+			cliLogln("Warning: postStart openURL failed: %v", err)
+		} else {
+			cliLogln("Hook postStart: opened %s", url)
+		}
+	}
+
+	if hook.CLI == "" {
+		return nil
+	}
+
+	expanded := expandHookEnv(hook.CLI, hostname, appCfg.AppID)
+	shell, flags := shellCommand()
+	cmd := execCommandContext(ctx, shell, append(flags, expanded)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	finalizeProcessGroup := configurePostStartProcessGroup(cmd)
