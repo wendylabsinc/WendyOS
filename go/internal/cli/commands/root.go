@@ -32,6 +32,11 @@ func NewRootCmd() *cobra.Command {
 			case "__ble-check", "open-browser":
 				return nil
 			}
+
+			if !cmd.Root().PersistentFlags().Changed("json") && !isInteractiveTerminal() {
+				jsonOutput = true
+			}
+
 			providers.Initialize(cmd.Context())
 
 			cfg, err := config.Load()
