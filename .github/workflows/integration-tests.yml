@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -254,24 +254,23 @@ jobs:
 
       - name: Run integration tests
         run: |
-          WORKDIR="$(pwd)"
-          TEST_ARGS="-w $WORKDIR/bin/wendy"
+          TEST_ARGS="-w $(pwd)/bin/wendy"
 
           if [[ -n "$INPUT_TESTS" ]]; then
             HAS_TESTS=false
             IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
-              # Skip swift tests on Linux
+              # Skip swift-* tests on Linux
               if [[ "$t" == swift-* ]]; then
-                echo "Skipping Swift test $t on Linux"
+                echo "Skipping Swift test on Linux: $t"
                 continue
               fi
               TEST_ARGS="$TEST_ARGS -t $t"
               HAS_TESTS=true
             done
             if [[ "$HAS_TESTS" == false ]]; then
-              echo "No applicable tests requested, skipping."
+              echo "No applicable tests requested for Linux, skipping."
               exit 0
             fi
           else
@@ -284,10 +283,7 @@ jobs:
             DEVICES=("$INPUT_HOSTNAME")
           else
             echo "==> Discovering LAN devices..."
-            DISCOVER_STDERR=$(mktemp)
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR" || true)
-            cat "$DISCOVER_STDERR" >&2 || true
-            rm -f "$DISCOVER_STDERR"
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>/dev/null || true)
             DEVICES=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && DEVICES+=("$line")
@@ -303,13 +299,9 @@ jobs:
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
             device="${DEVICES[$i]}"
-            BUILDER="wendy-$i"
-            echo "==> Starting tests on $device (builder: $BUILDER)"
+            echo "==> Starting tests on $device"
             (
-              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
-              rc=$?
-              docker buildx rm "$BUILDER" --force 2>/dev/null || true
-              exit $rc
+              scripts/test-ci.sh $TEST_ARGS -h "$device"
             ) &
             PIDS[$i]=$!
           done
