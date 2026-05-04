@@ -490,6 +490,11 @@ func handleUtilityCommand(args []string) (bool, int) {
 		return false, 0
 	}
 
+	if args[0] == "--version" || args[0] == "-v" {
+		fmt.Println(version.Version)
+		return true, 0
+	}
+
 	if args[0] != "utils" {
 		return false, 0
 	}
