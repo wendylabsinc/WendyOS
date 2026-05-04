@@ -74,5 +74,7 @@ let package = Package(
             swiftSettings: strictConcurrencySettings
         ),
     ],
+    // WendyAgentCore intentionally requires Swift 6 language mode so
+    // strict concurrency diagnostics match the mac prototype defaults.
     swiftLanguageModes: [.v6]
 )
