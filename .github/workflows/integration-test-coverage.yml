@@ -22,7 +22,7 @@ jobs:
             --repo ${{ github.repository }} > "$RUNNER_TEMP/pr.diff"
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
 
