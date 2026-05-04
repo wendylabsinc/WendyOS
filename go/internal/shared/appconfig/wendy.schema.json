@@ -260,9 +260,14 @@
       "description": "Commands to run at a lifecycle stage.",
       "additionalProperties": false,
       "properties": {
+        "openURL": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to open in the developer's default browser. Cross-platform; prefer this over a `cli` shell invocation of `open`/`xdg-open`/`start`. Supports ${WENDY_HOSTNAME} and ${WENDY_APP_ID} expansion."
+        },
         "cli": {
           "type": "string",
-          "description": "Command to run on the developer's machine."
+          "description": "Command to run on the developer's machine. Note: `open`/`xdg-open`/`start` are not portable across macOS/Linux/Windows — use `openURL` to open a URL instead."
         },
         "agent": {
           "type": "string",

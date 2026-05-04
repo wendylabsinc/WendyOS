@@ -128,9 +128,15 @@ type HooksConfig struct {
 const PostStartAgentHookMetadataKey = "wendy-post-start-agent-command"
 
 // HookCommand holds CLI and agent-side commands for a lifecycle hook.
+//
+// OpenURL is the portable way to open a URL in the developer's default browser
+// at hook time — the CLI dispatches it directly without a shell, so it works
+// uniformly on macOS, Linux, and Windows. Prefer it over `cli: "open …"` /
+// `cli: "xdg-open …"` / `cli: "start …"`, which are platform-specific.
 type HookCommand struct {
-	CLI   string `json:"cli,omitempty"`   // Command to run on the developer's machine
-	Agent string `json:"agent,omitempty"` // Command to run on the device
+	OpenURL string `json:"openURL,omitempty"` // URL to open in the developer's default browser
+	CLI     string `json:"cli,omitempty"`     // Command to run on the developer's machine
+	Agent   string `json:"agent,omitempty"`   // Command to run on the device
 }
 
 // PythonConfig holds Python-specific configuration.
@@ -310,16 +316,24 @@ func isValidI2CDevice(device string) bool {
 	return true
 }
 
-// ValidateJSON checks raw JSON data for unknown keys in entitlements and returns warnings.
-// Call this after decoding to detect potential typos or invalid configuration.
+// ValidateJSON checks raw JSON data for non-fatal issues that should surface
+// as user-visible warnings (unknown entitlement keys, deprecated entitlement
+// types, non-portable hook commands) and returns them. Call this after
+// decoding to detect potential typos or platform-specific configuration.
 func ValidateJSON(data []byte) []string {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
 
-	entRaw, ok := raw["entitlements"]
-	if !ok {
+	var warnings []string
+	warnings = append(warnings, validateEntitlementsJSON(raw["entitlements"])...)
+	warnings = append(warnings, validateHooksJSON(raw["hooks"])...)
+	return warnings
+}
+
+func validateEntitlementsJSON(entRaw json.RawMessage) []string {
+	if len(entRaw) == 0 {
 		return nil
 	}
 
@@ -378,4 +392,42 @@ func ValidateJSON(data []byte) []string {
 	}
 
 	return warnings
+}
+
+// nonPortableOpenerCommands maps the bare-binary prefix of a non-portable
+// URL-opening shell command to the platform on which it works. Detected at
+// the start of hooks.postStart.cli to suggest the portable openURL field.
+var nonPortableOpenerCommands = map[string]string{
+	"open":     "macOS",
+	"xdg-open": "Linux",
+	"start":    "Windows",
+}
+
+func validateHooksJSON(hooksRaw json.RawMessage) []string {
+	if len(hooksRaw) == 0 {
+		return nil
+	}
+
+	var hooks struct {
+		PostStart *struct {
+			CLI string `json:"cli"`
+		} `json:"postStart"`
+	}
+	if err := json.Unmarshal(hooksRaw, &hooks); err != nil {
+		return nil
+	}
+	if hooks.PostStart == nil || hooks.PostStart.CLI == "" {
+		return nil
+	}
+
+	cli := strings.TrimLeft(hooks.PostStart.CLI, " \t")
+	for opener, platform := range nonPortableOpenerCommands {
+		if cli == opener || strings.HasPrefix(cli, opener+" ") || strings.HasPrefix(cli, opener+"\t") {
+			return []string{fmt.Sprintf(
+				"hooks.postStart.cli starts with %q, which only works on %s; use \"openURL\" to open a URL portably across macOS, Linux, and Windows",
+				opener, platform,
+			)}
+		}
+	}
+	return nil
 }

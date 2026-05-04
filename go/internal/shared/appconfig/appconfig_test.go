@@ -358,6 +358,156 @@ func TestLoadFromFile_WithoutHooks(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_HooksPostStartOpenURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wendy.json")
+
+	content := `{
+		"appId": "com.example.webapp",
+		"hooks": {
+			"postStart": {
+				"openURL": "http://${WENDY_HOSTNAME}:3000"
+			}
+		}
+	}`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile() error = %v", err)
+	}
+	if cfg.Hooks == nil || cfg.Hooks.PostStart == nil {
+		t.Fatal("Hooks.PostStart is nil")
+	}
+	if got, want := cfg.Hooks.PostStart.OpenURL, "http://${WENDY_HOSTNAME}:3000"; got != want {
+		t.Errorf("Hooks.PostStart.OpenURL = %q, want %q", got, want)
+	}
+	if cfg.Hooks.PostStart.CLI != "" {
+		t.Errorf("Hooks.PostStart.CLI = %q, want empty", cfg.Hooks.PostStart.CLI)
+	}
+}
+
+func TestValidateJSON_PostStartCLILegacyOpener(t *testing.T) {
+	tests := []struct {
+		name       string
+		cli        string
+		wantOpener string
+		wantPlatfm string
+	}{
+		{"open", "open http://localhost:3000", "open", "macOS"},
+		{"xdg-open", "xdg-open http://localhost:3000", "xdg-open", "Linux"},
+		{"start", "start http://localhost:3000", "start", "Windows"},
+		{"open with leading whitespace", "  open http://localhost:3000", "open", "macOS"},
+		{"open with tab separator", "open\thttp://localhost:3000", "open", "macOS"},
+		{"bare open", "open", "open", "macOS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := []byte(`{
+				"appId": "com.example.app",
+				"hooks": {
+					"postStart": {
+						"cli": ` + jsonString(tt.cli) + `
+					}
+				}
+			}`)
+
+			warnings := ValidateJSON(data)
+			if len(warnings) != 1 {
+				t.Fatalf("ValidateJSON() got %d warnings, want 1: %v", len(warnings), warnings)
+			}
+			if !strings.Contains(warnings[0], `"`+tt.wantOpener+`"`) {
+				t.Errorf("warning %q does not mention opener %q", warnings[0], tt.wantOpener)
+			}
+			if !strings.Contains(warnings[0], tt.wantPlatfm) {
+				t.Errorf("warning %q does not mention platform %q", warnings[0], tt.wantPlatfm)
+			}
+			if !strings.Contains(warnings[0], "openURL") {
+				t.Errorf("warning %q does not recommend openURL", warnings[0])
+			}
+		})
+	}
+}
+
+func TestValidateJSON_PostStartCLIPortableNoWarning(t *testing.T) {
+	tests := []struct {
+		name string
+		cli  string
+	}{
+		{"echo", "echo hello"},
+		{"openssl is not open", "openssl version"},
+		{"started is not start", "started --foo"},
+		{"empty", ""},
+		{"openURL only", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := []byte(`{
+				"appId": "com.example.app",
+				"hooks": {
+					"postStart": {
+						"cli": ` + jsonString(tt.cli) + `
+					}
+				}
+			}`)
+
+			warnings := ValidateJSON(data)
+			for _, w := range warnings {
+				if strings.Contains(w, "hooks.postStart.cli") {
+					t.Errorf("unexpected warning: %q", w)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateJSON_PostStartOpenURLNoWarning(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"hooks": {
+			"postStart": {
+				"openURL": "http://localhost:3000"
+			}
+		}
+	}`)
+
+	warnings := ValidateJSON(data)
+	for _, w := range warnings {
+		if strings.Contains(w, "hooks.postStart") {
+			t.Errorf("unexpected warning: %q", w)
+		}
+	}
+}
+
+func TestValidateJSON_NoEntitlementsStillValidatesHooks(t *testing.T) {
+	// Regression: ValidateJSON used to early-return when entitlements were
+	// missing, silently skipping hook validation.
+	data := []byte(`{
+		"appId": "com.example.app",
+		"hooks": {
+			"postStart": {
+				"cli": "open http://localhost:3000"
+			}
+		}
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 1 {
+		t.Fatalf("ValidateJSON() got %d warnings, want 1", len(warnings))
+	}
+}
+
+func jsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
 func TestLoadFromFile_HooksPostStartCLIOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wendy.json")
