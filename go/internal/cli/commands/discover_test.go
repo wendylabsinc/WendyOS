@@ -169,6 +169,44 @@ func TestRenderDeviceTable(t *testing.T) {
 	}
 }
 
+func TestHumanReadableDeviceType(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"raspberry-pi-4", "Raspberry Pi 4"},
+		{"raspberry-pi-5", "Raspberry Pi 5"},
+		{"raspberry-pi-3", "Raspberry Pi 3"},
+		{"jetson-agx-orin", "Jetson AGX Orin"},
+		{"jetson-orin-nano", "Jetson Orin Nano"},
+		{"x86_64", "x86-64"},
+		{"unknown-board", "unknown-board"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := humanReadableDeviceType(tc.input); got != tc.want {
+			t.Errorf("humanReadableDeviceType(%q) = %q; want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestRenderDeviceTable_DeviceType(t *testing.T) {
+	collection := &models.DevicesCollection{
+		LANDevices: []models.LANDevice{{
+			DisplayName:  "wendy-pi",
+			IPAddress:    "192.168.1.20",
+			Port:         8443,
+			AgentVersion: "1.0.0",
+			DeviceType:   "raspberry-pi-4",
+		}},
+	}
+
+	output := renderDeviceTable(collection)
+	if !strings.Contains(output, "Raspberry Pi 4") {
+		t.Fatalf("expected output to contain %q, got %q", "Raspberry Pi 4", output)
+	}
+}
+
 func TestDiscoverDeviceInfo_JSONSingleDevice(t *testing.T) {
 	info := discoverDeviceInfo{
 		Name:    "wendyos-brave-phoenix",

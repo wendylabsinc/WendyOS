@@ -792,12 +792,12 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 			Name:   r.imageName(repo, tag),
 			Target: desc,
 		}
-		// Use context.Background() so the image service entry is updated
-		// independently of the HTTP request lifecycle and the content-write
-		// lease. The registry client's WithDefaultNamespace interceptor
-		// injects the required "default" namespace into every outgoing gRPC
+		// Use a fresh context so the image service update is independent of the
+		// HTTP request lifecycle and the content-write lease. WithDefaultNamespace
+		// on the client injects the required namespace into every outgoing gRPC
 		// call, so no explicit namespace is needed here.
-		imgCtx := context.Background()
+		imgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		_, err := is.Update(imgCtx, img, "target")
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
