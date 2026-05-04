@@ -289,12 +289,12 @@ jobs:
           sudo gem install fpm
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wendy-cli-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
       - name: Download Agent artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
@@ -508,7 +508,7 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
 
@@ -600,14 +600,14 @@ jobs:
       id-token: write
     steps:
       - name: Download all .deb packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: linux-packages-deb-*
           merge-multiple: true
           path: packages/deb
 
       - name: Download all .rpm packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: linux-packages-rpm-*
           merge-multiple: true
@@ -651,7 +651,7 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       - name: List files
