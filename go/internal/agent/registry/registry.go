@@ -772,17 +772,17 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 		labels["containerd.io/gc.bref.content.subject"] = string(manifestChildren.Subject.Digest)
 	}
 
-	ctx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
+	leaseCtx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
 	if err != nil {
 		return ociregistry.Descriptor{}, err
 	}
 
 	cs := r.client.ContentStore()
 	ingestRef := string(desc.Digest)
-	if err := cs.Abort(ctx, ingestRef); err != nil && !errdefs.IsNotFound(err) {
+	if err := cs.Abort(leaseCtx, ingestRef); err != nil && !errdefs.IsNotFound(err) {
 		return ociregistry.Descriptor{}, err
 	}
-	if err := content.WriteBlob(ctx, cs, ingestRef, bytes.NewReader(contents), desc, content.WithLabels(labels)); err != nil {
+	if err := content.WriteBlob(leaseCtx, cs, ingestRef, bytes.NewReader(contents), desc, content.WithLabels(labels)); err != nil {
 		return ociregistry.Descriptor{}, err
 	}
 
@@ -792,12 +792,18 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 			Name:   r.imageName(repo, tag),
 			Target: desc,
 		}
-		_, err := is.Update(ctx, img, "target")
+		// Use context.Background() so the image service entry is updated
+		// independently of the HTTP request lifecycle and the content-write
+		// lease. The registry client's WithDefaultNamespace interceptor
+		// injects the required "default" namespace into every outgoing gRPC
+		// call, so no explicit namespace is needed here.
+		imgCtx := context.Background()
+		_, err := is.Update(imgCtx, img, "target")
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
 				return desc, err
 			}
-			_, err = is.Create(ctx, img)
+			_, err = is.Create(imgCtx, img)
 			if err != nil {
 				return desc, err
 			}
