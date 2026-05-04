@@ -160,8 +160,23 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
-          printf '## AI Security Review\n\n' > comment.md
-          cat review.md >> comment.md
+          python3 << 'EXTRACT'
+          import re
+
+          with open('review.md') as f:
+              content = f.read()
+
+          paragraphs = re.split(r'\n\n+', content)
+          summary = next((p.strip() for p in paragraphs if p.strip() and not p.strip().startswith('#')), '_No summary available._')
+
+          with open('comment.md', 'w') as f:
+              f.write('## AI Security Review\n\n')
+              f.write('<details>\n<summary>\n\n')
+              f.write(summary)
+              f.write('\n\n</summary>\n\n')
+              f.write(content)
+              f.write('\n</details>\n')
+          EXTRACT
 
           # Replace previous security review comment if one exists
           EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
