@@ -77,8 +77,7 @@ func newCompletionInstallCmd() *cobra.Command {
 		Short: "Install shell completions into the user's standard config locations",
 		Long: "Detect the current shell and write its completion script to the conventional " +
 			"location, appending an idempotent sourcing line to your shell rc file when needed.\n\n" +
-			"Use --shell to override detection, --print-path for a dry run, or --output-dir to " +
-			"redirect writes (used by tests).",
+			"Use --shell to override shell detection, or --print-path for a dry run.",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			shell, err := detectShell(shellOverride, runtime.GOOS, os.Getenv)
@@ -109,7 +108,22 @@ func newCompletionInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&shellOverride, "shell", "", "Override shell (bash|zsh|fish|powershell)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Use this directory as $HOME (for testing)")
 	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print install paths without writing")
+	// --output-dir is a test seam, not a user-facing knob; hide from --help.
+	_ = cmd.Flags().MarkHidden("output-dir")
 	return cmd
+}
+
+// posixSingleQuote returns s wrapped in POSIX single quotes, suitable for
+// embedding in bash/zsh rc files. Inside single quotes only the quote
+// character itself is special; close-quote-literal-quote-open-quote escapes it.
+func posixSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// powershellSingleQuote returns s wrapped in PowerShell single quotes, where
+// single quotes are literal and embedded quotes are escaped by doubling.
+func powershellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func detectShell(override, goos string, env func(string) string) (string, error) {
@@ -185,7 +199,8 @@ func bashPlan(goos, home string, env func(string) string, exists func(string) bo
 
 	scriptPath := filepath.Join(home, ".wendy", "completions", "wendy.bash")
 	rcPath := filepath.Join(home, ".bashrc")
-	rcBlock := fmt.Sprintf("%s\n[ -f %q ] && source %q", completionRcSentinel, scriptPath, scriptPath)
+	quoted := posixSingleQuote(scriptPath)
+	rcBlock := fmt.Sprintf("%s\n[ -f %s ] && source %s", completionRcSentinel, quoted, quoted)
 	notes := []string{
 		"bash-completion package not detected; using stand-alone install.",
 		"Restart your shell (or `source ~/.bashrc`) for completions to take effect.",
@@ -210,7 +225,7 @@ func zshPlan(home string, env func(string) string) installPlan {
 		rcDir = zd
 	}
 	rcPath := filepath.Join(rcDir, ".zshrc")
-	rcBlock := fmt.Sprintf("%s\nfpath=(%q $fpath)\nautoload -U compinit && compinit", completionRcSentinel, scriptDir)
+	rcBlock := fmt.Sprintf("%s\nfpath=(%s $fpath)\nautoload -U compinit && compinit", completionRcSentinel, posixSingleQuote(scriptDir))
 
 	return installPlan{
 		scriptPath: scriptPath,
@@ -241,7 +256,7 @@ func powershellPlan(goos, home string) installPlan {
 	}
 	scriptPath := filepath.Join(profileDir, "Completions", "wendy.ps1")
 	rcPath := filepath.Join(profileDir, "Microsoft.PowerShell_profile.ps1")
-	rcBlock := fmt.Sprintf("%s\n. %q", completionRcSentinel, scriptPath)
+	rcBlock := fmt.Sprintf("%s\n. %s", completionRcSentinel, powershellSingleQuote(scriptPath))
 	notes := []string{"Restart PowerShell for completions to take effect."}
 	if goos == "windows" {
 		notes = append(notes, "Windows PowerShell 5.1 users: dot-source the script from your WindowsPowerShell profile manually.")
@@ -258,7 +273,7 @@ func performInstall(root *cobra.Command, stderr io.Writer, shell string, plan in
 	if err := os.MkdirAll(filepath.Dir(plan.scriptPath), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(plan.scriptPath), err)
 	}
-	f, err := os.Create(plan.scriptPath)
+	f, err := os.OpenFile(plan.scriptPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", plan.scriptPath, err)
 	}
@@ -305,29 +320,34 @@ func writeShellScript(root *cobra.Command, shell string, w io.Writer) error {
 }
 
 // ensureBlockInFile appends block to path unless sentinel is already present.
-// Returns true when the file was modified.
-func ensureBlockInFile(path, sentinel, block string) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// Returns true when the file was modified. Surfaces close errors via a named
+// return so buffered-write failures on close aren't silently dropped.
+func ensureBlockInFile(path, sentinel, block string) (added bool, err error) {
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
 
-	existing, err := os.ReadFile(path)
+	existing, readErr := os.ReadFile(path)
 	switch {
-	case errors.Is(err, os.ErrNotExist):
+	case errors.Is(readErr, os.ErrNotExist):
 		existing = nil
-	case err != nil:
-		return false, err
+	case readErr != nil:
+		return false, readErr
 	}
 
 	if bytes.Contains(existing, []byte(sentinel)) {
 		return false, nil
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		return false, err
+	f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return false, openErr
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); err == nil && cerr != nil {
+			err = cerr
+		}
+	}()
 
 	var buf strings.Builder
 	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
@@ -337,7 +357,7 @@ func ensureBlockInFile(path, sentinel, block string) (bool, error) {
 	if !strings.HasSuffix(block, "\n") {
 		buf.WriteByte('\n')
 	}
-	if _, err := f.WriteString(buf.String()); err != nil {
+	if _, err = f.WriteString(buf.String()); err != nil {
 		return false, err
 	}
 	return true, nil
