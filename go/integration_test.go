@@ -253,6 +253,7 @@ func (f *integrationFakeCertService) IssueCertificate(_ context.Context, _ *clou
 const integrationBufSize = 1024 * 1024
 
 func TestFullAgentLifecycle(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -433,6 +434,7 @@ func TestFullAgentLifecycle(t *testing.T) {
 // TestContainerDeployStartStopDelete tests the full container lifecycle via gRPC:
 // WriteLayer -> CreateContainer -> StartContainer -> ListContainers -> StopContainer -> DeleteContainer
 func TestContainerDeployStartStopDelete(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 	cc := newStatefulContainerdClient()
@@ -723,6 +725,7 @@ func TestContainerDeployStartStopDelete(t *testing.T) {
 // TestStreamMetrics verifies that metrics published via the OTEL receiver
 // are received by a StreamMetrics subscriber.
 func TestStreamMetrics(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -790,6 +793,7 @@ func TestStreamMetrics(t *testing.T) {
 // TestStreamTraces verifies that traces published via the OTEL receiver
 // are received by a StreamTraces subscriber.
 func TestStreamTraces(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -857,6 +861,7 @@ func TestStreamTraces(t *testing.T) {
 // TestProvisioningFlow tests the full provisioning lifecycle via gRPC:
 // IsProvisioned (not provisioned) -> StartProvisioning (with fake cloud) -> IsProvisioned (provisioned).
 func TestProvisioningFlow(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -981,6 +986,7 @@ func TestProvisioningFlow(t *testing.T) {
 // TestRunContainer tests the RunContainer RPC which combines container creation + starting
 // in a single call, and streams output back.
 func TestRunContainer(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 	cc := newStatefulContainerdClient()
@@ -1100,6 +1106,7 @@ func TestRunContainer(t *testing.T) {
 // is not reachable from a non-loopback interface, confirming the security
 // property of the fix for WDY-1097/WDY-1100.
 func TestOTELLocalhostBindProperty(t *testing.T) {
+	t.Parallel()
 	// Find a non-loopback IPv4 address on this machine. If none exists (e.g.
 	// a stripped-down CI container with only lo), skip rather than fail.
 	var externalIP string
