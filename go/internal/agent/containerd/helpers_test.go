@@ -273,8 +273,37 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 	}
 	labels := wendyLabels("app", "1.0", nil, entitlements)
 
+	cases := []struct {
+		key  string
+		want appconfig.Entitlement
+	}{
+		{labelKeyEntitlementPrefix + appconfig.EntitlementNetwork, entitlements[0]},
+		{labelKeyEntitlementPrefix + appconfig.EntitlementGPU, entitlements[1]},
+	}
+	for _, tc := range cases {
+		raw, ok := labels[tc.key]
+		if !ok {
+			t.Fatalf("missing entitlement label %q", tc.key)
+		}
+		var got appconfig.Entitlement
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("entitlement label %q is not valid JSON: %v", tc.key, err)
+		}
+		if got.Type != tc.want.Type || got.Mode != tc.want.Mode {
+			t.Errorf("%q = %+v; want %+v", tc.key, got, tc.want)
+		}
+	}
+}
+
+func TestWendyLabels_DuplicateEntitlementType(t *testing.T) {
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementPersist, Name: "data", Path: "/data"},
+		{Type: appconfig.EntitlementPersist, Name: "logs", Path: "/logs"},
+	}
+	labels := wendyLabels("app", "1.0", nil, entitlements)
+
 	for i, want := range entitlements {
-		key := fmt.Sprintf("%s%d", labelKeyEntitlementPrefix, i)
+		key := fmt.Sprintf("%s%s.%d", labelKeyEntitlementPrefix, appconfig.EntitlementPersist, i)
 		raw, ok := labels[key]
 		if !ok {
 			t.Fatalf("missing entitlement label %q", key)
@@ -283,8 +312,8 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &got); err != nil {
 			t.Fatalf("entitlement label %q is not valid JSON: %v", key, err)
 		}
-		if got.Type != want.Type || got.Mode != want.Mode {
-			t.Errorf("entitlement[%d] = %+v; want %+v", i, got, want)
+		if got.Name != want.Name || got.Path != want.Path {
+			t.Errorf("%q = %+v; want %+v", key, got, want)
 		}
 	}
 }
