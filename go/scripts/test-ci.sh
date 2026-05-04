@@ -135,7 +135,7 @@ echo ""
 
 # ── Device discovery ─────────────────────────────────────────────────
 
-trap 'rm -f "${DISCOVER_STDERR:-}" ; rm -rf "${RESULT_DIR:-}"' EXIT
+trap '[[ -n "${DISCOVER_STDERR:-}" ]] && rm -f "$DISCOVER_STDERR"; [[ -n "${RESULT_DIR:-}" ]] && rm -rf "$RESULT_DIR"' EXIT
 
 if [[ -z "$HOSTNAME" ]]; then
     echo -e "${BOLD}==> Auto-discovering device...${RESET}"
