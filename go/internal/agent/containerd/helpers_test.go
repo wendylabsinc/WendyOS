@@ -274,23 +274,29 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 	labels := wendyLabels("app", "1.0", nil, entitlements)
 
 	cases := []struct {
-		key  string
-		want appconfig.Entitlement
+		key      string
+		wantMode string
 	}{
-		{labelKeyEntitlementPrefix + appconfig.EntitlementNetwork, entitlements[0]},
-		{labelKeyEntitlementPrefix + appconfig.EntitlementGPU, entitlements[1]},
+		{labelKeyEntitlementPrefix + appconfig.EntitlementNetwork, "host"},
+		{labelKeyEntitlementPrefix + appconfig.EntitlementGPU, ""},
 	}
 	for _, tc := range cases {
 		raw, ok := labels[tc.key]
 		if !ok {
 			t.Fatalf("missing entitlement label %q", tc.key)
 		}
-		var got appconfig.Entitlement
-		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
 			t.Fatalf("entitlement label %q is not valid JSON: %v", tc.key, err)
 		}
-		if got.Type != tc.want.Type || got.Mode != tc.want.Mode {
-			t.Errorf("%q = %+v; want %+v", tc.key, got, tc.want)
+		if _, hasType := m["type"]; hasType {
+			t.Errorf("%q value should not contain \"type\" field", tc.key)
+		}
+		if tc.wantMode != "" {
+			var mode string
+			if err := json.Unmarshal(m["mode"], &mode); err != nil || mode != tc.wantMode {
+				t.Errorf("%q mode = %q; want %q", tc.key, mode, tc.wantMode)
+			}
 		}
 	}
 }
@@ -308,12 +314,16 @@ func TestWendyLabels_DuplicateEntitlementType(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing entitlement label %q", key)
 		}
-		var got appconfig.Entitlement
-		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
 			t.Fatalf("entitlement label %q is not valid JSON: %v", key, err)
 		}
-		if got.Name != want.Name || got.Path != want.Path {
-			t.Errorf("%q = %+v; want %+v", key, got, want)
+		if _, hasType := m["type"]; hasType {
+			t.Errorf("%q value should not contain \"type\" field", key)
+		}
+		var name string
+		if err := json.Unmarshal(m["name"], &name); err != nil || name != want.Name {
+			t.Errorf("%q name = %q; want %q", key, name, want.Name)
 		}
 	}
 }

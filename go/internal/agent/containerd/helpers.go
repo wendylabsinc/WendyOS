@@ -137,7 +137,13 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 			typeIndex[e.Type]++
 		}
 		if data, err := json.Marshal(e); err == nil {
-			labels[key] = string(data)
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(data, &m); err == nil {
+				delete(m, "type")
+				if stripped, err := json.Marshal(m); err == nil {
+					labels[key] = string(stripped)
+				}
+			}
 		}
 	}
 
