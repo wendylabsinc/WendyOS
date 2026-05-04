@@ -278,7 +278,9 @@ func performInstall(root *cobra.Command, stderr io.Writer, shell string, plan in
 		return fmt.Errorf("creating %s: %w", plan.scriptPath, err)
 	}
 	if err := writeShellScript(root, shell, f); err != nil {
-		f.Close()
+		if cerr := f.Close(); cerr != nil {
+			return errors.Join(err, cerr)
+		}
 		return err
 	}
 	if err := f.Close(); err != nil {
