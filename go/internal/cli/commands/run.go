@@ -737,9 +737,14 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return err
 	}
 
+	buildConfig := "release"
+	if opts.debug {
+		buildConfig = "debug"
+	}
+
 	// Build locally.
 	cliLogln("Building Swift project locally...")
-	buildCmd := exec.CommandContext(ctx, "swift", "build")
+	buildCmd := exec.CommandContext(ctx, "swift", "build", "-c", buildConfig)
 	buildCmd.Dir = cwd
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
@@ -748,7 +753,7 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 	cliLogln("Build completed.")
 
-	binDir, err := swiftBuildBinPath(ctx, cwd)
+	binDir, err := swiftBuildBinPath(ctx, cwd, buildConfig)
 	if err != nil {
 		return err
 	}
@@ -780,12 +785,12 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	return runMacOSNativeContainer(ctx, conn, appCfg, createReq, opts)
 }
 
-func swiftBuildBinPath(ctx context.Context, cwd string) (string, error) {
-	showBinCmd := exec.CommandContext(ctx, "swift", "build", "--show-bin-path")
+func swiftBuildBinPath(ctx context.Context, cwd, buildConfig string) (string, error) {
+	showBinCmd := exec.CommandContext(ctx, "swift", "build", "-c", buildConfig, "--show-bin-path")
 	showBinCmd.Dir = cwd
 	out, err := showBinCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("swift build --show-bin-path: %w\n%s", err, string(out))
+		return "", fmt.Errorf("swift build -c %s --show-bin-path: %w\n%s", buildConfig, err, string(out))
 	}
 
 	binDir := strings.TrimSpace(string(out))
