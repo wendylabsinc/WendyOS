@@ -283,7 +283,7 @@ jobs:
             DEVICES=("$INPUT_HOSTNAME")
           else
             echo "==> Discovering LAN devices..."
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>/dev/null || true)
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s || true)
             DEVICES=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && DEVICES+=("$line")
@@ -301,6 +301,8 @@ jobs:
             device="${DEVICES[$i]}"
             echo "==> Starting tests on $device"
             (
+              export WENDY_BUILDX_BUILDER="wendy-linux-$i"
+              trap 'docker buildx rm -f "$WENDY_BUILDX_BUILDER" >/dev/null 2>&1 || true' EXIT
               scripts/test-ci.sh $TEST_ARGS -h "$device"
             ) &
             PIDS[$i]=$!
