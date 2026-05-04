@@ -135,10 +135,11 @@ echo ""
 
 # ── Device discovery ─────────────────────────────────────────────────
 
+trap 'rm -f "${DISCOVER_STDERR:-}" ; rm -rf "${RESULT_DIR:-}"' EXIT
+
 if [[ -z "$HOSTNAME" ]]; then
     echo -e "${BOLD}==> Auto-discovering device...${RESET}"
     DISCOVER_STDERR=$(mktemp -t wendy-discover-stderr.XXXXXX)
-    trap 'rm -f "$DISCOVER_STDERR"' EXIT
     DISCOVER_JSON=$("$WENDY" discover --json --timeout 5s 2>"$DISCOVER_STDERR")
     cat "$DISCOVER_STDERR" >&2 || true
     DISCOVERED_HOST=$(echo "$DISCOVER_JSON" | jq -r '.lanDevices[0].hostname // empty' 2>/dev/null)
@@ -218,95 +219,118 @@ else
     TESTS=("${ALL_TESTS[@]}")
 fi
 
-echo -e "${BOLD}==> Running ${#TESTS[@]} test(s)${RESET}"
+echo -e "${BOLD}==> Running ${#TESTS[@]} test(s) in parallel${RESET}"
 echo ""
 
-# ── Test loop ────────────────────────────────────────────────────────
+# ── Parallel test execution ──────────────────────────────────────────
+# Each test runs in its own subshell with a unique buildx builder so
+# concurrent deployments to the same device don't share builder state.
+# Output is buffered per-test and printed in the original order once all
+# tests have finished.
+
+BASE_BUILDER="${WENDY_BUILDX_BUILDER:-wendy}"
+RESULT_DIR=$(mktemp -d)
+
+declare -a PIDS=()
 
 for test_name in "${TESTS[@]}"; do
-    test_dir="$TESTS_DIR/$test_name"
+    (
+        _pass=0; _fail=0; _skip=0
 
-    # Skip GPU tests on devices that don't have a GPU.
-    if [[ "$test_name" == *"-gpu"* ]] && [[ "$DEVICE_HAS_GPU" != "true" ]]; then
-        skip_test "$test_name" "no GPU"
-        continue
-    fi
+        _run_test() {
+            local name="$1"; shift
+            printf "  %-50s " "$name"
+            local output; output=$("$@" 2>&1)
+            local rc=$?
+            if [[ $rc -eq 0 ]]; then
+                echo -e "${GREEN}PASS${RESET}"; ((_pass++))
+            else
+                echo -e "${RED}FAIL${RESET} (exit $rc)"
+                echo "    Output: $(echo "$output" | tail -10)"
+                ((_fail++))
+            fi
+            return $rc
+        }
 
-    # ── Security: OTEL ports must not be reachable from the network ──────
-    if [[ "$test_name" == "otel-localhost-only" ]]; then
-        otel_grpc_closed() { ! nc -z -w 3 "$HOSTNAME" 4317 2>/dev/null; }
-        otel_http_closed() { ! nc -z -w 3 "$HOSTNAME" 4318 2>/dev/null; }
-        run_test "otel-localhost-only (gRPC 4317 not reachable)" otel_grpc_closed
-        run_test "otel-localhost-only (HTTP 4318 not reachable)" otel_http_closed
-        continue
-    fi
+        _skip_test() {
+            local name="$1" reason="${2:-}"
+            printf "  %-50s " "$name"
+            [[ -n "$reason" ]] && echo -e "${YELLOW}SKIP${RESET} ($reason)" || echo -e "${YELLOW}SKIP${RESET}"
+            ((_skip++))
+        }
 
-    # Verify directory exists
-    if [[ ! -d "$test_dir" ]]; then
-        skip_test "$test_name" "no directory"
-        continue
-    fi
+        export WENDY_BUILDX_BUILDER="${BASE_BUILDER}-${test_name}"
+        test_dir="$TESTS_DIR/$test_name"
 
-    # ── Compose tests (docker-compose.{yml,yaml}, compose.{yml,yaml}, no wendy.json) ──
-    compose_file=""
-    for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-        if [[ -f "$test_dir/$cand" ]]; then
-            compose_file="$test_dir/$cand"
-            break
+        if [[ "$test_name" == *"-gpu"* ]] && [[ "$DEVICE_HAS_GPU" != "true" ]]; then
+            _skip_test "$test_name" "no GPU"
+        elif [[ "$test_name" == "otel-localhost-only" ]]; then
+            otel_grpc_closed() { ! nc -z -w 3 "$HOSTNAME" 4317 2>/dev/null; }
+            otel_http_closed() { ! nc -z -w 3 "$HOSTNAME" 4318 2>/dev/null; }
+            _run_test "otel-localhost-only (gRPC 4317 not reachable)" otel_grpc_closed
+            _run_test "otel-localhost-only (HTTP 4318 not reachable)" otel_http_closed
+        elif [[ ! -d "$test_dir" ]]; then
+            _skip_test "$test_name" "no directory"
+        else
+            # ── Compose tests ──────────────────────────────────────────────
+            compose_file=""
+            for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+                if [[ -f "$test_dir/$cand" ]]; then
+                    compose_file="$test_dir/$cand"
+                    break
+                fi
+            done
+            if [[ -n "$compose_file" ]]; then
+                project_name="$(basename "$test_dir")"
+                service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
+                for svc in $service_names; do
+                    "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
+                done
+                pushd "$test_dir" > /dev/null
+                _run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
+                popd > /dev/null
+                for svc in $service_names; do
+                    "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
+                    "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
+                done
+                docker buildx rm "${WENDY_BUILDX_BUILDER}" --force &>/dev/null || true
+            elif [[ ! -f "$test_dir/wendy.json" ]]; then
+                _skip_test "$test_name" "no wendy.json"
+            else
+                # ── Standard single-container tests ────────────────────────
+                app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
+                if [[ -z "$app_id" || "$app_id" == "null" ]]; then
+                    _skip_test "$test_name" "no appId"
+                else
+                    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+                    pushd "$test_dir" > /dev/null
+                    _run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
+                    popd > /dev/null
+                    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
+                    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
+                    docker buildx rm "${WENDY_BUILDX_BUILDER}" --force &>/dev/null || true
+                fi
+            fi
         fi
-    done
-    if [[ -n "$compose_file" ]]; then
-        # Derive project name from directory name (mirrors CLI logic).
-        project_name="$(basename "$test_dir")"
 
-        # Use docker compose itself to enumerate services so we don't depend
-        # on PyYAML (not in stdlib and not installed on most CI hosts).
-        service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
+        echo "$_pass $_fail $_skip" > "$RESULT_DIR/${test_name}.counts"
+    ) > "$RESULT_DIR/${test_name}.out" 2>&1 &
+    PIDS+=($!)
+done
 
-        # Pre-cleanup: remove leftover service containers.
-        for svc in $service_names; do
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
+# ── Collect results in original test order ───────────────────────────
 
-        # Deploy and run.
-        pushd "$test_dir" > /dev/null
-        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-        popd > /dev/null
-
-        # Post-cleanup.
-        for svc in $service_names; do
-            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-        continue
+i=0
+for test_name in "${TESTS[@]}"; do
+    wait "${PIDS[$i]}" || true
+    cat "$RESULT_DIR/${test_name}.out"
+    if [[ -f "$RESULT_DIR/${test_name}.counts" ]]; then
+        read -r _p _f _s < "$RESULT_DIR/${test_name}.counts"
+        ((PASS_COUNT += _p))
+        ((FAIL_COUNT += _f))
+        ((SKIP_COUNT += _s))
     fi
-
-    # ── Standard single-container tests (wendy.json) ───────────────────
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
+    ((i++))
 done
 
 echo ""
