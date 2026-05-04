@@ -163,11 +163,27 @@ jobs:
           python3 << 'EXTRACT'
           import re
 
+          def extract_summary(paragraphs):
+              for paragraph in paragraphs:
+                  block = paragraph.strip()
+                  if not block:
+                      continue
+
+                  lines = block.splitlines()
+                  while lines and re.match(r'^\s*#{1,6}\s+\S', lines[0]):
+                      lines.pop(0)
+
+                  summary = '\n'.join(lines).strip()
+                  if summary:
+                      return summary
+
+              return '_No summary available._'
+
           with open('review.md') as f:
               content = f.read()
 
           paragraphs = re.split(r'\n\n+', content)
-          summary = next((p.strip() for p in paragraphs if p.strip() and not p.strip().startswith('#')), '_No summary available._')
+          summary = extract_summary(paragraphs)
 
           with open('comment.md', 'w') as f:
               f.write('## AI Security Review\n\n')
