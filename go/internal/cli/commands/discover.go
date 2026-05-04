@@ -690,10 +690,10 @@ func newDiscoverTable(interactive bool) bubbleTable.Model {
 }
 
 var deviceTypeNames = map[string]string{
-	"raspberry-pi-3":  "Raspberry Pi 3",
-	"raspberry-pi-4":  "Raspberry Pi 4",
-	"raspberry-pi-5":  "Raspberry Pi 5",
-	"jetson-agx-orin": "Jetson AGX Orin",
+	"raspberry-pi-3":   "Raspberry Pi 3",
+	"raspberry-pi-4":   "Raspberry Pi 4",
+	"raspberry-pi-5":   "Raspberry Pi 5",
+	"jetson-agx-orin":  "Jetson AGX Orin",
 	"jetson-orin-nano": "Jetson Orin Nano",
 	"x86_64":           "x86-64",
 }
@@ -746,7 +746,7 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 			continue
 		}
 		addr := fmt.Sprintf("%s: %s", d.ProviderKey, d.ID)
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, d.OS, addr, markOutdated(d.AgentVersion)})
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "", addr, markOutdated(d.AgentVersion)})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {

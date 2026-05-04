@@ -19,8 +19,8 @@ import (
 // testImageStore is a minimal in-memory images.Store for testing.
 type testImageStore struct {
 	images.Store
-	mu     sync.Mutex
-	store  map[string]images.Image
+	mu    sync.Mutex
+	store map[string]images.Image
 }
 
 func newTestImageStore() *testImageStore {
