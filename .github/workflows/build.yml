@@ -593,8 +593,11 @@ jobs:
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
     runs-on: ubuntu-latest
-    needs: [determine-version, package-linux, test-templates]
-    if: needs.determine-version.outputs.is_release == 'true' && needs.determine-version.outputs.is_prerelease == 'false'
+    needs: [determine-version, package-linux, test-templates, integration-tests]
+    if: |
+      needs.determine-version.outputs.is_release == 'true' &&
+      needs.determine-version.outputs.is_prerelease == 'false' &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
     permissions:
       contents: read
       id-token: write
@@ -644,11 +647,21 @@ jobs:
               --source="$rpm"
           done
 
+  integration-tests:
+    name: Integration Tests (macOS, stable gate)
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      platform: macos
+      jobs: integration
+
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, build-agent-macos-app, package-linux, package-windows, test-templates]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, package-linux, package-windows, test-templates, integration-tests]
+    if: |
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v8
