@@ -229,7 +229,7 @@ echo ""
 # tests have finished.
 
 BASE_BUILDER="${WENDY_BUILDX_BUILDER:-wendy}"
-RESULT_DIR=$(mktemp -d)
+RESULT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/wendy-test-ci.XXXXXX")
 
 declare -a PIDS=()
 
