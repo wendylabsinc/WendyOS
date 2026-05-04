@@ -273,30 +273,28 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 	}
 	labels := wendyLabels("app", "1.0", nil, entitlements)
 
-	raw, ok := labels[labelKeyEntitlements]
-	if !ok {
-		t.Fatal("missing entitlements label")
-	}
-
-	var got []appconfig.Entitlement
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("entitlements label is not valid JSON: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 entitlements, got %d", len(got))
-	}
-	if got[0].Type != appconfig.EntitlementNetwork || got[0].Mode != "host" {
-		t.Errorf("unexpected entitlement[0]: %+v", got[0])
-	}
-	if got[1].Type != appconfig.EntitlementGPU {
-		t.Errorf("unexpected entitlement[1]: %+v", got[1])
+	for i, want := range entitlements {
+		key := fmt.Sprintf("%s%d", labelKeyEntitlementPrefix, i)
+		raw, ok := labels[key]
+		if !ok {
+			t.Fatalf("missing entitlement label %q", key)
+		}
+		var got appconfig.Entitlement
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("entitlement label %q is not valid JSON: %v", key, err)
+		}
+		if got.Type != want.Type || got.Mode != want.Mode {
+			t.Errorf("entitlement[%d] = %+v; want %+v", i, got, want)
+		}
 	}
 }
 
 func TestWendyLabels_NoEntitlementsLabel(t *testing.T) {
 	labels := wendyLabels("app", "1.0", nil, nil)
-	if _, ok := labels[labelKeyEntitlements]; ok {
-		t.Error("should not have entitlements label when entitlements are empty")
+	for k := range labels {
+		if strings.HasPrefix(k, labelKeyEntitlementPrefix) {
+			t.Errorf("should not have entitlement label when entitlements are empty, got %q", k)
+		}
 	}
 }
 
