@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   integration-tests:
+
     if: github.event.pull_request.head.repo.full_name == github.repository
     name: Integration Tests (macOS)
     uses: ./.github/workflows/integration-tests.yml
