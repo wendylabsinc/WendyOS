@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-env python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -262,9 +262,9 @@ jobs:
             IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
-              # Skip swift tests on Linux
+              # Skip swift-* tests on Linux
               if [[ "$t" == swift-* ]]; then
-                echo "Skipping Swift test $t on Linux"
+                echo "Skipping Swift test on Linux: $t"
                 continue
               fi
               TEST_ARGS="$TEST_ARGS -t $t"
@@ -275,7 +275,7 @@ jobs:
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-bluetooth python-env python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -285,7 +285,7 @@ jobs:
           else
             echo "==> Discovering LAN devices..."
             DISCOVER_STDERR=$(mktemp)
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR" || true)
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR")
             cat "$DISCOVER_STDERR" >&2 || true
             rm -f "$DISCOVER_STDERR"
             DEVICES=()
@@ -303,13 +303,9 @@ jobs:
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
             device="${DEVICES[$i]}"
-            BUILDER="wendy-$i"
-            echo "==> Starting tests on $device (builder: $BUILDER)"
+            echo "==> Starting tests on $device"
             (
-              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
-              rc=$?
-              docker buildx rm "$BUILDER" --force 2>/dev/null || true
-              exit $rc
+              scripts/test-ci.sh $TEST_ARGS -h "$device"
             ) &
             PIDS[$i]=$!
           done
