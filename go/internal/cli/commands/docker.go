@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -922,47 +921,30 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	// Public images (e.g. python:3.11-slim) need no credentials; anonymous
 	// pull works fine with an empty auths map.
 	//
-	// We only replace config.json; everything else (cli-plugins, buildx builder
-	// instances, contexts) is linked from the original Docker config so that
-	// buildx and the "wendy" builder remain discoverable.
-	origDockerConfig := os.Getenv("DOCKER_CONFIG")
-	if origDockerConfig == "" {
-		origDockerConfig = filepath.Join(home, ".docker")
-	}
-	cleanDockerConfigDir := filepath.Join(userCache, "wendy", "docker-config")
-	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
-		return fmt.Errorf("creating clean docker config directory: %w", err)
-	}
-	cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
-	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
-		return fmt.Errorf("writing clean docker config: %w", err)
-	}
-	// Link subdirs that docker/buildx need to find plugins and builder state.
-	// On Windows os.Symlink requires Developer Mode or admin, so linkOrCopyDir
-	// falls back to a native directory junction and finally to copying.
-	//
-	// Symlinks and junctions transparently follow source updates, so we keep
-	// them across builds. A real (copied) directory is a snapshot that would
-	// go stale if the source changes (new builder, updated cli-plugin); refresh
-	// it on every build by removing it before relinking. Go reports junctions
-	// with ModeSymlink on Windows, so the same check works on both platforms.
-	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
-		src := filepath.Join(origDockerConfig, subdir)
-		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Stat(src); err != nil {
-			continue
+	// On Windows, Docker Desktop's credential helper is always available and
+	// symlinks for builder-state lookup are unreliable in elevated processes,
+	// so we skip this override entirely and let docker use its normal config.
+	var cleanDockerConfigDir string
+	if runtime.GOOS != "windows" {
+		origDockerConfig := os.Getenv("DOCKER_CONFIG")
+		if origDockerConfig == "" {
+			origDockerConfig = filepath.Join(home, ".docker")
 		}
-		if info, err := os.Lstat(dst); err == nil {
-			if info.Mode()&fs.ModeSymlink != 0 {
-				continue
-			}
-			if err := os.RemoveAll(dst); err != nil {
-				fmt.Fprintf(os.Stderr, "[buildx] warning: refreshing %s in clean docker config failed: %v\n", subdir, err)
-				continue
-			}
+		cleanDockerConfigDir = filepath.Join(home, ".cache", "wendy", "docker-config")
+		if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
+			return fmt.Errorf("creating clean docker config directory: %w", err)
 		}
-		if err := linkOrCopyDir(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "[buildx] warning: linking %s into clean docker config failed: %v\n", subdir, err)
+		cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
+		if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
+			return fmt.Errorf("writing clean docker config: %w", err)
+		}
+		// Symlink subdirs that docker/buildx need to find plugins and builder state.
+		for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+			dst := filepath.Join(cleanDockerConfigDir, subdir)
+			if _, err := os.Lstat(dst); err != nil {
+				// best-effort: ignore if source doesn't exist or symlink fails
+				_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+			}
 		}
 	}
 
