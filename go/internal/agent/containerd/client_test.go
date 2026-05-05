@@ -56,41 +56,31 @@ func TestCreateContainerProgressMappingUsesUnpackingPhaseForStart(t *testing.T) 
 	}
 }
 
-func TestBuildContainerBaseEnvIncludesDeviceHostname(t *testing.T) {
+func TestBuildContainerBaseEnvIncludesWendyHostname(t *testing.T) {
 	old := deviceHostnameWithSuffix
 	t.Cleanup(func() { deviceHostnameWithSuffix = old })
 	deviceHostnameWithSuffix = func() string { return "wendyos-test-device.local" }
 
-	env := buildContainerBaseEnv("camera-app")
+	env := buildContainerBaseEnv()
 
-	wantApp := "WENDY_HOSTNAME=camera-app.local"
-	wantDevice := "WENDY_DEVICE_HOSTNAME=wendyos-test-device.local"
-	var sawApp, sawDevice bool
+	want := "WENDY_HOSTNAME=wendyos-test-device.local"
 	for _, kv := range env {
-		switch kv {
-		case wantApp:
-			sawApp = true
-		case wantDevice:
-			sawDevice = true
+		if kv == want {
+			return
 		}
 	}
-	if !sawApp {
-		t.Errorf("env missing %q; got %v", wantApp, env)
-	}
-	if !sawDevice {
-		t.Errorf("env missing %q; got %v", wantDevice, env)
-	}
+	t.Errorf("env missing %q; got %v", want, env)
 }
 
-func TestBuildContainerBaseEnvOmitsDeviceHostnameWhenUnavailable(t *testing.T) {
+func TestBuildContainerBaseEnvOmitsWendyHostnameWhenUnavailable(t *testing.T) {
 	old := deviceHostnameWithSuffix
 	t.Cleanup(func() { deviceHostnameWithSuffix = old })
 	deviceHostnameWithSuffix = func() string { return "" }
 
-	env := buildContainerBaseEnv("camera-app")
+	env := buildContainerBaseEnv()
 
 	for _, kv := range env {
-		if len(kv) >= len("WENDY_DEVICE_HOSTNAME=") && kv[:len("WENDY_DEVICE_HOSTNAME=")] == "WENDY_DEVICE_HOSTNAME=" {
+		if len(kv) >= len("WENDY_HOSTNAME=") && kv[:len("WENDY_HOSTNAME=")] == "WENDY_HOSTNAME=" {
 			t.Errorf("env unexpectedly contains %q when device hostname is unresolvable", kv)
 		}
 	}

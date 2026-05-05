@@ -483,7 +483,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Build environment variables: image env first, then our overrides.
-	env := buildContainerBaseEnv(appName)
+	env := buildContainerBaseEnv()
 	if specErr == nil {
 		env = append(imageSpec.Config.Env, env...)
 	}
@@ -743,16 +743,15 @@ var deviceHostnameWithSuffix = func() string {
 }
 
 // buildContainerBaseEnv builds the wendy-injected env vars layered on top of
-// the image's own env. WENDY_HOSTNAME is the per-app mDNS name; WENDY_DEVICE_HOSTNAME
-// is the device's mDNS name (omitted when unresolvable).
-func buildContainerBaseEnv(appName string) []string {
+// the image's own env. WENDY_HOSTNAME is the device's mDNS hostname
+// (omitted when unresolvable).
+func buildContainerBaseEnv() []string {
 	env := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"TERM=xterm",
-		fmt.Sprintf("WENDY_HOSTNAME=%s.local", appName),
 	}
 	if h := deviceHostnameWithSuffix(); h != "" {
-		env = append(env, "WENDY_DEVICE_HOSTNAME="+h)
+		env = append(env, "WENDY_HOSTNAME="+h)
 	}
 	return env
 }
