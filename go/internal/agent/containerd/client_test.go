@@ -56,6 +56,46 @@ func TestCreateContainerProgressMappingUsesUnpackingPhaseForStart(t *testing.T) 
 	}
 }
 
+func TestBuildContainerBaseEnvIncludesDeviceHostname(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "wendyos-test-device.local" }
+
+	env := buildContainerBaseEnv("camera-app")
+
+	wantApp := "WENDY_HOSTNAME=camera-app.local"
+	wantDevice := "WENDY_DEVICE_HOSTNAME=wendyos-test-device.local"
+	var sawApp, sawDevice bool
+	for _, kv := range env {
+		switch kv {
+		case wantApp:
+			sawApp = true
+		case wantDevice:
+			sawDevice = true
+		}
+	}
+	if !sawApp {
+		t.Errorf("env missing %q; got %v", wantApp, env)
+	}
+	if !sawDevice {
+		t.Errorf("env missing %q; got %v", wantDevice, env)
+	}
+}
+
+func TestBuildContainerBaseEnvOmitsDeviceHostnameWhenUnavailable(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "" }
+
+	env := buildContainerBaseEnv("camera-app")
+
+	for _, kv := range env {
+		if len(kv) >= len("WENDY_DEVICE_HOSTNAME=") && kv[:len("WENDY_DEVICE_HOSTNAME=")] == "WENDY_DEVICE_HOSTNAME=" {
+			t.Errorf("env unexpectedly contains %q when device hostname is unresolvable", kv)
+		}
+	}
+}
+
 func TestExpandAgentHook(t *testing.T) {
 	t.Setenv("EXTRA_VALUE", "ok")
 

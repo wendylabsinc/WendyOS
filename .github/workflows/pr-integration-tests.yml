@@ -1,0 +1,19 @@
+name: PR Integration Tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+
+concurrency:
+  group: pr-integration-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  integration-tests:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    name: Integration Tests (macOS)
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      platform: macos
+      jobs: integration
