@@ -378,3 +378,111 @@ func TestPreEnrollDevice_EmptyCert(t *testing.T) {
 		t.Fatal("expected error when cloud returns empty certificate")
 	}
 }
+
+func TestWriteConfigFiles_AgentBinaryOnly(t *testing.T) {
+	dir := t.TempDir()
+	binary := []byte("fake-agent-binary")
+
+	if err := writeConfigFiles(dir, binary, nil, "", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "wendy-agent"))
+	if err != nil {
+		t.Fatalf("reading wendy-agent: %v", err)
+	}
+	if string(got) != string(binary) {
+		t.Errorf("wendy-agent content = %q; want %q", got, binary)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "wendy.conf")); !os.IsNotExist(err) {
+		t.Error("wendy.conf should not be written when no creds or device name")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "provisioning.json")); !os.IsNotExist(err) {
+		t.Error("provisioning.json should not be written when no provisioning data")
+	}
+}
+
+func TestWriteConfigFiles_WithWiFiCreds(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{
+		{SSID: "MyNetwork", Password: "secret"},
+	}
+
+	if err := writeConfigFiles(dir, []byte("bin"), creds, "", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
+	if err != nil {
+		t.Fatalf("reading wendy.conf: %v", err)
+	}
+	if !strings.Contains(string(conf), "MyNetwork") {
+		t.Errorf("wendy.conf missing SSID; got: %s", conf)
+	}
+}
+
+func TestWriteConfigFiles_WithDeviceName(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := writeConfigFiles(dir, []byte("bin"), nil, "my-device", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
+	if err != nil {
+		t.Fatalf("reading wendy.conf: %v", err)
+	}
+	if !strings.Contains(string(conf), "my-device") {
+		t.Errorf("wendy.conf missing device name; got: %s", conf)
+	}
+}
+
+func TestWriteConfigFiles_WithProvisioningJSON(t *testing.T) {
+	dir := t.TempDir()
+	provJSON := []byte(`{"enrolled":true}`)
+
+	if err := writeConfigFiles(dir, []byte("bin"), nil, "", provJSON); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "provisioning.json"))
+	if err != nil {
+		t.Fatalf("reading provisioning.json: %v", err)
+	}
+	if string(got) != string(provJSON) {
+		t.Errorf("provisioning.json = %q; want %q", got, provJSON)
+	}
+	info, _ := os.Stat(filepath.Join(dir, "provisioning.json"))
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("provisioning.json mode = %o; want 0600", info.Mode().Perm())
+	}
+}
+
+func TestWriteConfigFiles_NewlineInSSID(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{{SSID: "bad\nssid", Password: "ok"}}
+
+	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	if err == nil {
+		t.Fatal("expected error for SSID with newline")
+	}
+}
+
+func TestWriteConfigFiles_NewlineInPassword(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{{SSID: "ok", Password: "bad\npassword"}}
+
+	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	if err == nil {
+		t.Fatal("expected error for password with newline")
+	}
+}
+
+func TestWriteConfigFiles_NewlineInDeviceName(t *testing.T) {
+	dir := t.TempDir()
+
+	err := writeConfigFiles(dir, []byte("bin"), nil, "bad\nname", nil)
+	if err == nil {
+		t.Fatal("expected error for device name with newline")
+	}
+}
