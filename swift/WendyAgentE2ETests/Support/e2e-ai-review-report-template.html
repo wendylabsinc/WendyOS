@@ -4,24 +4,86 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{REPORT_TITLE}}</title>
+  <script>
+    (() => {
+      try {
+        const stored = localStorage.getItem('wendy-e2e-theme');
+        const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = stored || preferred;
+      } catch {
+        document.documentElement.dataset.theme = 'light';
+      }
+    })();
+  </script>
   <style>
     :root {
-      --bg: #f7f8fb;
-      --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
+      color-scheme: light;
+
+      /* Wendy CLI emerald palette (go/internal/cli/tui/theme.go). */
+      --emerald-50: #ecfdf5;
+      --emerald-100: #d1fae5;
+      --emerald-200: #a7f3d0;
+      --emerald-300: #6ee7b7;
+      --emerald-400: #34d399;
+      --emerald-500: #10b981;
+      --emerald-600: #059669;
+      --emerald-700: #047857;
+      --emerald-800: #065f46;
+      --emerald-900: #064e3b;
+      --emerald-950: #022c22;
+
+      --bg: #f8fafc;
+      --card: rgba(255, 255, 255, .92);
+      --panel: rgba(255, 255, 255, .78);
+      --text: #111827;
+      --muted: #64748b;
       --line: #e5e7eb;
       --soft: #f3f4f6;
-      --green: #16803c;
-      --green-bg: #ecfdf3;
-      --green-line: #bbf7d0;
+      --green: var(--emerald-700);
+      --green-bg: var(--emerald-50);
+      --green-line: var(--emerald-200);
       --amber: #a16207;
       --amber-bg: #fffbeb;
       --amber-line: #fde68a;
       --red: #b91c1c;
       --red-bg: #fef2f2;
       --red-line: #fecaca;
-      --blue: #2563eb;
+      --blue: var(--emerald-600);
+      --shadow: rgba(15, 23, 42, .08);
+      --shadow-strong: rgba(15, 23, 42, .14);
+      --focus-ring: rgba(16, 185, 129, .18);
+      --code-bg: rgba(243, 244, 246, .90);
+      --stream-bg: #0f172a;
+      --stream-heading: #111827;
+      --stream-text: #e5e7eb;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #020617;
+      --card: rgba(15, 23, 42, .88);
+      --panel: rgba(30, 41, 59, .58);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --line: rgba(148, 163, 184, .22);
+      --soft: rgba(51, 65, 85, .48);
+      --green: var(--emerald-300);
+      --green-bg: rgba(16, 185, 129, .14);
+      --green-line: rgba(52, 211, 153, .35);
+      --amber: #fbbf24;
+      --amber-bg: rgba(245, 158, 11, .14);
+      --amber-line: rgba(245, 158, 11, .34);
+      --red: #fca5a5;
+      --red-bg: rgba(239, 68, 68, .14);
+      --red-line: rgba(248, 113, 113, .34);
+      --blue: var(--emerald-400);
+      --shadow: rgba(0, 0, 0, .28);
+      --shadow-strong: rgba(0, 0, 0, .38);
+      --focus-ring: rgba(52, 211, 153, .22);
+      --code-bg: rgba(51, 65, 85, .62);
+      --stream-bg: #020617;
+      --stream-heading: #0f172a;
+      --stream-text: #d1fae5;
     }
 
     * { box-sizing: border-box; }
@@ -45,6 +107,85 @@
       gap: 20px;
       align-items: end;
       margin-bottom: 18px;
+    }
+
+    .brand-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid rgba(110, 231, 183, .54);
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--emerald-400), var(--emerald-600));
+      color: var(--emerald-950);
+      font-weight: 950;
+      letter-spacing: -.08em;
+      box-shadow: 0 12px 30px rgba(16, 185, 129, .26);
+    }
+
+    .brand-copy {
+      display: grid;
+      gap: 0;
+      line-height: 1.1;
+    }
+
+    .brand-copy strong {
+      font-size: 15px;
+      letter-spacing: -.02em;
+    }
+
+    .brand-copy span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .header-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .theme-toggle {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 8px 12px;
+      box-shadow: 0 8px 22px var(--shadow);
+    }
+
+    .theme-toggle:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 26px var(--shadow-strong);
+    }
+
+    .theme-toggle:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    .theme-toggle-icon {
+      color: var(--blue);
+      font-size: 15px;
+      line-height: 1;
     }
 
     .kicker {
@@ -83,7 +224,7 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       padding: 10px 12px;
-      box-shadow: 0 6px 18px rgba(31, 41, 55, .04);
+      box-shadow: 0 6px 18px var(--shadow);
     }
 
     .metric strong {
@@ -114,10 +255,10 @@
       align-items: center;
       margin: 18px 0;
       padding: 12px;
-      background: rgba(255, 255, 255, .9);
+      background: var(--card);
       border: 1px solid var(--line);
       border-radius: 16px;
-      box-shadow: 0 10px 28px rgba(31, 41, 55, .08);
+      box-shadow: 0 10px 28px var(--shadow-strong);
       backdrop-filter: blur(12px);
     }
 
@@ -165,7 +306,7 @@
     .filter-button:hover,
     .filter-button[aria-pressed="true"] {
       transform: translateY(-1px);
-      box-shadow: 0 6px 16px rgba(31, 41, 55, .12);
+      box-shadow: 0 6px 16px var(--shadow-strong);
     }
 
     .filter-button[aria-pressed="true"] {
@@ -187,7 +328,7 @@
 
     .search-field:focus {
       border-color: var(--blue);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, .14);
+      box-shadow: 0 0 0 3px var(--focus-ring);
       outline: none;
     }
 
@@ -206,7 +347,7 @@
     .card-title {
       margin: 0 0 8px;
       padding: 0 0 6px;
-      border-bottom: 1px solid rgba(31, 41, 55, .10);
+      border-bottom: 1px solid var(--line);
     }
 
     h2 {
@@ -279,7 +420,7 @@
       border-radius: 8px;
     }
 
-    .test-summary:hover { background: rgba(255, 255, 255, .62); }
+    .test-summary:hover { background: var(--panel); }
 
     .test-path {
       color: var(--text);
@@ -319,8 +460,8 @@
     .test-body {
       margin: 4px 0 14px 22px;
       padding: 14px 16px;
-      background: rgba(255, 255, 255, .72);
-      border: 1px solid rgba(31, 41, 55, .08);
+      background: var(--panel);
+      border: 1px solid var(--line);
       border-radius: 12px;
     }
 
@@ -347,7 +488,7 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       background: var(--soft);
-      color: #4b5563;
+      color: var(--muted);
       font-size: 14px;
     }
 
@@ -361,7 +502,8 @@
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: .88em;
-      background: var(--soft);
+      background: var(--code-bg);
+      border: 1px solid var(--line);
       border-radius: 5px;
       padding: .12em .34em;
     }
@@ -410,7 +552,7 @@
     }
 
     .skipped li {
-      color: #4b5563;
+      color: var(--muted);
       background: var(--soft);
       border-radius: 999px;
       padding: 7px 10px;
@@ -421,7 +563,7 @@
       margin-top: 18px;
       border: 1px solid var(--line);
       border-radius: 14px;
-      background: #fbfcff;
+      background: var(--panel);
       overflow: hidden;
     }
 
@@ -480,16 +622,16 @@
       min-width: 0;
       border: 1px solid var(--line);
       border-radius: 12px;
-      background: #0f172a;
+      background: var(--stream-bg);
       overflow: hidden;
     }
 
     .stream h4 {
       margin: 0;
       padding: 9px 12px;
-      color: #cbd5e1;
-      background: #111827;
-      border-bottom: 1px solid rgba(255, 255, 255, .08);
+      color: var(--stream-text);
+      background: var(--stream-heading);
+      border-bottom: 1px solid var(--line);
       font-size: 12px;
       letter-spacing: .08em;
       text-transform: uppercase;
@@ -501,7 +643,7 @@
       max-height: 420px;
       overflow: auto;
       padding: 12px;
-      color: #e5e7eb;
+      color: var(--stream-text);
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -517,6 +659,8 @@
     @media (max-width: 680px) {
       main { padding: 24px 16px 56px; }
       header { grid-template-columns: 1fr; }
+      .header-side { justify-items: stretch; }
+      .theme-toggle { justify-self: start; }
       .summary { grid-template-columns: repeat(2, 1fr); }
       .filter-bar { position: static; }
       .filter-count { flex-basis: 100%; margin-left: 0; }
@@ -555,16 +699,26 @@
   <main>
     <header>
       <div>
+        <div class="brand-row" aria-label="Wendy">
+          <span class="brand-mark" aria-hidden="true">W</span>
+          <span class="brand-copy"><strong>Wendy</strong><span>Agent E2E Report</span></span>
+        </div>
         <div class="kicker">{{REPORT_KICKER}}</div>
         <h1>{{REPORT_HEADING}}</h1>
         <p class="lead">{{REPORT_SUMMARY}}</p>
       </div>
-      <section class="summary compact-stats" aria-label="Summary">
-        <div class="metric"><strong>{{TESTS_PASSED_COUNT}}</strong><span>Passed</span></div>
-        <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
-        <div class="metric"><strong>{{TESTS_FAILED_COUNT}}</strong><span>Failed</span></div>
-        <div class="metric"><strong>{{COMMAND_RUN_COUNT}}</strong><span>Commands</span></div>
-      </section>
+      <div class="header-side">
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">
+          <span class="theme-toggle-icon" data-theme-toggle-icon aria-hidden="true">◐</span>
+          <span data-theme-toggle-label>Theme</span>
+        </button>
+        <section class="summary compact-stats" aria-label="Summary">
+          <div class="metric"><strong>{{TESTS_PASSED_COUNT}}</strong><span>Passed</span></div>
+          <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
+          <div class="metric"><strong>{{TESTS_FAILED_COUNT}}</strong><span>Failed</span></div>
+          <div class="metric"><strong>{{COMMAND_RUN_COUNT}}</strong><span>Commands</span></div>
+        </section>
+      </div>
     </header>
 
     <section class="filter-bar" aria-label="Filter tests by status">
@@ -665,7 +819,30 @@
       const tests = Array.from(document.querySelectorAll('[data-test-status]'));
       const cards = Array.from(document.querySelectorAll('[data-test-file-card]'));
       const count = document.querySelector('[data-filter-count]');
+      const themeToggle = document.querySelector('[data-theme-toggle]');
+      const themeToggleIcon = document.querySelector('[data-theme-toggle-icon]');
+      const themeToggleLabel = document.querySelector('[data-theme-toggle-label]');
       let activeFilter = 'all';
+
+      function currentTheme() {
+        return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      }
+
+      function setTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        try { localStorage.setItem('wendy-e2e-theme', theme); } catch {}
+        updateThemeToggle();
+      }
+
+      function updateThemeToggle() {
+        const theme = currentTheme();
+        if (themeToggle) {
+          themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+          themeToggle.setAttribute('title', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
+        }
+        if (themeToggleIcon) themeToggleIcon.textContent = theme === 'dark' ? '☾' : '☼';
+        if (themeToggleLabel) themeToggleLabel.textContent = theme === 'dark' ? 'Dark' : 'Light';
+      }
 
       function renderQuotedCode(root = document.querySelector('main')) {
         if (!root) return;
@@ -749,7 +926,12 @@
         });
       }
 
+      themeToggle?.addEventListener('click', () => {
+        setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+      });
+
       search?.addEventListener('input', applyFilters);
+      updateThemeToggle();
       renderQuotedCode();
       applyFilters();
     })();
