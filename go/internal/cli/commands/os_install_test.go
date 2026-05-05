@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/version"
@@ -399,14 +400,14 @@ func TestDownloadParallel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var progressCalled bool
+	var progressCalled atomic.Bool
 	err = downloadParallel(&http.Client{}, srv.URL+"/image.img", contentLength, f, func(downloaded, total int64) {
-		progressCalled = true
+		progressCalled.Store(true)
 	})
 	if err != nil {
 		t.Fatalf("downloadParallel: %v", err)
 	}
-	if !progressCalled {
+	if !progressCalled.Load() {
 		t.Error("progress callback was never called")
 	}
 

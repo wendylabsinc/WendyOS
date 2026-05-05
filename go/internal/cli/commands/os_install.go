@@ -646,16 +646,19 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 // the I/O loop itself. The terminal can't usefully render faster than the
 // throttle rate anyway, and a trailing ProgressDoneMsg always renders 100%.
 func throttledProgress(p *tea.Program, minInterval time.Duration) func(written, total int64) {
-	var last time.Time
+	var lastNanos atomic.Int64
 	return func(written, total int64) {
 		if total <= 0 {
 			return
 		}
 		now := time.Now()
-		if now.Sub(last) < minInterval {
+		prev := lastNanos.Load()
+		if now.UnixNano()-prev < minInterval.Nanoseconds() {
 			return
 		}
-		last = now
+		if !lastNanos.CompareAndSwap(prev, now.UnixNano()) {
+			return
+		}
 		p.Send(tui.ProgressUpdateMsg{
 			Percent: float64(written) / float64(total),
 			Written: written,
