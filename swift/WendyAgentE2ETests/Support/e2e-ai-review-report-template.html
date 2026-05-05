@@ -290,9 +290,26 @@
     }
 
     .test-path .arrow {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       color: var(--muted);
-      font-weight: 500;
-      margin: 0 4px;
+      font-size: 0;
+      font-weight: 700;
+      margin: 0 6px;
+      vertical-align: 1px;
+    }
+
+    .test-path .arrow::before {
+      content: "›";
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .test-path code {
+      color: var(--text);
+      font-size: .9em;
+      font-weight: 650;
     }
 
     .test-summary .badge {
@@ -560,7 +577,7 @@
       <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
     </section>
 
-    <!-- Repeat this .card section once per test file. Use prose display names, e.g. WendyAnalyticsTests.swift -> Wendy Analytics. -->
+    <!-- Repeat this .card section once per test file. Use prose display names, e.g. WendyAnalyticsTests.swift → Wendy Analytics. -->
     <section class="card" data-test-file-card>
       <div class="card-title">
         <h2>{{TEST_FILE_DISPLAY_NAME}}</h2>
@@ -650,6 +667,54 @@
       const count = document.querySelector('[data-filter-count]');
       let activeFilter = 'all';
 
+      function renderQuotedCode(root = document.querySelector('main')) {
+        if (!root) return;
+
+        const ignoredParents = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            if (!node.nodeValue.includes("'")) return NodeFilter.FILTER_REJECT;
+            if (node.parentElement?.closest('code, pre, script, style, textarea')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (ignoredParents.has(node.parentNode?.nodeName ?? '')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+
+        for (const node of nodes) {
+          const text = node.nodeValue;
+          const fragment = document.createDocumentFragment();
+          const pattern = /'([^'\n]+)'/g;
+          let lastIndex = 0;
+          let match;
+          let replaced = false;
+
+          while ((match = pattern.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+              fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
+            }
+
+            const code = document.createElement('code');
+            code.textContent = match[1];
+            fragment.append(code);
+            lastIndex = pattern.lastIndex;
+            replaced = true;
+          }
+
+          if (!replaced) continue;
+          if (lastIndex < text.length) {
+            fragment.append(document.createTextNode(text.slice(lastIndex)));
+          }
+          node.replaceWith(fragment);
+        }
+      }
+
       function applyFilters() {
         const query = (search?.value ?? '').trim().toLowerCase();
         let visible = 0;
@@ -685,6 +750,7 @@
       }
 
       search?.addEventListener('input', applyFilters);
+      renderQuotedCode();
       applyFilters();
     })();
   </script>
