@@ -696,3 +696,120 @@ func TestDownloadParallel(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveOSImage_ZipCacheHit(t *testing.T) {
+	content := []byte("fake image bytes")
+	zipPath, err := osCachedZipPath("test-device", "9.9.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(zipPath)
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	fw, _ := w.Create("image.img")
+	fw.Write(content) //nolint:errcheck
+	w.Close()
+	f.Close()
+
+	img := &imageInfo{Version: "9.9.9", DownloadURL: "https://example.com/image.zip"}
+	got, err := resolveOSImage("test-device", img)
+	if err != nil {
+		t.Fatalf("resolveOSImage: %v", err)
+	}
+	if got != zipPath {
+		t.Errorf("got %q; want %q", got, zipPath)
+	}
+}
+
+func TestResolveOSImage_LegacyImgCacheHit(t *testing.T) {
+	imgPath, err := osCachedImagePath("test-device", "8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(imgPath)
+
+	if err := os.WriteFile(imgPath, []byte("legacydata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "8.8.8", DownloadURL: "https://example.com/image.zip"}
+	got, err := resolveOSImage("test-device", img)
+	if err != nil {
+		t.Fatalf("resolveOSImage: %v", err)
+	}
+	if got != imgPath {
+		t.Errorf("got %q; want %q (legacy img cache)", got, imgPath)
+	}
+}
+
+func TestOpenOSImageStream_ZipCacheHit(t *testing.T) {
+	content := []byte("stream me please")
+	zipPath, err := osCachedZipPath("stream-device", "7.7.7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(zipPath)
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	fw, _ := w.Create("wendyos.img")
+	fw.Write(content) //nolint:errcheck
+	w.Close()
+	f.Close()
+
+	img := &imageInfo{Version: "7.7.7", DownloadURL: "https://example.com/image.zip"}
+	r, size, err := openOSImageStream("stream-device", img)
+	if err != nil {
+		t.Fatalf("openOSImageStream: %v", err)
+	}
+	defer r.Close()
+
+	if size != int64(len(content)) {
+		t.Errorf("size = %d; want %d", size, len(content))
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Error("content mismatch")
+	}
+}
+
+func TestOpenOSImageStream_LegacyImgCacheHit(t *testing.T) {
+	content := []byte("old img cache data")
+	imgPath, err := osCachedImagePath("legacy-device", "6.6.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(imgPath)
+
+	if err := os.WriteFile(imgPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "6.6.6", DownloadURL: "https://example.com/image.zip"}
+	r, size, err := openOSImageStream("legacy-device", img)
+	if err != nil {
+		t.Fatalf("openOSImageStream: %v", err)
+	}
+	defer r.Close()
+
+	if size != int64(len(content)) {
+		t.Errorf("size = %d; want %d", size, len(content))
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Error("content mismatch")
+	}
+}
