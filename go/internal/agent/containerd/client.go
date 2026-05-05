@@ -483,11 +483,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Build environment variables: image env first, then our overrides.
-	env := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"TERM=xterm",
-		fmt.Sprintf("WENDY_HOSTNAME=%s.local", appName),
-	}
+	env := buildContainerBaseEnv(appName)
 	if specErr == nil {
 		env = append(imageSpec.Config.Env, env...)
 	}
@@ -733,6 +729,32 @@ func shellCommand() (string, string) {
 		return "cmd.exe", "/C"
 	}
 	return "sh", "-c"
+}
+
+// deviceHostnameWithSuffix returns the device's mDNS hostname with the ".local"
+// suffix (e.g. "wendyos-mighty-kayak.local"), or "" if the OS hostname is
+// unavailable. Indirected through a var so tests can override it.
+var deviceHostnameWithSuffix = func() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return ""
+	}
+	return h + ".local"
+}
+
+// buildContainerBaseEnv builds the wendy-injected env vars layered on top of
+// the image's own env. WENDY_HOSTNAME is the per-app mDNS name; WENDY_DEVICE_HOSTNAME
+// is the device's mDNS name (omitted when unresolvable).
+func buildContainerBaseEnv(appName string) []string {
+	env := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TERM=xterm",
+		fmt.Sprintf("WENDY_HOSTNAME=%s.local", appName),
+	}
+	if h := deviceHostnameWithSuffix(); h != "" {
+		env = append(env, "WENDY_DEVICE_HOSTNAME="+h)
+	}
+	return env
 }
 
 func expandAgentHook(command, appName string) string {
