@@ -5,6 +5,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -180,35 +181,26 @@ func unmountLsblkDevice(dev lsblkDevice) {
 	}
 }
 
-// writeImageToDisk writes an image file to a block device using dd. dd reads
-// the file directly (rather than via a stdin pipe) so that bs=4M actually
-// produces 4 MiB writes to the device — pipe input forces dd to issue a write
-// per pipe-buffer-sized read, which is dramatically slower on raw devices.
-// Progress is driven by parsing dd's status=progress output on stderr.
-//
-// For NVMe drives we use a 64 MiB block size and oflag=direct to bypass the
-// page cache; large buffered writes cause RAM pressure and a multi-second
-// global sync stall after dd exits. conv=fdatasync ensures dd flushes the
-// target device before exiting (runs as root, only flushes this device).
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
 	ddArgs := []string{
 		"dd",
-		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.DevicePath),
 		"bs=4M",
 		"status=progress",
 		"conv=fdatasync",
 	}
 	if d.StorageType == StorageNVMe {
-		ddArgs[3] = "bs=64M"
+		ddArgs[2] = "bs=64M" // index 2 = "bs=4M" (no if= arg now)
 		ddArgs = append(ddArgs, "oflag=direct")
 	}
 
 	cmd := exec.Command("sudo", ddArgs...)
+	cmd.Stdin = r
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("creating stderr pipe: %w", err)
