@@ -181,19 +181,15 @@ func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwri
 		}
 	}
 
-	imgPath := imagePath
-	if strings.HasSuffix(strings.ToLower(imagePath), ".zip") {
-		extracted, err := extractImageFromZipWithProgress(imagePath)
-		if err != nil {
-			return fmt.Errorf("extracting image: %w", err)
-		}
-		defer os.Remove(extracted)
-		imgPath = extracted
+	r, size, err := openLocalImageStream(imagePath)
+	if err != nil {
+		return fmt.Errorf("opening image: %w", err)
 	}
+	defer r.Close()
 
 	cliLogln("Writing image to %s...", targetDrive.DevicePath)
 	cliNotice("%s", elevationHint())
-	if err := writeImageToDisk(imgPath, *targetDrive, nil); err != nil {
+	if err := writeImageToDisk(r, size, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 
@@ -525,22 +521,11 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	imgPath, err := resolveOSImage(deviceKey, imgInfo)
+	imgStream, totalSize, err := openOSImageStream(deviceKey, imgInfo)
 	if err != nil {
 		return fmt.Errorf("opening OS image: %w", err)
 	}
-	if strings.HasSuffix(strings.ToLower(imgPath), ".zip") {
-		extracted, err := extractImageFromZipWithProgress(imgPath)
-		if err != nil {
-			return fmt.Errorf("extracting image: %w", err)
-		}
-		defer os.Remove(extracted)
-		imgPath = extracted
-	}
-	var totalSize int64
-	if info, err := os.Stat(imgPath); err == nil {
-		totalSize = info.Size()
-	}
+	defer imgStream.Close()
 
 	// Pre-authenticate elevated privileges (sudo on Unix, admin check on
 	// Windows) so the prompt works on the raw terminal before the TUI starts.
@@ -554,7 +539,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	wp := tea.NewProgram(writeProg)
 
 	go func() {
-		writeErr := writeImageToDisk(imgPath, targetDrive, func(written int64) {
+		writeErr := writeImageToDisk(imgStream, totalSize, targetDrive, func(written int64) {
 			if totalSize > 0 {
 				wp.Send(tui.ProgressUpdateMsg{
 					Percent: float64(written) / float64(totalSize),
@@ -902,101 +887,6 @@ func downloadImage(img *imageInfo) (string, error) {
 
 	tmpFile.Close()
 	return tmpFile.Name(), nil
-}
-
-// extractImageFromZipWithProgress opens a zip archive and extracts the first OS
-// image file (.img, .raw, or .wic) to a temp file, and displays a progress bar.
-func extractImageFromZipWithProgress(zipPath string) (string, error) {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("opening zip: %w", err)
-	}
-	defer r.Close()
-
-	for _, f := range r.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext != ".img" && ext != ".raw" && ext != ".wic" {
-			continue
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return "", fmt.Errorf("opening %s in zip: %w", f.Name, err)
-		}
-		defer rc.Close()
-
-		// Write directly into the OS cache directory so we never land in
-		// /tmp (which is often a size-limited tmpfs on Linux).
-		cacheDir, err := osCacheDir()
-		if err != nil {
-			return "", fmt.Errorf("resolving cache dir: %w", err)
-		}
-		tmpFile, err := os.CreateTemp(cacheDir, "wendyos-*.img")
-		if err != nil {
-			return "", fmt.Errorf("creating temp file: %w", err)
-		}
-
-		totalSize := int64(f.UncompressedSize64)
-		if totalSize == 0 {
-			// Some zip writers don't populate UncompressedSize64;
-			// fall back to FileInfo which may use the 32-bit field.
-			totalSize = f.FileInfo().Size()
-		}
-
-		prog := tui.NewProgress("Extracting image...")
-		p := tea.NewProgram(prog)
-
-		sendProgress := throttledProgress(p, 33*time.Millisecond)
-		go func() {
-			// Brief pause so Bubble Tea can initialize the terminal
-			// before we start sending updates. Without this, fast local
-			// I/O can queue all messages before the TUI renders.
-			time.Sleep(50 * time.Millisecond)
-			buf := make([]byte, 1*1024*1024) // 1 MiB chunks for visible progress
-			var extracted int64
-			for {
-				n, readErr := rc.Read(buf)
-				if n > 0 {
-					if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-						p.Send(tui.ProgressDoneMsg{Err: writeErr})
-						return
-					}
-					extracted += int64(n)
-					sendProgress(extracted, totalSize)
-				}
-				if readErr == io.EOF {
-					p.Send(tui.ProgressDoneMsg{})
-					return
-				}
-				if readErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: readErr})
-					return
-				}
-			}
-		}()
-
-		finalModel, err := p.Run()
-		if err != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", fmt.Errorf("progress TUI: %w", err)
-		}
-
-		model := finalModel.(tui.ProgressModel)
-		if model.Err() != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", model.Err()
-		}
-
-		tmpFile.Close()
-		return tmpFile.Name(), nil
-	}
-
-	return "", fmt.Errorf("no .img, .raw, or .wic file found in zip archive")
 }
 
 // osCacheDir returns the OS image cache directory, e.g.
