@@ -17,7 +17,7 @@ Tests:
   swift-hello           Basic Swift containerized deployment (no entitlements)
   swift-network         Swift with network entitlement (WiFi connectivity)
   swift-bluetooth       Swift with bluetooth entitlement
-  swift-resources       SwiftPM resource bundle sync (macOS only)
+  swift-resources       Swift app with bundled resources (verifies resource loading)
   python-hello          Basic Python deployment (no entitlements)
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
