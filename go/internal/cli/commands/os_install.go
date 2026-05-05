@@ -1022,8 +1022,11 @@ type zipReadCloser struct {
 func (z *zipReadCloser) Read(p []byte) (int, error) { return z.entry.Read(p) }
 
 func (z *zipReadCloser) Close() error {
-	z.entry.Close()
-	return z.archive.Close()
+	err := z.entry.Close()
+	if err2 := z.archive.Close(); err == nil {
+		err = err2
+	}
+	return err
 }
 
 // streamZipImageEntry opens a zip archive and returns a streaming reader over
