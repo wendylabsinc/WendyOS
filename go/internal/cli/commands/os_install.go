@@ -1682,8 +1682,6 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 	return writeConfigPartition(d, agentBinary, creds, deviceName, provisioningJSON)
 }
 
-// installESP32Firmware handles the ESP32 path: detect device → download → flash.
-// chip is e.g. "esp32c6" or "esp32c5".
 func installESP32Firmware(ctx context.Context, nightly bool, chip string) error {
 	cliLogln("\nScanning for ESP32 devices...")
 
