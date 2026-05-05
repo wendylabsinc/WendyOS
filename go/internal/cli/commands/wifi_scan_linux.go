@@ -4,10 +4,13 @@ package commands
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/wendylabsinc/wendy/internal/shared/nmcli"
 )
 
 type localWifiNetwork struct {
@@ -18,10 +21,15 @@ type localWifiNetwork struct {
 // scanLocalWifiNetworks uses nmcli on Linux to list WiFi networks visible to
 // the host machine.
 func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
-	// Trigger a rescan first (may fail if already scanning).
-	_ = exec.Command("nmcli", "device", "wifi", "rescan").Run()
+	nmcliPath, err := exec.LookPath("nmcli")
+	if err != nil {
+		return nil, fmt.Errorf("nmcli not found on PATH: %w", err)
+	}
 
-	cmd := exec.Command("nmcli", "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list")
+	// Trigger a rescan first (may fail if already scanning).
+	_ = nmcli.Command(context.Background(), nmcliPath, "device", "wifi", "rescan").Run()
+
+	cmd := nmcli.Command(context.Background(), nmcliPath, "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("scanning WiFi networks: %w", err)
@@ -32,7 +40,10 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
-		fields := strings.SplitN(scanner.Text(), ":", 2)
+		// Use the shared nmcli parser so SSIDs containing literal `:` (escaped
+		// by nmcli as `\:`) and `\` survive intact, and so the parsing is
+		// consistent with the agent side.
+		fields := nmcli.Split(scanner.Text(), 2)
 		if len(fields) < 2 {
 			continue
 		}

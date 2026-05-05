@@ -16,6 +16,11 @@ func TestSplitNMCLI(t *testing.T) {
 		{"My\\:Net:50:WPA2:", 4, []string{"My:Net", "50", "WPA2", ""}},
 		{"a:b:c", 3, []string{"a", "b", "c"}},
 		{"trailing::", 3, []string{"trailing", "", ""}},
+		// Emoji bytes (0xF0-0xF4 + 0x80-0xBF continuation bytes) never collide
+		// with `:` (0x3A) or `\` (0x5C), so they must round-trip verbatim.
+		{"Read Only Internet \xf0\x9f\xab\xa5:70:WPA2:", 4, []string{"Read Only Internet \xf0\x9f\xab\xa5", "70", "WPA2", ""}},
+		// Escaped colon adjacent to an emoji.
+		{"evil\\:ssid \xf0\x9f\x98\x88:90:WPA3:", 4, []string{"evil:ssid \xf0\x9f\x98\x88", "90", "WPA3", ""}},
 	}
 	for _, c := range cases {
 		got := splitNMCLI(c.in, c.n)

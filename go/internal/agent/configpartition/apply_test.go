@@ -143,6 +143,32 @@ func TestParseINI_Empty(t *testing.T) {
 	}
 }
 
+// TestParseINI_NonASCIISSID guards against byte-level corruption of UTF-8
+// values: emoji bytes (0xF0..0xF4 + 0x80-0xBF continuation) never overlap with
+// `=` (0x3D), `[` (0x5B), `]` (0x5D), `#` (0x23), or `;` (0x3B), so the parser
+// must return them verbatim.
+func TestParseINI_NonASCIISSID(t *testing.T) {
+	cases := []struct {
+		name, ssid string
+	}{
+		{"latin1", "café-wifi"},
+		{"cjk", "東京 Wi-Fi"},
+		{"emoji-4byte", "Read Only Internet \xf0\x9f\xab\xa5"},
+		{"home-emoji", "Home \xf0\x9f\x8f\xa0"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := []byte("[wifi]\nssid = " + c.ssid + "\n")
+			got := parseINI(data)
+			if got["wifi"]["ssid"] != c.ssid {
+				t.Errorf("ssid = %q (% x); want %q (% x)",
+					got["wifi"]["ssid"], []byte(got["wifi"]["ssid"]),
+					c.ssid, []byte(c.ssid))
+			}
+		})
+	}
+}
+
 func TestApplyBinaryUpdate_ValidBinary(t *testing.T) {
 	dir := t.TempDir()
 	installDir := t.TempDir()
