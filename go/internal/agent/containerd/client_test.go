@@ -150,3 +150,45 @@ func TestStartPostStartAgentHookStartErrorDoesNotLogCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestLayerMediaType_Zstd(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_ZSTD, false)
+	want := "application/vnd.oci.image.layer.v1.tar+zstd"
+	if got != want {
+		t.Errorf("layerMediaType(ZSTD, false) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_ZstdIgnoresGzipBool(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_ZSTD, true)
+	want := "application/vnd.oci.image.layer.v1.tar+zstd"
+	if got != want {
+		t.Errorf("layerMediaType(ZSTD, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_None(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_NONE, true)
+	want := "application/vnd.oci.image.layer.v1.tar"
+	if got != want {
+		t.Errorf("layerMediaType(NONE, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_GzipDefault_GzipTrue(t *testing.T) {
+	// Old CLI path: compression field absent (zero value = GZIP), gzip=true.
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_GZIP, true)
+	want := "application/vnd.oci.image.layer.v1.tar+gzip"
+	if got != want {
+		t.Errorf("layerMediaType(GZIP, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_GzipDefault_GzipFalse(t *testing.T) {
+	// Old CLI path: compression field absent (zero value = GZIP), gzip=false → uncompressed.
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_GZIP, false)
+	want := "application/vnd.oci.image.layer.v1.tar"
+	if got != want {
+		t.Errorf("layerMediaType(GZIP, false) = %q; want %q", got, want)
+	}
+}
