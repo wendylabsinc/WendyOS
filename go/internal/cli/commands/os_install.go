@@ -773,7 +773,6 @@ func probeRangeSupport(client *http.Client, img *imageInfo) (contentLength int64
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.
-// downloadImage downloads an OS image to a temp file with a progress bar.
 // If the server supports HTTP range requests, it downloads in parallel using
 // parallelDownloadWorkers concurrent connections. Falls back to a single
 // sequential stream otherwise.
