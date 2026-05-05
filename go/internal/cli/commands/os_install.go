@@ -571,12 +571,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	hasProvisioningData := provisioningRequired(provCreds, provDeviceName, provisioningJSON)
 
 	if !configPartitionSupported {
-		// writeConfigPartition has no implementation on this OS (currently
-		// Windows). Skip the agent download — paying 5–30s of network for a
-		// guaranteed-skipped step is the bug from WDY-1118.
+		// writeConfigPartition is not supported on this platform. Skip the
+		// agent download — paying 5–30s of network for a guaranteed-skipped
+		// step is the bug from WDY-1118.
 		if hasProvisioningData {
 			ejectDisk(targetDrive.DevicePath)
-			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not yet supported. Re-run on macOS or Linux to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
+			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
 		}
 		cliNotice("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
 	} else {
