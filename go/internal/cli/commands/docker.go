@@ -726,27 +726,30 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	// Public images (e.g. python:3.11-slim) need no credentials; anonymous
 	// pull works fine with an empty auths map.
 	//
-	// We only replace config.json; everything else (cli-plugins, buildx builder
-	// instances, contexts) is symlinked from the original Docker config so that
-	// buildx and the "wendy" builder remain discoverable.
-	origDockerConfig := os.Getenv("DOCKER_CONFIG")
-	if origDockerConfig == "" {
-		origDockerConfig = filepath.Join(home, ".docker")
-	}
-	cleanDockerConfigDir := filepath.Join(home, ".cache", "wendy", "docker-config")
-	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
-		return fmt.Errorf("creating clean docker config directory: %w", err)
-	}
-	cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
-	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
-		return fmt.Errorf("writing clean docker config: %w", err)
-	}
-	// Symlink subdirs that docker/buildx need to find plugins and builder state.
-	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
-		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Lstat(dst); err != nil {
-			// best-effort: ignore if source doesn't exist or symlink fails
-			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+	// On Windows, Docker Desktop's credential helper is always available and
+	// symlinks for builder-state lookup are unreliable in elevated processes,
+	// so we skip this override entirely and let docker use its normal config.
+	var cleanDockerConfigDir string
+	if runtime.GOOS != "windows" {
+		origDockerConfig := os.Getenv("DOCKER_CONFIG")
+		if origDockerConfig == "" {
+			origDockerConfig = filepath.Join(home, ".docker")
+		}
+		cleanDockerConfigDir = filepath.Join(home, ".cache", "wendy", "docker-config")
+		if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
+			return fmt.Errorf("creating clean docker config directory: %w", err)
+		}
+		cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
+		if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
+			return fmt.Errorf("writing clean docker config: %w", err)
+		}
+		// Symlink subdirs that docker/buildx need to find plugins and builder state.
+		for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+			dst := filepath.Join(cleanDockerConfigDir, subdir)
+			if _, err := os.Lstat(dst); err != nil {
+				// best-effort: ignore if source doesn't exist or symlink fails
+				_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+			}
 		}
 	}
 
@@ -777,16 +780,18 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	cmd.Dir = dir
 	cmd.Stdout = streamOutput
 	cmd.Stderr = streamOutput
-	// Override DOCKER_CONFIG so the buildx client does not call the host
-	// credential helper (osxkeychain) when setting up the build session.
-	// Filter any existing DOCKER_CONFIG first so our value takes effect.
-	baseEnv := make([]string, 0, len(os.Environ()))
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
-			baseEnv = append(baseEnv, e)
+	// On macOS/Linux, override DOCKER_CONFIG so the buildx client does not
+	// call the host credential helper when setting up the build session.
+	// On Windows we leave DOCKER_CONFIG untouched (cleanDockerConfigDir == "").
+	if cleanDockerConfigDir != "" {
+		baseEnv := make([]string, 0, len(os.Environ()))
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+				baseEnv = append(baseEnv, e)
+			}
 		}
+		cmd.Env = append(baseEnv, "DOCKER_CONFIG="+cleanDockerConfigDir)
 	}
-	cmd.Env = append(baseEnv, "DOCKER_CONFIG="+cleanDockerConfigDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker buildx build failed: %w", err)
