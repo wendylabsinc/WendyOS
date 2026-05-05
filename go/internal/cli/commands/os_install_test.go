@@ -3,6 +3,8 @@
 package commands
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -279,6 +281,61 @@ func TestConfirmOverwriteInternalDrive(t *testing.T) {
 		// yesOverwriteInternal = true means we never reach the stdin read.
 		if err := confirmOverwriteInternalDrive(internal, false, true); err != nil {
 			t.Errorf("override flag should bypass typed prompt: %v", err)
+		}
+	})
+}
+
+func TestProbeRangeSupport(t *testing.T) {
+	t.Run("returns content length when server supports ranges", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodHead {
+				t.Errorf("expected HEAD, got %s", r.Method)
+			}
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		cl, ok := probeRangeSupport(&http.Client{}, img)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if cl != 8192 {
+			t.Fatalf("expected contentLength=8192, got %d", cl)
+		}
+	})
+
+	t.Run("returns false when Accept-Ranges header is absent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		_, ok := probeRangeSupport(&http.Client{}, img)
+		if ok {
+			t.Fatal("expected ok=false when no Accept-Ranges header")
+		}
+	})
+
+	t.Run("falls back to img.ImageSize when Content-Length is absent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Accept-Ranges", "bytes")
+			// No Content-Length header.
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img", ImageSize: 4096}
+		cl, ok := probeRangeSupport(&http.Client{}, img)
+		if !ok {
+			t.Fatal("expected ok=true with ImageSize fallback")
+		}
+		if cl != 4096 {
+			t.Fatalf("expected contentLength=4096 from ImageSize, got %d", cl)
 		}
 	})
 }

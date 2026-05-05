@@ -169,6 +169,9 @@ func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwri
 		}
 	}
 
+	if err := preAuthElevation(); err != nil {
+		return err
+	}
 	cliLogln("Writing image to %s...", targetDrive.DevicePath)
 	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
@@ -508,6 +511,15 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
+	// Pre-authenticate elevated privileges before downloading — on Unix
+	// this prompts for sudo, on Windows it checks/requests Administrator rights.
+	// Done here so the prompt appears on the raw terminal (before any TUI) and
+	// before spending time on a potentially large download.
+	if err := preAuthElevation(); err != nil {
+		return err
+	}
+
+	// Step 5: Resolve image (cached or download).
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
 	imgInfo, err := getImageInfoForStorage(device.Manifest, selectedVersion, selectedStorage)
 	if err != nil {
@@ -525,12 +537,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return fmt.Errorf("stat image: %w", err)
 	}
 	totalSize := imgStat.Size()
-
-	// Pre-authenticate elevated privileges (sudo on Unix, admin check on
-	// Windows) so the prompt works on the raw terminal before the TUI starts.
-	if err := preAuthElevation(); err != nil {
-		return err
-	}
 
 	// Step 5: Write image to drive with progress bar.
 	cliLogln("Writing image to %s...", targetDrive.DevicePath)
@@ -654,6 +660,32 @@ func throttledProgress(p *tea.Program, minInterval time.Duration) func(written, 
 			Total:   total,
 		})
 	}
+}
+
+// probeRangeSupport issues a HEAD request to check whether the server
+// supports HTTP range requests. Returns the content length and true on
+// success. Falls back to img.ImageSize if Content-Length is absent.
+// Returns 0, false if ranges are unsupported or content length is unknown.
+func probeRangeSupport(client *http.Client, img *imageInfo) (contentLength int64, ok bool) {
+	resp, err := client.Head(img.DownloadURL)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, false
+	}
+	if resp.Header.Get("Accept-Ranges") != "bytes" {
+		return 0, false
+	}
+	cl := resp.ContentLength
+	if cl <= 0 && img.ImageSize > 0 {
+		cl = img.ImageSize
+	}
+	if cl <= 0 {
+		return 0, false
+	}
+	return cl, true
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.
