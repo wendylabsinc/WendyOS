@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth python-hello python-hostname python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -252,6 +252,11 @@ jobs:
       - name: Build CLI
         run: make build-cli
 
+      - name: Prepare Docker
+        run: |
+          docker buildx ls 2>/dev/null | awk '/^wendy/{print $1}' | xargs -r docker buildx rm --force 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
       - name: Run integration tests
         run: |
           WORKDIR="$(pwd)"
@@ -264,7 +269,7 @@ jobs:
               t="$(echo "$t" | xargs)"
               # Skip swift tests on Linux
               if [[ "$t" == swift-* ]]; then
-                echo "Skipping Swift test $t on Linux"
+                echo "Skipping Swift test on Linux: $t"
                 continue
               fi
               TEST_ARGS="$TEST_ARGS -t $t"
@@ -275,7 +280,7 @@ jobs:
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-hostname python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi

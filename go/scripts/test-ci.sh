@@ -18,6 +18,7 @@ Tests:
   swift-network         Swift with network entitlement (WiFi connectivity)
   swift-bluetooth       Swift with bluetooth entitlement
   python-hello          Basic Python deployment (no entitlements)
+  python-hostname       Verify WENDY_HOSTNAME is set to the device mDNS hostname
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
   python-bluetooth      Python with bluetooth entitlement
@@ -182,6 +183,7 @@ ALL_TESTS=(
     swift-network
     swift-bluetooth
     python-hello
+    python-hostname
     python-network
     python-gpu
     python-bluetooth
@@ -245,83 +247,22 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
-    # ── Compose tests (docker-compose.{yml,yaml}, compose.{yml,yaml}, no wendy.json) ──
-    compose_file=""
-    for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-        if [[ -f "$test_dir/$cand" ]]; then
-            compose_file="$test_dir/$cand"
-            break
-        fi
-    done
-    if [[ -n "$compose_file" ]]; then
-        # Derive project name from directory name (mirrors CLI logic).
-        project_name="$(basename "$test_dir")"
-
-        # Use docker compose itself to enumerate services so we don't depend
-        # on PyYAML (not in stdlib and not installed on most CI hosts).
-        service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
-
-        # Pre-cleanup: remove leftover service containers.
-        for svc in $service_names; do
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-
-        # Deploy and run.
-        pushd "$test_dir" > /dev/null
-        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-        popd > /dev/null
-
-        # Post-cleanup.
-        for svc in $service_names; do
-            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-        continue
+    # Dispatch to wendy deploy / compose deploy
+    if [[ -f "$test_dir/docker-compose.yml" ]]; then
+        run_test "$test_name" "$WENDY" compose deploy \
+            --device "$HOSTNAME" \
+            --file "$test_dir/docker-compose.yml" \
+            --build-context "$test_dir"
+    else
+        run_test "$test_name" "$WENDY" deploy \
+            --device "$HOSTNAME" \
+            --app "$test_dir"
     fi
-
-    # ── Standard single-container tests (wendy.json) ───────────────────
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
 done
 
 echo ""
-
-# ── Summary ──────────────────────────────────────────────────────────
-
-TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
-echo -e "${BOLD}========================================${RESET}"
-echo -e "${BOLD}Results:${RESET} $TOTAL tests"
-echo -e "  ${GREEN}Passed:  $PASS_COUNT${RESET}"
-echo -e "  ${RED}Failed:  $FAIL_COUNT${RESET}"
-if [[ $SKIP_COUNT -gt 0 ]]; then
-    echo -e "  ${YELLOW}Skipped: $SKIP_COUNT${RESET}"
-fi
-echo -e "${BOLD}========================================${RESET}"
+echo -e "${BOLD}==> Results: ${GREEN}${PASS_COUNT} passed${RESET}, ${RED}${FAIL_COUNT} failed${RESET}, ${YELLOW}${SKIP_COUNT} skipped${RESET}"
 
 if [[ $FAIL_COUNT -gt 0 ]]; then
     exit 1
 fi
-exit 0
