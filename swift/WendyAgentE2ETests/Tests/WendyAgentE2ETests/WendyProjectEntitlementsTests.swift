@@ -1,34 +1,27 @@
 import Testing
 
 @Suite
-struct `wendy os` {
+struct `wendy project entitlements` {
     // TODO: implement.
 
     // MARK: -
 
     @Suite
-    struct `wendy os download` {
+    struct `wendy project entitlements add` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os install` {
+    struct `wendy project entitlements list` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os list-drives` {
-        // TODO: implement.
-    }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy os update` {
+    struct `wendy project entitlements remove` {
         // TODO: implement.
     }
 }

@@ -1,34 +1,34 @@
 import Testing
 
 @Suite
-struct `wendy os` {
+struct `wendy device audio` {
     // TODO: implement.
 
     // MARK: -
 
     @Suite
-    struct `wendy os download` {
+    struct `wendy device audio list` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os install` {
+    struct `wendy device audio listen` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os list-drives` {
+    struct `wendy device audio monitor` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os update` {
+    struct `wendy device audio set-default` {
         // TODO: implement.
     }
 }

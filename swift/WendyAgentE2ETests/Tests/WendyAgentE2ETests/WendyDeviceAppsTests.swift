@@ -1,34 +1,34 @@
 import Testing
 
 @Suite
-struct `wendy os` {
+struct `wendy device apps` {
     // TODO: implement.
 
     // MARK: -
 
     @Suite
-    struct `wendy os download` {
+    struct `wendy device apps list` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os install` {
+    struct `wendy device apps remove` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os list-drives` {
+    struct `wendy device apps start` {
         // TODO: implement.
     }
 
     // MARK: -
 
     @Suite
-    struct `wendy os update` {
+    struct `wendy device apps stop` {
         // TODO: implement.
     }
 }
