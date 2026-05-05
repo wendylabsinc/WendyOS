@@ -953,6 +953,11 @@ func streamZipImageEntry(zipPath string) (io.ReadCloser, int64, error) {
 		if size == 0 {
 			size = f.FileInfo().Size()
 		}
+		if size == 0 {
+			rc.Close()
+			r.Close()
+			return nil, 0, fmt.Errorf("zip entry %s has unknown uncompressed size", f.Name)
+		}
 
 		return &zipReadCloser{archive: r, entry: rc}, size, nil
 	}
@@ -992,6 +997,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		if dlErr != nil {
 			return "", fmt.Errorf("downloading image: %w", dlErr)
 		}
+		os.Remove(zipCached) // remove stale/0-byte file if present so Rename succeeds on Windows
 		if renameErr := os.Rename(downloadPath, zipCached); renameErr != nil {
 			os.Remove(downloadPath)
 			return "", fmt.Errorf("caching image: %w", renameErr)
@@ -1004,6 +1010,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
+	os.Remove(imgCached) // remove stale/0-byte file if present so Rename succeeds on Windows
 	if err := os.Rename(downloadPath, imgCached); err != nil {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)

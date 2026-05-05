@@ -186,15 +186,12 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 		return err
 	}
 
-	ddArgs := []string{
-		"dd",
-		fmt.Sprintf("of=%s", d.DevicePath),
-		"bs=4M",
-		"status=progress",
-		"conv=fdatasync",
-	}
+	bs := "bs=4M"
 	if d.StorageType == StorageNVMe {
-		ddArgs[2] = "bs=64M" // index 2 = "bs=4M" (no if= arg now)
+		bs = "bs=64M"
+	}
+	ddArgs := []string{"dd", fmt.Sprintf("of=%s", d.DevicePath), bs, "status=progress", "conv=fdatasync"}
+	if d.StorageType == StorageNVMe {
 		ddArgs = append(ddArgs, "oflag=direct")
 	}
 

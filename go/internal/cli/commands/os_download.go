@@ -66,8 +66,10 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 	}
 
 	if cached != "" {
-		info, _ := os.Stat(cached)
-		sizeMB := float64(info.Size()) / (1024 * 1024)
+		var sizeMB float64
+		if info, err := os.Stat(cached); err == nil {
+			sizeMB = float64(info.Size()) / (1024 * 1024)
+		}
 		cliLogln("\nImage already cached: %s (%.1f MB)", cached, sizeMB)
 
 		if !overwrite {
