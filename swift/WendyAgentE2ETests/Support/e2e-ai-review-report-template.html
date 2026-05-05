@@ -262,24 +262,8 @@
       text-transform: uppercase;
     }
 
-    .filter-group {
-      display: inline-flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .filter-group + .filter-group {
-      margin-left: 2px;
-      padding-left: 10px;
-      border-left: 1px solid var(--line);
-    }
-
     .filter-button {
       appearance: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: var(--card);
@@ -291,27 +275,27 @@
       padding: 8px 12px;
     }
 
-    .filter-button[data-status-filter="pass"],
-    .filter-button[data-status-filter="passed"] {
+    .filter-button[data-filter="pass"],
+    .filter-button[data-filter="passed"] {
       color: var(--green);
       background: var(--green-bg);
       border-color: var(--green-line);
     }
 
-    .filter-button[data-status-filter="skipped"] {
+    .filter-button[data-filter="skipped"] {
       color: var(--amber);
       background: var(--amber-bg);
       border-color: var(--amber-line);
     }
 
-    .filter-button[data-status-filter="fail"],
-    .filter-button[data-status-filter="failed"] {
+    .filter-button[data-filter="fail"],
+    .filter-button[data-filter="failed"] {
       color: var(--red);
       background: var(--red-bg);
       border-color: var(--red-line);
     }
 
-    .filter-button[data-ai-filter] {
+    .filter-button[data-filter="ai"] {
       color: #fff;
       background: #000;
       border-color: #000;
@@ -422,15 +406,9 @@
     }
 
     .badge.ai {
-      gap: 4px;
       color: #fff;
       background: #000;
       border: 1px solid #000;
-    }
-
-    .ai-symbol {
-      font-weight: 950;
-      line-height: 1;
     }
 
     .test-details {
@@ -737,8 +715,8 @@
     blocks as needed, then remove these instructions and any unused example
     sections. This template is intended to list every E2E test, including
     passed tests, disabled/skipped tests, and tests without // AI: review
-    comments. For checklist statuses, use one of: pass, concern, fail. Map
-    aggregate AI severities to data-ai-severities as info, warning, and error.
+    comments. For checklist and test statuses, use one of: pass, concern,
+    fail, skipped, no-ai.
 
     Command run details are optional but recommended for every test that ran
     commands. Fill them from the matching Markdown command record. Render each
@@ -749,14 +727,10 @@
     skipped reasons for skipped tests.
 
     The filter bar expects every test details row to have data-test-status set
-    to pass, skipped, or fail, and data-ai-severities set to a space-separated
-    list containing any of info, warning, or error. Leave data-ai-severities
-    empty for tests without // AI: comments. Status filters and AI filters are
-    ANDed together; multiple selections inside one group are ORed. Command/Ctrl
-    click toggles multiple filters in the same group. The search field filters
-    against the row text content, including suite name, test title, command
-    text, stdout, and stderr. File cards are hidden automatically when none of
-    their test rows match the active filters and search query.
+    to pass, skipped, or fail. The search field filters against the row text
+    content, including suite name, test title, command text, stdout, and
+    stderr. File cards are hidden automatically when none of their test rows
+    match the active filter and search query.
   -->
   <main>
     <header>
@@ -782,21 +756,13 @@
       </div>
     </header>
 
-    <section class="filter-bar" aria-label="Filter tests">
-      <div class="filter-group" aria-label="Filter by test status">
-        <span class="filter-label">Test status</span>
-        <button class="filter-button" type="button" data-status-filter="all" aria-pressed="true">All</button>
-        <button class="filter-button" type="button" data-status-filter="pass" aria-pressed="false">Passed</button>
-        <button class="filter-button" type="button" data-status-filter="skipped" aria-pressed="false">Skipped</button>
-        <button class="filter-button" type="button" data-status-filter="fail" aria-pressed="false">Failed</button>
-      </div>
-      <div class="filter-group" aria-label="Filter by AI remarks">
-        <span class="filter-label">AI remarks</span>
-        <button class="filter-button" type="button" data-ai-filter="all" aria-pressed="true">All</button>
-        <button class="filter-button" type="button" data-ai-filter="info" aria-pressed="false"><span class="ai-symbol" aria-hidden="true">✓</span><span>Info</span></button>
-        <button class="filter-button" type="button" data-ai-filter="warning" aria-pressed="false"><span class="ai-symbol" aria-hidden="true">!</span><span>Warning</span></button>
-        <button class="filter-button" type="button" data-ai-filter="error" aria-pressed="false"><span class="ai-symbol" aria-hidden="true">✕</span><span>Error</span></button>
-      </div>
+    <section class="filter-bar" aria-label="Filter tests by status">
+      <span class="filter-label">Filter</span>
+      <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
+      <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
+      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
+      <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
+      <button class="filter-button" type="button" data-filter="ai" aria-pressed="false">AI</button>
       <input class="search-field" type="search" data-search placeholder="Search tests, commands, stdout, stderr…" aria-label="Search tests, commands, stdout, and stderr" />
       <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
     </section>
@@ -809,8 +775,8 @@
 
       <!-- Repeat this .suite-group once per suite in the file. Do not add a visible suite heading; the suite appears in each test sentence. -->
       <div class="suite-group">
-        <!-- Repeat this details.test-details once per test function in the suite. Set data-ai-severities to any space-separated combination of info, warning, and error. Render TEST_AI_BADGE as a black .badge.ai with an .ai-symbol: ✓ AI, ! AI, or ✕ AI. -->
-        <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}" data-has-ai="{{TEST_HAS_AI}}" data-ai-severities="{{TEST_AI_SEVERITIES}}">
+        <!-- Repeat this details.test-details once per test function in the suite. Set data-has-ai to true when // AI: checklist items are present. -->
+        <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}" data-has-ai="{{TEST_HAS_AI}}">
           <summary class="test-summary">
             {{TEST_REPORT_LINK}}<span class="test-path">{{TEST_PATH_TEXT}}</span><span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span>{{TEST_AI_BADGE}}
           </summary>
@@ -871,8 +837,7 @@
   </main>
   <script>
     (() => {
-      const statusButtons = Array.from(document.querySelectorAll('[data-status-filter]'));
-      const aiButtons = Array.from(document.querySelectorAll('[data-ai-filter]'));
+      const buttons = Array.from(document.querySelectorAll('[data-filter]'));
       const search = document.querySelector('[data-search]');
       const tests = Array.from(document.querySelectorAll('[data-test-status]'));
       const cards = Array.from(document.querySelectorAll('[data-test-file-card]'));
@@ -881,8 +846,7 @@
       const themeToggleIcon = document.querySelector('[data-theme-toggle-icon]');
       const themeToggleLabel = document.querySelector('[data-theme-toggle-label]');
       const reportButtons = Array.from(document.querySelectorAll('.report-button'));
-      const activeStatusFilters = new Set();
-      const activeAiFilters = new Set();
+      let activeFilter = 'all';
 
       function currentTheme() {
         return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
@@ -952,35 +916,16 @@
         }
       }
 
-      function selectedMatches(selectedValues, candidateValues) {
-        if (selectedValues.size === 0) return true;
-        return candidateValues.some(value => selectedValues.has(value));
-      }
-
-      function updateFilterGroup(buttons, selectedValues, datasetKey) {
-        for (const button of buttons) {
-          const value = button.dataset[datasetKey];
-          const isAll = value === 'all';
-          const isPressed = isAll ? selectedValues.size === 0 : selectedValues.has(value);
-          button.setAttribute('aria-pressed', String(isPressed));
-        }
-      }
-
-      function updateFilterButtons() {
-        updateFilterGroup(statusButtons, activeStatusFilters, 'statusFilter');
-        updateFilterGroup(aiButtons, activeAiFilters, 'aiFilter');
-      }
-
       function applyFilters() {
         const query = (search?.value ?? '').trim().toLowerCase();
         let visible = 0;
 
         for (const test of tests) {
-          const statusMatches = selectedMatches(activeStatusFilters, [test.dataset.testStatus]);
-          const aiSeverities = (test.dataset.aiSeverities ?? '').split(/\s+/).filter(Boolean);
-          const aiMatches = selectedMatches(activeAiFilters, aiSeverities);
+          const statusMatches = activeFilter === 'all'
+            || test.dataset.testStatus === activeFilter
+            || (activeFilter === 'ai' && test.dataset.hasAi === 'true');
           const searchMatches = query === '' || test.textContent.toLowerCase().includes(query);
-          const matches = statusMatches && aiMatches && searchMatches;
+          const matches = statusMatches && searchMatches;
           test.classList.toggle('is-hidden', !matches);
           if (matches) visible += 1;
         }
@@ -990,7 +935,9 @@
           card.classList.toggle('is-hidden', !hasVisibleTest);
         }
 
-        updateFilterButtons();
+        for (const button of buttons) {
+          button.setAttribute('aria-pressed', String(button.dataset.filter === activeFilter));
+        }
 
         if (count) {
           const suffix = query ? ` matching “${search.value}”` : '';
@@ -998,35 +945,9 @@
         }
       }
 
-      function handleFilterClick(event, selectedValues, value) {
-        if (value === 'all') {
-          selectedValues.clear();
-          return;
-        }
-
-        if (event.metaKey || event.ctrlKey) {
-          if (selectedValues.has(value)) {
-            selectedValues.delete(value);
-          } else {
-            selectedValues.add(value);
-          }
-          return;
-        }
-
-        selectedValues.clear();
-        selectedValues.add(value);
-      }
-
-      for (const button of statusButtons) {
-        button.addEventListener('click', event => {
-          handleFilterClick(event, activeStatusFilters, button.dataset.statusFilter);
-          applyFilters();
-        });
-      }
-
-      for (const button of aiButtons) {
-        button.addEventListener('click', event => {
-          handleFilterClick(event, activeAiFilters, button.dataset.aiFilter);
+      for (const button of buttons) {
+        button.addEventListener('click', () => {
+          activeFilter = button.dataset.filter;
           applyFilters();
         });
       }
