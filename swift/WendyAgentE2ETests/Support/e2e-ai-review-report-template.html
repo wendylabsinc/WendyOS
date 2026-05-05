@@ -563,90 +563,85 @@
       margin-top: 18px;
       border: 1px solid var(--line);
       border-radius: 14px;
-      background: var(--panel);
-      overflow: hidden;
-    }
-
-    details.commands > summary,
-    details.command-run > summary {
-      cursor: pointer;
-      user-select: none;
-      font-weight: 800;
-    }
-
-    details.commands > summary {
-      padding: 13px 16px;
-      color: var(--text);
-    }
-
-    details.command-run {
-      border-top: 1px solid var(--line);
-      background: var(--card);
-    }
-
-    details.command-run > summary {
-      padding: 12px 16px;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
-
-    .command-meta {
-      display: grid;
-      grid-template-columns: 160px minmax(0, 1fr);
-      gap: 8px 14px;
-      margin: 0;
-      padding: 0 16px 16px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .command-meta dt {
-      font-weight: 800;
-      color: var(--text);
-    }
-
-    .command-meta dd {
-      margin: 0;
-      min-width: 0;
-      overflow-wrap: anywhere;
-    }
-
-    .streams {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      padding: 0 16px 16px;
-    }
-
-    .stream {
-      min-width: 0;
-      border: 1px solid var(--line);
-      border-radius: 12px;
       background: var(--stream-bg);
       overflow: hidden;
     }
 
-    .stream h4 {
-      margin: 0;
-      padding: 9px 12px;
+    details.commands > summary {
+      cursor: pointer;
+      user-select: none;
+      padding: 13px 16px;
       color: var(--stream-text);
       background: var(--stream-heading);
       border-bottom: 1px solid var(--line);
-      font-size: 12px;
-      letter-spacing: .08em;
-      text-transform: uppercase;
+      font-weight: 800;
     }
 
-    .stream pre {
-      margin: 0;
-      min-height: 120px;
-      max-height: 420px;
-      overflow: auto;
-      padding: 12px;
+    .command-run {
+      padding: 14px 16px;
       color: var(--stream-text);
-      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .command-run + .command-run {
+      border-top: 1px solid rgba(148, 163, 184, .24);
+    }
+
+    .command-line {
+      display: flex;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .command-prompt {
+      flex: 0 0 auto;
+      color: var(--emerald-400);
+      font-weight: 900;
+    }
+
+    .command-text {
+      min-width: 0;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .command-output {
+      display: grid;
+      gap: 2px;
+      margin: 10px 0 0 22px;
+      white-space: pre-wrap;
+    }
+
+    .command-output:empty {
+      display: none;
+    }
+
+    .output-line {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .output-line.stdout .stream-marker {
+      visibility: hidden;
+    }
+
+    .output-line.stderr .stream-marker {
+      color: #f59e0b;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .output-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .command-run-meta {
+      margin: 8px 0 0 22px;
+      color: var(--muted);
+      font-size: 12px;
     }
 
     footer {
@@ -667,8 +662,8 @@
       .search-field { flex-basis: 100%; }
       .test-body { margin-left: 14px; padding: 12px; }
       .checks li { align-items: flex-start; }
-      .command-meta { grid-template-columns: 1fr; }
-      .streams { grid-template-columns: 1fr; }
+      .command-output { margin-left: 0; }
+      .command-run-meta { margin-left: 0; }
     }
   </style>
 </head>
@@ -684,11 +679,11 @@
     fail, skipped, no-ai.
 
     Command run details are optional but recommended for every test that ran
-    commands. Fill them from the matching Markdown command record. Include
-    stdout and stderr exactly as captured, escaped for HTML. If a stream is
-    empty, render an empty <pre></pre> or a short escaped marker such as
-    <empty>. For skipped tests, omit the command details block and include the
-    skip reason.
+    commands. Fill them from the matching Markdown command record. Render each
+    command as a terminal-style run followed by captured output lines. Leave
+    stdout lines unmarked. Mark stderr lines with an amber ! in the gutter.
+    If a command produced no output, omit the command-output block. For skipped
+    tests, omit the command details block and include the skip reason.
 
     The filter bar expects every test details row to have data-test-status set
     to pass, skipped, or fail. The search field filters against the row text
@@ -768,28 +763,23 @@
           <details class="commands">
             <summary>Command runs ({{COMMAND_RUN_COUNT}})</summary>
 
-            <!-- Repeat this details.command-run once per command captured in the record. -->
-            <details class="command-run">
-              <summary><code>{{COMMAND_TEXT}}</code></summary>
-              <dl class="command-meta">
-                <dt>Machine</dt><dd>{{COMMAND_MACHINE}}</dd>
-                <dt>Working directory</dt><dd><code>{{COMMAND_WORKING_DIRECTORY}}</code></dd>
-                <dt>Source</dt><dd><code>{{COMMAND_SOURCE}}</code></dd>
-                <dt>Process ID</dt><dd>{{COMMAND_PROCESS_ID}}</dd>
-                <dt>Termination</dt><dd><code>{{COMMAND_TERMINATION_STATUS}}</code></dd>
-                <dt>Duration</dt><dd>{{COMMAND_DURATION}}</dd>
-              </dl>
-              <div class="streams">
-                <section class="stream">
-                  <h4>stdout</h4>
-                  <pre>{{COMMAND_STDOUT}}</pre>
-                </section>
-                <section class="stream">
-                  <h4>stderr</h4>
-                  <pre>{{COMMAND_STDERR}}</pre>
-                </section>
+            <!-- Repeat this section.command-run once per command captured in the record. -->
+            <section class="command-run">
+              <div class="command-line">
+                <span class="command-prompt">❯</span>
+                <span class="command-text">{{COMMAND_TEXT}}</span>
               </div>
-            </details>
+
+              <!-- Optional: remove this block when the command produced no output. Repeat .output-line in captured order when available; otherwise render stdout lines before stderr lines. -->
+              <div class="command-output">
+                <!-- stdout line: empty marker keeps text aligned with stderr lines. -->
+                <div class="output-line stdout"><span class="stream-marker">!</span><span class="output-text">{{COMMAND_STDOUT_LINE}}</span></div>
+                <!-- stderr line: show ! marker in the gutter. -->
+                <div class="output-line stderr"><span class="stream-marker">!</span><span class="output-text">{{COMMAND_STDERR_LINE}}</span></div>
+              </div>
+
+              <p class="command-run-meta">{{COMMAND_MACHINE}} · {{COMMAND_TERMINATION_STATUS}} · {{COMMAND_DURATION}}</p>
+            </section>
           </details>
           </div>
         </details>
@@ -851,7 +841,7 @@
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
           acceptNode(node) {
             if (!node.nodeValue.includes("'")) return NodeFilter.FILTER_REJECT;
-            if (node.parentElement?.closest('code, pre, script, style, textarea')) {
+            if (node.parentElement?.closest('code, pre, script, style, textarea, .command-line, .command-output')) {
               return NodeFilter.FILTER_REJECT;
             }
             if (ignoredParents.has(node.parentNode?.nodeName ?? '')) {
