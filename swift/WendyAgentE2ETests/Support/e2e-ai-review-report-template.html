@@ -198,38 +198,40 @@
     }
 
     .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 12px 32px rgba(31, 41, 55, .06);
-      overflow: hidden;
-      margin-top: 18px;
+      margin-top: 30px;
     }
 
     .is-hidden { display: none !important; }
 
     .card-title {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
-      padding: 20px 22px;
-      border-bottom: 1px solid var(--line);
-      background: linear-gradient(#fff, #fbfcff);
+      margin: 0 0 8px;
+      padding: 0 0 6px;
+      border-bottom: 1px solid rgba(31, 41, 55, .10);
     }
 
     h2 {
       margin: 0;
-      font-size: 20px;
-      letter-spacing: -0.02em;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: -0.025em;
+    }
+
+    .suite-group {
+      margin: 4px 0 16px;
     }
 
     .badge {
+      display: inline-flex;
+      align-items: center;
       flex: 0 0 auto;
       border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 13px;
-      font-weight: 700;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.4;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      vertical-align: 1px;
     }
 
     .badge.pass {
@@ -246,6 +248,18 @@
       border: 1px solid var(--amber-line);
     }
 
+    .test-summary .badge.skipped {
+      display: inline-block;
+      width: auto;
+      min-width: 0;
+      max-width: max-content;
+      padding: 2px 7px;
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+
     .badge.fail {
       color: var(--red);
       background: var(--red-bg);
@@ -253,29 +267,25 @@
     }
 
     .test-details {
-      border-top: 1px solid var(--line);
+      margin: 1px 0;
+      border-radius: 8px;
     }
-
-    .test-details:first-of-type { border-top: 0; }
 
     .test-summary {
-      display: flex;
-      justify-content: space-between;
-      gap: 14px;
-      align-items: center;
-      padding: 10px 14px;
+      display: block;
+      padding: 4px 2px;
       cursor: pointer;
       user-select: none;
+      border-radius: 8px;
     }
 
-    .test-summary:hover { background: #fbfcff; }
+    .test-summary:hover { background: rgba(255, 255, 255, .62); }
 
     .test-path {
-      min-width: 0;
       color: var(--text);
       font-size: 14px;
-      font-weight: 650;
-      line-height: 1.35;
+      font-weight: 500;
+      line-height: 1.45;
       overflow-wrap: anywhere;
     }
 
@@ -285,8 +295,16 @@
       margin: 0 4px;
     }
 
+    .test-summary .badge {
+      margin-left: 8px;
+    }
+
     .test-body {
-      padding: 0 14px 16px 32px;
+      margin: 4px 0 14px 22px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, .72);
+      border: 1px solid rgba(31, 41, 55, .08);
+      border-radius: 12px;
     }
 
     h3 {
@@ -486,9 +504,7 @@
       .filter-bar { position: static; }
       .filter-count { flex-basis: 100%; margin-left: 0; }
       .search-field { flex-basis: 100%; }
-      .card-title { align-items: flex-start; flex-direction: column; }
-      .test-summary { align-items: flex-start; }
-      .test-body { padding-left: 16px; }
+      .test-body { margin-left: 14px; padding: 12px; }
       .checks li { align-items: flex-start; }
       .command-meta { grid-template-columns: 1fr; }
       .streams { grid-template-columns: 1fr; }
@@ -544,20 +560,20 @@
       <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
     </section>
 
-    <!-- Repeat this .card section once per test file. -->
+    <!-- Repeat this .card section once per test file. Use prose display names, e.g. WendyAnalyticsTests.swift -> Wendy Analytics. -->
     <section class="card" data-test-file-card>
       <div class="card-title">
-        <h2>{{TEST_FILE_NAME}}</h2>
-        <span class="badge {{TEST_FILE_BADGE_STATUS_CLASS}}">{{TEST_FILE_BADGE_TEXT}}</span>
+        <h2>{{TEST_FILE_DISPLAY_NAME}}</h2>
       </div>
 
-      <!-- Repeat this details.test-details once per test function in the file. -->
-      <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}">
-        <summary class="test-summary">
-          <span class="test-path">{{TEST_PATH_TEXT}}</span>
-          <span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span>
-        </summary>
-        <div class="test-body">
+      <!-- Repeat this .suite-group once per suite in the file. Do not add a visible suite heading; the suite appears in each test sentence. -->
+      <div class="suite-group">
+        <!-- Repeat this details.test-details once per test function in the suite. -->
+        <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}">
+          <summary class="test-summary">
+            <span class="test-path">{{TEST_PATH_TEXT}}</span><span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span>
+          </summary>
+          <div class="test-body">
           <p class="test-meta">
             <span>Suite: <code>{{TEST_SUITE_NAME}}</code></span>
             <span>Test: <code>{{TEST_FUNCTION_TITLE}}</code></span>
@@ -604,8 +620,9 @@
               </div>
             </details>
           </details>
-        </div>
-      </details>
+          </div>
+        </details>
+      </div>
     </section>
 
     <!-- Optional: remove this section when no files were skipped. -->
