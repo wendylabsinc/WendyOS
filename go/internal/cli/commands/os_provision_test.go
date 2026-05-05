@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,128 @@ func TestProvisioningRequired(t *testing.T) {
 				t.Errorf("provisioningRequired(%v, %q, %v) = false; want true (user-supplied data must not be silently dropped)", c.creds, c.deviceName, c.provisioningJSON)
 			}
 		})
+	}
+}
+
+func TestParseConfigPartition_Empty(t *testing.T) {
+	_, err := parseConfigPartition([]byte(""))
+	if err == nil {
+		t.Fatal("empty input must return error")
+	}
+	if !strings.Contains(err.Error(), "no partitions found") {
+		t.Errorf("error should mention 'no partitions found': %v", err)
+	}
+}
+
+func TestParseConfigPartition_SingleObject(t *testing.T) {
+	// PowerShell emits a bare object (not an array) when the pipeline yields
+	// exactly one row. Defending against this is necessary even though the
+	// wendyOS image always has multiple partitions, because a malformed image
+	// or a `Where-Object`-narrowed pipeline could land here.
+	js := []byte(`{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864}`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_NullLabelSkipped(t *testing.T) {
+	// EFI / reserved partitions have no FAT volume → Label is null. The
+	// parser must skip those rather than treat them as a missing-config
+	// signal.
+	js := []byte(`[
+		{"PartitionNumber":1,"DriveLetter":null,"Label":null,"Size":268435456},
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864},
+		{"PartitionNumber":3,"DriveLetter":null,"Label":"rootfs","Size":2147483648}
+	]`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_NullDriveLetterAccepted(t *testing.T) {
+	// At first online, Windows hasn't auto-mounted the partition yet so
+	// DriveLetter is null. That's the common case — we mustn't filter it out.
+	js := []byte(`[{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864}]`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_MixedCaseAndPadding(t *testing.T) {
+	// FAT32 labels are case-preserved and historically space-padded to 11
+	// chars. Match case-insensitively and trim before comparing so a tool
+	// that wrote "Config" or "config     " still matches.
+	cases := map[string]string{
+		"lowercase": `"config"`,
+		"uppercase": `"CONFIG"`,
+		"titlecase": `"Config"`,
+		"padded":    `"config     "`,
+		"both":      `"  Config "`,
+	}
+	for name, label := range cases {
+		t.Run(name, func(t *testing.T) {
+			js := []byte(fmt.Sprintf(`[{"PartitionNumber":2,"DriveLetter":null,"Label":%s,"Size":67108864}]`, label))
+			n, err := parseConfigPartition(js)
+			if err != nil {
+				t.Fatalf("label %s: unexpected error: %v", label, err)
+			}
+			if n != 2 {
+				t.Errorf("label %s: partition number = %d; want 2", label, n)
+			}
+		})
+	}
+}
+
+func TestParseConfigPartition_NoMatch(t *testing.T) {
+	// No "config" label found at all — fail loudly so the user knows the
+	// image isn't fully written rather than silently mounting an arbitrary
+	// partition.
+	js := []byte(`[
+		{"PartitionNumber":1,"DriveLetter":null,"Label":null,"Size":268435456},
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"rootfs","Size":2147483648}
+	]`)
+	_, err := parseConfigPartition(js)
+	if err == nil {
+		t.Fatal("expected error when no config-labelled partition exists")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error should mention 'config': %v", err)
+	}
+}
+
+func TestParseConfigPartition_MultipleMatches(t *testing.T) {
+	// Malformed image with two partitions both labelled "config" — refuse
+	// to guess. Better to bail than to silently mount whichever PowerShell
+	// happened to list first.
+	js := []byte(`[
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864},
+		{"PartitionNumber":4,"DriveLetter":null,"Label":"config","Size":67108864}
+	]`)
+	_, err := parseConfigPartition(js)
+	if err == nil {
+		t.Fatal("expected error when multiple config-labelled partitions exist")
+	}
+	if !strings.Contains(err.Error(), "multiple") {
+		t.Errorf("error should mention 'multiple': %v", err)
+	}
+}
+
+func TestParseConfigPartition_MalformedJSON(t *testing.T) {
+	_, err := parseConfigPartition([]byte("not json at all"))
+	if err == nil {
+		t.Fatal("expected error on malformed JSON")
 	}
 }
 

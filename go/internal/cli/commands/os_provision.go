@@ -125,6 +125,62 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	return json.Marshal(state)
 }
 
+// psPartition is one row from the Windows partition-listing PowerShell
+// script. Pointer fields tolerate JSON nulls for partitions without a
+// drive letter or associated volume (e.g. EFI or reserved partitions).
+type psPartition struct {
+	PartitionNumber int     `json:"PartitionNumber"`
+	DriveLetter     *string `json:"DriveLetter"`
+	Label           *string `json:"Label"`
+	Size            int64   `json:"Size"`
+}
+
+// parseConfigPartition returns the partition number whose FAT32 filesystem
+// label is "config" from the JSON output of the Windows partition-listing
+// script. Lives in the platform-agnostic file so its tests run on the
+// Darwin/Linux host CI without a Windows runner.
+//
+// PowerShell emits a single object (not an array) when the pipeline yields
+// one row, so the parser accepts both shapes. Label matching ignores case
+// and FAT32's 11-char whitespace padding.
+func parseConfigPartition(jsonBytes []byte) (int, error) {
+	trimmed := strings.TrimSpace(string(jsonBytes))
+	if trimmed == "" {
+		return 0, fmt.Errorf("no partitions found on disk (is the image fully written?)")
+	}
+
+	var parts []psPartition
+	if strings.HasPrefix(trimmed, "[") {
+		if err := json.Unmarshal([]byte(trimmed), &parts); err != nil {
+			return 0, fmt.Errorf("parsing partition JSON: %w", err)
+		}
+	} else {
+		var single psPartition
+		if err := json.Unmarshal([]byte(trimmed), &single); err != nil {
+			return 0, fmt.Errorf("parsing partition JSON: %w", err)
+		}
+		parts = []psPartition{single}
+	}
+
+	var matches []int
+	for _, p := range parts {
+		if p.Label == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(*p.Label), "config") {
+			matches = append(matches, p.PartitionNumber)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return 0, fmt.Errorf("no partition labelled 'config' found on disk (is the image fully written?)")
+	case 1:
+		return matches[0], nil
+	default:
+		return 0, fmt.Errorf("multiple partitions labelled 'config' found (%v); refusing to guess which to mount", matches)
+	}
+}
+
 // provisioningRequired reports whether the user supplied provisioning data
 // that must reach the device's config partition. When this returns true, a
 // failure to write the config partition has dropped user-visible state on
