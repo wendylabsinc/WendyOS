@@ -198,10 +198,7 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 	var layerDescs []ocispec.Descriptor
 	var diffIDs []digest.Digest
 	for _, l := range layers {
-		mediaType := ocispec.MediaTypeImageLayerGzip
-		if !l.GetGzip() {
-			mediaType = ocispec.MediaTypeImageLayer
-		}
+		mediaType := layerMediaType(l.GetCompression(), l.GetGzip())
 
 		dgst, err := digest.Parse(l.GetDigest())
 		if err != nil {
