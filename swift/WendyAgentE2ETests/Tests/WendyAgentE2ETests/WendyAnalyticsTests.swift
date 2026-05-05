@@ -3,7 +3,7 @@ import Testing
 import WendyE2ETesting
 
 @Suite(.serialized)
-struct `wendy analytics` {
+struct `wendy analytics status` {
     var cli: Machine
 
     init() async throws {
@@ -33,6 +33,15 @@ struct `wendy analytics` {
             #expect(standardError == "Analytics: disabled\n")
         }
     }
+}
+
+@Suite(.serialized)
+struct `wendy analytics enable` {
+    var cli: Machine
+
+    init() async throws {
+        self.cli = try await Machine.cli()
+    }
 
     @Test
     func `'wendy analytics enable' enables anonymous analytics`() async throws {
@@ -56,6 +65,15 @@ struct `wendy analytics` {
             #expect(standardOutput.isEmpty)
             #expect(standardError == "Analytics: enabled\n")
         }
+    }
+}
+
+@Suite(.serialized)
+struct `wendy analytics disable` {
+    var cli: Machine
+
+    init() async throws {
+        self.cli = try await Machine.cli()
     }
 
     @Test
@@ -81,26 +99,4 @@ struct `wendy analytics` {
             #expect(standardError == "Analytics: disabled\n")
         }
     }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy analytics disable` {
-        // TODO: implement.
-    }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy analytics enable` {
-        // TODO: implement.
-    }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy analytics status` {
-        // TODO: implement.
-    }
-
 }

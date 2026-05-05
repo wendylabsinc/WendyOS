@@ -3,7 +3,7 @@ import Testing
 import WendyE2ETesting
 
 @Suite(.serialized)
-struct `wendy json` {
+struct `wendy json schema` {
     var cli: Machine
 
     init() async throws {
@@ -36,6 +36,15 @@ struct `wendy json` {
 
         // AI:
         // - Schema output is readable as documentation.
+    }
+}
+
+@Suite(.serialized)
+struct `wendy json validate` {
+    var cli: Machine
+
+    init() async throws {
+        self.cli = try await Machine.cli()
     }
 
     @Test
@@ -90,19 +99,4 @@ struct `wendy json` {
         #expect(record.standardOutput == "")
         #expect(record.standardError?.contains("Error: appId is required") == true)
     }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy json schema` {
-        // TODO: implement.
-    }
-
-    // MARK: -
-
-    @Suite
-    struct `wendy json validate` {
-        // TODO: implement.
-    }
-
 }
