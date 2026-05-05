@@ -51,7 +51,7 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 	}
 
 	// Check if already cached.
-	cached, err := osCachedImagePath(selectedKey, version, StorageUnknown)
+	cached, err := osCachedImagePath(selectedKey, version)
 	if err != nil {
 		return err
 	}
