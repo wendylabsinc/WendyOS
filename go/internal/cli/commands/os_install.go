@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -660,6 +662,84 @@ func throttledProgress(p *tea.Program, minInterval time.Duration) func(written, 
 			Total:   total,
 		})
 	}
+}
+
+const parallelDownloadWorkers = 8
+
+// downloadChunk fetches the byte range [start, end] from url, writes it to dst
+// at the correct offset via WriteAt, and atomically increments *downloaded.
+func downloadChunk(client *http.Client, url string, start, end int64, dst *os.File, downloaded *int64, total int64, sendProgress func(int64, int64)) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("range request %d-%d: %w", start, end, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("range request %d-%d: expected 206, got %d", start, end, resp.StatusCode)
+	}
+
+	buf := make([]byte, 1*1024*1024)
+	offset := start
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := dst.WriteAt(buf[:n], offset); writeErr != nil {
+				return fmt.Errorf("writing at offset %d: %w", offset, writeErr)
+			}
+			offset += int64(n)
+			newTotal := atomic.AddInt64(downloaded, int64(n))
+			sendProgress(newTotal, total)
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading chunk %d-%d: %w", start, end, readErr)
+		}
+	}
+}
+
+// downloadParallel downloads url into dst using parallelDownloadWorkers concurrent
+// range requests. dst must already be truncated to contentLength bytes.
+func downloadParallel(client *http.Client, url string, contentLength int64, dst *os.File, sendProgress func(int64, int64)) error {
+	chunkSize := (contentLength + parallelDownloadWorkers - 1) / parallelDownloadWorkers
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, parallelDownloadWorkers)
+	var downloaded int64
+
+	for i := 0; i < parallelDownloadWorkers; i++ {
+		start := int64(i) * chunkSize
+		if start >= contentLength {
+			break
+		}
+		end := start + chunkSize - 1
+		if end >= contentLength {
+			end = contentLength - 1
+		}
+
+		wg.Add(1)
+		go func(start, end int64) {
+			defer wg.Done()
+			if err := downloadChunk(client, url, start, end, dst, &downloaded, contentLength, sendProgress); err != nil {
+				errCh <- err
+			}
+		}(start, end)
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
+	}
+	return nil
 }
 
 // probeRangeSupport issues a HEAD request to check whether the server

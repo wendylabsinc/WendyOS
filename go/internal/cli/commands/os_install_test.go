@@ -3,8 +3,12 @@
 package commands
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -353,4 +357,72 @@ func TestProbeRangeSupport(t *testing.T) {
 			t.Fatal("expected ok=false when server returns non-200")
 		}
 	})
+}
+
+func TestDownloadParallel(t *testing.T) {
+	// 8 KiB fixture — with 8 workers each gets a 1 KiB chunk.
+	fixture := make([]byte, 8*1024)
+	for i := range fixture {
+		fixture[i] = byte(i % 251) // prime modulus gives a non-trivial pattern
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader == "" {
+			http.Error(w, "range required", http.StatusBadRequest)
+			return
+		}
+		var start, end int64
+		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
+			http.Error(w, "bad range header", http.StatusBadRequest)
+			return
+		}
+		if end >= int64(len(fixture)) {
+			end = int64(len(fixture)) - 1
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(fixture)))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(fixture[start : end+1]) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	f, err := os.CreateTemp(dir, "wendy-test-*.img")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+
+	contentLength := int64(len(fixture))
+	if err := f.Truncate(contentLength); err != nil {
+		t.Fatal(err)
+	}
+
+	var progressCalled bool
+	err = downloadParallel(&http.Client{}, srv.URL+"/image.img", contentLength, f, func(downloaded, total int64) {
+		progressCalled = true
+	})
+	if err != nil {
+		t.Fatalf("downloadParallel: %v", err)
+	}
+	if !progressCalled {
+		t.Error("progress callback was never called")
+	}
+
+	f.Close()
+
+	got, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, fixture) {
+		t.Errorf("content mismatch: got %d bytes, want %d bytes", len(got), len(fixture))
+		for i := range fixture {
+			if i >= len(got) || got[i] != fixture[i] {
+				t.Errorf("first diff at byte %d: got %d, want %d", i, got[i], fixture[i])
+				break
+			}
+		}
+	}
 }
