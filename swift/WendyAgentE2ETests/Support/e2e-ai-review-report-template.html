@@ -34,7 +34,7 @@
     }
 
     main {
-      max-width: 900px;
+      max-width: 1080px;
       margin: 0 auto;
       padding: 56px 24px 72px;
     }
@@ -93,6 +93,57 @@
       font-size: 13px;
     }
 
+    .filter-bar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 28px 0 18px;
+      padding: 12px;
+      background: rgba(255, 255, 255, .88);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 10px 28px rgba(31, 41, 55, .08);
+      backdrop-filter: blur(12px);
+    }
+
+    .filter-label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .filter-button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      padding: 8px 12px;
+    }
+
+    .filter-button:hover,
+    .filter-button[aria-pressed="true"] {
+      border-color: var(--blue);
+      color: var(--blue);
+      background: #eff6ff;
+    }
+
+    .filter-count {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     .card {
       background: var(--card);
       border: 1px solid var(--line);
@@ -101,6 +152,8 @@
       overflow: hidden;
       margin-top: 18px;
     }
+
+    .is-hidden { display: none !important; }
 
     .card-title {
       display: flex;
@@ -144,6 +197,13 @@
       border: 1px solid var(--red-line);
     }
 
+    .badge.skipped,
+    .badge.no-ai {
+      color: #4b5563;
+      background: var(--soft);
+      border: 1px solid var(--line);
+    }
+
     article {
       padding: 22px;
       border-top: 1px solid var(--line);
@@ -156,6 +216,36 @@
       font-size: 18px;
       line-height: 1.35;
       letter-spacing: -0.015em;
+    }
+
+    .test-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 7px;
+    }
+
+    .test-heading h3 { margin-bottom: 0; }
+
+    .test-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .skip-reason,
+    .no-ai-note {
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--soft);
+      color: #4b5563;
+      font-size: 14px;
     }
 
     .record {
@@ -223,6 +313,96 @@
       font-size: 13px;
     }
 
+    details.commands {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcff;
+      overflow: hidden;
+    }
+
+    details.commands > summary,
+    details.command-run > summary {
+      cursor: pointer;
+      user-select: none;
+      font-weight: 800;
+    }
+
+    details.commands > summary {
+      padding: 13px 16px;
+      color: var(--text);
+    }
+
+    details.command-run {
+      border-top: 1px solid var(--line);
+      background: var(--card);
+    }
+
+    details.command-run > summary {
+      padding: 12px 16px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    .command-meta {
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 8px 14px;
+      margin: 0;
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .command-meta dt {
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .command-meta dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .streams {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 0 16px 16px;
+    }
+
+    .stream {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #0f172a;
+      overflow: hidden;
+    }
+
+    .stream h4 {
+      margin: 0;
+      padding: 9px 12px;
+      color: #cbd5e1;
+      background: #111827;
+      border-bottom: 1px solid rgba(255, 255, 255, .08);
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .stream pre {
+      margin: 0;
+      min-height: 120px;
+      max-height: 420px;
+      overflow: auto;
+      padding: 12px;
+      color: #e5e7eb;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
     footer {
       margin-top: 22px;
       color: var(--muted);
@@ -233,8 +413,12 @@
     @media (max-width: 680px) {
       main { padding: 36px 16px 56px; }
       .summary { grid-template-columns: repeat(2, 1fr); }
+      .filter-bar { position: static; }
+      .filter-count { flex-basis: 100%; margin-left: 0; }
       .card-title { align-items: flex-start; flex-direction: column; }
       .checks li { align-items: flex-start; }
+      .command-meta { grid-template-columns: 1fr; }
+      .streams { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -244,7 +428,21 @@
 
     Fill every {{PLACEHOLDER}} with escaped text. Duplicate the marked repeat
     blocks as needed, then remove these instructions and any unused example
-    sections. For checklist statuses, use one of: pass, concern, fail.
+    sections. This template is intended to list every E2E test, including
+    passed tests, disabled/skipped tests, and tests without // AI: review
+    comments. For checklist and test statuses, use one of: pass, concern,
+    fail, skipped, no-ai.
+
+    Command run details are optional but recommended for every test that ran
+    commands. Fill them from the matching Markdown command record. Include
+    stdout and stderr exactly as captured, escaped for HTML. If a stream is
+    empty, render an empty <pre></pre> or a short escaped marker such as
+    <empty>. For skipped tests, omit the command details block and include the
+    skip reason.
+
+    The filter bar expects every test article to have data-test-status set to
+    pass, skipped, or fail. File cards are hidden automatically when none of
+    their test articles match the active filter.
   -->
   <main>
     <header>
@@ -260,22 +458,73 @@
       <div class="metric"><strong>{{ISSUE_COUNT}}</strong><span>Issues found</span></div>
     </section>
 
-    <!-- Repeat this .card section once per test file with AI-reviewed tests. -->
-    <section class="card">
+    <section class="filter-bar" aria-label="Filter tests by status">
+      <span class="filter-label">Filter</span>
+      <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
+      <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
+      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
+      <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
+      <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
+    </section>
+
+    <!-- Repeat this .card section once per test file. -->
+    <section class="card" data-test-file-card>
       <div class="card-title">
         <h2>{{TEST_FILE_NAME}}</h2>
         <span class="badge {{TEST_FILE_BADGE_STATUS_CLASS}}">{{TEST_FILE_BADGE_TEXT}}</span>
       </div>
 
-      <!-- Repeat this article once per AI-reviewed test function in the file. -->
-      <article>
-        <h3>{{TEST_FUNCTION_TITLE}}</h3>
-        <p class="record"><code>{{RECORD_FILE_NAME}}</code></p>
+      <!-- Repeat this article once per test function in the file. -->
+      <article data-test-status="{{TEST_STATUS_CLASS}}">
+        <div class="test-heading">
+          <h3>{{TEST_FUNCTION_TITLE}}</h3>
+          <span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span>
+        </div>
+        <p class="test-meta">
+          <span>Suite: <code>{{TEST_SUITE_NAME}}</code></span>
+          <span>Record: <code>{{RECORD_FILE_NAME}}</code></span>
+        </p>
+
+        <!-- Optional: render when the test has // AI: checklist items. -->
         <ul class="checks">
           <!-- Repeat this li once per checklist item. -->
           <li><span>{{CHECKLIST_ITEM_TEXT}}</span><span class="status {{CHECKLIST_STATUS_CLASS}}">{{CHECKLIST_STATUS_TEXT}}</span></li>
         </ul>
         <p class="note">{{TEST_NOTES}}</p>
+
+        <!-- Optional: render when the test has no // AI: checklist. -->
+        <p class="no-ai-note">{{NO_AI_CHECKLIST_NOTE}}</p>
+
+        <!-- Optional: render when the test was disabled/skipped. -->
+        <p class="skip-reason">{{SKIP_REASON}}</p>
+
+        <!-- Optional: remove this details block when the test did not run commands. -->
+        <details class="commands">
+          <summary>Command runs ({{COMMAND_RUN_COUNT}})</summary>
+
+          <!-- Repeat this details.command-run once per command captured in the record. -->
+          <details class="command-run">
+            <summary><code>{{COMMAND_TEXT}}</code></summary>
+            <dl class="command-meta">
+              <dt>Machine</dt><dd>{{COMMAND_MACHINE}}</dd>
+              <dt>Working directory</dt><dd><code>{{COMMAND_WORKING_DIRECTORY}}</code></dd>
+              <dt>Source</dt><dd><code>{{COMMAND_SOURCE}}</code></dd>
+              <dt>Process ID</dt><dd>{{COMMAND_PROCESS_ID}}</dd>
+              <dt>Termination</dt><dd><code>{{COMMAND_TERMINATION_STATUS}}</code></dd>
+              <dt>Duration</dt><dd>{{COMMAND_DURATION}}</dd>
+            </dl>
+            <div class="streams">
+              <section class="stream">
+                <h4>stdout</h4>
+                <pre>{{COMMAND_STDOUT}}</pre>
+              </section>
+              <section class="stream">
+                <h4>stderr</h4>
+                <pre>{{COMMAND_STDERR}}</pre>
+              </section>
+            </div>
+          </details>
+        </details>
       </article>
     </section>
 
@@ -295,5 +544,40 @@
       Records: <code>{{RECORDS_DIRECTORY}}</code>
     </footer>
   </main>
+  <script>
+    (() => {
+      const buttons = Array.from(document.querySelectorAll('[data-filter]'));
+      const articles = Array.from(document.querySelectorAll('article[data-test-status]'));
+      const cards = Array.from(document.querySelectorAll('[data-test-file-card]'));
+      const count = document.querySelector('[data-filter-count]');
+
+      function applyFilter(filter) {
+        let visible = 0;
+
+        for (const article of articles) {
+          const matches = filter === 'all' || article.dataset.testStatus === filter;
+          article.classList.toggle('is-hidden', !matches);
+          if (matches) visible += 1;
+        }
+
+        for (const card of cards) {
+          const hasVisibleArticle = Boolean(card.querySelector('article[data-test-status]:not(.is-hidden)'));
+          card.classList.toggle('is-hidden', !hasVisibleArticle);
+        }
+
+        for (const button of buttons) {
+          button.setAttribute('aria-pressed', String(button.dataset.filter === filter));
+        }
+
+        if (count) {
+          count.textContent = `${visible} of ${articles.length} tests shown`;
+        }
+      }
+
+      for (const button of buttons) {
+        button.addEventListener('click', () => applyFilter(button.dataset.filter));
+      }
+    })();
+  </script>
 </body>
 </html>
