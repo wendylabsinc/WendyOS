@@ -1232,38 +1232,6 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
 // chip is e.g. "esp32c6" or "esp32c5".
-// probeRangeSupport checks if a server supports HTTP range requests.
-// It returns the content size and whether range requests are supported.
-// If the server returns a non-200 status or doesn't support ranges, it returns 0, false.
-func probeRangeSupport(client *http.Client, img *imageInfo) (int64, bool) {
-	req, err := http.NewRequest("HEAD", img.DownloadURL, nil)
-	if err != nil {
-		return 0, false
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, false
-	}
-
-	// Rejects both absent header and RFC 7233 "Accept-Ranges: none".
-	if resp.Header.Get("Accept-Ranges") != "bytes" {
-		return 0, false
-	}
-
-	size := resp.ContentLength
-	if size <= 0 {
-		return 0, false
-	}
-
-	return size, true
-}
-
 func installESP32Firmware(ctx context.Context, nightly bool, chip string) error {
 	cliLogln("\nScanning for ESP32 devices...")
 
