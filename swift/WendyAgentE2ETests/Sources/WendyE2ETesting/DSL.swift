@@ -1,11 +1,5 @@
 import Subprocess
 
-extension Machine {
-    public func command(_ command: String) -> MachineCommand {
-        MachineCommand(machine: self, command: command)
-    }
-}
-
 public struct MachineCommand: Sendable {
     public enum PollCondition: Sendable {
         case success
