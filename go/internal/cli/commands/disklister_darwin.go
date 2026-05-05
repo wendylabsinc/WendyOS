@@ -5,6 +5,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -180,17 +181,7 @@ func unmountDisk(devPath string) error {
 	return nil
 }
 
-// writeImageToDisk writes an image file to a raw disk device using dd. dd
-// reads the file directly (rather than via a stdin pipe) so that bs=8m
-// actually produces 8 MiB writes to /dev/rdiskN — pipe input forces dd to
-// issue one write per pipe-buffer-sized read, which is dramatically slower
-// on raw devices. Progress is driven by `status=progress`, which BSD dd
-// has supported since macOS Monterey (12.0); it prints a transfer-stats
-// line to stderr roughly once per second.
-// /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
-// needed after dd exits. NVMe drives in USB enclosures benefit from larger
-// blocks (64 MiB) to reduce per-write overhead over the USB link.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
@@ -200,13 +191,15 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		bs = "64m"
 	}
 
-	// Use rdisk for faster raw writes on macOS.
+	// Use rdisk for faster raw writes on macOS. Read from stdin so the
+	// caller can pipe an io.Reader (e.g. a streaming zip entry) without
+	// materialising the image to disk first.
 	cmd := exec.Command("sudo", "dd",
-		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.RawPath),
 		"bs="+bs,
 		"status=progress",
 	)
+	cmd.Stdin = r
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
