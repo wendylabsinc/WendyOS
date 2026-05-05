@@ -28,23 +28,35 @@ const configPartitionSupported = true
 // On entry the disk is expected to be offline — writeImageToDisk takes it
 // offline at the end of the raw-image phase to suppress auto-mount of every
 // partition Windows finds in the freshly-written table.
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
+func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) (retErr error) {
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
 		return err
 	}
 
-	if err := onlineAndRescanDisk(diskNum); err != nil {
+	if err := setDiskOnline(diskNum); err != nil {
 		return fmt.Errorf("bringing disk %d online: %w", diskNum, err)
 	}
-	// Always unmount and offline the disk before returning, even on panic.
-	// This is what stops Windows from leaving phantom drive letters between
-	// now and ejectDisk.
+	// From here the disk is online — register cleanup BEFORE the partition
+	// rescan so a failure between online and rescan still triggers
+	// unmount + offline. If the main path succeeded, a cleanup failure must
+	// be promoted to the returned error: leaving the disk online with
+	// phantom letters is the bug this PR exists to prevent, and silently
+	// returning nil would let the caller print "Successfully installed"
+	// against a half-cleaned-up disk.
 	defer func() {
-		if err := unmountAndOfflineDisk(diskNum); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to unmount/offline disk %d: %v\n", diskNum, err)
+		if cleanupErr := unmountAndOfflineDisk(diskNum); cleanupErr != nil {
+			if retErr == nil {
+				retErr = fmt.Errorf("config partition write succeeded but cleanup failed (disk may still be online with phantom drive letters): %w", cleanupErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: failed to unmount/offline disk %d during cleanup: %v\n", diskNum, cleanupErr)
+			}
 		}
 	}()
+
+	if err := updateDisk(diskNum); err != nil {
+		return fmt.Errorf("rescanning disk %d: %w", diskNum, err)
+	}
 
 	// The storage stack needs a moment after Update-Disk before partitions
 	// are reliably enumerable by Get-Volume; mirrors the partprobe sleep on
@@ -69,17 +81,23 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	return nil
 }
 
-// onlineAndRescanDisk brings the disk online and rescans its partition table
-// so partitions written by the dd phase become enumerable. Set-Disk
-// -IsOffline does not prompt, so we don't pass -Confirm:$false (the legacy
-// Storage module rejects -Confirm as unknown — see WINDOWS_REGRESSION_REVIEW.md
-// section 1.1).
-func onlineAndRescanDisk(diskNum int) error {
-	script := fmt.Sprintf(
-		"Set-Disk -Number %d -IsOffline $false -ErrorAction Stop; "+
-			"Update-Disk -Number %d -ErrorAction Stop",
-		diskNum, diskNum,
-	)
+// setDiskOnline brings the disk online. Set-Disk -IsOffline does not prompt,
+// so we don't pass -Confirm:$false (the legacy Storage module rejects
+// -Confirm as unknown — see WINDOWS_REGRESSION_REVIEW.md section 1.1).
+func setDiskOnline(diskNum int) error {
+	script := fmt.Sprintf("Set-Disk -Number %d -IsOffline $false -ErrorAction Stop", diskNum)
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// updateDisk rescans the disk's partition table so partitions written by
+// the dd phase become enumerable. Kept separate from setDiskOnline so a
+// rescan failure still triggers the deferred cleanup of the now-online disk.
+func updateDisk(diskNum int) error {
+	script := fmt.Sprintf("Update-Disk -Number %d -ErrorAction Stop", diskNum)
 	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
@@ -213,6 +231,24 @@ func ejectDisk(devPath string) {
 	// disk offline. This catches the path where the user invoked something
 	// that bypassed writeConfigPartition (e.g. a future caller that imaged
 	// without provisioning, or an early bail before the online step).
-	script := fmt.Sprintf("Set-Disk -Number %d -IsOffline $true -Confirm:$false -ErrorAction SilentlyContinue", diskNum)
-	_ = exec.Command("powershell", "-NoProfile", "-Command", script).Run()
+	//
+	// No -Confirm:$false: Set-Disk -IsOffline does not prompt, and the
+	// legacy Storage module rejects -Confirm as unknown (see
+	// WINDOWS_REGRESSION_REVIEW.md §1.1). On the failure paths from
+	// writeConfigPartition this is the last attempt to offline the disk —
+	// surfacing rather than silently swallowing failure means a stuck
+	// online disk is at least visible to the user.
+	//
+	// Check IsOffline first so the success path (where writeConfigPartition's
+	// deferred cleanup already offlined the disk) doesn't emit a spurious
+	// warning if the legacy module errors on a redundant Set-Disk.
+	script := fmt.Sprintf(
+		"$d = Get-Disk -Number %d -ErrorAction Stop; "+
+			"if (-not $d.IsOffline) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
+		diskNum, diskNum,
+	)
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to take disk %d offline (it may still be online with assigned drive letters): %v: %s\n", diskNum, err, strings.TrimSpace(string(out)))
+	}
 }
