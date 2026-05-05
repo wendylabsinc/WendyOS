@@ -995,6 +995,73 @@ func osCachedImagePath(deviceKey, version string, storageType StorageType) (stri
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s.img", safeDevice, safeVersion, suffix)), nil
 }
 
+// osCachedZipPath returns the expected cache path for a device+version zip.
+// Format: <cache>/os-images/<device>-<version>.zip
+func osCachedZipPath(deviceKey, version string) (string, error) {
+	safeDevice := filepath.Base(deviceKey)
+	safeVersion := filepath.Base(version)
+	if safeDevice != deviceKey || safeVersion != version ||
+		strings.Contains(deviceKey, "..") || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid device key or version: %q / %q", deviceKey, version)
+	}
+
+	dir, err := osCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s.zip", safeDevice, safeVersion)), nil
+}
+
+// zipReadCloser wraps a zip.ReadCloser and its entry's ReadCloser so both
+// are released with a single Close call.
+type zipReadCloser struct {
+	archive *zip.ReadCloser
+	entry   io.ReadCloser
+}
+
+func (z *zipReadCloser) Read(p []byte) (int, error) { return z.entry.Read(p) }
+
+func (z *zipReadCloser) Close() error {
+	z.entry.Close()
+	return z.archive.Close()
+}
+
+// streamZipImageEntry opens a zip archive and returns a streaming reader over
+// the first .img, .raw, or .wic entry it finds, plus the uncompressed size.
+// The caller must Close the returned reader.
+func streamZipImageEntry(zipPath string) (io.ReadCloser, int64, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening zip: %w", err)
+	}
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext != ".img" && ext != ".raw" && ext != ".wic" {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			r.Close()
+			return nil, 0, fmt.Errorf("opening %s in zip: %w", f.Name, err)
+		}
+
+		size := int64(f.UncompressedSize64)
+		if size == 0 {
+			size = f.FileInfo().Size()
+		}
+
+		return &zipReadCloser{archive: r, entry: rc}, size, nil
+	}
+
+	r.Close()
+	return nil, 0, fmt.Errorf("no .img, .raw, or .wic file found in zip archive")
+}
+
 // resolveOSImage returns the path to a ready-to-write .img file.
 // It checks the local cache first; on a miss it downloads (and extracts if
 // zipped), then stores the result in the cache.
