@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -22,6 +24,35 @@ const (
 	fsctlAllowExtendedDASDIO = 0x00090083
 	ioctlDiskGetDriveLayout  = 0x00070050
 )
+
+// powershellExe is the absolute path to powershell.exe, resolved once at
+// package init time. Looking it up via PATH is unsafe: in a 32-bit wendy.exe
+// process running on 64-bit Windows, PATH-resolved `powershell` lands in
+// SysWOW64, which ships a legacy Storage module that rejects modern parameters
+// like -Confirm on Set-Disk. Resolving through System32 (or Sysnative when
+// running under WoW64) ensures we always invoke the host-architecture
+// PowerShell with the current Storage module.
+var powershellExe = resolvePowershellExe()
+
+func resolvePowershellExe() string {
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+	}
+	// Sysnative is a virtual alias that exists only inside a 32-bit (WoW64)
+	// process and points at the real System32. Prefer it so 32-bit builds of
+	// wendy.exe still launch 64-bit PowerShell.
+	candidates := []string{
+		filepath.Join(systemRoot, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+		filepath.Join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "powershell"
+}
 
 // drive represents an external disk suitable for image writing.
 type drive struct {
@@ -63,7 +94,7 @@ func listDrivesWindows(externalOnly bool) ([]drive, error) {
 		"[PSCustomObject]@{ Number=$_.Number; FriendlyName=$_.FriendlyName; Size=$_.Size; " +
 		"BusType=$_.BusType; IsSystem=$_.IsSystem; IsReadOnly=$_.IsReadOnly; MediaType=$mt } " +
 		"} | ConvertTo-Json -Compress"
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", script).Output()
+	out, err := exec.Command(powershellExe, "-NoProfile", "-Command", script).Output()
 	if err != nil {
 		return nil, fmt.Errorf("running Get-Disk: %w", err)
 	}
@@ -157,7 +188,7 @@ func getVolumesForDisk(diskNumber int) ([]string, error) {
 			"Select-Object -ExpandProperty DriveLetter",
 		diskNumber,
 	)
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", script).Output()
+	out, err := exec.Command(powershellExe, "-NoProfile", "-Command", script).Output()
 	if err != nil {
 		return nil, nil // no partitions is fine
 	}
@@ -213,11 +244,20 @@ func lockAndDismountVolume(letter string) (syscall.Handle, error) {
 	return h, nil
 }
 
+// physicalDrivePathRE matches a Windows physical-drive path with the disk
+// number captured. The end anchor matters: fmt.Sscanf with %d would silently
+// accept `\\.\PhysicalDrive1abc` as disk 1, picking up a path the user almost
+// certainly didn't intend.
+var physicalDrivePathRE = regexp.MustCompile(`^\\\\\.\\PhysicalDrive(\d+)$`)
+
 // parseDiskNumber extracts the disk number from a \\.\PhysicalDriveN path.
 func parseDiskNumber(devPath string) (int, error) {
+	m := physicalDrivePathRE.FindStringSubmatch(devPath)
+	if m == nil {
+		return 0, fmt.Errorf("parsing disk number from %q: not a physical drive path", devPath)
+	}
 	var n int
-	_, err := fmt.Sscanf(devPath, `\\.\PhysicalDrive%d`, &n)
-	if err != nil {
+	if _, err := fmt.Sscanf(m[1], "%d", &n); err != nil {
 		return 0, fmt.Errorf("parsing disk number from %q: %w", devPath, err)
 	}
 	return n, nil
@@ -227,19 +267,20 @@ func parseDiskNumber(devPath string) (int, error) {
 // volumes, and OEM recovery data from the disk. This releases Windows' hold
 // on volumes that have no drive letter (e.g. EFI, recovery, or Jetson
 // partitions) which would otherwise block raw disk writes with "Access denied".
+//
+// We first inspect Get-Disk's PartitionStyle: an uninitialized disk reports
+// "RAW" and Clear-Disk has nothing to do. Skipping in that case avoids a
+// non-terminating error whose message text is locale-dependent.
 func clearDiskPartitions(diskNum int) error {
 	script := fmt.Sprintf(
-		"Clear-Disk -Number %d -RemoveData -RemoveOEM -Confirm:$false",
-		diskNum,
+		"$d = Get-Disk -Number %d -ErrorAction Stop; "+
+			"if ($d.PartitionStyle -ne 'RAW') { "+
+			"Clear-Disk -Number %d -RemoveData -RemoveOEM -Confirm:$false "+
+			"}",
+		diskNum, diskNum,
 	)
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput()
+	out, err := exec.Command(powershellExe, "-NoProfile", "-Command", script).CombinedOutput()
 	if err != nil {
-		// "not been initialized" means the disk already has no partition
-		// table (e.g. from a previous Clear-Disk). That's the state we
-		// want, so treat it as success.
-		if strings.Contains(string(out), "not been initialized") {
-			return nil
-		}
 		return fmt.Errorf("clearing disk %d: %s: %w", diskNum, strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -249,16 +290,18 @@ func clearDiskPartitions(diskNum int) error {
 // It clears existing partitions, locks and dismounts remaining volumes,
 // opens the raw physical device, and writes in 4 MiB chunks with
 // sector-aligned I/O.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
 		return err
 	}
 
 	// Ensure the disk is online before clearing partitions — a previous
-	// write may have left it offline.
-	onlineScript := fmt.Sprintf("Set-Disk -Number %d -IsOffline $false -Confirm:$false", diskNum)
-	_ = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", onlineScript).Run()
+	// write may have left it offline. Set-Disk -IsOffline doesn't prompt, so
+	// no -Confirm switch is required (and the legacy Storage module rejects
+	// it outright).
+	onlineScript := fmt.Sprintf("Set-Disk -Number %d -IsOffline $false", diskNum)
+	_ = exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", onlineScript).Run()
 
 	// Clear all partitions on the disk first. This is necessary because
 	// disks (e.g. from a prior Jetson flash) may contain many partitions
@@ -293,12 +336,6 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		volumeHandles = append(volumeHandles, h)
 	}
 
-	imgFile, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
-	}
-	defer imgFile.Close()
-
 	// Open the raw physical drive for writing.
 	devPathUTF16, err := syscall.UTF16PtrFromString(d.DevicePath)
 	if err != nil {
@@ -331,7 +368,7 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	buf := make([]byte, 4*1024*1024) // 4 MiB
 	var totalWritten int64
 	for {
-		n, readErr := imgFile.Read(buf)
+		n, readErr := r.Read(buf)
 		if n > 0 {
 			// Writes to raw disks on Windows must be sector-aligned.
 			// Pad the final chunk to a 512-byte boundary.
@@ -369,20 +406,34 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	// rescans the partition table and auto-assigns drive letters to every
 	// partition it finds (EFI, rootfs, recovery, etc.), flooding Explorer
 	// with phantom drives. Setting the disk offline right after prevents this.
-	syscall.CloseHandle(handle)
+	//
+	// os.NewFile took ownership of the underlying Windows HANDLE (it installs
+	// a finalizer that calls CloseHandle), so we close exclusively through
+	// diskFile.Close() — calling syscall.CloseHandle separately would
+	// double-close once the finalizer ran, with undefined behavior if Windows
+	// reused the handle value.
+	if cerr := diskFile.Close(); cerr != nil {
+		fmt.Fprintf(os.Stderr, "warning: closing %s: %v\n", d.DevicePath, cerr)
+	}
 	closeAllHandles()
 
 	// Remove any auto-assigned drive letters, then take the disk offline.
 	// Set-Disk -IsOffline alone doesn't remove letters that Windows already
 	// assigned during the brief window between releasing locks and going offline.
+	//
+	// Get-Partition -ErrorAction SilentlyContinue: right after Clear-Disk the
+	// partition table re-read may not have completed and the cmdlet emits a
+	// non-terminating "no MSFT_Partition objects" error we don't want fatal.
+	// Set-Disk: no -Confirm (legacy Storage module rejects it; -IsOffline
+	// doesn't prompt) and no -ErrorAction Stop (we log exit status below).
 	cleanupScript := fmt.Sprintf(
-		"Get-Partition -DiskNumber %d | "+
+		"Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue | "+
 			"Where-Object { $_.DriveLetter } | "+
 			"ForEach-Object { Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue }; "+
-			"Set-Disk -Number %d -IsOffline $true -Confirm:$false -ErrorAction Stop",
+			"Set-Disk -Number %d -IsOffline $true",
 		diskNum, diskNum,
 	)
-	if output, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", cleanupScript).CombinedOutput(); err != nil {
+	if output, err := exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", cleanupScript).CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(output))
 		if msg != "" {
 			fmt.Fprintf(os.Stderr, "warning: failed to set disk %d offline: %v: %s\n", diskNum, err, msg)

@@ -3,15 +3,15 @@ package containerd
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/containerd/containerd/v2/core/content"
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
@@ -36,6 +36,41 @@ type UnpackProgress struct {
 	Reused bool
 }
 
+// snapshotStatter is the subset of snapshots.Snapshotter used for existence checks.
+type snapshotStatter interface {
+	Stat(ctx context.Context, key string) (snapshots.Info, error)
+}
+
+// statLayers checks which chain-ID snapshots already exist by fanning out
+// sn.Stat calls concurrently. Returns a bool slice indexed by layer position.
+// Any non-NotFound error from any goroutine is returned (first one wins).
+func statLayers(ctx context.Context, sn snapshotStatter, chainIDs []string) ([]bool, error) {
+	exists := make([]bool, len(chainIDs))
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	for i, id := range chainIDs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := sn.Stat(ctx, id)
+			if err == nil {
+				exists[i] = true
+			} else if !errdefs.IsNotFound(err) {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return exists, firstErr
+}
+
 // UnpackImage unpacks an image's layers into the snapshotter so that the
 // resulting chain-ID snapshots are present for a subsequent
 // `WithNewSnapshot` call to build a container rootfs from. It computes chain
@@ -53,7 +88,7 @@ type UnpackProgress struct {
 // freshly committed chain-ID snapshot before the next layer's `Prepare`
 // references it as a parent — surfacing as a random-layer "parent snapshot
 // does not exist" failure.
-func (c *Client) UnpackImage(ctx context.Context, imageName string, progress func(UnpackProgress)) error {
+func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress func(UnpackProgress)) error {
 	ctx = c.withNamespace(ctx)
 
 	// cleanupCtx is used for best-effort `Remove` calls so a cancelled caller
@@ -77,15 +112,23 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 	cs := c.client.ContentStore()
 	sn := c.client.SnapshotService("")
 
-	img, err := c.client.GetImage(ctx, imageName)
-	if err != nil {
-		return fmt.Errorf("getting image %q: %w", imageName, err)
-	}
-
 	// Resolve through index if needed (platform selection).
 	manifest, err := images.Manifest(ctx, cs, img.Target(), img.Platform())
 	if err != nil {
-		return fmt.Errorf("reading manifest for %q: %w", imageName, err)
+		return fmt.Errorf("reading manifest for %q: %w", img.Name(), err)
+	}
+
+	// Read all diff IDs from the image config in a single cheap blob read.
+	// images.GetDiffID resolves each diff ID by decompressing the layer blob
+	// when the containerd.io/uncompressed label is absent — the same bytes
+	// DiffService.Apply will decompress again. Reading from the config avoids
+	// that double-decompression on every first-time unpack.
+	diffIDs, err := images.RootFS(ctx, cs, manifest.Config)
+	if err != nil {
+		return fmt.Errorf("reading diff IDs for %q: %w", img.Name(), err)
+	}
+	if len(diffIDs) != len(manifest.Layers) {
+		return fmt.Errorf("image %q has %d layers but %d diff IDs", img.Name(), len(manifest.Layers), len(diffIDs))
 	}
 
 	totalLayers := len(manifest.Layers)
@@ -93,16 +136,24 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 		progress(UnpackProgress{Phase: "start", TotalLayers: totalLayers})
 	}
 
+	// Pre-compute all chain IDs in a single pass, then check existence in parallel.
+	chainIDs := make([]string, len(diffIDs))
+	parent := ""
+	for i, diffID := range diffIDs {
+		chainIDs[i] = computeChainID(parent, diffID.String())
+		parent = chainIDs[i]
+	}
+
+	exists, err := statLayers(ctx, sn, chainIDs)
+	if err != nil {
+		return fmt.Errorf("pre-checking layer snapshots: %w", err)
+	}
+
 	var parentChainID string
 	for i, layerDesc := range manifest.Layers {
-		diffID, err := layerDiffID(ctx, cs, layerDesc)
-		if err != nil {
-			return fmt.Errorf("getting diff ID for layer %d: %w", i, err)
-		}
+		chainID := chainIDs[i]
 
-		chainID := computeChainID(parentChainID, diffID)
-
-		if _, err := sn.Stat(ctx, chainID); err == nil {
+		if exists[i] {
 			if progress != nil {
 				progress(UnpackProgress{
 					Phase:       "layer",
@@ -118,8 +169,6 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 			)
 			parentChainID = chainID
 			continue
-		} else if !errdefs.IsNotFound(err) {
-			return fmt.Errorf("stat snapshot %q: %w", chainID, err)
 		}
 
 		// Unique per-attempt active key so concurrent unpacks of the same
@@ -128,7 +177,7 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 		// snapshot. The lease pins the active snapshot during this loop
 		// iteration; only the committed chain-ID snapshot needs gc.root
 		// to survive lease release.
-		activeKey := fmt.Sprintf("extract-%s-%d-%s", imageName, i, uuid.NewString())
+		activeKey := fmt.Sprintf("extract-%s-%d-%s", img.Name(), i, uuid.NewString())
 		mounts, err := sn.Prepare(ctx, activeKey, parentChainID)
 		if err != nil {
 			return fmt.Errorf("preparing snapshot for layer %d: %w", i, err)
@@ -159,10 +208,10 @@ func (c *Client) UnpackImage(ctx context.Context, imageName string, progress fun
 					Reused:      false,
 				})
 			}
+		// A concurrent unpack committed the same chain ID first. Our
+		// active key still exists; clean it up and report the layer
+		// as reused rather than freshly unpacked.
 		case errdefs.IsAlreadyExists(commitErr):
-			// A concurrent unpack committed the same chain ID first. Our
-			// active key still exists; clean it up and report the layer
-			// as reused rather than freshly unpacked.
 			c.removeActiveSnapshot(cleanupCtx, sn, activeKey, "active snapshot after concurrent commit", i)
 			if progress != nil {
 				progress(UnpackProgress{
@@ -199,13 +248,4 @@ func (c *Client) removeActiveSnapshot(ctx context.Context, sn snapshots.Snapshot
 			zap.Error(err),
 		)
 	}
-}
-
-// layerDiffID resolves the uncompressed diff ID for a layer descriptor.
-func layerDiffID(ctx context.Context, cs content.Store, desc ocispec.Descriptor) (string, error) {
-	diffID, err := images.GetDiffID(ctx, cs, desc)
-	if err != nil {
-		return "", err
-	}
-	return diffID.String(), nil
 }

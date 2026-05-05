@@ -17,6 +17,7 @@ Tests:
   swift-hello           Basic Swift containerized deployment (no entitlements)
   swift-network         Swift with network entitlement (WiFi connectivity)
   swift-bluetooth       Swift with bluetooth entitlement
+  swift-resources       Swift app with bundled resources (verifies resource loading)
   python-hello          Basic Python deployment (no entitlements)
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
@@ -181,6 +182,7 @@ ALL_TESTS=(
     swift-hello
     swift-network
     swift-bluetooth
+    swift-resources
     python-hello
     python-network
     python-gpu
