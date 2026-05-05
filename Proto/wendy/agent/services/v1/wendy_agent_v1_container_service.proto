@@ -125,7 +125,19 @@ message RunContainerLayerHeader {
     string diff_id = 3;
 
     // Whether the layer is compressed with gzip.
+    // Deprecated: use compression instead. Kept for backward compatibility with
+    // older CLIs that do not send the compression field.
     bool gzip = 4;
+
+    // Compression format of the layer blob. When set to a non-zero value,
+    // takes precedence over the gzip field.
+    CompressionType compression = 5;
+
+    enum CompressionType {
+        COMPRESSION_GZIP = 0;  // default; treated as gzip when gzip=true, uncompressed when gzip=false
+        COMPRESSION_ZSTD = 1;
+        COMPRESSION_NONE = 2;
+    }
 }
 
 message RunContainerLayersResponse {
