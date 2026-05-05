@@ -17,8 +17,7 @@ func preAuthElevation() error {
 	return nil
 }
 
-// elevationHint returns a message about what to expect for privilege elevation.
+// elevationHint returns a user-facing message about privilege requirements.
 func elevationHint() string {
 	return "You may be prompted for your password (sudo is required)."
 }
-
