@@ -733,17 +733,12 @@ func probeRangeSupport(client *http.Client, img *imageInfo) (contentLength int64
 }
 
 // downloadImage downloads an OS image to a temp file with a progress bar.
+// downloadImage downloads an OS image to a temp file with a progress bar.
+// If the server supports HTTP range requests, it downloads in parallel using
+// parallelDownloadWorkers concurrent connections. Falls back to a single
+// sequential stream otherwise.
 func downloadImage(img *imageInfo) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(img.DownloadURL)
-	if err != nil {
-		return "", fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
 
 	// Write directly into the OS cache directory so we never land in /tmp
 	// (which is often a size-limited tmpfs on Linux).
@@ -756,38 +751,60 @@ func downloadImage(img *imageInfo) (string, error) {
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
 
-	total := resp.ContentLength
-	if img.ImageSize > 0 {
-		total = img.ImageSize
-	}
-
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version))
 	p := tea.NewProgram(prog)
-
-	var downloaded int64
 	sendProgress := throttledProgress(p, 33*time.Millisecond)
-	go func() {
-		buf := make([]byte, 1*1024*1024)
-		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: writeErr})
+
+	contentLength, supportsRanges := probeRangeSupport(client, img)
+
+	if supportsRanges {
+		if err := tmpFile.Truncate(contentLength); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("pre-allocating: %w", err)
+		}
+		go func() {
+			p.Send(tui.ProgressDoneMsg{Err: downloadParallel(client, img.DownloadURL, contentLength, tmpFile, sendProgress)})
+		}()
+	} else {
+		go func() {
+			resp, err := client.Get(img.DownloadURL)
+			if err != nil {
+				p.Send(tui.ProgressDoneMsg{Err: fmt.Errorf("downloading: %w", err)})
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				p.Send(tui.ProgressDoneMsg{Err: fmt.Errorf("download returned status %d", resp.StatusCode)})
+				return
+			}
+			total := resp.ContentLength
+			if img.ImageSize > 0 {
+				total = img.ImageSize
+			}
+			buf := make([]byte, 1*1024*1024)
+			var downloaded int64
+			for {
+				n, readErr := resp.Body.Read(buf)
+				if n > 0 {
+					if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
+						p.Send(tui.ProgressDoneMsg{Err: writeErr})
+						return
+					}
+					downloaded += int64(n)
+					sendProgress(downloaded, total)
+				}
+				if readErr == io.EOF {
+					p.Send(tui.ProgressDoneMsg{})
 					return
 				}
-				downloaded += int64(n)
-				sendProgress(downloaded, total)
+				if readErr != nil {
+					p.Send(tui.ProgressDoneMsg{Err: readErr})
+					return
+				}
 			}
-			if readErr == io.EOF {
-				p.Send(tui.ProgressDoneMsg{})
-				return
-			}
-			if readErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: readErr})
-				return
-			}
-		}
-	}()
+		}()
+	}
 
 	finalModel, err := p.Run()
 	if err != nil {
