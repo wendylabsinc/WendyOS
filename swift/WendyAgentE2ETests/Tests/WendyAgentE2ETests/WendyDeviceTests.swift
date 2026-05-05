@@ -83,7 +83,7 @@ struct `wendy device version` {
     }
 
     @Test
-    func `formats version and hardware details as JSON`() async throws {
+    func `'--json' formats version and hardware details as JSON`() async throws {
         // TODO: implement.
     }
 }
@@ -113,7 +113,7 @@ struct `wendy device logs` {
     }
 
     @Test
-    func `filters logs by application when requested`() async throws {
+    func `'--app' filters logs by application`() async throws {
         // TODO: implement.
     }
 }

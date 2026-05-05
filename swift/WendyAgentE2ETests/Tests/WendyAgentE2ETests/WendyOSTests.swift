@@ -58,7 +58,7 @@ struct `wendy os list-drives` {
     }
 
     @Test
-    func `formats removable drives as JSON`() async throws {
+    func `'--json' formats removable drives as JSON`() async throws {
         // TODO: implement.
     }
 }

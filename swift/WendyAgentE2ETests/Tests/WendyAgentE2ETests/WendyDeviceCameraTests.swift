@@ -18,7 +18,7 @@ struct `wendy device camera list` {
     }
 
     @Test
-    func `formats cameras as JSON`() async throws {
+    func `'--json' formats cameras as JSON`() async throws {
         // TODO: implement.
     }
 }

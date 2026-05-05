@@ -18,7 +18,7 @@ struct `wendy run` {
     }
 
     @Test
-    func `formats deployment result as JSON`() async throws {
+    func `'--json' formats deployment result as JSON`() async throws {
         // TODO: implement.
     }
 }

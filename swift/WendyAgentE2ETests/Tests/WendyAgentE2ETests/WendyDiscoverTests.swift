@@ -8,7 +8,7 @@ struct `wendy discover` {
     }
 
     @Test
-    func `formats discovered devices as JSON`() async throws {
+    func `'--json' formats discovered devices as JSON`() async throws {
         // TODO: implement.
     }
 

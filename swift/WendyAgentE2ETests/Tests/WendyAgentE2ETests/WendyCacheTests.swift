@@ -33,7 +33,7 @@ struct `wendy cache list` {
     }
 
     @Test
-    func `formats cached entries as JSON`() async throws {
+    func `'--json' formats cached entries as JSON`() async throws {
         // TODO: implement.
     }
 }

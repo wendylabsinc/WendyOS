@@ -13,7 +13,7 @@ struct `wendy project entitlements` {
 @Suite(.serialized)
 struct `wendy project entitlements list` {
     @Test
-    func `shows all available entitlement types`() async throws {
+    func `'--show-all' shows all available entitlement types`() async throws {
         // TODO: implement.
     }
 

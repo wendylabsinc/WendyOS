@@ -18,7 +18,7 @@ struct `wendy device audio list` {
     }
 
     @Test
-    func `formats audio devices as JSON`() async throws {
+    func `'--json' formats audio devices as JSON`() async throws {
         // TODO: implement.
     }
 }

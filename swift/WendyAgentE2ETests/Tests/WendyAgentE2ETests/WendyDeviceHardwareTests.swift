@@ -18,7 +18,7 @@ struct `wendy device hardware list` {
     }
 
     @Test
-    func `formats hardware capabilities as JSON`() async throws {
+    func `'--json' formats hardware capabilities as JSON`() async throws {
         // TODO: implement.
     }
 }

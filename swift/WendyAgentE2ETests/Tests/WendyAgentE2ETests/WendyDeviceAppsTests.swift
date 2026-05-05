@@ -23,7 +23,7 @@ struct `wendy device apps list` {
     }
 
     @Test
-    func `formats applications as JSON`() async throws {
+    func `'--json' formats applications as JSON`() async throws {
         // TODO: implement.
     }
 }

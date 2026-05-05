@@ -18,7 +18,7 @@ struct `wendy device volumes list` {
     }
 
     @Test
-    func `formats persistent volumes as JSON`() async throws {
+    func `'--json' formats persistent volumes as JSON`() async throws {
         // TODO: implement.
     }
 }

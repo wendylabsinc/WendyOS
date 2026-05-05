@@ -37,7 +37,7 @@ struct `wendy` {
     }
 
     @Test
-    func `selects the target device explicitly`() async throws {
+    func `'--device' selects the target device explicitly`() async throws {
         // REFACTOR: Starting WendyAgentMac and shutting it down are test fixture
         // concerns. Replace this inline lifecycle management with a dedicated
         // DSL or something. This is good enough for the first draft.
@@ -102,7 +102,7 @@ struct `wendy info` {
     }
 
     @Test
-    func `formats CLI and system information as JSON`() async throws {
+    func `'--json' formats CLI and system information as JSON`() async throws {
         try await self.cli.run("./bin/wendy --json info") { standardOutput, standardError in
             #expect(standardError.isEmpty)
 

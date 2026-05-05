@@ -33,7 +33,7 @@ struct `wendy os cache list` {
     }
 
     @Test
-    func `formats cached WendyOS images as JSON`() async throws {
+    func `'--json' formats cached WendyOS images as JSON`() async throws {
         // TODO: implement.
     }
 }

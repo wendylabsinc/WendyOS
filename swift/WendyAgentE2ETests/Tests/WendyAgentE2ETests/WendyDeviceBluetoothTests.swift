@@ -63,7 +63,7 @@ struct `wendy device bluetooth list` {
     }
 
     @Test
-    func `formats Bluetooth devices as JSON`() async throws {
+    func `'--json' formats Bluetooth devices as JSON`() async throws {
         // TODO: implement.
     }
 }

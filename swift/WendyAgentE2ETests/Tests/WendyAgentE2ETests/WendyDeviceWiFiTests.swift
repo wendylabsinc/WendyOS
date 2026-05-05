@@ -63,7 +63,7 @@ struct `wendy device wifi list` {
     }
 
     @Test
-    func `formats WiFi networks as JSON`() async throws {
+    func `'--json' formats WiFi networks as JSON`() async throws {
         // TODO: implement.
     }
 }
@@ -93,7 +93,7 @@ struct `wendy device wifi status` {
     }
 
     @Test
-    func `formats WiFi status as JSON`() async throws {
+    func `'--json' formats WiFi status as JSON`() async throws {
         // TODO: implement.
     }
 }
