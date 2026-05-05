@@ -136,11 +136,24 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 		progress(UnpackProgress{Phase: "start", TotalLayers: totalLayers})
 	}
 
+	// Pre-compute all chain IDs in a single pass, then check existence in parallel.
+	chainIDs := make([]string, len(diffIDs))
+	parent := ""
+	for i, diffID := range diffIDs {
+		chainIDs[i] = computeChainID(parent, diffID.String())
+		parent = chainIDs[i]
+	}
+
+	exists, err := statLayers(ctx, sn, chainIDs)
+	if err != nil {
+		return fmt.Errorf("pre-checking layer snapshots: %w", err)
+	}
+
 	var parentChainID string
 	for i, layerDesc := range manifest.Layers {
-		chainID := computeChainID(parentChainID, diffIDs[i].String())
+		chainID := chainIDs[i]
 
-		if _, err := sn.Stat(ctx, chainID); err == nil {
+		if exists[i] {
 			if progress != nil {
 				progress(UnpackProgress{
 					Phase:       "layer",
@@ -156,8 +169,6 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 			)
 			parentChainID = chainID
 			continue
-		} else if !errdefs.IsNotFound(err) {
-			return fmt.Errorf("stat snapshot %q: %w", chainID, err)
 		}
 
 		// Unique per-attempt active key so concurrent unpacks of the same
@@ -197,10 +208,10 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 					Reused:      false,
 				})
 			}
+		// A concurrent unpack committed the same chain ID first. Our
+		// active key still exists; clean it up and report the layer
+		// as reused rather than freshly unpacked.
 		case errdefs.IsAlreadyExists(commitErr):
-			// A concurrent unpack committed the same chain ID first. Our
-			// active key still exists; clean it up and report the layer
-			// as reused rather than freshly unpacked.
 			c.removeActiveSnapshot(cleanupCtx, sn, activeKey, "active snapshot after concurrent commit", i)
 			if progress != nil {
 				progress(UnpackProgress{
