@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/internal/shared/nmcli"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -48,28 +49,11 @@ func resolveNMCLIPath() string {
 	return ""
 }
 
-// nmcli -t output escapes embedded colons as `\:` — we need to respect that
-// when splitting. splitNMCLI splits a single record into `fields` substrings,
-// undoing the backslash escaping that nmcli applies.
+// splitNMCLI is the legacy local alias for nmcli.Split. Kept so the rest of
+// this file reads the same; the underlying implementation also unescapes
+// `\n`/`\r`/`\t` and forces a UTF-8 locale on every nmcli invocation.
 func splitNMCLI(line string, fields int) []string {
-	out := make([]string, 0, fields)
-	var cur strings.Builder
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		if c == '\\' && i+1 < len(line) {
-			cur.WriteByte(line[i+1])
-			i++
-			continue
-		}
-		if c == ':' && len(out) < fields-1 {
-			out = append(out, cur.String())
-			cur.Reset()
-			continue
-		}
-		cur.WriteByte(c)
-	}
-	out = append(out, cur.String())
-	return out
+	return nmcli.Split(line, fields)
 }
 
 // classifySecurity converts an nmcli SECURITY string (e.g. "WPA2", "WPA1 WPA2",
@@ -107,7 +91,7 @@ type knownProfile struct {
 // so the cost is O(1) exec calls regardless of how many profiles exist.
 func (n *NMCLINetworkManager) listKnownProfiles(ctx context.Context) ([]knownProfile, error) {
 	// First pass: list wifi connections and their priorities.
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "-t",
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t",
 		"-f", "NAME,UUID,TYPE,AUTOCONNECT-PRIORITY",
 		"connection", "show")
 	out, err := cmd.Output()
@@ -146,7 +130,7 @@ func (n *NMCLINetworkManager) listKnownProfiles(ctx context.Context) ([]knownPro
 	for _, p := range result {
 		args = append(args, p.UUID)
 	}
-	dcmd := exec.CommandContext(ctx, n.nmcliPath, args...)
+	dcmd := nmcli.Command(ctx, n.nmcliPath, args...)
 	dout, derr := dcmd.Output()
 	if derr != nil {
 		// Fall back to name-as-ssid if the detail fetch fails so callers
@@ -175,16 +159,7 @@ func (n *NMCLINetworkManager) listKnownProfiles(ctx context.Context) ([]knownPro
 }
 
 func unescapeNMCLI(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) {
-			b.WriteByte(s[i+1])
-			i++
-			continue
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
+	return nmcli.Unescape(s)
 }
 
 func classifyKeyMgmt(k string) agentpb.WiFiSecurityType {
@@ -204,10 +179,10 @@ func classifyKeyMgmt(k string) agentpb.WiFiSecurityType {
 // ListWiFiNetworks scans for and lists available WiFi networks, merging scan
 // results with saved profiles so the response carries is_known/priority/security.
 func (n *NMCLINetworkManager) ListWiFiNetworks(ctx context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
-	rescan := exec.CommandContext(ctx, n.nmcliPath, "device", "wifi", "rescan")
+	rescan := nmcli.Command(ctx, n.nmcliPath, "device", "wifi", "rescan")
 	_ = rescan.Run()
 
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "-t",
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t",
 		"-f", "IN-USE,SSID,SIGNAL,SECURITY",
 		"device", "wifi", "list")
 	output, err := cmd.Output()
@@ -331,7 +306,7 @@ func addOrUpdateProfile(ctx context.Context, nmcliPath string, c SavedCredential
 // exists. Uses a single batched `nmcli connection show UUID1 UUID2 …` call
 // so the cost is O(1) exec calls in the number of saved profiles.
 func existingProfileUUID(ctx context.Context, nmcliPath, ssid string) (string, error) {
-	out, err := exec.CommandContext(ctx, nmcliPath, "-t",
+	out, err := nmcli.Command(ctx, nmcliPath, "-t",
 		"-f", "NAME,UUID,TYPE", "connection", "show").Output()
 	if err != nil {
 		return "", fmt.Errorf("nmcli connection show: %w", err)
@@ -349,7 +324,7 @@ func existingProfileUUID(ctx context.Context, nmcliPath, ssid string) (string, e
 		return "", nil
 	}
 	args := append([]string{"-t", "-g", "802-11-wireless.ssid", "connection", "show"}, uuids...)
-	dout, derr := exec.CommandContext(ctx, nmcliPath, args...).Output()
+	dout, derr := nmcli.Command(ctx, nmcliPath, args...).Output()
 	if derr != nil {
 		return "", fmt.Errorf("nmcli connection show (ssids): %w", derr)
 	}
@@ -381,7 +356,7 @@ func addProfile(ctx context.Context, nmcliPath string, c SavedCredential) error 
 			args = append(args, "802-11-wireless-security.psk", c.Password)
 		}
 	}
-	cmd := exec.CommandContext(ctx, nmcliPath, args...)
+	cmd := nmcli.Command(ctx, nmcliPath, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli connection add %s: %s: %w", c.SSID, strings.TrimSpace(string(out)), err)
 	}
@@ -408,7 +383,7 @@ func modifyProfile(ctx context.Context, nmcliPath, uuid string, c SavedCredentia
 		// Nothing to change beyond the existing profile — still fine.
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, nmcliPath, args...)
+	cmd := nmcli.Command(ctx, nmcliPath, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli connection modify %s: %s: %w", c.SSID, strings.TrimSpace(string(out)), err)
 	}
@@ -433,7 +408,7 @@ func activateProfile(ctx context.Context, nmcliPath, ssid string) error {
 	if uuid == "" {
 		return fmt.Errorf("no saved profile for SSID %q", ssid)
 	}
-	cmd := exec.CommandContext(ctx, nmcliPath, "connection", "up", uuid)
+	cmd := nmcli.Command(ctx, nmcliPath, "connection", "up", uuid)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli connection up %s: %s: %w", ssid, strings.TrimSpace(string(out)), err)
 	}
@@ -530,7 +505,7 @@ func (n *NMCLINetworkManager) cleanupTransientProfile(ctx context.Context, ssid,
 	if err != nil || uuid == "" {
 		return
 	}
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "connection", "delete", uuid)
+	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "delete", uuid)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		n.logger.Warn("failed to clean up profile after failed connect",
 			zap.String("ssid", ssid),
@@ -568,7 +543,7 @@ func runNMCLIConnect(ctx context.Context, nmcliPath, ssid, password string, hidd
 	if hidden {
 		args = append(args, "hidden", "yes")
 	}
-	cmd := exec.CommandContext(ctx, nmcliPath, args...)
+	cmd := nmcli.Command(ctx, nmcliPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nmcli connect: %s: %w", strings.TrimSpace(string(output)), err)
@@ -578,7 +553,7 @@ func runNMCLIConnect(ctx context.Context, nmcliPath, ssid, password string, hidd
 
 // GetWiFiStatus returns the current WiFi connection status.
 func (n *NMCLINetworkManager) GetWiFiStatus(ctx context.Context) (connected bool, ssid string, err error) {
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "-t", "-f", "TYPE,STATE,CONNECTION", "device", "status")
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t", "-f", "TYPE,STATE,CONNECTION", "device", "status")
 	output, err := cmd.Output()
 	if err != nil {
 		return false, "", fmt.Errorf("nmcli device status: %w", err)
@@ -599,7 +574,7 @@ func (n *NMCLINetworkManager) GetWiFiStatus(ctx context.Context) (connected bool
 
 // DisconnectWiFi disconnects from the current WiFi network.
 func (n *NMCLINetworkManager) DisconnectWiFi(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "-t", "-f", "DEVICE,TYPE", "device", "status")
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t", "-f", "DEVICE,TYPE", "device", "status")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("nmcli device status: %w", err)
@@ -619,7 +594,7 @@ func (n *NMCLINetworkManager) DisconnectWiFi(ctx context.Context) error {
 		return fmt.Errorf("no WiFi device found")
 	}
 
-	disconnCmd := exec.CommandContext(ctx, n.nmcliPath, "device", "disconnect", wifiDevice)
+	disconnCmd := nmcli.Command(ctx, n.nmcliPath, "device", "disconnect", wifiDevice)
 	if disconnOutput, err := disconnCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli disconnect: %s: %w", strings.TrimSpace(string(disconnOutput)), err)
 	}
@@ -668,7 +643,7 @@ func (n *NMCLINetworkManager) SetWiFiNetworkPriority(ctx context.Context, ssid s
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "connection", "modify", uuid,
+	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "modify", uuid,
 		"connection.autoconnect-priority", strconv.Itoa(int(priority)))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli modify: %s: %w", strings.TrimSpace(string(out)), err)
@@ -703,7 +678,7 @@ func (n *NMCLINetworkManager) ReorderKnownWiFiNetworks(ctx context.Context, orde
 		if kp.Priority == newPrio {
 			continue
 		}
-		cmd := exec.CommandContext(ctx, n.nmcliPath, "connection", "modify", kp.UUID,
+		cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "modify", kp.UUID,
 			"connection.autoconnect-priority", strconv.Itoa(int(newPrio)))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("nmcli modify %s: %s: %w", ssid, strings.TrimSpace(string(out)), err)
@@ -719,7 +694,7 @@ func (n *NMCLINetworkManager) ForgetWiFiNetwork(ctx context.Context, ssid string
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, n.nmcliPath, "connection", "delete", uuid)
+	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "delete", uuid)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nmcli delete: %s: %w", strings.TrimSpace(string(out)), err)
 	}
