@@ -3,8 +3,10 @@
 package commands
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +163,104 @@ func TestOsCachedImagePath_Sanitization(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for path traversal in device key")
 	}
+}
+
+func TestOsCachedZipPath_Sanitization(t *testing.T) {
+	path, err := osCachedZipPath("raspberry-pi-5", "0.10.4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(path, ".zip") {
+		t.Fatalf("expected .zip suffix, got %q", path)
+	}
+
+	_, err = osCachedZipPath("raspberry-pi-5", "../../../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for path traversal in version")
+	}
+
+	_, err = osCachedZipPath("../evil", "0.10.4")
+	if err == nil {
+		t.Fatal("expected error for path traversal in device key")
+	}
+}
+
+func makeTestZip(t *testing.T, entryName string, content []byte) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "test-*.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	w := zip.NewWriter(f)
+	fw, err := w.Create(entryName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return f.Name()
+}
+
+func TestStreamZipImageEntry(t *testing.T) {
+	content := []byte("fake image data 12345")
+
+	t.Run("reads img entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.img", content)
+		r, size, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer r.Close()
+		if size != int64(len(content)) {
+			t.Errorf("size = %d; want %d", size, len(content))
+		}
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("reading: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("content mismatch")
+		}
+	})
+
+	t.Run("reads raw entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.raw", content)
+		r, _, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r.Close()
+	})
+
+	t.Run("reads wic entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.wic", content)
+		r, _, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r.Close()
+	})
+
+	t.Run("no image entry returns error", func(t *testing.T) {
+		zipPath := makeTestZip(t, "readme.txt", content)
+		_, _, err := streamZipImageEntry(zipPath)
+		if err == nil {
+			t.Fatal("expected error for zip with no image entry")
+		}
+	})
+
+	t.Run("nonexistent file returns error", func(t *testing.T) {
+		_, _, err := streamZipImageEntry("/nonexistent/path/image.zip")
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+	})
 }
 
 func TestParseWiFiEntry(t *testing.T) {
