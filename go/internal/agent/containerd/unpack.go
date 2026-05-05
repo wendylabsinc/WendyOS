@@ -249,4 +249,3 @@ func (c *Client) removeActiveSnapshot(ctx context.Context, sn snapshots.Snapshot
 		)
 	}
 }
-
