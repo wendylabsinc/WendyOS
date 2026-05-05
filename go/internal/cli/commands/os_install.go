@@ -171,11 +171,15 @@ func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwri
 		}
 	}
 
-	if err := preAuthElevation(); err != nil {
-		return err
+	r, size, err := openLocalImageStream(imagePath)
+	if err != nil {
+		return fmt.Errorf("opening image: %w", err)
 	}
+	defer r.Close()
+
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
-	if err := writeImageToDisk(imagePath, *targetDrive, nil); err != nil {
+	fmt.Println(elevationHint())
+	if err := writeImageToDisk(r, size, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 
@@ -473,40 +477,26 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-	// Step 4: Pre-authenticate elevated privileges before downloading — on Unix
-	// this prompts for sudo, on Windows it checks/requests Administrator rights.
-	// Done here so the prompt appears on the raw terminal (before any TUI) and
-	// before spending time on a potentially large download.
-	if err := preAuthElevation(); err != nil {
-		return err
-	}
-
-	// Step 5: Resolve image (cached or download).
+	// Step 5: Resolve image (cached or download) and open streaming reader.
 	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
 	imgInfo, err := getImageInfo(device.Manifest, selectedVersion)
 	if err != nil {
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	imagePath, err := resolveOSImage(deviceKey, imgInfo)
+	r, totalSize, err := openOSImageStream(deviceKey, imgInfo)
 	if err != nil {
-		return fmt.Errorf("resolving OS image: %w", err)
+		return fmt.Errorf("opening OS image: %w", err)
 	}
+	defer r.Close()
 
-	// Get image size for progress tracking.
-	imgStat, err := os.Stat(imagePath)
-	if err != nil {
-		return fmt.Errorf("stat image: %w", err)
-	}
-	totalSize := imgStat.Size()
-
-	// Step 5: Write image to drive with progress bar.
+	// Step 6: Write image to drive with progress bar.
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	wp := tea.NewProgram(writeProg)
 
 	go func() {
-		writeErr := writeImageToDisk(imagePath, targetDrive, func(written int64) {
+		writeErr := writeImageToDisk(r, totalSize, targetDrive, func(written int64) {
 			if totalSize > 0 {
 				wp.Send(tui.ProgressUpdateMsg{
 					Percent: float64(written) / float64(totalSize),
@@ -823,101 +813,6 @@ func downloadImage(img *imageInfo) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-// extractImageFromZipWithProgress opens a zip archive and extracts the first OS
-// image file (.img, .raw, or .wic) to a temp file, and displays a progress bar.
-func extractImageFromZipWithProgress(zipPath string) (string, error) {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("opening zip: %w", err)
-	}
-	defer r.Close()
-
-	for _, f := range r.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext != ".img" && ext != ".raw" && ext != ".wic" {
-			continue
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return "", fmt.Errorf("opening %s in zip: %w", f.Name, err)
-		}
-		defer rc.Close()
-
-		// Write directly into the OS cache directory so we never land in
-		// /tmp (which is often a size-limited tmpfs on Linux).
-		cacheDir, err := osCacheDir()
-		if err != nil {
-			return "", fmt.Errorf("resolving cache dir: %w", err)
-		}
-		tmpFile, err := os.CreateTemp(cacheDir, "wendyos-*.img")
-		if err != nil {
-			return "", fmt.Errorf("creating temp file: %w", err)
-		}
-
-		totalSize := int64(f.UncompressedSize64)
-		if totalSize == 0 {
-			// Some zip writers don't populate UncompressedSize64;
-			// fall back to FileInfo which may use the 32-bit field.
-			totalSize = f.FileInfo().Size()
-		}
-
-		prog := tui.NewProgress("Extracting image...")
-		p := tea.NewProgram(prog)
-
-		sendProgress := throttledProgress(p, 33*time.Millisecond)
-		go func() {
-			// Brief pause so Bubble Tea can initialize the terminal
-			// before we start sending updates. Without this, fast local
-			// I/O can queue all messages before the TUI renders.
-			time.Sleep(50 * time.Millisecond)
-			buf := make([]byte, 1*1024*1024) // 1 MiB chunks for visible progress
-			var extracted int64
-			for {
-				n, readErr := rc.Read(buf)
-				if n > 0 {
-					if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-						p.Send(tui.ProgressDoneMsg{Err: writeErr})
-						return
-					}
-					extracted += int64(n)
-					sendProgress(extracted, totalSize)
-				}
-				if readErr == io.EOF {
-					p.Send(tui.ProgressDoneMsg{})
-					return
-				}
-				if readErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: readErr})
-					return
-				}
-			}
-		}()
-
-		finalModel, err := p.Run()
-		if err != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", fmt.Errorf("progress TUI: %w", err)
-		}
-
-		model := finalModel.(tui.ProgressModel)
-		if model.Err() != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", model.Err()
-		}
-
-		tmpFile.Close()
-		return tmpFile.Name(), nil
-	}
-
-	return "", fmt.Errorf("no .img, .raw, or .wic file found in zip archive")
-}
-
 // osCacheDir returns the OS image cache directory, e.g.
 // ~/Library/Caches/wendy/os-images (macOS) or ~/.cache/wendy/os-images (Linux).
 func osCacheDir() (string, error) {
@@ -950,46 +845,173 @@ func osCachedImagePath(deviceKey, version string) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("%s-%s.img", safeDevice, safeVersion)), nil
 }
 
-// resolveOSImage returns the path to a ready-to-write .img file.
-// It checks the local cache first; on a miss it downloads (and extracts if
-// zipped), then stores the result in the cache.
-func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
-	cached, err := osCachedImagePath(deviceKey, img.Version)
+// osCachedZipPath returns the expected cache path for a device+version zip.
+// Format: <cache>/os-images/<device>-<version>.zip
+func osCachedZipPath(deviceKey, version string) (string, error) {
+	safeDevice := filepath.Base(deviceKey)
+	safeVersion := filepath.Base(version)
+	if safeDevice != deviceKey || safeVersion != version ||
+		strings.Contains(deviceKey, "..") || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid device key or version: %q / %q", deviceKey, version)
+	}
+
+	dir, err := osCacheDir()
 	if err != nil {
 		return "", err
 	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%s.zip", safeDevice, safeVersion)), nil
+}
 
-	// Cache hit.
-	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached image (%s)\n", cached)
-		return cached, nil
+// zipReadCloser wraps a zip.ReadCloser and its entry's ReadCloser so both
+// are released with a single Close call.
+type zipReadCloser struct {
+	archive *zip.ReadCloser
+	entry   io.ReadCloser
+}
+
+func (z *zipReadCloser) Read(p []byte) (int, error) { return z.entry.Read(p) }
+
+func (z *zipReadCloser) Close() error {
+	err := z.entry.Close()
+	if err2 := z.archive.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+// streamZipImageEntry opens a zip archive and returns a streaming reader over
+// the first .img, .raw, or .wic entry it finds, plus the uncompressed size.
+// The caller must Close the returned reader.
+func streamZipImageEntry(zipPath string) (io.ReadCloser, int64, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening zip: %w", err)
 	}
 
-	// Download.
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext != ".img" && ext != ".raw" && ext != ".wic" {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			r.Close()
+			return nil, 0, fmt.Errorf("opening %s in zip: %w", f.Name, err)
+		}
+
+		size := int64(f.UncompressedSize64)
+		if size == 0 {
+			size = f.FileInfo().Size()
+		}
+		if size == 0 {
+			rc.Close()
+			r.Close()
+			return nil, 0, fmt.Errorf("zip entry %s has unknown uncompressed size", f.Name)
+		}
+
+		return &zipReadCloser{archive: r, entry: rc}, size, nil
+	}
+
+	r.Close()
+	return nil, 0, fmt.Errorf("no .img, .raw, or .wic file found in zip archive")
+}
+
+// resolveOSImage returns the path to a cached file ready for streaming.
+// For zip URLs: checks legacy .img cache, then .zip cache, then downloads.
+// For non-zip URLs: checks legacy .img cache, then downloads the img directly.
+func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
+	isZip := strings.HasSuffix(strings.ToLower(img.DownloadURL), ".zip")
+
+	// Legacy .img cache hit (backward compat with pre-streaming caches).
+	imgCached, err := osCachedImagePath(deviceKey, img.Version)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
+		fmt.Printf("Using cached image (%s)\n", imgCached)
+		return imgCached, nil
+	}
+
+	if isZip {
+		// Zip cache hit.
+		zipCached, zipErr := osCachedZipPath(deviceKey, img.Version)
+		if zipErr != nil {
+			return "", zipErr
+		}
+		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
+			fmt.Printf("Using cached image (%s)\n", zipCached)
+			return zipCached, nil
+		}
+		// Cache miss: download zip, rename to zip cache path.
+		downloadPath, dlErr := downloadImage(img)
+		if dlErr != nil {
+			return "", fmt.Errorf("downloading image: %w", dlErr)
+		}
+		os.Remove(zipCached) // remove stale/0-byte file if present so Rename succeeds on Windows
+		if renameErr := os.Rename(downloadPath, zipCached); renameErr != nil {
+			os.Remove(downloadPath)
+			return "", fmt.Errorf("caching image: %w", renameErr)
+		}
+		return zipCached, nil
+	}
+
+	// Non-zip URL: download img directly and cache as .img.
 	downloadPath, err := downloadImage(img)
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
-
-	// Extract from zip if needed, otherwise the download is the image.
-	imagePath := downloadPath
-	if strings.HasSuffix(strings.ToLower(img.DownloadURL), ".zip") {
-		extracted, err := extractImageFromZipWithProgress(downloadPath)
-		os.Remove(downloadPath) // zip no longer needed
-		if err != nil {
-			return "", fmt.Errorf("extracting image: %w", err)
-		}
-		imagePath = extracted
-	}
-
-	// Move into cache. Both files are in the same cache directory so
-	// Rename is always a same-filesystem operation.
-	if err := os.Rename(imagePath, cached); err != nil {
-		os.Remove(imagePath)
+	os.Remove(imgCached) // remove stale/0-byte file if present so Rename succeeds on Windows
+	if err := os.Rename(downloadPath, imgCached); err != nil {
+		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)
 	}
+	return imgCached, nil
+}
 
-	return cached, nil
+// openOSImageStream resolves the cached file for deviceKey+img, then returns
+// a streaming reader over the image bytes and the total uncompressed size.
+// The caller must Close the returned reader.
+func openOSImageStream(deviceKey string, img *imageInfo) (io.ReadCloser, int64, error) {
+	cachePath, err := resolveOSImage(deviceKey, img)
+	if err != nil {
+		return nil, 0, err
+	}
+	if strings.HasSuffix(strings.ToLower(cachePath), ".zip") {
+		return streamZipImageEntry(cachePath)
+	}
+	f, err := os.Open(cachePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening cached image: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, fmt.Errorf("stat cached image: %w", err)
+	}
+	return f, info.Size(), nil
+}
+
+// openLocalImageStream opens an arbitrary local file for streaming.
+// If the path ends in .zip it finds the first image entry inside it.
+// Otherwise it opens the file directly as a reader.
+func openLocalImageStream(imagePath string) (io.ReadCloser, int64, error) {
+	if strings.HasSuffix(strings.ToLower(imagePath), ".zip") {
+		return streamZipImageEntry(imagePath)
+	}
+	f, err := os.Open(imagePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening image: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, fmt.Errorf("stat image: %w", err)
+	}
+	return f, info.Size(), nil
 }
 
 // wifiCLIOptions captures the WiFi-related flags coming from cobra so they

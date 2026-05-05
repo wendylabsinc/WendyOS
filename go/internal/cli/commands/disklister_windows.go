@@ -290,7 +290,7 @@ func clearDiskPartitions(diskNum int) error {
 // It clears existing partitions, locks and dismounts remaining volumes,
 // opens the raw physical device, and writes in 4 MiB chunks with
 // sector-aligned I/O.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
 		return err
@@ -336,12 +336,6 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		volumeHandles = append(volumeHandles, h)
 	}
 
-	imgFile, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
-	}
-	defer imgFile.Close()
-
 	// Open the raw physical drive for writing.
 	devPathUTF16, err := syscall.UTF16PtrFromString(d.DevicePath)
 	if err != nil {
@@ -374,7 +368,7 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 	buf := make([]byte, 4*1024*1024) // 4 MiB
 	var totalWritten int64
 	for {
-		n, readErr := imgFile.Read(buf)
+		n, readErr := r.Read(buf)
 		if n > 0 {
 			// Writes to raw disks on Windows must be sector-aligned.
 			// Pad the final chunk to a 512-byte boundary.

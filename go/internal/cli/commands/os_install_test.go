@@ -3,8 +3,10 @@
 package commands
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,6 +152,104 @@ func TestOsCachedImagePath_Sanitization(t *testing.T) {
 	}
 }
 
+func TestOsCachedZipPath_Sanitization(t *testing.T) {
+	path, err := osCachedZipPath("raspberry-pi-5", "0.10.4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(path, ".zip") {
+		t.Fatalf("expected .zip suffix, got %q", path)
+	}
+
+	_, err = osCachedZipPath("raspberry-pi-5", "../../../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for path traversal in version")
+	}
+
+	_, err = osCachedZipPath("../evil", "0.10.4")
+	if err == nil {
+		t.Fatal("expected error for path traversal in device key")
+	}
+}
+
+func makeTestZip(t *testing.T, entryName string, content []byte) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "test-*.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	w := zip.NewWriter(f)
+	fw, err := w.Create(entryName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return f.Name()
+}
+
+func TestStreamZipImageEntry(t *testing.T) {
+	content := []byte("fake image data 12345")
+
+	t.Run("reads img entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.img", content)
+		r, size, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer r.Close()
+		if size != int64(len(content)) {
+			t.Errorf("size = %d; want %d", size, len(content))
+		}
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("reading: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("content mismatch")
+		}
+	})
+
+	t.Run("reads raw entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.raw", content)
+		r, _, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r.Close()
+	})
+
+	t.Run("reads wic entry", func(t *testing.T) {
+		zipPath := makeTestZip(t, "wendyos.wic", content)
+		r, _, err := streamZipImageEntry(zipPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		r.Close()
+	})
+
+	t.Run("no image entry returns error", func(t *testing.T) {
+		zipPath := makeTestZip(t, "readme.txt", content)
+		_, _, err := streamZipImageEntry(zipPath)
+		if err == nil {
+			t.Fatal("expected error for zip with no image entry")
+		}
+	})
+
+	t.Run("nonexistent file returns error", func(t *testing.T) {
+		_, _, err := streamZipImageEntry("/nonexistent/path/image.zip")
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+	})
+}
+
 func TestParseWiFiEntry(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -231,6 +331,149 @@ func TestResolveWiFiCredentialsListFlags(t *testing.T) {
 	// --wifi-password without --wifi-ssid should error.
 	if _, err := resolveWiFiCredentialsList(wifiCLIOptions{Password: "pw"}); err == nil {
 		t.Error("expected error when --wifi-password is passed alone")
+	}
+}
+
+func TestResolveOSImage_ZipCacheHit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	content := []byte("fake image bytes")
+	zipPath, err := osCachedZipPath("test-device", "9.9.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	fw, err := w.Create("image.img")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "9.9.9", DownloadURL: "https://example.com/image.zip"}
+	got, err := resolveOSImage("test-device", img)
+	if err != nil {
+		t.Fatalf("resolveOSImage: %v", err)
+	}
+	if got != zipPath {
+		t.Errorf("got %q; want %q", got, zipPath)
+	}
+}
+
+func TestResolveOSImage_LegacyImgCacheHit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	imgPath, err := osCachedImagePath("test-device", "8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(imgPath, []byte("legacydata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "8.8.8", DownloadURL: "https://example.com/image.zip"}
+	got, err := resolveOSImage("test-device", img)
+	if err != nil {
+		t.Fatalf("resolveOSImage: %v", err)
+	}
+	if got != imgPath {
+		t.Errorf("got %q; want %q (legacy img cache)", got, imgPath)
+	}
+}
+
+func TestOpenOSImageStream_ZipCacheHit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	content := []byte("stream me please")
+	zipPath, err := osCachedZipPath("stream-device", "7.7.7")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	fw, err := w.Create("wendyos.img")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "7.7.7", DownloadURL: "https://example.com/image.zip"}
+	r, size, err := openOSImageStream("stream-device", img)
+	if err != nil {
+		t.Fatalf("openOSImageStream: %v", err)
+	}
+	defer r.Close()
+
+	if size != int64(len(content)) {
+		t.Errorf("size = %d; want %d", size, len(content))
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Error("content mismatch")
+	}
+}
+
+func TestOpenOSImageStream_LegacyImgCacheHit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	content := []byte("old img cache data")
+	imgPath, err := osCachedImagePath("legacy-device", "6.6.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(imgPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	img := &imageInfo{Version: "6.6.6", DownloadURL: "https://example.com/image.zip"}
+	r, size, err := openOSImageStream("legacy-device", img)
+	if err != nil {
+		t.Fatalf("openOSImageStream: %v", err)
+	}
+	defer r.Close()
+
+	if size != int64(len(content)) {
+		t.Errorf("size = %d; want %d", size, len(content))
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Error("content mismatch")
 	}
 }
 
