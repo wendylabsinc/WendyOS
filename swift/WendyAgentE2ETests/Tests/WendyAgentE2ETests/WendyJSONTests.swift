@@ -3,6 +3,14 @@ import Testing
 import WendyE2ETesting
 
 @Suite(.serialized)
+struct `wendy json` {
+    @Test
+    func `describes JSON inspection subcommands`() async throws {
+        // TODO: implement.
+    }
+}
+
+@Suite(.serialized)
 struct `wendy json schema` {
     var cli: Machine
 

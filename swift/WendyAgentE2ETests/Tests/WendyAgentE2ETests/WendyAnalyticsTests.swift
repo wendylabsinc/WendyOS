@@ -3,6 +3,14 @@ import Testing
 import WendyE2ETesting
 
 @Suite(.serialized)
+struct `wendy analytics` {
+    @Test
+    func `describes analytics subcommands`() async throws {
+        // TODO: implement.
+    }
+}
+
+@Suite(.serialized)
 struct `wendy analytics status` {
     var cli: Machine
 

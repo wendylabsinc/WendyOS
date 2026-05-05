@@ -1,6 +1,14 @@
 import Testing
 
 @Suite(.serialized)
+struct `wendy project entitlements` {
+    @Test
+    func `describes entitlement subcommands`() async throws {
+        // TODO: implement.
+    }
+}
+
+@Suite(.serialized)
 struct `wendy project entitlements list` {
     @Test
     func `shows all available entitlement types`() async throws {
