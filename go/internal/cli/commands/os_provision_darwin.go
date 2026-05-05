@@ -10,6 +10,11 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 )
 
+// configPartitionSupported reports whether writeConfigPartition has a working
+// implementation on this OS. Callers gate the agent download + config write
+// on this so non-supported platforms don't pay the network cost just to fail.
+const configPartitionSupported = true
+
 // writeConfigPartition finds, mounts, populates, and unmounts the FAT32 config
 // partition on d after a dd write. agentBinary is the arm64 agent binary
 // content. creds and deviceName are written to wendy.conf when non-empty.

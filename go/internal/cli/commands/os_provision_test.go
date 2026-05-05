@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,8 +22,160 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 )
+
+func TestProvisioningRequired(t *testing.T) {
+	// Empty inputs: no provisioning data, agent download is the only thing
+	// that would have happened, and a config-partition write failure can
+	// safely degrade to a warning.
+	if provisioningRequired(nil, "", nil) {
+		t.Error("provisioningRequired(nil, \"\", nil) = true; want false")
+	}
+
+	cred := []wendyconf.WifiCredential{{SSID: "Home", Password: "x"}}
+	cases := []struct {
+		name             string
+		creds            []wendyconf.WifiCredential
+		deviceName       string
+		provisioningJSON []byte
+	}{
+		{"creds only", cred, "", nil},
+		{"deviceName only", nil, "brave-dolphin", nil},
+		{"provisioningJSON only", nil, "", []byte(`{"enrolled":true}`)},
+		{"all three", cred, "brave-dolphin", []byte(`{"enrolled":true}`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !provisioningRequired(c.creds, c.deviceName, c.provisioningJSON) {
+				t.Errorf("provisioningRequired(%v, %q, %v) = false; want true (user-supplied data must not be silently dropped)", c.creds, c.deviceName, c.provisioningJSON)
+			}
+		})
+	}
+}
+
+func TestParseConfigPartition_Empty(t *testing.T) {
+	_, err := parseConfigPartition([]byte(""))
+	if err == nil {
+		t.Fatal("empty input must return error")
+	}
+	if !strings.Contains(err.Error(), "no partitions found") {
+		t.Errorf("error should mention 'no partitions found': %v", err)
+	}
+}
+
+func TestParseConfigPartition_SingleObject(t *testing.T) {
+	// PowerShell emits a bare object (not an array) when the pipeline yields
+	// exactly one row. Defending against this is necessary even though the
+	// wendyOS image always has multiple partitions, because a malformed image
+	// or a `Where-Object`-narrowed pipeline could land here.
+	js := []byte(`{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864}`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_NullLabelSkipped(t *testing.T) {
+	// EFI / reserved partitions have no FAT volume → Label is null. The
+	// parser must skip those rather than treat them as a missing-config
+	// signal.
+	js := []byte(`[
+		{"PartitionNumber":1,"DriveLetter":null,"Label":null,"Size":268435456},
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864},
+		{"PartitionNumber":3,"DriveLetter":null,"Label":"rootfs","Size":2147483648}
+	]`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_NullDriveLetterAccepted(t *testing.T) {
+	// At first online, Windows hasn't auto-mounted the partition yet so
+	// DriveLetter is null. That's the common case — we mustn't filter it out.
+	js := []byte(`[{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864}]`)
+	n, err := parseConfigPartition(js)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("partition number = %d; want 2", n)
+	}
+}
+
+func TestParseConfigPartition_MixedCaseAndPadding(t *testing.T) {
+	// FAT32 labels are case-preserved and historically space-padded to 11
+	// chars. Match case-insensitively and trim before comparing so a tool
+	// that wrote "Config" or "config     " still matches.
+	cases := map[string]string{
+		"lowercase": `"config"`,
+		"uppercase": `"CONFIG"`,
+		"titlecase": `"Config"`,
+		"padded":    `"config     "`,
+		"both":      `"  Config "`,
+	}
+	for name, label := range cases {
+		t.Run(name, func(t *testing.T) {
+			js := []byte(fmt.Sprintf(`[{"PartitionNumber":2,"DriveLetter":null,"Label":%s,"Size":67108864}]`, label))
+			n, err := parseConfigPartition(js)
+			if err != nil {
+				t.Fatalf("label %s: unexpected error: %v", label, err)
+			}
+			if n != 2 {
+				t.Errorf("label %s: partition number = %d; want 2", label, n)
+			}
+		})
+	}
+}
+
+func TestParseConfigPartition_NoMatch(t *testing.T) {
+	// No "config" label found at all — fail loudly so the user knows the
+	// image isn't fully written rather than silently mounting an arbitrary
+	// partition.
+	js := []byte(`[
+		{"PartitionNumber":1,"DriveLetter":null,"Label":null,"Size":268435456},
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"rootfs","Size":2147483648}
+	]`)
+	_, err := parseConfigPartition(js)
+	if err == nil {
+		t.Fatal("expected error when no config-labelled partition exists")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error should mention 'config': %v", err)
+	}
+}
+
+func TestParseConfigPartition_MultipleMatches(t *testing.T) {
+	// Malformed image with two partitions both labelled "config" — refuse
+	// to guess. Better to bail than to silently mount whichever PowerShell
+	// happened to list first.
+	js := []byte(`[
+		{"PartitionNumber":2,"DriveLetter":null,"Label":"config","Size":67108864},
+		{"PartitionNumber":4,"DriveLetter":null,"Label":"config","Size":67108864}
+	]`)
+	_, err := parseConfigPartition(js)
+	if err == nil {
+		t.Fatal("expected error when multiple config-labelled partitions exist")
+	}
+	if !strings.Contains(err.Error(), "multiple") {
+		t.Errorf("error should mention 'multiple': %v", err)
+	}
+}
+
+func TestParseConfigPartition_MalformedJSON(t *testing.T) {
+	_, err := parseConfigPartition([]byte("not json at all"))
+	if err == nil {
+		t.Fatal("expected error on malformed JSON")
+	}
+}
 
 type fakePreEnrollCertService struct {
 	cloudpb.UnimplementedCertificateServiceServer
@@ -223,5 +376,113 @@ func TestPreEnrollDevice_EmptyCert(t *testing.T) {
 	_, err := preEnrollDevice(context.Background(), fakeAuth(t), "", dialer)
 	if err == nil {
 		t.Fatal("expected error when cloud returns empty certificate")
+	}
+}
+
+func TestWriteConfigFiles_AgentBinaryOnly(t *testing.T) {
+	dir := t.TempDir()
+	binary := []byte("fake-agent-binary")
+
+	if err := writeConfigFiles(dir, binary, nil, "", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "wendy-agent"))
+	if err != nil {
+		t.Fatalf("reading wendy-agent: %v", err)
+	}
+	if string(got) != string(binary) {
+		t.Errorf("wendy-agent content = %q; want %q", got, binary)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "wendy.conf")); !os.IsNotExist(err) {
+		t.Error("wendy.conf should not be written when no creds or device name")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "provisioning.json")); !os.IsNotExist(err) {
+		t.Error("provisioning.json should not be written when no provisioning data")
+	}
+}
+
+func TestWriteConfigFiles_WithWiFiCreds(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{
+		{SSID: "MyNetwork", Password: "secret"},
+	}
+
+	if err := writeConfigFiles(dir, []byte("bin"), creds, "", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
+	if err != nil {
+		t.Fatalf("reading wendy.conf: %v", err)
+	}
+	if !strings.Contains(string(conf), "MyNetwork") {
+		t.Errorf("wendy.conf missing SSID; got: %s", conf)
+	}
+}
+
+func TestWriteConfigFiles_WithDeviceName(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := writeConfigFiles(dir, []byte("bin"), nil, "my-device", nil); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
+	if err != nil {
+		t.Fatalf("reading wendy.conf: %v", err)
+	}
+	if !strings.Contains(string(conf), "my-device") {
+		t.Errorf("wendy.conf missing device name; got: %s", conf)
+	}
+}
+
+func TestWriteConfigFiles_WithProvisioningJSON(t *testing.T) {
+	dir := t.TempDir()
+	provJSON := []byte(`{"enrolled":true}`)
+
+	if err := writeConfigFiles(dir, []byte("bin"), nil, "", provJSON); err != nil {
+		t.Fatalf("writeConfigFiles: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "provisioning.json"))
+	if err != nil {
+		t.Fatalf("reading provisioning.json: %v", err)
+	}
+	if string(got) != string(provJSON) {
+		t.Errorf("provisioning.json = %q; want %q", got, provJSON)
+	}
+	info, _ := os.Stat(filepath.Join(dir, "provisioning.json"))
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("provisioning.json mode = %o; want 0600", info.Mode().Perm())
+	}
+}
+
+func TestWriteConfigFiles_NewlineInSSID(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{{SSID: "bad\nssid", Password: "ok"}}
+
+	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	if err == nil {
+		t.Fatal("expected error for SSID with newline")
+	}
+}
+
+func TestWriteConfigFiles_NewlineInPassword(t *testing.T) {
+	dir := t.TempDir()
+	creds := []wendyconf.WifiCredential{{SSID: "ok", Password: "bad\npassword"}}
+
+	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	if err == nil {
+		t.Fatal("expected error for password with newline")
+	}
+}
+
+func TestWriteConfigFiles_NewlineInDeviceName(t *testing.T) {
+	dir := t.TempDir()
+
+	err := writeConfigFiles(dir, []byte("bin"), nil, "bad\nname", nil)
+	if err == nil {
+		t.Fatal("expected error for device name with newline")
 	}
 }
