@@ -338,4 +338,19 @@ func TestProbeRangeSupport(t *testing.T) {
 			t.Fatalf("expected contentLength=4096 from ImageSize, got %d", cl)
 		}
 	})
+
+	t.Run("returns false when server returns non-200", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		_, ok := probeRangeSupport(&http.Client{}, img)
+		if ok {
+			t.Fatal("expected ok=false when server returns non-200")
+		}
+	})
 }

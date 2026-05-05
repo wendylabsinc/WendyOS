@@ -675,6 +675,7 @@ func probeRangeSupport(client *http.Client, img *imageInfo) (contentLength int64
 	if resp.StatusCode != http.StatusOK {
 		return 0, false
 	}
+	// Rejects both absent header and RFC 7233 "Accept-Ranges: none".
 	if resp.Header.Get("Accept-Ranges") != "bytes" {
 		return 0, false
 	}
