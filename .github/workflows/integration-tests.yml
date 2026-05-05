@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-zstd otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -274,7 +274,7 @@ jobs:
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-zstd otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi

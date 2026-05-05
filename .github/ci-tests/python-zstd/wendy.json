@@ -1,0 +1,6 @@
+{
+    "appId": "sh.wendy.ci.python-zstd",
+    "version": "1.0.0",
+    "language": "python",
+    "compression": "zstd"
+}
