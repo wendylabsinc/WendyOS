@@ -17,7 +17,7 @@ func newOSDownloadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "download",
 		Short: "Download a WendyOS image to the local cache",
-		Long:  "Download (and extract) a WendyOS image for a supported device. The image is stored in the local cache for later use by `wendy os install`.",
+		Long:  "Download a WendyOS image for a supported device. The image is stored in the local cache for later use by `wendy os install`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runOSDownload(version, overwrite)
 		},
@@ -50,13 +50,23 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	// Check if already cached.
-	cached, err := osCachedImagePath(selectedKey, version)
-	if err != nil {
-		return err
+	// Check if already cached — zip format (new) or legacy extracted img.
+	cached := ""
+	if zipPath, zpErr := osCachedZipPath(selectedKey, version); zpErr == nil {
+		if info, statErr := os.Stat(zipPath); statErr == nil && info.Size() > 0 {
+			cached = zipPath
+		}
+	}
+	if cached == "" {
+		if imgPath, ipErr := osCachedImagePath(selectedKey, version); ipErr == nil {
+			if info, statErr := os.Stat(imgPath); statErr == nil && info.Size() > 0 {
+				cached = imgPath
+			}
+		}
 	}
 
-	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+	if cached != "" {
+		info, _ := os.Stat(cached)
 		sizeMB := float64(info.Size()) / (1024 * 1024)
 		cliLogln("\nImage already cached: %s (%.1f MB)", cached, sizeMB)
 
@@ -71,7 +81,6 @@ func runOSDownload(flagVersion string, overwrite bool) error {
 			}
 		}
 
-		// Remove stale cache entry before re-downloading.
 		if err := os.Remove(cached); err != nil {
 			return fmt.Errorf("removing cached image: %w", err)
 		}
