@@ -5,6 +5,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -192,25 +193,22 @@ func unmountLsblkDevice(dev lsblkDevice) {
 // page cache; large buffered writes cause RAM pressure and a multi-second
 // global sync stall after dd exits. conv=fdatasync ensures dd flushes the
 // target device before exiting (runs as root, only flushes this device).
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	ddArgs := []string{
-		"dd",
-		fmt.Sprintf("if=%s", imagePath),
-		fmt.Sprintf("of=%s", d.DevicePath),
-		"bs=4M",
-		"status=progress",
-		"conv=fdatasync",
-	}
+	bs := "bs=4M"
 	if d.StorageType == StorageNVMe {
-		ddArgs[3] = "bs=64M"
+		bs = "bs=64M"
+	}
+	ddArgs := []string{"dd", fmt.Sprintf("of=%s", d.DevicePath), bs, "status=progress", "conv=fdatasync"}
+	if d.StorageType == StorageNVMe {
 		ddArgs = append(ddArgs, "oflag=direct")
 	}
 
 	cmd := exec.Command("sudo", ddArgs...)
+	cmd.Stdin = r
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

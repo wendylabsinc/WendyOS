@@ -5,6 +5,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -219,7 +220,7 @@ func unmountDisk(devPath string) error {
 // /dev/rdisk bypasses the filesystem buffer cache, so no explicit flush is
 // needed after dd exits. NVMe drives in USB enclosures benefit from larger
 // blocks (64 MiB) to reduce per-write overhead over the USB link.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
@@ -229,13 +230,15 @@ func writeImageToDisk(imagePath string, d drive, progressFn func(written int64))
 		bs = "64m"
 	}
 
-	// Use rdisk for faster raw writes on macOS.
+	// Use rdisk for faster raw writes on macOS. Read from stdin so the
+	// caller can pipe an io.Reader (e.g. a streaming zip entry) without
+	// materialising the image to disk first.
 	cmd := exec.Command("sudo", "dd",
-		fmt.Sprintf("if=%s", imagePath),
 		fmt.Sprintf("of=%s", d.RawPath),
 		"bs="+bs,
 		"status=progress",
 	)
+	cmd.Stdin = r
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

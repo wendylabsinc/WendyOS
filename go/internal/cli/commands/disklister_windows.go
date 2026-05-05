@@ -320,12 +320,7 @@ func clearDiskPartitions(diskNum int) error {
 // It clears existing partitions, locks and dismounts remaining volumes,
 // opens the raw physical device, and writes in 4 MiB chunks with
 // sector-aligned I/O.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
-	r, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
-	}
-	defer r.Close()
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
 		return err
