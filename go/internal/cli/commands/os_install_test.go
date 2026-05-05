@@ -3,6 +3,8 @@
 package commands
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -279,6 +281,67 @@ func TestConfirmOverwriteInternalDrive(t *testing.T) {
 		// yesOverwriteInternal = true means we never reach the stdin read.
 		if err := confirmOverwriteInternalDrive(internal, false, true); err != nil {
 			t.Errorf("override flag should bypass typed prompt: %v", err)
+		}
+	})
+}
+
+func TestProbeRangeSupport(t *testing.T) {
+	t.Run("returns size and true when server supports ranges", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		size, ok := probeRangeSupport(&http.Client{}, img)
+		if !ok || size != 8192 {
+			t.Fatalf("expected size=8192, ok=true; got size=%d, ok=%v", size, ok)
+		}
+	})
+
+	t.Run("returns false when Accept-Ranges header is absent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		_, ok := probeRangeSupport(&http.Client{}, img)
+		if ok {
+			t.Fatal("expected ok=false when Accept-Ranges header is absent")
+		}
+	})
+
+	t.Run("returns false when Accept-Ranges is not 'bytes'", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Accept-Ranges", "none")
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		_, ok := probeRangeSupport(&http.Client{}, img)
+		if ok {
+			t.Fatal("expected ok=false when Accept-Ranges is 'none'")
+		}
+	})
+
+	t.Run("returns false when server returns non-200", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", "8192")
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		img := &imageInfo{DownloadURL: srv.URL + "/image.img"}
+		_, ok := probeRangeSupport(&http.Client{}, img)
+		if ok {
+			t.Fatal("expected ok=false when server returns non-200")
 		}
 	})
 }
