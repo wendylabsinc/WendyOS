@@ -324,11 +324,12 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 		return buildPythonProject(dir, imageName, platform)
 	case "swift":
 		// `swift build` requires a host Swift toolchain. Only darwin and
-		// linux ship one — Windows users must use the Docker buildx flow
-		// (provide a Dockerfile, or let `wendy run` invoke
-		// swift-container-plugin via the agent).
+		// linux ship one. swift-container-plugin (the buildx-based fallback
+		// used elsewhere) does not yet support Windows either, and neither
+		// does the WASM/WendyLite path, so on Windows the only working
+		// route is a user-provided Dockerfile.
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-			return fmt.Errorf("`wendy build` for Swift packages is not supported on %s; provide a Dockerfile or use `wendy run` to build via swift-container-plugin", runtime.GOOS)
+			return fmt.Errorf("`wendy build` for Swift packages is not supported on %s; provide a Dockerfile", runtime.GOOS)
 		}
 		return buildSwiftProject(dir, appID, platform)
 	case "xcode":

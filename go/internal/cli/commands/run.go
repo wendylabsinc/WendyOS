@@ -1041,24 +1041,28 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Swift projects use a native darwin path for macOS targets and
 	// swift-container-plugin for Linux targets when --build-type=swift
 	// explicitly selects that path or when no Dockerfile is present.
-	// The native path requires a host swift toolchain — only darwin and
-	// linux ship one, so on Windows hosts the linux-target case falls
-	// through to the swift-container-plugin (Docker buildx) flow. The
-	// darwin-target case has no Windows fallback (swift-container-plugin
-	// builds linux images), so it must error out instead.
-	hostSupportsNativeSwift := runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+	// Both paths shell out to a host Swift toolchain:
+	//   - darwin target: `swift build` on the host. Requires a darwin host —
+	//     Linux's swift toolchain cannot cross-compile to macOS.
+	//   - linux target: swift-container-plugin via `swift package`. Requires
+	//     a darwin or linux host — swift-container-plugin does not yet ship
+	//     for Windows.
+	// On a Windows host with a Dockerfile the docker buildx path below
+	// handles the build, so the gates only trip when the host swift path
+	// would actually be taken.
 	if projectType == "swift" {
 		targetIsDarwin := platformOS(platform) == "darwin"
-		if targetIsDarwin && !hostSupportsNativeSwift {
-			return fmt.Errorf("`wendy run` for Swift packages targeting darwin is not supported on %s; macOS targets require a host Swift toolchain (darwin or linux host)", runtime.GOOS)
-		}
-		if normalizeBuildType(opts.buildType) == "swift" {
-			if targetIsDarwin {
-				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
+		explicitSwift := normalizeBuildType(opts.buildType) == "swift"
+		_, dockerfileStatErr := os.Stat(filepath.Join(cwd, "Dockerfile"))
+		needsHostSwift := explicitSwift || os.IsNotExist(dockerfileStatErr)
+
+		if needsHostSwift {
+			if targetIsDarwin && runtime.GOOS != "darwin" {
+				return fmt.Errorf("`wendy run` for Swift packages targeting darwin requires a darwin host (got %s); provide a Dockerfile to build a Linux image instead", runtime.GOOS)
 			}
-			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
-		}
-		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
+			if !targetIsDarwin && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+				return fmt.Errorf("`wendy run` for Swift packages is not supported on %s; provide a Dockerfile", runtime.GOOS)
+			}
 			if targetIsDarwin {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
