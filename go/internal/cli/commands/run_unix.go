@@ -9,4 +9,8 @@ import "os/exec"
 // because hooks are spawned via `sh -c`, and once the parent shell exits its
 // foreground children are reaped through the process group cleanup the OS
 // already performs.
-func configurePostStartProcessGroup(_ *exec.Cmd) {}
+//
+// Returns a no-op finalizer for API parity with the Windows implementation.
+func configurePostStartProcessGroup(_ *exec.Cmd) func() {
+	return func() {}
+}

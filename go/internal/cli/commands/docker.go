@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -751,15 +752,27 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	}
 	// Link subdirs that docker/buildx need to find plugins and builder state.
 	// On Windows os.Symlink requires Developer Mode or admin, so linkOrCopyDir
-	// falls back to a directory junction (mklink /J) and finally to copying.
+	// falls back to a native directory junction and finally to copying.
+	//
+	// Symlinks and junctions transparently follow source updates, so we keep
+	// them across builds. A real (copied) directory is a snapshot that would
+	// go stale if the source changes (new builder, updated cli-plugin); refresh
+	// it on every build by removing it before relinking. Go reports junctions
+	// with ModeSymlink on Windows, so the same check works on both platforms.
 	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
 		src := filepath.Join(origDockerConfig, subdir)
 		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Lstat(dst); err == nil {
-			continue
-		}
 		if _, err := os.Stat(src); err != nil {
 			continue
+		}
+		if info, err := os.Lstat(dst); err == nil {
+			if info.Mode()&fs.ModeSymlink != 0 {
+				continue
+			}
+			if err := os.RemoveAll(dst); err != nil {
+				fmt.Fprintf(os.Stderr, "[buildx] warning: refreshing %s in clean docker config failed: %v\n", subdir, err)
+				continue
+			}
 		}
 		if err := linkOrCopyDir(src, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "[buildx] warning: linking %s into clean docker config failed: %v\n", subdir, err)
