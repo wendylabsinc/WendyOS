@@ -1346,11 +1346,15 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	cmd := execCommandContext(ctx, shell, flag, expanded)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	configurePostStartProcessGroup(cmd)
+	finalizeProcessGroup := configurePostStartProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
+		// Release any OS resources the configure step allocated; the finalizer
+		// no-ops the attach step when cmd.Process is nil.
+		finalizeProcessGroup()
 		cliLogln("Warning: postStart hook failed to start: %v", err)
 		return nil
 	}
+	finalizeProcessGroup()
 	cliLogln("Hook postStart: %s", expanded)
 	return cmd
 }
