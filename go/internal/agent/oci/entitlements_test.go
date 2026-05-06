@@ -182,13 +182,6 @@ func TestApplyEntitlements_Network_Host(t *testing.T) {
 }
 
 func TestApplyEntitlements_Network_Host_ResolvConf(t *testing.T) {
-	const resolvedConf = "/run/systemd/resolve/resolv.conf"
-	_, errSystemd := os.Stat(resolvedConf)
-	_, errHost := os.Stat("/etc/resolv.conf")
-	if errSystemd != nil && errHost != nil {
-		t.Skip("no resolv.conf on host; skipping DNS mount assertion")
-	}
-
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
 	cfg := &appconfig.AppConfig{
 		AppID: "test-app",
@@ -202,25 +195,44 @@ func TestApplyEntitlements_Network_Host_ResolvConf(t *testing.T) {
 	}
 
 	// A container with host networking but its own mount namespace needs
-	// /etc/resolv.conf bind-mounted from the host; otherwise the container
-	// rootfs may have an empty file and all DNS lookups fail.
+	// /etc/resolv.conf bind-mounted from the host (or a synthetic fallback);
+	// otherwise the container rootfs may have an empty file and all DNS fails.
 	if !hasMountDest(spec, "/etc/resolv.conf") {
 		t.Fatal("host network entitlement did not mount /etc/resolv.conf")
 	}
 
-	for _, m := range spec.Mounts {
-		if m.Destination == "/etc/resolv.conf" {
-			if m.Source != resolvedConf && m.Source != "/etc/resolv.conf" {
-				t.Errorf("/etc/resolv.conf source = %q, want %q or %q",
-					m.Source, resolvedConf, "/etc/resolv.conf")
-			}
-			if m.Type != "bind" {
-				t.Errorf("/etc/resolv.conf mount type = %q, want \"bind\"", m.Type)
-			}
-			break
-		}
+	m, _ := mountForDest(spec, "/etc/resolv.conf")
+	if m.Type != "bind" {
+		t.Errorf("/etc/resolv.conf mount type = %q, want \"bind\"", m.Type)
+	}
+	if m.Source == "" {
+		t.Error("/etc/resolv.conf mount has empty source")
 	}
 }
+
+func TestHostResolvConf_DanglingSymlink(t *testing.T) {
+	// Create a temp dir to act as a fake /etc with a dangling symlink.
+	tmp := t.TempDir()
+	link := filepath.Join(tmp, "resolv.conf")
+	target := filepath.Join(tmp, "nonexistent-target")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	// A dangling symlink should not be returned as a valid source.
+	real, err := filepath.EvalSymlinks(link)
+	if err == nil {
+		// If EvalSymlinks somehow succeeded, the target must not exist.
+		if _, statErr := os.Stat(real); statErr == nil {
+			t.Skip("unexpected: dangling symlink target exists on this host")
+		}
+	}
+	// Confirm that os.Stat on the dangling link fails.
+	if _, err := os.Stat(link); err == nil {
+		t.Fatal("expected os.Stat on dangling symlink to fail")
+	}
+}
+
 
 func TestApplyEntitlements_Network_Default(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})

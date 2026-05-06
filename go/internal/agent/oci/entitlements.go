@@ -208,13 +208,10 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 		spec.Process.Capabilities.Permitted = appendUnique(spec.Process.Capabilities.Permitted, "CAP_NET_ADMIN")
 
 		// Mount a resolv.conf from the host so DNS works inside the container.
-		// The container has its own mount namespace, so its rootfs resolv.conf
-		// may be empty. Prefer systemd-resolved's upstream file, since on
-		// systemd hosts /etc/resolv.conf often points to the 127.0.0.53 stub
-		// listener; using the upstream file avoids depending on that stub in
-		// environments where the container has its own network namespace. When
-		// systemd-resolved is not in use, fall back to the host's /etc/resolv.conf.
-		const resolvedConf = "/run/systemd/resolve/resolv.conf"
+		// The container has its own mount namespace so its rootfs resolv.conf
+		// may be empty or absent. We try several sources in preference order to
+		// handle different host configurations (systemd-resolved, resolvconf,
+		// NetworkManager, Avahi-only with DHCP-managed /etc/resolv.conf).
 		alreadyMounted := false
 		for _, m := range spec.Mounts {
 			if m.Destination == "/etc/resolv.conf" {
@@ -223,13 +220,7 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 			}
 		}
 		if !alreadyMounted {
-			source := ""
-			if _, err := os.Stat(resolvedConf); err == nil {
-				source = resolvedConf
-			} else if _, err := os.Stat("/etc/resolv.conf"); err == nil {
-				source = "/etc/resolv.conf"
-			}
-			if source != "" {
+			if source := hostResolvConf(); source != "" {
 				spec.Mounts = append(spec.Mounts, Mount{
 					Destination: "/etc/resolv.conf",
 					Type:        "bind",
@@ -560,6 +551,42 @@ func applyInput(spec *Spec) {
 		Major:  &major,
 		Access: "rwm",
 	})
+}
+
+// hostResolvConf returns the path of the best available resolv.conf on the
+// host. It tries candidates in preference order:
+//  1. /run/systemd/resolve/resolv.conf – systemd-resolved upstream resolvers
+//     (avoids the 127.0.0.53 stub that won't work in a separate network namespace)
+//  2. /run/resolvconf/resolv.conf – resolvconf package
+//  3. /run/NetworkManager/resolv.conf – NetworkManager
+//  4. /etc/resolv.conf with symlink resolution – covers dhcpcd, dhclient, and
+//     static configs; symlinks are followed so a dangling link (e.g. pointing
+//     at a systemd-resolved path on an Avahi-only host) does not silently leave
+//     the container without DNS
+//
+// Returns "" if no usable file is found.
+func hostResolvConf() string {
+	// Candidates with stable, real-file paths (no symlinks to follow).
+	for _, c := range []string{
+		"/run/systemd/resolve/resolv.conf",
+		"/run/resolvconf/resolv.conf",
+		"/run/NetworkManager/resolv.conf",
+	} {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+
+	// /etc/resolv.conf is often a symlink (to systemd-resolved, resolvconf,
+	// or dhcpcd output). Resolve it so we bind-mount the real file; passing a
+	// dangling symlink as the mount source would fail at container start time.
+	if real, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil {
+		if _, err := os.Stat(real); err == nil {
+			return real
+		}
+	}
+
+	return ""
 }
 
 // appendUnique appends a value to a slice only if it is not already present.
