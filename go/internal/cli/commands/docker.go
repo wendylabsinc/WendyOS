@@ -709,13 +709,21 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		registryImage = strings.Replace(registryImage, registryAddr, effectiveAddr, 1)
 	}
 
+	// Use UserCacheDir so the cache lives in the platform's idiomatic location:
+	// %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, $XDG_CACHE_HOME (or
+	// ~/.cache) on Linux.
+	userCache, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("finding user cache directory: %w", err)
+	}
+	cacheDir := filepath.Join(userCache, "wendy", "buildx")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("creating cache directory: %w", err)
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("finding home directory: %w", err)
-	}
-	cacheDir := filepath.Join(home, ".cache", "wendy", "buildx")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return fmt.Errorf("creating cache directory: %w", err)
 	}
 
 	// Use a clean Docker config without a credsStore credential helper.
@@ -727,13 +735,13 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	// pull works fine with an empty auths map.
 	//
 	// We only replace config.json; everything else (cli-plugins, buildx builder
-	// instances, contexts) is symlinked from the original Docker config so that
+	// instances, contexts) is linked from the original Docker config so that
 	// buildx and the "wendy" builder remain discoverable.
 	origDockerConfig := os.Getenv("DOCKER_CONFIG")
 	if origDockerConfig == "" {
 		origDockerConfig = filepath.Join(home, ".docker")
 	}
-	cleanDockerConfigDir := filepath.Join(home, ".cache", "wendy", "docker-config")
+	cleanDockerConfigDir := filepath.Join(userCache, "wendy", "docker-config")
 	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
 		return fmt.Errorf("creating clean docker config directory: %w", err)
 	}
@@ -741,21 +749,32 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
 		return fmt.Errorf("writing clean docker config: %w", err)
 	}
-	// Symlink subdirs that docker/buildx need to find plugins and builder state.
+	// Link subdirs that docker/buildx need to find plugins and builder state.
+	// On Windows os.Symlink requires Developer Mode or admin, so linkOrCopyDir
+	// falls back to a directory junction (mklink /J) and finally to copying.
 	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		src := filepath.Join(origDockerConfig, subdir)
 		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Lstat(dst); err != nil {
-			// best-effort: ignore if source doesn't exist or symlink fails
-			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := linkOrCopyDir(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "[buildx] warning: linking %s into clean docker config failed: %v\n", subdir, err)
 		}
 	}
 
+	// buildkitd inside the Linux VM appends "/index.json" to the cache src/dest,
+	// so pass forward-slash paths to avoid mixed-separator warnings on Windows.
+	cacheDirSlash := filepath.ToSlash(cacheDir)
 	args := []string{
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
-		"--cache-from", "type=local,src=" + cacheDir,
-		"--cache-to", "type=local,dest=" + cacheDir,
+		"--cache-from", "type=local,src=" + cacheDirSlash,
+		"--cache-to", "type=local,dest=" + cacheDirSlash,
 	}
 	// Sort keys so the argument order is stable across runs, which keeps
 	// build logs reproducible and avoids flakiness in tests that assert args.
