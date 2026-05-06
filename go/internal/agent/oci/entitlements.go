@@ -3,6 +3,7 @@ package oci
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -558,19 +559,24 @@ func applyInput(spec *Spec) {
 //  1. /run/systemd/resolve/resolv.conf – systemd-resolved upstream resolvers
 //     (avoids the 127.0.0.53 stub that won't work in a separate network namespace)
 //  2. /run/resolvconf/resolv.conf – resolvconf package
-//  3. /run/NetworkManager/resolv.conf – NetworkManager
-//  4. /etc/resolv.conf with symlink resolution – covers dhcpcd, dhclient, and
+//  3. /run/NetworkManager/resolv.conf – NetworkManager-managed file
+//  4. /run/connman/resolv.conf – ConnMan
+//  5. /etc/resolv.conf with symlink resolution – covers dhcpcd, dhclient, and
 //     static configs; symlinks are followed so a dangling link (e.g. pointing
 //     at a systemd-resolved path on an Avahi-only host) does not silently leave
 //     the container without DNS
+//  6. DNS servers queried from NetworkManager via nmcli – handles systems where
+//     NM has dns=none (e.g. Avahi-only setups) so NM never writes a resolv.conf
+//     but still knows the DHCP-obtained nameservers
 //
-// Returns "" if no usable file is found.
+// Returns "" if no DNS configuration can be determined.
 func hostResolvConf() string {
 	// Candidates with stable, real-file paths (no symlinks to follow).
 	for _, c := range []string{
 		"/run/systemd/resolve/resolv.conf",
 		"/run/resolvconf/resolv.conf",
 		"/run/NetworkManager/resolv.conf",
+		"/run/connman/resolv.conf",
 	} {
 		if _, err := os.Stat(c); err == nil {
 			return c
@@ -586,7 +592,64 @@ func hostResolvConf() string {
 		}
 	}
 
-	return ""
+	// Last resort: ask NetworkManager for the DHCP-obtained DNS servers. This
+	// handles hosts where NM has dns=none (Avahi handles local .local lookups)
+	// so NM never writes any resolv.conf file, but it still knows what
+	// nameservers DHCP provided.
+	return resolvConfFromNMCLI()
+}
+
+// nmcliPaths lists common locations for the nmcli binary when PATH is restricted
+// (e.g. inside a systemd service with a stripped environment).
+var nmcliPaths = []string{"/usr/bin/nmcli", "/usr/sbin/nmcli", "/usr/local/bin/nmcli"}
+
+// resolvConfFromNMCLI queries nmcli for DNS servers on all active interfaces,
+// writes unique entries to /run/wendy/resolv.conf (on the host tmpfs), and
+// returns that path. Returns "" if nmcli is unavailable, no servers are found,
+// or the file cannot be written.
+func resolvConfFromNMCLI() string {
+	nmcliPath, err := exec.LookPath("nmcli")
+	if err != nil {
+		nmcliPath = ""
+		for _, p := range nmcliPaths {
+			if _, err := os.Stat(p); err == nil {
+				nmcliPath = p
+				break
+			}
+		}
+	}
+	if nmcliPath == "" {
+		return ""
+	}
+
+	// -t: terse (no headers), -g: field selector, dev show: all interfaces.
+	out, err := exec.Command(nmcliPath, "-t", "-g", "IP4.DNS", "dev", "show").Output()
+	if err != nil {
+		return ""
+	}
+
+	seen := make(map[string]bool)
+	var entries []string
+	for _, s := range strings.Split(string(out), "\n") {
+		s = strings.TrimSpace(s)
+		if s == "" || s == "--" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		entries = append(entries, "nameserver "+s)
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+
+	const path = "/run/wendy/resolv.conf"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return ""
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(entries, "\n")+"\n"), 0o644); err != nil {
+		return ""
+	}
+	return path
 }
 
 // appendUnique appends a value to a slice only if it is not already present.

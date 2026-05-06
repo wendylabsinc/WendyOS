@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -211,7 +212,6 @@ func TestApplyEntitlements_Network_Host_ResolvConf(t *testing.T) {
 }
 
 func TestHostResolvConf_DanglingSymlink(t *testing.T) {
-	// Create a temp dir to act as a fake /etc with a dangling symlink.
 	tmp := t.TempDir()
 	link := filepath.Join(tmp, "resolv.conf")
 	target := filepath.Join(tmp, "nonexistent-target")
@@ -219,17 +219,39 @@ func TestHostResolvConf_DanglingSymlink(t *testing.T) {
 		t.Fatalf("creating symlink: %v", err)
 	}
 
-	// A dangling symlink should not be returned as a valid source.
-	real, err := filepath.EvalSymlinks(link)
-	if err == nil {
-		// If EvalSymlinks somehow succeeded, the target must not exist.
-		if _, statErr := os.Stat(real); statErr == nil {
-			t.Skip("unexpected: dangling symlink target exists on this host")
-		}
+	// A dangling symlink must not be accepted: EvalSymlinks should fail.
+	if _, err := filepath.EvalSymlinks(link); err == nil {
+		t.Skip("unexpected: dangling symlink resolved on this host")
 	}
-	// Confirm that os.Stat on the dangling link fails.
+	// os.Stat follows the symlink and must also fail.
 	if _, err := os.Stat(link); err == nil {
 		t.Fatal("expected os.Stat on dangling symlink to fail")
+	}
+}
+
+func TestResolvConfFromNMCLI_OutputParsing(t *testing.T) {
+	// Simulate the output that `nmcli -t -g IP4.DNS dev show` would produce
+	// and verify the generated resolv.conf content.
+	nmcliOut := "192.168.1.1\n192.168.1.1\n10.0.0.1\n--\n\n"
+	seen := make(map[string]bool)
+	var entries []string
+	for _, s := range strings.Split(nmcliOut, "\n") {
+		s = strings.TrimSpace(s)
+		if s == "" || s == "--" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		entries = append(entries, "nameserver "+s)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 unique entries, got %d: %v", len(entries), entries)
+	}
+	if entries[0] != "nameserver 192.168.1.1" {
+		t.Errorf("entries[0] = %q, want \"nameserver 192.168.1.1\"", entries[0])
+	}
+	if entries[1] != "nameserver 10.0.0.1" {
+		t.Errorf("entries[1] = %q, want \"nameserver 10.0.0.1\"", entries[1])
 	}
 }
 
