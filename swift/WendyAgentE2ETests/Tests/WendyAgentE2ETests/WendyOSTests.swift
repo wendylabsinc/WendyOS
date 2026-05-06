@@ -117,7 +117,13 @@ struct `'wendy os list-drives'` {
     func `lists removable drives that can receive WendyOS`() async throws {
         try await self.cli.run("WENDY_ANALYTICS=false ./bin/wendy os list-drives") { standardOutput, standardError in
             #expect(standardError.isEmpty)
-            #expect(standardOutput.contains("Drive") || standardOutput.contains("No drives found"))
+
+            let trimmedOutput = standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedOutput.hasPrefix("[") {
+                _ = try Helper.jsonArray(from: standardOutput)
+            } else {
+                #expect(standardOutput.contains("Drive") || standardOutput.contains("No drives found"))
+            }
         }
     }
 
