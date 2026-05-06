@@ -1041,15 +1041,19 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Swift projects use a native darwin path for macOS targets and
 	// swift-container-plugin for Linux targets when --build-type=swift
 	// explicitly selects that path or when no Dockerfile is present.
+	// The native path requires a host swift toolchain — only darwin and
+	// linux ship one, so on Windows hosts fall through to the
+	// swift-container-plugin (Docker buildx) flow.
+	hostSupportsNativeSwift := runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 	if projectType == "swift" {
 		if normalizeBuildType(opts.buildType) == "swift" {
-			if platformOS(platform) == "darwin" {
+			if platformOS(platform) == "darwin" && hostSupportsNativeSwift {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
-			if platformOS(platform) == "darwin" {
+			if platformOS(platform) == "darwin" && hostSupportsNativeSwift {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)

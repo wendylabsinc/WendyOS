@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -322,6 +323,13 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	case "python":
 		return buildPythonProject(dir, imageName, platform)
 	case "swift":
+		// `swift build` requires a host Swift toolchain. Only darwin and
+		// linux ship one — Windows users must use the Docker buildx flow
+		// (provide a Dockerfile, or let `wendy run` invoke
+		// swift-container-plugin via the agent).
+		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+			return fmt.Errorf("`wendy build` for Swift packages is not supported on %s; provide a Dockerfile or use `wendy run` to build via swift-container-plugin", runtime.GOOS)
+		}
 		return buildSwiftProject(dir, appID, platform)
 	case "xcode":
 		return buildXcodeProject(ctx, dir, option.File)
