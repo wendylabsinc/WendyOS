@@ -3,11 +3,15 @@
 package swifttoolchain
 
 import (
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestUnzipOverwriteEnv_WindowsNoOp(t *testing.T) {
+	want := os.Environ()
+
 	env, cleanup, err := unzipOverwriteEnv()
 	if err != nil {
 		t.Fatalf("unzipOverwriteEnv() error = %v, want nil", err)
@@ -23,7 +27,15 @@ func TestUnzipOverwriteEnv_WindowsNoOp(t *testing.T) {
 	if env == nil {
 		t.Fatal("unzipOverwriteEnv() env = nil, want process environment")
 	}
-	if !reflect.DeepEqual(env, append([]string(nil), env...)) {
-		t.Fatal("env should be a real slice")
+	if !reflect.DeepEqual(env, want) {
+		t.Fatalf("unzipOverwriteEnv() env differs from process environment\n got = %v\nwant = %v", env, want)
+	}
+	for _, kv := range env {
+		if !strings.HasPrefix(strings.ToUpper(kv), "PATH=") {
+			continue
+		}
+		if strings.Contains(kv, "wendy-unzip-") {
+			t.Fatalf("unzipOverwriteEnv() injected wendy-unzip shim into PATH: %q", kv)
+		}
 	}
 }

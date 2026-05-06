@@ -1042,18 +1042,24 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// swift-container-plugin for Linux targets when --build-type=swift
 	// explicitly selects that path or when no Dockerfile is present.
 	// The native path requires a host swift toolchain — only darwin and
-	// linux ship one, so on Windows hosts fall through to the
-	// swift-container-plugin (Docker buildx) flow.
+	// linux ship one, so on Windows hosts the linux-target case falls
+	// through to the swift-container-plugin (Docker buildx) flow. The
+	// darwin-target case has no Windows fallback (swift-container-plugin
+	// builds linux images), so it must error out instead.
 	hostSupportsNativeSwift := runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 	if projectType == "swift" {
+		targetIsDarwin := platformOS(platform) == "darwin"
+		if targetIsDarwin && !hostSupportsNativeSwift {
+			return fmt.Errorf("`wendy run` for Swift packages targeting darwin is not supported on %s; macOS targets require a host Swift toolchain (darwin or linux host)", runtime.GOOS)
+		}
 		if normalizeBuildType(opts.buildType) == "swift" {
-			if platformOS(platform) == "darwin" && hostSupportsNativeSwift {
+			if targetIsDarwin {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
-			if platformOS(platform) == "darwin" && hostSupportsNativeSwift {
+			if targetIsDarwin {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
