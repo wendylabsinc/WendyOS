@@ -255,6 +255,38 @@ func TestResolvConfFromNMCLI_OutputParsing(t *testing.T) {
 	}
 }
 
+func TestHasNonLoopbackNameserver(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"empty", "", false},
+		{"comments only", "# no nameservers here\n", false},
+		{"loopback stub", "nameserver 127.0.0.53\n", false},
+		{"loopback 127.0.0.1", "nameserver 127.0.0.1\n", false},
+		{"ipv6 loopback", "nameserver ::1\n", false},
+		{"real ip", "nameserver 192.168.1.1\n", true},
+		{"mixed loopback and real", "nameserver 127.0.0.53\nnameserver 192.168.1.1\n", true},
+		{"multiple real", "nameserver 10.0.0.1\nnameserver 10.0.0.2\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := os.CreateTemp(t.TempDir(), "resolv.conf")
+			if err != nil {
+				t.Fatalf("creating temp file: %v", err)
+			}
+			if _, err := f.WriteString(tc.content); err != nil {
+				t.Fatalf("writing content: %v", err)
+			}
+			f.Close()
+			if got := hasNonLoopbackNameserver(f.Name()); got != tc.want {
+				t.Errorf("hasNonLoopbackNameserver(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
 
 func TestApplyEntitlements_Network_Default(t *testing.T) {
 	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})

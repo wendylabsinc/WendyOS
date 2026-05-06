@@ -561,10 +561,11 @@ func applyInput(spec *Spec) {
 //  2. /run/resolvconf/resolv.conf – resolvconf package
 //  3. /run/NetworkManager/resolv.conf – NetworkManager-managed file
 //  4. /run/connman/resolv.conf – ConnMan
-//  5. /etc/resolv.conf with symlink resolution – covers dhcpcd, dhclient, and
-//     static configs; symlinks are followed so a dangling link (e.g. pointing
-//     at a systemd-resolved path on an Avahi-only host) does not silently leave
-//     the container without DNS
+//  5. /etc/resolv.conf with symlink resolution, accepted only when it contains
+//     at least one non-loopback nameserver. Loopback-only entries (e.g.
+//     127.0.0.53 left behind by a removed systemd-resolved) would silently
+//     fail inside the container even with host networking since nothing is
+//     listening at that address.
 //  6. DNS servers queried from NetworkManager via nmcli – handles systems where
 //     NM has dns=none (e.g. Avahi-only setups) so NM never writes a resolv.conf
 //     but still knows the DHCP-obtained nameservers
@@ -583,11 +584,14 @@ func hostResolvConf() string {
 		}
 	}
 
-	// /etc/resolv.conf is often a symlink (to systemd-resolved, resolvconf,
-	// or dhcpcd output). Resolve it so we bind-mount the real file; passing a
-	// dangling symlink as the mount source would fail at container start time.
+	// /etc/resolv.conf is often a symlink; resolve it to get the real file so a
+	// dangling link doesn't silently break DNS. Also require at least one
+	// non-loopback nameserver: loopback-only entries (127.0.0.53, ::1) mean the
+	// file was written for a local resolver daemon (systemd-resolved, etc.) that
+	// may no longer be running — mounting such a file would leave the container
+	// with no working DNS.
 	if real, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil {
-		if _, err := os.Stat(real); err == nil {
+		if _, err := os.Stat(real); err == nil && hasNonLoopbackNameserver(real) {
 			return real
 		}
 	}
@@ -595,8 +599,30 @@ func hostResolvConf() string {
 	// Last resort: ask NetworkManager for the DHCP-obtained DNS servers. This
 	// handles hosts where NM has dns=none (Avahi handles local .local lookups)
 	// so NM never writes any resolv.conf file, but it still knows what
-	// nameservers DHCP provided.
+	// nameservers DHCP provided. Also handles the case where /etc/resolv.conf
+	// exists but contains only loopback addresses (stale systemd-resolved config).
 	return resolvConfFromNMCLI()
+}
+
+// hasNonLoopbackNameserver reports whether the resolv.conf at path has at
+// least one nameserver entry whose address is not a loopback address.
+// Loopback addresses (127.x.x.x or ::1) are only valid when a local resolver
+// daemon is actively listening; if that daemon is absent, DNS silently fails.
+func hasNonLoopbackNameserver(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "nameserver" {
+			continue
+		}
+		if !strings.HasPrefix(fields[1], "127.") && fields[1] != "::1" {
+			return true
+		}
+	}
+	return false
 }
 
 // nmcliPaths lists common locations for the nmcli binary when PATH is restricted
