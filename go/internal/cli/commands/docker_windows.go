@@ -137,10 +137,10 @@ func buildMountPointReparseBuffer(targetAbs string) ([]byte, error) {
 	binary.LittleEndian.PutUint32(buf[0:4], windows.IO_REPARSE_TAG_MOUNT_POINT)
 	binary.LittleEndian.PutUint16(buf[4:6], uint16(bufSize-8)) // ReparseDataLength
 	// buf[6:8] Reserved = 0
-	binary.LittleEndian.PutUint16(buf[8:10], 0)                          // SubstituteNameOffset
-	binary.LittleEndian.PutUint16(buf[10:12], uint16(substBytes))        // SubstituteNameLength
-	binary.LittleEndian.PutUint16(buf[12:14], uint16(substBytes+2))      // PrintNameOffset
-	binary.LittleEndian.PutUint16(buf[14:16], uint16(printBytes))        // PrintNameLength
+	binary.LittleEndian.PutUint16(buf[8:10], 0)                     // SubstituteNameOffset
+	binary.LittleEndian.PutUint16(buf[10:12], uint16(substBytes))   // SubstituteNameLength
+	binary.LittleEndian.PutUint16(buf[12:14], uint16(substBytes+2)) // PrintNameOffset
+	binary.LittleEndian.PutUint16(buf[14:16], uint16(printBytes))   // PrintNameLength
 
 	pathBuf := unsafe.Slice((*uint16)(unsafe.Pointer(&buf[headerSize])), (bufSize-headerSize)/2)
 	copy(pathBuf, subst)
