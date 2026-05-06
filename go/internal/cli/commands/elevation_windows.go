@@ -46,9 +46,14 @@ func isElevated() (bool, error) {
 // prompt. The elevated child runs in a new console window. extraArgs are
 // appended when they are not already present in os.Args (used to inject
 // flags like --device that were resolved interactively before elevation).
-// Returns nil when the child started, or an error when the user declined the
-// UAC prompt or the launch otherwise failed.
+// extraArgs must contain an even number of elements, treated as flag/value
+// pairs. Returns nil when the child started, or an error when the user
+// declined the UAC prompt or the launch otherwise failed.
 func relaunchElevated(extraArgs ...string) error {
+	if len(extraArgs)%2 != 0 {
+		return fmt.Errorf("relaunchElevated: extraArgs must be flag/value pairs, got %d elements", len(extraArgs))
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolving executable path: %w", err)
@@ -67,7 +72,7 @@ func relaunchElevated(extraArgs ...string) error {
 				break
 			}
 		}
-		if !already && i+1 < len(extraArgs) {
+		if !already {
 			args = append(args, flag, extraArgs[i+1])
 		}
 	}
@@ -76,30 +81,27 @@ func relaunchElevated(extraArgs ...string) error {
 	for _, a := range args {
 		quotedArgs = append(quotedArgs, syscall.EscapeArg(a))
 	}
-	wendyArgs := strings.Join(quotedArgs, " ")
+	params := strings.Join(quotedArgs, " ")
 
-	// Launch via "cmd.exe /k <exe> <args>" so the elevated window stays open
-	// after wendy exits and the user can read the output.
-	cmdExe := os.Getenv("COMSPEC")
-	if cmdExe == "" {
-		cmdExe = "cmd.exe"
-	}
-	cmdParams := "/k " + syscall.EscapeArg(exe)
-	if wendyArgs != "" {
-		cmdParams += " " + wendyArgs
-	}
-
+	// Launch the executable directly via ShellExecute. We deliberately do NOT
+	// wrap with `cmd.exe /k` here: syscall.EscapeArg only handles
+	// CreateProcess-style quoting, not cmd.exe metacharacters (%, &, |, <, >,
+	// ^), so an arg containing those would be interpreted by cmd.exe and
+	// could expand env vars or chain commands in the elevated session.
 	verbPtr, err := syscall.UTF16PtrFromString("runas")
 	if err != nil {
 		return fmt.Errorf("encoding verb: %w", err)
 	}
-	exePtr, err := syscall.UTF16PtrFromString(cmdExe)
+	exePtr, err := syscall.UTF16PtrFromString(exe)
 	if err != nil {
-		return fmt.Errorf("encoding cmd.exe path: %w", err)
+		return fmt.Errorf("encoding exe path: %w", err)
 	}
-	paramsPtr, err := syscall.UTF16PtrFromString(cmdParams)
-	if err != nil {
-		return fmt.Errorf("encoding parameters: %w", err)
+	var paramsPtr *uint16
+	if params != "" {
+		paramsPtr, err = syscall.UTF16PtrFromString(params)
+		if err != nil {
+			return fmt.Errorf("encoding parameters: %w", err)
+		}
 	}
 
 	const swNormal int32 = 1
