@@ -192,6 +192,100 @@ Flesh out and implement a plan to make Windows discovery reliable:
 9. Ensure `resolveLANVersions` can connect using whatever address is returned.
 10. Add tests around converting mDNS service entries to `models.LANDevice` so parsing/address selection behavior is covered without needing a real Windows mDNS environment.
 
+## Reliable Reproduction Steps
+
+Use these steps to reproduce the cold USB-NCM/mDNS discovery failure and to validate that the fix resolves it. Run them on Windows from an elevated PowerShell where possible.
+
+Start from the repo's `go` directory:
+
+```powershell
+cd C:\Users\konstantinbe\Projects\WendyLabs\wendy-agent\go
+```
+
+Find the USB-NCM interface:
+
+```powershell
+Get-NetAdapter | Where-Object InterfaceDescription -match "UsbNcm|NCM|RNDIS|USB Ethernet" |
+  Format-Table Name, InterfaceDescription, Status, ifIndex
+```
+
+In the observed setup, this was:
+
+```powershell
+$ifIndex = 7
+$ifAlias = "Ethernet"
+```
+
+Cold-reset the Windows side of the USB-NCM link and clear cached state:
+
+```powershell
+Disable-NetAdapter -Name $ifAlias -Confirm:$false
+Start-Sleep 3
+Enable-NetAdapter -Name $ifAlias -Confirm:$false
+Start-Sleep 8
+
+arp -d *
+Get-NetNeighbor -InterfaceIndex $ifIndex |
+  Where-Object State -ne "Permanent" |
+  Remove-NetNeighbor -Confirm:$false -ErrorAction SilentlyContinue
+
+ipconfig /flushdns
+```
+
+Immediately run discovery:
+
+```powershell
+go run ./cmd/wendy discover --type lan --timeout 10s --json
+```
+
+Expected behavior before the fix: this may return no LAN devices, e.g.:
+
+```json
+{
+  "usbDevices": null,
+  "lanDevices": null,
+  "bluetoothDevices": null,
+  "ethernetDevices": null
+}
+```
+
+Expected behavior after the fix: the Jetson should reliably appear over LAN/USB-NCM, e.g.:
+
+```json
+{
+  "lanDevices": [
+    {
+      "displayName": "wendyos-prudent-lark",
+      "hostname": "wendyos-prudent-lark.local",
+      "ipAddress": "169.254.249.48",
+      "port": 50051
+    }
+  ]
+}
+```
+
+Stress loop for validation after implementing the fix:
+
+```powershell
+for ($i = 1; $i -le 10; $i++) {
+  Write-Host "=== Run $i ==="
+
+  Disable-NetAdapter -Name $ifAlias -Confirm:$false
+  Start-Sleep 2
+  Enable-NetAdapter -Name $ifAlias -Confirm:$false
+  Start-Sleep 8
+
+  arp -d *
+  ipconfig /flushdns | Out-Null
+
+  go run ./cmd/wendy discover --type lan --timeout 10s --json
+}
+```
+
+Pass criterion: after the USB-NCM interface comes back up, the Jetson appears every time.
+
+Important: do not run the temporary per-interface mDNS debug probe before testing the old behavior, because that can warm the neighbor/mDNS path and mask the bug.
+
 ## Validation Commands
 
 On Windows, from the repo's `go` directory:
