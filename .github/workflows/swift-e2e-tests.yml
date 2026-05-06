@@ -1,6 +1,9 @@
 name: Swift E2E Tests
 
 on:
+  push:
+    branches:
+      - kb.swift-e2e-tests
   workflow_dispatch:
     inputs:
       tests:
@@ -41,9 +44,9 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 120
     env:
-      INPUT_TESTS: ${{ inputs.tests }}
-      INPUT_AGENT_SSH: ${{ inputs.agent_ssh }}
-      INPUT_AGENT_WORKDIR: ${{ inputs.agent_workdir }}
+      INPUT_TESTS: ${{ inputs.tests || '' }}
+      INPUT_AGENT_SSH: ${{ inputs.agent_ssh || 'wendy-agent-mac' }}
+      INPUT_AGENT_WORKDIR: ${{ inputs.agent_workdir || '' }}
     steps:
       - uses: actions/checkout@v6
 
