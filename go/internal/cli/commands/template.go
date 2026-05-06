@@ -32,6 +32,8 @@ var (
 	templateArchiveAttemptTimeout = 2 * time.Minute
 	templateArchiveMaxAttempts    = 3
 	templateArchiveRetryDelay     = 750 * time.Millisecond
+	templateRawBaseURL            = "https://raw.githubusercontent.com"
+	templateLanguageProbeClient   = &http.Client{Timeout: 10 * time.Second}
 )
 
 // resolveTemplateBranch returns branch if non-empty, otherwise the default branch.
@@ -51,7 +53,8 @@ type repoMeta struct {
 type repoMetaTemplate struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Targets     []string `json:"targets"` // optional; empty means all targets
+	Targets     []string `json:"targets"`   // optional; empty means all targets
+	Languages   []string `json:"languages"` // optional; empty means discover from repo layout
 }
 
 type repoMetaLanguage struct {
@@ -163,6 +166,99 @@ func isTemplateLanguage(language string, meta *repoMeta) bool {
 		}
 	}
 	return false
+}
+
+func templateByName(meta *repoMeta, templateName string) (*repoMetaTemplate, bool) {
+	if meta == nil {
+		return nil, false
+	}
+	for i := range meta.Templates {
+		if meta.Templates[i].Name == templateName {
+			return &meta.Templates[i], true
+		}
+	}
+	return nil, false
+}
+
+func templateLanguagesForTemplate(ctx context.Context, meta *repoMeta, templateName, branch string) ([]repoMetaLanguage, error) {
+	tmpl, ok := templateByName(meta, templateName)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", templateName)
+	}
+
+	if len(tmpl.Languages) > 0 {
+		return repoMetaLanguagesForKeys(meta, tmpl.Languages), nil
+	}
+
+	return probeTemplateLanguages(ctx, meta.Languages, templateName, branch)
+}
+
+func repoMetaLanguagesForKeys(meta *repoMeta, keys []string) []repoMetaLanguage {
+	if meta == nil || len(keys) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
+
+	languages := make([]repoMetaLanguage, 0, len(keys))
+	for _, language := range meta.Languages {
+		if _, ok := allowed[language.Key]; ok {
+			languages = append(languages, language)
+		}
+	}
+	return languages
+}
+
+func probeTemplateLanguages(ctx context.Context, languages []repoMetaLanguage, templateName, branch string) ([]repoMetaLanguage, error) {
+	branch = resolveTemplateBranch(branch)
+
+	available := make([]repoMetaLanguage, 0, len(languages))
+	for _, language := range languages {
+		ok, err := probeTemplateLanguage(ctx, branch, language.Key, templateName)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			available = append(available, language)
+		}
+	}
+	return available, nil
+}
+
+func probeTemplateLanguage(ctx context.Context, branch, language, templateName string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, templateLanguageManifestURL(branch, language, templateName), nil)
+	if err != nil {
+		return false, fmt.Errorf("checking template language availability: %w", err)
+	}
+
+	resp, err := templateLanguageProbeClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("checking template language availability (branch %q): %w", branch, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("checking template language availability (branch %q): HTTP %d", branch, resp.StatusCode)
+	}
+}
+
+func templateLanguageManifestURL(branch, language, templateName string) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s/template.json",
+		strings.TrimRight(templateRawBaseURL, "/"),
+		templateRepoOwner,
+		templateRepoName,
+		resolveTemplateBranch(branch),
+		language,
+		templateName,
+	)
 }
 
 // progressCallback reports download progress. total is the expected content

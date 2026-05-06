@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	"google.golang.org/grpc/metadata"
 )
 
 func testPort(t *testing.T, ln net.Listener) int {
@@ -181,5 +182,31 @@ func TestStartPostStartHook_EmptyCLI(t *testing.T) {
 	cmd := startPostStartHook(context.Background(), cfg, "localhost")
 	if cmd != nil {
 		t.Error("expected nil cmd when CLI is empty")
+	}
+}
+
+func TestContextWithPostStartAgentHook(t *testing.T) {
+	cfg := &appconfig.AppConfig{
+		AppID: "test",
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{Agent: "wendy-agent utils open-browser http://localhost:3000"},
+		},
+	}
+
+	ctx := contextWithPostStartAgentHook(context.Background(), cfg)
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("expected outgoing metadata")
+	}
+	got := md.Get(appconfig.PostStartAgentHookMetadataKey)
+	if len(got) != 1 || got[0] != "wendy-agent utils open-browser http://localhost:3000" {
+		t.Fatalf("metadata hook = %#v", got)
+	}
+}
+
+func TestContextWithPostStartAgentHookEmpty(t *testing.T) {
+	ctx := contextWithPostStartAgentHook(context.Background(), &appconfig.AppConfig{AppID: "test"})
+	if _, ok := metadata.FromOutgoingContext(ctx); ok {
+		t.Fatal("expected no outgoing metadata for empty agent hook")
 	}
 }

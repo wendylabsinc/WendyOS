@@ -39,6 +39,9 @@ const labelKeyAppVersion = "sh.wendy/app.version"
 // labelKeyRestartPolicy stores the restart policy (e.g. "on-failure:5").
 const labelKeyRestartPolicy = "sh.wendy/restart.policy"
 
+// labelKeyMCPPort stores the MCP server port for containers with an mcp entitlement.
+const labelKeyMCPPort = "sh.wendy/mcp.port"
+
 // labelKeyGCRoot prevents garbage collection of content blobs.
 const labelKeyGCRoot = "containerd.io/gc.root"
 
@@ -94,7 +97,7 @@ func gcTimestamp() string {
 
 // wendyLabels builds the standard set of containerd labels for a Wendy-managed
 // container. These labels are used to identify, filter, and manage containers.
-func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy) map[string]string {
+func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, mcpPort uint32) map[string]string {
 	labels := map[string]string{
 		labelKeyAppVersion: version,
 	}
@@ -104,6 +107,10 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy) 
 		if policyStr != "" {
 			labels[labelKeyRestartPolicy] = policyStr
 		}
+	}
+
+	if mcpPort > 0 {
+		labels[labelKeyMCPPort] = strconv.FormatUint(uint64(mcpPort), 10)
 	}
 
 	return labels

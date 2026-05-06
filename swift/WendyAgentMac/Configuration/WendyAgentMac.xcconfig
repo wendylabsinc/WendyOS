@@ -16,6 +16,10 @@ ARCHS = arm64
 PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac
 PRODUCT_MODULE_NAME = WendyAgentMac
 PRODUCT_NAME = WendyAgentMac
+// This target is the macOS UI shell, so unannotated app code should
+// default to the main actor. Non-UI work belongs in WendyAgentCore or
+// should declare its own isolation explicitly.
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
 SWIFT_EMIT_LOC_STRINGS = YES
 SWIFT_VERSION = 6.0
 INFOPLIST_FILE = Support/WendyAgentMac-Info.plist

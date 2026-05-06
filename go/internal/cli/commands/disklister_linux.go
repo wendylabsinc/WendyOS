@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 
 	"github.com/dustin/go-humanize"
@@ -42,6 +41,7 @@ type drive struct {
 	Size        string // human-readable size
 	SizeBytes   int64  // size in bytes
 	IsRemovable bool
+	StorageType StorageType // underlying storage protocol
 }
 
 // lsblkOutput is the JSON output from lsblk.
@@ -101,6 +101,10 @@ func listDrivesLinux() ([]drive, error) {
 			sizeBytes = n
 		}
 
+		storageType := StorageUnknown
+		if dev.Transport == "nvme" {
+			storageType = StorageNVMe
+		}
 		drives = append(drives, drive{
 			DevicePath: devPath,
 			RawPath:    devPath,
@@ -110,6 +114,7 @@ func listDrivesLinux() ([]drive, error) {
 			// IsRemovable reflects our external-ness predicate so downstream code
 			// sees the same classification used to include this device.
 			IsRemovable: isExternal,
+			StorageType: storageType,
 		})
 	}
 
@@ -143,57 +148,44 @@ func unmountLsblkDevice(dev lsblkDevice) {
 	}
 }
 
-// writeImageToDisk writes an image file to a block device using dd,
-// streaming data via stdin in 4 MiB chunks for progress tracking.
-func writeImageToDisk(imagePath string, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
 
-	imgFile, err := os.Open(imagePath)
-	if err != nil {
-		return fmt.Errorf("opening image: %w", err)
+	bs := "bs=4M"
+	if d.StorageType == StorageNVMe {
+		bs = "bs=64M"
 	}
-	defer imgFile.Close()
+	ddArgs := []string{"dd", fmt.Sprintf("of=%s", d.DevicePath), bs, "status=progress", "conv=fdatasync"}
+	if d.StorageType == StorageNVMe {
+		ddArgs = append(ddArgs, "oflag=direct")
+	}
 
-	cmd := exec.Command("sudo", "dd", fmt.Sprintf("of=%s", d.DevicePath), "bs=4M")
-	stdin, err := cmd.StdinPipe()
+	cmd := exec.Command("sudo", ddArgs...)
+	cmd.Stdin = r
+
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("creating stdin pipe: %w", err)
+		return fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting dd: %w", err)
 	}
 
-	buf := make([]byte, 4*1024*1024) // 4 MiB
-	var totalWritten int64
-	for {
-		n, readErr := imgFile.Read(buf)
-		if n > 0 {
-			if _, writeErr := stdin.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing to dd: %w", writeErr)
-			}
-			totalWritten += int64(n)
-			if progressFn != nil {
-				progressFn(totalWritten)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading image: %w", readErr)
-		}
-	}
+	scannerDone := make(chan struct{})
+	go func() {
+		defer close(scannerDone)
+		scanDDProgress(stderr, progressFn)
+	}()
 
-	stdin.Close()
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("writing image: %w", err)
-	}
+	waitErr := cmd.Wait()
+	<-scannerDone
 
-	// Sync to flush writes.
-	exec.Command("sync").Run() //nolint:errcheck
+	if waitErr != nil {
+		return fmt.Errorf("writing image: %w", waitErr)
+	}
 
 	return nil
 }

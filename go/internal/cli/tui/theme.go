@@ -19,6 +19,12 @@ const (
 	// Amber color palette.
 	Amber500 = lipgloss.Color("#f59e0b")
 
+	// Red color palette.
+	Red500 = lipgloss.Color("#ef4444")
+
+	// Sky color palette.
+	Sky500 = lipgloss.Color("#0ea5e9")
+
 	// Semantic aliases used across TUI components.
 	ColorPrimary    = Emerald400            // titles, spinners, scanning text
 	ColorAccent     = Emerald500            // progress bar, active indicators
@@ -29,4 +35,29 @@ const (
 	ColorSelectedFg = Emerald100            // table selection foreground
 	ColorDim        = lipgloss.Color("240") // muted/hint text (neutral gray)
 	ColorNotice     = Amber500              // informational notices
+	ColorError      = Red500                // error messages
+	ColorInfo       = Sky500                // informational status messages
 )
+
+var (
+	successStyle = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	errorStyle   = lipgloss.NewStyle().Foreground(ColorError).Bold(true)
+	warningStyle = lipgloss.NewStyle().Foreground(ColorNotice).Bold(true)
+	infoStyle    = lipgloss.NewStyle().Foreground(ColorInfo).Bold(true)
+)
+
+func SuccessMessage(message string) string {
+	return successStyle.Render("✓ " + message)
+}
+
+func ErrorMessage(message string) string {
+	return errorStyle.Render("✗ " + message)
+}
+
+func WarningMessage(message string) string {
+	return warningStyle.Render("⚠ " + message)
+}
+
+func InfoMessage(message string) string {
+	return infoStyle.Render("› " + message)
+}

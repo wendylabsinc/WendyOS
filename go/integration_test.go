@@ -173,7 +173,7 @@ func (m *statefulContainerdClient) CreateContainerWithProgress(ctx context.Conte
 	return m.CreateContainer(ctx, req, appCfg)
 }
 
-func (m *statefulContainerdClient) StartContainer(_ context.Context, appName string) (<-chan services.ContainerOutput, error) {
+func (m *statefulContainerdClient) StartContainer(_ context.Context, appName, _ string) (<-chan services.ContainerOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.containers[appName]; !ok {
@@ -192,8 +192,8 @@ func (m *statefulContainerdClient) StartContainer(_ context.Context, appName str
 	return ch, nil
 }
 
-func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader) (<-chan services.ContainerOutput, error) {
-	return m.StartContainer(context.Background(), appName)
+func (m *statefulContainerdClient) StartContainerWithStdin(_ context.Context, appName string, _ io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
+	return m.StartContainer(context.Background(), appName, postStartAgentCommand)
 }
 
 func (m *statefulContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.ContainerStats, error) {
@@ -202,6 +202,10 @@ func (m *statefulContainerdClient) GetContainerStats(_ context.Context) ([]*agen
 
 func (m *statefulContainerdClient) GetContainerMetrics(_ context.Context, _ string) (services.ContainerMetrics, error) {
 	return services.ContainerMetrics{}, nil
+}
+
+func (s *statefulContainerdClient) GetContainerMCPPort(_ context.Context, _ string) (uint32, error) {
+	return 0, nil
 }
 
 // getLayerData returns the data stored for a given digest, for test assertions.
@@ -249,6 +253,7 @@ func (f *integrationFakeCertService) IssueCertificate(_ context.Context, _ *clou
 const integrationBufSize = 1024 * 1024
 
 func TestFullAgentLifecycle(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -429,6 +434,7 @@ func TestFullAgentLifecycle(t *testing.T) {
 // TestContainerDeployStartStopDelete tests the full container lifecycle via gRPC:
 // WriteLayer -> CreateContainer -> StartContainer -> ListContainers -> StopContainer -> DeleteContainer
 func TestContainerDeployStartStopDelete(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 	cc := newStatefulContainerdClient()
@@ -719,6 +725,7 @@ func TestContainerDeployStartStopDelete(t *testing.T) {
 // TestStreamMetrics verifies that metrics published via the OTEL receiver
 // are received by a StreamMetrics subscriber.
 func TestStreamMetrics(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -786,6 +793,7 @@ func TestStreamMetrics(t *testing.T) {
 // TestStreamTraces verifies that traces published via the OTEL receiver
 // are received by a StreamTraces subscriber.
 func TestStreamTraces(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -853,6 +861,7 @@ func TestStreamTraces(t *testing.T) {
 // TestProvisioningFlow tests the full provisioning lifecycle via gRPC:
 // IsProvisioned (not provisioned) -> StartProvisioning (with fake cloud) -> IsProvisioned (provisioned).
 func TestProvisioningFlow(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 
@@ -977,6 +986,7 @@ func TestProvisioningFlow(t *testing.T) {
 // TestRunContainer tests the RunContainer RPC which combines container creation + starting
 // in a single call, and streams output back.
 func TestRunContainer(t *testing.T) {
+	t.Parallel()
 	logger := zap.NewNop()
 	lis := bufconn.Listen(integrationBufSize)
 	cc := newStatefulContainerdClient()
@@ -1090,4 +1100,48 @@ func TestRunContainer(t *testing.T) {
 			t.Errorf("running_state = %v; want RUNNING", containers[0].RunningState)
 		}
 	})
+}
+
+// TestOTELLocalhostBindProperty verifies that a 127.0.0.1-bound TCP listener
+// is not reachable from a non-loopback interface, confirming the security
+// property of the fix for WDY-1097/WDY-1100.
+func TestOTELLocalhostBindProperty(t *testing.T) {
+	t.Parallel()
+	// Find a non-loopback IPv4 address on this machine. If none exists (e.g.
+	// a stripped-down CI container with only lo), skip rather than fail.
+	var externalIP string
+	ifaces, _ := net.InterfaceAddrs()
+	for _, a := range ifaces {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
+			continue
+		}
+		externalIP = ipNet.IP.String()
+		break
+	}
+	if externalIP == "" {
+		t.Skip("no non-loopback IPv4 interface — cannot verify localhost-only property")
+	}
+
+	// Bind to 127.0.0.1 only, as the OTEL receivers do after the fix.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer lis.Close()
+	port := lis.Addr().(*net.TCPAddr).Port
+
+	// Localhost must be able to connect.
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+	if err != nil {
+		t.Fatalf("localhost connection refused: %v", err)
+	}
+	c.Close()
+
+	// External interface must NOT be able to connect to the same port.
+	c2, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", externalIP, port), 500*time.Millisecond)
+	if err == nil {
+		c2.Close()
+		t.Errorf("connection via external IP %s:%d succeeded — listener should be localhost-only", externalIP, port)
+	}
 }

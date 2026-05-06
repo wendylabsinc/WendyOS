@@ -72,7 +72,45 @@ type Linux struct {
 	CgroupsPath   string           `json:"cgroupsPath,omitempty"`
 	MaskedPaths   []string         `json:"maskedPaths,omitempty"`
 	ReadonlyPaths []string         `json:"readonlyPaths,omitempty"`
+	Seccomp       *LinuxSeccomp    `json:"seccomp,omitempty"`
 }
+
+// LinuxSeccomp defines a seccomp filter for the container.
+type LinuxSeccomp struct {
+	DefaultAction LinuxSeccompAction `json:"defaultAction"`
+	Syscalls      []LinuxSyscall     `json:"syscalls,omitempty"`
+}
+
+// LinuxSeccompAction is the action taken when a seccomp rule matches.
+type LinuxSeccompAction string
+
+const (
+	ActAllow LinuxSeccompAction = "SCMP_ACT_ALLOW"
+	ActErrno LinuxSeccompAction = "SCMP_ACT_ERRNO"
+)
+
+// LinuxSyscall restricts a set of syscalls.
+type LinuxSyscall struct {
+	Names    []string           `json:"names"`
+	Action   LinuxSeccompAction `json:"action"`
+	ErrnoRet *uint              `json:"errnoRet,omitempty"`
+	Args     []LinuxSeccompArg  `json:"args,omitempty"`
+}
+
+// LinuxSeccompArg restricts a syscall based on argument values.
+type LinuxSeccompArg struct {
+	Index    uint                 `json:"index"`
+	Value    uint64               `json:"value"`
+	ValueTwo uint64               `json:"valueTwo,omitempty"`
+	Op       LinuxSeccompOperator `json:"op"`
+}
+
+// LinuxSeccompOperator is the comparison operator used in seccomp argument matching.
+type LinuxSeccompOperator string
+
+const (
+	OpMaskedEqual LinuxSeccompOperator = "SCMP_CMP_MASKED_EQ"
+)
 
 // LinuxResources has container resource constraints.
 type LinuxResources struct {
@@ -188,6 +226,7 @@ func DefaultSpec(rootfsPath string, args []string) *Spec {
 				"/proc/sys",
 				"/proc/sysrq-trigger",
 			},
+			Seccomp: defaultSeccomp(),
 		},
 	}
 }
@@ -206,7 +245,6 @@ func defaultCapabilities() *LinuxCapabilities {
 		"CAP_SETFCAP",
 		"CAP_SETPCAP",
 		"CAP_NET_BIND_SERVICE",
-		"CAP_SYS_CHROOT",
 		"CAP_KILL",
 		"CAP_AUDIT_WRITE",
 	}
@@ -216,6 +254,38 @@ func defaultCapabilities() *LinuxCapabilities {
 		Inheritable: caps,
 		Permitted:   caps,
 		Ambient:     caps,
+	}
+}
+
+// defaultSeccomp returns a seccomp profile that denies known escape vectors while
+// allowing all other syscalls. It blocks ptrace and unshare unconditionally, and
+// blocks clone/clone3 when CLONE_NEWUSER is requested to prevent unprivileged
+// user-namespace creation inside the container.
+func defaultSeccomp() *LinuxSeccomp {
+	eperm := uint(1)
+	cloneNewuser := uint64(0x10000000) // CLONE_NEWUSER
+	return &LinuxSeccomp{
+		DefaultAction: ActAllow,
+		Syscalls: []LinuxSyscall{
+			{
+				Names:    []string{"ptrace", "unshare"},
+				Action:   ActErrno,
+				ErrnoRet: &eperm,
+			},
+			{
+				Names:  []string{"clone"},
+				Action: ActErrno,
+				Args: []LinuxSeccompArg{
+					{
+						Index:    0,
+						Value:    cloneNewuser,
+						ValueTwo: cloneNewuser,
+						Op:       OpMaskedEqual,
+					},
+				},
+				ErrnoRet: &eperm,
+			},
+		},
 	}
 }
 

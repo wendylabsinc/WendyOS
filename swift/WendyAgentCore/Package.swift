@@ -1,6 +1,11 @@
 // swift-tools-version: 6.2.0
 import PackageDescription
 
+let strictConcurrencySettings: [SwiftSetting] = [
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+]
+
 let package = Package(
     name: "WendyAgentCore",
     platforms: [
@@ -26,7 +31,8 @@ let package = Package(
                 .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
             ],
-            path: "Tests/WendyAgentTests"
+            path: "Tests/WendyAgentTests",
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "WendyAgentCore",
@@ -39,7 +45,8 @@ let package = Package(
                 .target(name: "WendyAgentGRPC"),
                 .target(name: "WendyCloudGRPC"),
             ],
-            path: "Sources/WendyAgent"
+            path: "Sources/WendyAgent",
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "WendyAgentGRPC",
@@ -47,21 +54,27 @@ let package = Package(
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
                 .target(name: "OpenTelemetryGRPC"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "WendyCloudGRPC",
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "OpenTelemetryGRPC",
             dependencies: [
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
-    ]
+    ],
+    // WendyAgentCore intentionally requires Swift 6 language mode so
+    // strict concurrency diagnostics match the mac prototype defaults.
+    swiftLanguageModes: [.v6]
 )

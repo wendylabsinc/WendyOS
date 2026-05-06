@@ -1,0 +1,34 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
+
+service WendyProvisioningService {
+    rpc StartProvisioning(StartProvisioningRequest) returns (StartProvisioningResponse);
+    rpc IsProvisioned(IsProvisionedRequest) returns (IsProvisionedResponse);
+}
+
+message IsProvisionedRequest {}
+
+message IsProvisionedResponse {
+    oneof response_type {
+        NotProvisionedResponse not_provisioned = 1;
+        ProvisionedResponse provisioned = 2;
+    }
+}
+
+message NotProvisionedResponse {}
+
+message ProvisionedResponse {
+    string cloud_host = 1;
+    int32 organization_id = 2;
+    int32 asset_id = 3;
+}
+
+message StartProvisioningRequest {
+    int32 organization_id = 1;
+    string enrollment_token = 2;
+    string cloud_host = 3;
+    int32 asset_id = 4;
+}
+
+message StartProvisioningResponse {}

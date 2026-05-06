@@ -17,14 +17,18 @@ Tests:
   swift-hello           Basic Swift containerized deployment (no entitlements)
   swift-network         Swift with network entitlement (WiFi connectivity)
   swift-bluetooth       Swift with bluetooth entitlement
+  swift-resources       Swift app with bundled resources (verifies resource loading)
   python-hello          Basic Python deployment (no entitlements)
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
   python-bluetooth      Python with bluetooth entitlement
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
+  python-no-ptrace      Verify ptrace is blocked by default seccomp profile (WDY-1099)
+  python-no-unshare     Verify unshare is blocked by default seccomp profile (WDY-1099)
   compose-hello         docker-compose multi-service deployment with build: Dockerfiles
   compose-images        docker-compose multi-service deployment using public images
+  otel-localhost-only   Verify OTEL receivers (4317/4318) are not reachable from the network
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -178,14 +182,18 @@ ALL_TESTS=(
     swift-hello
     swift-network
     swift-bluetooth
+    swift-resources
     python-hello
     python-network
     python-gpu
     python-bluetooth
     python-no-network
     python-no-bluetooth
+    python-no-ptrace
+    python-no-unshare
     compose-hello
     compose-images
+    otel-localhost-only
 )
 
 # If specific tests were requested via -t, filter the list.
@@ -221,6 +229,15 @@ for test_name in "${TESTS[@]}"; do
     # Skip GPU tests on devices that don't have a GPU.
     if [[ "$test_name" == *"-gpu"* ]] && [[ "$DEVICE_HAS_GPU" != "true" ]]; then
         skip_test "$test_name" "no GPU"
+        continue
+    fi
+
+    # ── Security: OTEL ports must not be reachable from the network ──────
+    if [[ "$test_name" == "otel-localhost-only" ]]; then
+        otel_grpc_closed() { ! nc -z -w 3 "$HOSTNAME" 4317 2>/dev/null; }
+        otel_http_closed() { ! nc -z -w 3 "$HOSTNAME" 4318 2>/dev/null; }
+        run_test "otel-localhost-only (gRPC 4317 not reachable)" otel_grpc_closed
+        run_test "otel-localhost-only (HTTP 4318 not reachable)" otel_http_closed
         continue
     fi
 

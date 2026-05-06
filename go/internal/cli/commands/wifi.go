@@ -145,7 +145,11 @@ type wifiClient struct {
 func newWifiClient(target *SelectedDevice) (*wifiClient, error) {
 	switch {
 	case target.Bluetooth != nil && target.Bluetooth.IsWendyAgent():
-		client, err := ble.ConnectAgent(target.Bluetooth)
+		tlsCfg, err := bleTLSConfig()
+		if err != nil {
+			return nil, err
+		}
+		client, err := ble.ConnectAgent(target.Bluetooth, tlsCfg)
 		if err != nil {
 			return nil, fmt.Errorf("connecting to %s: %w", target.Bluetooth.DisplayName, err)
 		}
@@ -290,7 +294,7 @@ func newWifiListCmd() *cobra.Command {
 			}
 
 			if len(networks) == 0 {
-				fmt.Println("No WiFi networks found.")
+				cliNotice("No WiFi networks found.")
 				return nil
 			}
 
@@ -385,10 +389,10 @@ func newWifiConnectCmd() *cobra.Command {
 
 					if answer == "" || answer == "y" || answer == "yes" {
 						if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
-							fmt.Println("Using saved password from keychain.")
+							cliLogln("Using saved password from keychain.")
 							password = kp
 						} else {
-							fmt.Println("Password not available from keychain.")
+							cliNotice("Password not available from keychain.")
 						}
 					}
 				}
@@ -420,7 +424,7 @@ func newWifiConnectCmd() *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			fmt.Printf("Connected to %s\n", ssid)
+			cliSuccess("Connected to %s", ssid)
 			return nil
 		},
 	}
@@ -471,9 +475,9 @@ func newWifiStatusCmd() *cobra.Command {
 			}
 
 			if resp.GetConnected() {
-				fmt.Printf("Connected to: %s\n", resp.GetSsid())
+				cliSuccess("Connected to: %s", resp.GetSsid())
 			} else {
-				fmt.Println("Not connected to any WiFi network.")
+				cliNotice("Not connected to any WiFi network.")
 			}
 			return nil
 		},
@@ -509,7 +513,7 @@ func newWifiDisconnectCmd() *cobra.Command {
 			if !resp.GetSuccess() {
 				return fmt.Errorf("failed to disconnect: %s", resp.GetErrorMessage())
 			}
-			fmt.Println("Disconnected from WiFi.")
+			cliSuccess("Disconnected from WiFi.")
 			return nil
 		},
 	}
@@ -567,14 +571,14 @@ Examples:
 				if err := client.Reorder(ctx, ssids); err != nil {
 					return err
 				}
-				fmt.Printf("Reordered %d known networks.\n", len(ssids))
+				cliSuccess("Reordered %d known networks.", len(ssids))
 				return nil
 			}
 
 			if err := client.SetPriority(ctx, ssid, int32(priority)); err != nil {
 				return err
 			}
-			fmt.Printf("Set %s priority to %d.\n", ssid, priority)
+			cliSuccess("Set %s priority to %d.", ssid, priority)
 			return nil
 		},
 	}
@@ -610,7 +614,7 @@ func newWifiForgetCmd() *cobra.Command {
 			if err := client.Forget(ctx, ssid); err != nil {
 				return err
 			}
-			fmt.Printf("Forgot %s.\n", ssid)
+			cliSuccess("Forgot %s.", ssid)
 			return nil
 		},
 	}
@@ -630,8 +634,12 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 
 	switch {
 	case target.Bluetooth != nil && target.Bluetooth.IsWendyAgent():
-		fmt.Printf("Scanning for WiFi networks on %s...\n", target.Bluetooth.DisplayName)
-		client, err := ble.ConnectAgent(target.Bluetooth)
+		cliLogln("Scanning for WiFi networks on %s...", target.Bluetooth.DisplayName)
+		tlsCfg, err := bleTLSConfig()
+		if err != nil {
+			return "", err
+		}
+		client, err := ble.ConnectAgent(target.Bluetooth, tlsCfg)
 		if err != nil {
 			return "", fmt.Errorf("connecting to device: %w", err)
 		}
@@ -646,7 +654,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		}
 
 	case target.Bluetooth != nil:
-		fmt.Println("Scanning for WiFi networks on this computer...")
+		cliLogln("Scanning for WiFi networks on this computer...")
 		nets, err := scanLocalWifiNetworks()
 		if err != nil {
 			return "", fmt.Errorf("scanning local WiFi networks: %w", err)
@@ -656,7 +664,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		}
 
 	case target.Agent != nil:
-		fmt.Println("Scanning for WiFi networks...")
+		cliLogln("Scanning for WiFi networks...")
 		resp, err := target.Agent.AgentService.ListWiFiNetworks(ctx, &agentpb.ListWiFiNetworksRequest{})
 		if err != nil {
 			return "", fmt.Errorf("listing WiFi networks: %w", err)
@@ -718,8 +726,12 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 // ── BLE WendyOS Agent / Lite helpers retained for status/disconnect ──
 
 func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
-	fmt.Printf("Connecting to %s via Bluetooth...\n", device.DisplayName)
-	client, err := ble.ConnectAgent(device)
+	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
+	tlsCfg, err := bleTLSConfig()
+	if err != nil {
+		return err
+	}
+	client, err := ble.ConnectAgent(device, tlsCfg)
 	if err != nil {
 		return err
 	}
@@ -743,16 +755,20 @@ func wifiStatusViaBLEAgent(device *models.BluetoothDevice) error {
 	}
 
 	if resp.GetConnected() {
-		fmt.Printf("Connected to: %s\n", resp.GetSsid())
+		cliSuccess("Connected to: %s", resp.GetSsid())
 	} else {
-		fmt.Println("Not connected to any WiFi network.")
+		cliNotice("Not connected to any WiFi network.")
 	}
 	return nil
 }
 
 func wifiDisconnectViaBLEAgent(device *models.BluetoothDevice) error {
-	fmt.Printf("Connecting to %s via Bluetooth...\n", device.DisplayName)
-	client, err := ble.ConnectAgent(device)
+	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
+	tlsCfg, err := bleTLSConfig()
+	if err != nil {
+		return err
+	}
+	client, err := ble.ConnectAgent(device, tlsCfg)
 	if err != nil {
 		return err
 	}
@@ -760,14 +776,14 @@ func wifiDisconnectViaBLEAgent(device *models.BluetoothDevice) error {
 	if err := client.WifiDisconnect(); err != nil {
 		return err
 	}
-	fmt.Println("Disconnected from WiFi.")
+	cliSuccess("Disconnected from WiFi.")
 	return nil
 }
 
 // ── Local host WiFi scan (for Wendy Lite `list`) ──────────────────
 
 func wifiListFromHost() error {
-	fmt.Println("Scanning for WiFi networks on this computer...")
+	cliLogln("Scanning for WiFi networks on this computer...")
 	networks, err := scanLocalWifiNetworks()
 	if err != nil {
 		return err
@@ -783,7 +799,7 @@ func wifiListFromHost() error {
 	}
 
 	if len(networks) == 0 {
-		fmt.Println("No WiFi networks found.")
+		cliNotice("No WiFi networks found.")
 		return nil
 	}
 
@@ -803,14 +819,14 @@ func wifiListFromHost() error {
 // ── BLE Wendy Lite helpers (GATT provisioning) ─────────────────────
 
 func wifiConnectViaBLELite(device *models.BluetoothDevice, ssid, password string) error {
-	fmt.Printf("Connecting to %s via Bluetooth...\n", device.DisplayName)
+	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
 	client, err := ble.ConnectLite(device)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	fmt.Printf("Provisioning WiFi '%s' on %s...\n", ssid, device.DisplayName)
+	cliLogln("Provisioning WiFi '%s' on %s...", ssid, device.DisplayName)
 	result, err := client.WifiConnect(ssid, password)
 	if err != nil {
 		return err
@@ -818,9 +834,9 @@ func wifiConnectViaBLELite(device *models.BluetoothDevice, ssid, password string
 
 	if result.Connected {
 		if result.IPAddress != "" {
-			fmt.Printf("Connected to %s (IP: %s)\n", ssid, result.IPAddress)
+			cliSuccess("Connected to %s (IP: %s)", ssid, result.IPAddress)
 		} else {
-			fmt.Printf("Connected to %s\n", ssid)
+			cliSuccess("Connected to %s", ssid)
 		}
 	} else {
 		return fmt.Errorf("failed to connect to %s", ssid)
@@ -829,7 +845,7 @@ func wifiConnectViaBLELite(device *models.BluetoothDevice, ssid, password string
 }
 
 func wifiStatusViaBLELite(device *models.BluetoothDevice) error {
-	fmt.Printf("Connecting to %s via Bluetooth...\n", device.DisplayName)
+	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
 	client, err := ble.ConnectLite(device)
 	if err != nil {
 		return err
@@ -855,18 +871,18 @@ func wifiStatusViaBLELite(device *models.BluetoothDevice) error {
 
 	if result.Connected {
 		if result.IPAddress != "" {
-			fmt.Printf("Connected (IP: %s)\n", result.IPAddress)
+			cliSuccess("Connected (IP: %s)", result.IPAddress)
 		} else {
-			fmt.Println("Connected to WiFi.")
+			cliSuccess("Connected to WiFi.")
 		}
 	} else {
-		fmt.Println("Not connected to any WiFi network.")
+		cliNotice("Not connected to any WiFi network.")
 	}
 	return nil
 }
 
 func wifiDisconnectViaBLELite(device *models.BluetoothDevice) error {
-	fmt.Printf("Connecting to %s via Bluetooth...\n", device.DisplayName)
+	cliLogln("Connecting to %s via Bluetooth...", device.DisplayName)
 	client, err := ble.ConnectLite(device)
 	if err != nil {
 		return err
@@ -877,6 +893,6 @@ func wifiDisconnectViaBLELite(device *models.BluetoothDevice) error {
 		return fmt.Errorf("clearing WiFi credentials: %w", err)
 	}
 
-	fmt.Println("WiFi credentials cleared. Device will disconnect from WiFi.")
+	cliSuccess("WiFi credentials cleared. Device will disconnect from WiFi.")
 	return nil
 }

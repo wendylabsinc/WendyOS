@@ -143,6 +143,32 @@ func TestParseINI_Empty(t *testing.T) {
 	}
 }
 
+// TestParseINI_NonASCIISSID guards against byte-level corruption of UTF-8
+// values: emoji bytes (0xF0..0xF4 + 0x80-0xBF continuation) never overlap with
+// `=` (0x3D), `[` (0x5B), `]` (0x5D), `#` (0x23), or `;` (0x3B), so the parser
+// must return them verbatim.
+func TestParseINI_NonASCIISSID(t *testing.T) {
+	cases := []struct {
+		name, ssid string
+	}{
+		{"latin1", "café-wifi"},
+		{"cjk", "東京 Wi-Fi"},
+		{"emoji-4byte", "Read Only Internet \xf0\x9f\xab\xa5"},
+		{"home-emoji", "Home \xf0\x9f\x8f\xa0"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := []byte("[wifi]\nssid = " + c.ssid + "\n")
+			got := parseINI(data)
+			if got["wifi"]["ssid"] != c.ssid {
+				t.Errorf("ssid = %q (% x); want %q (% x)",
+					got["wifi"]["ssid"], []byte(got["wifi"]["ssid"]),
+					c.ssid, []byte(c.ssid))
+			}
+		})
+	}
+}
+
 func TestApplyBinaryUpdate_ValidBinary(t *testing.T) {
 	dir := t.TempDir()
 	installDir := t.TempDir()
@@ -279,5 +305,122 @@ func TestApplyDeviceName_InvalidName(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	if err := applyDeviceName(logger, "BAD NAME"); err == nil {
 		t.Error("expected error for invalid device name")
+	}
+}
+
+func TestApplyPreProvisioning_Success(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := t.TempDir()
+
+	state := `{"enrolled":true,"cloudHost":"cloud.wendy.sh","orgId":1,"assetId":42,"keyPem":"fake-key","certPem":"fake-cert","chainPem":"fake-chain"}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	logger, _ := zap.NewDevelopment()
+	applyPreProvisioning(logger, cfgDir, configPath)
+
+	if _, err := os.Stat(filepath.Join(cfgDir, "provisioning.json")); !os.IsNotExist(err) {
+		t.Error("source provisioning.json should be deleted after apply")
+	}
+
+	got, err := os.ReadFile(filepath.Join(configPath, "provisioning.json"))
+	if err != nil {
+		t.Fatalf("provisioning.json not written to configPath: %v", err)
+	}
+	if string(got) != state {
+		t.Errorf("provisioning.json content = %q; want %q", got, state)
+	}
+
+	for _, name := range []string{"device-key.pem", "device.pem", "ca.pem"} {
+		if _, err := os.Stat(filepath.Join(configPath, name)); err != nil {
+			t.Errorf("%s not written: %v", name, err)
+		}
+	}
+
+	info, err := os.Stat(filepath.Join(configPath, "device-key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("device-key.pem mode = %o; want 0600", info.Mode().Perm())
+	}
+
+	info, err = os.Stat(filepath.Join(configPath, "device.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("device.pem mode = %o; want 0644", info.Mode().Perm())
+	}
+
+	info, err = os.Stat(filepath.Join(configPath, "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("ca.pem mode = %o; want 0644", info.Mode().Perm())
+	}
+
+	if _, err := os.Stat(filepath.Join(configPath, ".provisioned")); err != nil {
+		t.Error(".provisioned marker not written")
+	}
+}
+
+func TestApplyPreProvisioning_NoFile(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	applyPreProvisioning(logger, t.TempDir(), t.TempDir()) // must not panic
+}
+
+func TestApplyPreProvisioning_MalformedJSON(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := t.TempDir()
+	srcPath := filepath.Join(cfgDir, "provisioning.json")
+	if err := os.WriteFile(srcPath, []byte("not json {{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := zap.NewDevelopment()
+	applyPreProvisioning(logger, cfgDir, configPath)
+
+	if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
+		t.Error("malformed source should be deleted")
+	}
+	if _, err := os.Stat(filepath.Join(configPath, "provisioning.json")); !os.IsNotExist(err) {
+		t.Error("provisioning.json must not be written for malformed input")
+	}
+}
+
+func TestApplyPreProvisioning_IncompleteState(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := t.TempDir()
+	srcPath := filepath.Join(cfgDir, "provisioning.json")
+	// Missing keyPem — should be rejected.
+	if err := os.WriteFile(srcPath, []byte(`{"enrolled":true,"cloudHost":"cloud.wendy.sh","certPem":"cert"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := zap.NewDevelopment()
+	applyPreProvisioning(logger, cfgDir, configPath)
+
+	if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
+		t.Error("incomplete source should be deleted")
+	}
+	if _, err := os.Stat(filepath.Join(configPath, "provisioning.json")); !os.IsNotExist(err) {
+		t.Error("provisioning.json must not be written for incomplete input")
+	}
+}
+
+func TestApplyPreProvisioning_CreatesConfigDir(t *testing.T) {
+	cfgDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "subdir", "wendy-agent")
+
+	state := `{"enrolled":true,"cloudHost":"cloud.wendy.sh","orgId":1,"assetId":42,"keyPem":"k","certPem":"c","chainPem":"ch"}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := zap.NewDevelopment()
+	applyPreProvisioning(logger, cfgDir, configPath)
+
+	if _, err := os.Stat(filepath.Join(configPath, "provisioning.json")); err != nil {
+		t.Errorf("configPath should be created automatically: %v", err)
 	}
 }

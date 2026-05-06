@@ -1,9 +1,12 @@
 package containerd
 
 import (
+	"errors"
 	"testing"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestCreateContainerProgressMappingUsesApplyPhase(t *testing.T) {
@@ -50,5 +53,172 @@ func TestCreateContainerProgressMappingUsesUnpackingPhaseForStart(t *testing.T) 
 	}
 	if got.GetLayerIndex() != 0 {
 		t.Fatalf("layer index = %d; want 0", got.GetLayerIndex())
+	}
+}
+
+func TestBuildContainerBaseEnvIncludesWendyHostname(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "wendyos-test-device.local" }
+
+	env := buildContainerBaseEnv()
+
+	want := "WENDY_HOSTNAME=wendyos-test-device.local"
+	for _, kv := range env {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("env missing %q; got %v", want, env)
+}
+
+func TestBuildContainerBaseEnvOmitsWendyHostnameWhenUnavailable(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "" }
+
+	env := buildContainerBaseEnv()
+
+	for _, kv := range env {
+		if len(kv) >= len("WENDY_HOSTNAME=") && kv[:len("WENDY_HOSTNAME=")] == "WENDY_HOSTNAME=" {
+			t.Errorf("env unexpectedly contains %q when device hostname is unresolvable", kv)
+		}
+	}
+}
+
+func TestExpandAgentHook(t *testing.T) {
+	t.Setenv("EXTRA_VALUE", "ok")
+
+	got := expandAgentHook("echo ${WENDY_APP_ID} ${WENDY_HOSTNAME} ${EXTRA_VALUE}", "camera-app")
+	want := "echo camera-app localhost ok"
+	if got != want {
+		t.Fatalf("expandAgentHook = %q; want %q", got, want)
+	}
+}
+
+func TestExpandAgentHookMissingEnv(t *testing.T) {
+	t.Setenv("MISSING_VALUE", "")
+
+	got := expandAgentHook("echo ${MISSING_VALUE}", "app")
+	if got != "echo " {
+		t.Fatalf("expandAgentHook missing env = %q; want empty expansion", got)
+	}
+}
+
+func TestStartPostStartAgentHookSkippedWhenEmpty(t *testing.T) {
+	old := startPostStartHookCommand
+	t.Cleanup(func() { startPostStartHookCommand = old })
+
+	var calls int
+	startPostStartHookCommand = func(_, _, _ string) (func() error, error) {
+		calls++
+		return func() error { return nil }, nil
+	}
+
+	client := &Client{logger: zap.NewNop()}
+	started := client.startPostStartAgentHook("", "camera-app")
+	if started {
+		t.Fatal("startPostStartAgentHook returned true without command")
+	}
+	if calls != 0 {
+		t.Fatalf("hook runner called %d times; want 0", calls)
+	}
+}
+
+func TestStartPostStartAgentHookRunsWhenPresent(t *testing.T) {
+	t.Setenv("EXTRA_VALUE", "ok")
+	old := startPostStartHookCommand
+	t.Cleanup(func() { startPostStartHookCommand = old })
+
+	var gotShell, gotFlag, gotCommand string
+	startPostStartHookCommand = func(shell, flag, command string) (func() error, error) {
+		gotShell = shell
+		gotFlag = flag
+		gotCommand = command
+		return func() error { return nil }, nil
+	}
+
+	client := &Client{logger: zap.NewNop()}
+	started := client.startPostStartAgentHook("echo ${WENDY_APP_ID} ${WENDY_HOSTNAME} ${EXTRA_VALUE}", "camera-app")
+	if !started {
+		t.Fatal("startPostStartAgentHook returned false with command")
+	}
+	if gotShell == "" || gotFlag == "" {
+		t.Fatalf("shell command not populated: shell=%q flag=%q", gotShell, gotFlag)
+	}
+	wantCommand := "echo camera-app localhost ok"
+	if gotCommand != wantCommand {
+		t.Fatalf("hook command = %q; want %q", gotCommand, wantCommand)
+	}
+}
+
+func TestStartPostStartAgentHookStartErrorDoesNotLogCommand(t *testing.T) {
+	old := startPostStartHookCommand
+	t.Cleanup(func() { startPostStartHookCommand = old })
+
+	startPostStartHookCommand = func(_, _, _ string) (func() error, error) {
+		return nil, errors.New("start failed")
+	}
+
+	core, observed := observer.New(zap.WarnLevel)
+	client := &Client{logger: zap.New(core)}
+	started := client.startPostStartAgentHook("echo secret-token-value", "camera-app")
+	if started {
+		t.Fatal("startPostStartAgentHook returned true after start error")
+	}
+
+	logs := observed.FilterMessage("Failed to start postStart agent hook")
+	if logs.Len() != 1 {
+		t.Fatalf("warning log count = %d; want 1", logs.Len())
+	}
+	if observed.FilterMessageSnippet("secret-token-value").Len() != 0 {
+		t.Fatal("hook command leaked into warning message")
+	}
+	for _, field := range logs.All()[0].Context {
+		if field.Key == "command" {
+			t.Fatal("hook command leaked into warning fields")
+		}
+	}
+}
+
+func TestLayerMediaType_Zstd(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_ZSTD, false)
+	want := "application/vnd.oci.image.layer.v1.tar+zstd"
+	if got != want {
+		t.Errorf("layerMediaType(ZSTD, false) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_ZstdIgnoresGzipBool(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_ZSTD, true)
+	want := "application/vnd.oci.image.layer.v1.tar+zstd"
+	if got != want {
+		t.Errorf("layerMediaType(ZSTD, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_None(t *testing.T) {
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_NONE, true)
+	want := "application/vnd.oci.image.layer.v1.tar"
+	if got != want {
+		t.Errorf("layerMediaType(NONE, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_GzipDefault_GzipTrue(t *testing.T) {
+	// Old CLI path: compression field absent (zero value = GZIP), gzip=true.
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_GZIP, true)
+	want := "application/vnd.oci.image.layer.v1.tar+gzip"
+	if got != want {
+		t.Errorf("layerMediaType(GZIP, true) = %q; want %q", got, want)
+	}
+}
+
+func TestLayerMediaType_GzipDefault_GzipFalse(t *testing.T) {
+	// Old CLI path: compression field absent (zero value = GZIP), gzip=false → uncompressed.
+	got := layerMediaType(agentpb.RunContainerLayerHeader_COMPRESSION_GZIP, false)
+	want := "application/vnd.oci.image.layer.v1.tar"
+	if got != want {
+		t.Errorf("layerMediaType(GZIP, false) = %q; want %q", got, want)
 	}
 }

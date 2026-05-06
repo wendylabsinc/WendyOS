@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -165,6 +169,23 @@ func (c *Client) WriteLayer(ctx context.Context, dgst string, reader io.Reader, 
 	return nil
 }
 
+// layerMediaType returns the OCI media type for a layer given its compression.
+// The compression field takes precedence; when it is COMPRESSION_GZIP (the zero
+// default), the legacy gzip bool determines the type for backward compatibility.
+func layerMediaType(compression agentpb.RunContainerLayerHeader_CompressionType, gzip bool) string {
+	switch compression {
+	case agentpb.RunContainerLayerHeader_COMPRESSION_ZSTD:
+		return ocispec.MediaTypeImageLayerZstd
+	case agentpb.RunContainerLayerHeader_COMPRESSION_NONE:
+		return ocispec.MediaTypeImageLayer
+	default: // COMPRESSION_GZIP (0) or unrecognised
+		if gzip {
+			return ocispec.MediaTypeImageLayerGzip
+		}
+		return ocispec.MediaTypeImageLayer
+	}
+}
+
 // AssembleImage creates a containerd image from layers already present in the
 // content store. It builds an OCI manifest and config, writes them to the content
 // store, and registers the image. If the image already exists it is updated.
@@ -177,10 +198,7 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 	var layerDescs []ocispec.Descriptor
 	var diffIDs []digest.Digest
 	for _, l := range layers {
-		mediaType := ocispec.MediaTypeImageLayerGzip
-		if !l.GetGzip() {
-			mediaType = ocispec.MediaTypeImageLayer
-		}
+		mediaType := layerMediaType(l.GetCompression(), l.GetGzip())
 
 		dgst, err := digest.Parse(l.GetDigest())
 		if err != nil {
@@ -433,7 +451,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	if !unpacked {
 		c.logger.Info("Unpacking image", zap.String("image", imageName))
-		if err := c.UnpackImage(ctx, imageName, func(progress UnpackProgress) {
+		if err := c.UnpackImage(ctx, image, func(progress UnpackProgress) {
 			if mapped := toCreateContainerProgress(progress); mapped != nil {
 				report(mapped)
 			}
@@ -479,11 +497,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	// Build environment variables: image env first, then our overrides.
-	env := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"TERM=xterm",
-		fmt.Sprintf("WENDY_HOSTNAME=%s.local", appName),
-	}
+	env := buildContainerBaseEnv()
 	if specErr == nil {
 		env = append(imageSpec.Config.Env, env...)
 	}
@@ -513,7 +527,14 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
 
 	// Build labels for the container.
-	labels := wendyLabels(appName, version, req.GetRestartPolicy())
+	var mcpPort uint32
+	for _, e := range appCfg.Entitlements {
+		if e.Type == appconfig.EntitlementMCP {
+			mcpPort = uint32(e.Port)
+			break
+		}
+	}
+	labels := wendyLabels(appName, version, req.GetRestartPolicy(), mcpPort)
 
 	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
 	specJSON, err := json.Marshal(spec)
@@ -578,7 +599,7 @@ func (c *Client) applyCDIGPU(spec *localoci.Spec) {
 // StartContainer starts the task for a named container and returns a channel
 // that streams stdout/stderr output. When the container exits, a final
 // ContainerOutput with Done=true is sent and the channel is closed.
-func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -642,6 +663,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 	}
 
 	c.logger.Info("Container started", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
@@ -652,7 +674,7 @@ func (c *Client) StartContainer(ctx context.Context, appName string) (<-chan ser
 
 // StartContainerWithStdin is like StartContainer but attaches the provided
 // stdin reader to the container's standard input.
-func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
@@ -708,11 +730,94 @@ func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, st
 	}
 
 	c.logger.Info("Container started with stdin", zap.String("app_name", appName))
+	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
 	outputCh := make(chan services.ContainerOutput, 64)
 	go c.streamOutput(ctx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
 
 	return outputCh, nil
+}
+
+func shellCommand() (string, string) {
+	if runtime.GOOS == "windows" {
+		return "cmd.exe", "/C"
+	}
+	return "sh", "-c"
+}
+
+// deviceHostnameWithSuffix returns the device's mDNS hostname with the ".local"
+// suffix (e.g. "wendyos-mighty-kayak.local"), or "" if the OS hostname is
+// unavailable. Indirected through a var so tests can override it.
+var deviceHostnameWithSuffix = func() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return ""
+	}
+	return h + ".local"
+}
+
+// buildContainerBaseEnv builds the wendy-injected env vars layered on top of
+// the image's own env. WENDY_HOSTNAME is the device's mDNS hostname
+// (omitted when unresolvable).
+func buildContainerBaseEnv() []string {
+	env := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TERM=xterm",
+	}
+	if h := deviceHostnameWithSuffix(); h != "" {
+		env = append(env, "WENDY_HOSTNAME="+h)
+	}
+	return env
+}
+
+func expandAgentHook(command, appName string) string {
+	return os.Expand(command, func(key string) string {
+		switch key {
+		case "WENDY_HOSTNAME":
+			return "localhost"
+		case "WENDY_APP_ID":
+			return appName
+		default:
+			return os.Getenv(key)
+		}
+	})
+}
+
+var startPostStartHookCommand = func(shell, flag, command string) (func() error, error) {
+	cmd := exec.Command(shell, flag, command)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd.Wait, nil
+}
+
+func (c *Client) startPostStartAgentHook(command, appName string) bool {
+	if command == "" {
+		return false
+	}
+
+	expanded := expandAgentHook(command, appName)
+	shell, flag := shellCommand()
+	wait, err := startPostStartHookCommand(shell, flag, expanded)
+	if err != nil {
+		c.logger.Warn("Failed to start postStart agent hook",
+			zap.String("app_name", appName),
+			zap.Error(err),
+		)
+		return false
+	}
+	go func() {
+		if err := wait(); err != nil {
+			c.logger.Warn("postStart agent hook exited with error",
+				zap.String("app_name", appName),
+				zap.Error(err),
+			)
+		}
+	}()
+	c.logger.Info("Started postStart agent hook",
+		zap.String("app_name", appName),
+	)
+	return true
 }
 
 // deleteStaleTask attempts to load and force-delete any existing task for the
@@ -1024,15 +1129,46 @@ func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, e
 			_ = maxRetries
 		}
 
+		var mcpPort uint32
+		if portStr, ok := info.Labels[labelKeyMCPPort]; ok && portStr != "" {
+			if p, err := strconv.ParseUint(portStr, 10, 32); err == nil {
+				mcpPort = uint32(p)
+			}
+		}
+
 		result = append(result, &agentpb.AppContainer{
 			AppName:      ctr.ID(),
 			AppVersion:   appVersion,
 			RunningState: runningState,
 			FailureCount: failureCount,
+			McpPort:      mcpPort,
 		})
 	}
 
 	return result, nil
+}
+
+// GetContainerMCPPort returns the MCP server port for the named container,
+// or 0 if the container has no mcp entitlement.
+func (c *Client) GetContainerMCPPort(ctx context.Context, appName string) (uint32, error) {
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return 0, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+	info, err := ctr.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting container info for %q: %w", appName, err)
+	}
+	portStr, ok := info.Labels[labelKeyMCPPort]
+	if !ok || portStr == "" {
+		return 0, nil
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing mcp port label for %q: %w", appName, err)
+	}
+	return uint32(p), nil
 }
 
 // GetContainerStats collects memory and image-size stats for all Wendy-managed containers.
@@ -1126,25 +1262,7 @@ func extractContainerMetrics(metric *types.Metric) services.ContainerMetrics {
 
 // extractMemoryBytes decodes cgroup v1 or v2 task metrics and returns memory usage in bytes.
 func extractMemoryBytes(metric *types.Metric) int64 {
-	switch {
-	case typeurl.Is(metric.Data, (*cgroupv1.Metrics)(nil)):
-		m := &cgroupv1.Metrics{}
-		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
-			return 0
-		}
-		if m.Memory != nil && m.Memory.Usage != nil {
-			return int64(m.Memory.Usage.Usage)
-		}
-	case typeurl.Is(metric.Data, (*cgroupv2.Metrics)(nil)):
-		m := &cgroupv2.Metrics{}
-		if err := typeurl.UnmarshalTo(metric.Data, m); err != nil {
-			return 0
-		}
-		if m.Memory != nil {
-			return int64(m.Memory.Usage)
-		}
-	}
-	return 0
+	return extractContainerMetrics(metric).MemBytes
 }
 
 // streamReader is a helper that continuously reads from a reader and sends

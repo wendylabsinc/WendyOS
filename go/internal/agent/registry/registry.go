@@ -7,6 +7,7 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,14 +36,28 @@ import (
 
 // Server is the embedded OCI registry HTTP server.
 type Server struct {
-	httpServer *http.Server
-	logger     *zap.Logger
+	httpServer   *http.Server
+	client       *containerd.Client
+	logger       *zap.Logger
+	shutdownOnce sync.Once
+}
+
+// Shutdown gracefully stops the registry server and releases the containerd client.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (s *Server) Shutdown(ctx context.Context) error {
+	var err error
+	s.shutdownOnce.Do(func() {
+		err = s.httpServer.Shutdown(ctx)
+		s.client.Close()
+	})
+	return err
 }
 
 // Start creates a new OCI registry HTTP server backed by the given containerd
-// client and starts listening on listenAddr. The server shuts down gracefully
-// when ctx is cancelled.
-func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger) (*Server, error) {
+// client and starts listening on listenAddr. When tlsConfig is non-nil the
+// server is served over HTTPS. The server shuts down gracefully when ctx is
+// cancelled.
+func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config) (*Server, error) {
 	client, err := containerd.New(containerdAddr, containerd.WithDefaultNamespace("default"))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
@@ -79,10 +95,15 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 
 	handler := loggingMiddleware(logger)(securityHeadersMiddleware(mux))
 
-	lis, err := net.Listen("tcp", listenAddr)
+	tcpLis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("listening on %s for registry: %w", listenAddr, err)
+	}
+
+	var serveListener net.Listener = tcpLis
+	if tlsConfig != nil {
+		serveListener = tls.NewListener(tcpLis, tlsConfig)
 	}
 
 	srv := &http.Server{
@@ -93,11 +114,15 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	s := &Server{httpServer: srv, logger: logger}
+	s := &Server{httpServer: srv, client: client, logger: logger}
 
+	scheme := "HTTP"
+	if tlsConfig != nil {
+		scheme = "HTTPS"
+	}
 	go func() {
-		logger.Info("Dev registry listening", zap.String("address", listenAddr))
-		if err := srv.Serve(lis); err != nil && err != http.ErrServerClosed {
+		logger.Info("Dev registry listening", zap.String("address", listenAddr), zap.String("scheme", scheme))
+		if err := srv.Serve(serveListener); err != nil && err != http.ErrServerClosed {
 			logger.Error("Dev registry server error", zap.Error(err))
 		}
 	}()
@@ -106,10 +131,7 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("Dev registry shutdown error", zap.Error(err))
-		}
-		client.Close()
+		_ = s.Shutdown(shutdownCtx)
 	}()
 
 	return s, nil
@@ -750,17 +772,17 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 		labels["containerd.io/gc.bref.content.subject"] = string(manifestChildren.Subject.Digest)
 	}
 
-	ctx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
+	leaseCtx, _, err := r.client.WithLease(ctx, leases.WithExpiration(r.blobLeaseExpiration))
 	if err != nil {
 		return ociregistry.Descriptor{}, err
 	}
 
 	cs := r.client.ContentStore()
 	ingestRef := string(desc.Digest)
-	if err := cs.Abort(ctx, ingestRef); err != nil && !errdefs.IsNotFound(err) {
+	if err := cs.Abort(leaseCtx, ingestRef); err != nil && !errdefs.IsNotFound(err) {
 		return ociregistry.Descriptor{}, err
 	}
-	if err := content.WriteBlob(ctx, cs, ingestRef, bytes.NewReader(contents), desc, content.WithLabels(labels)); err != nil {
+	if err := content.WriteBlob(leaseCtx, cs, ingestRef, bytes.NewReader(contents), desc, content.WithLabels(labels)); err != nil {
 		return ociregistry.Descriptor{}, err
 	}
 
@@ -770,12 +792,18 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 			Name:   r.imageName(repo, tag),
 			Target: desc,
 		}
-		_, err := is.Update(ctx, img, "target")
+		// Use a fresh context so the image service update is independent of the
+		// HTTP request lifecycle and the content-write lease. WithDefaultNamespace
+		// on the client injects the required namespace into every outgoing gRPC
+		// call, so no explicit namespace is needed here.
+		imgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := is.Update(imgCtx, img, "target")
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
 				return desc, err
 			}
-			_, err = is.Create(ctx, img)
+			_, err = is.Create(imgCtx, img)
 			if err != nil {
 				return desc, err
 			}

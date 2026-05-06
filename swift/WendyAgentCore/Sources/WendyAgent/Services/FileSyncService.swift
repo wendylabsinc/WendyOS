@@ -116,12 +116,13 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
             return entry
         }
 
-        func sendAck(for path: String) async throws {
+        // Pure response builder; callers are responsible for writing the ack.
+        func ackResponse(for path: String) -> Wendy_Agent_Services_V1_FileSyncResponse {
             var ackResponse = Wendy_Agent_Services_V1_FileSyncResponse()
             var ack = Wendy_Agent_Services_V1_FileSyncAck()
             ack.path = path
             ackResponse.responseType = .ack(ack)
-            try await writeResponse(ackResponse)
+            return ackResponse
         }
 
         do {
@@ -328,7 +329,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
 
                     activeTransfer = nil
                     finalizedPaths.insert(commit.path)
-                    try await sendAck(for: commit.path)
+                    try await writeResponse(ackResponse(for: commit.path))
 
                     logger.info(
                         "File committed",
@@ -388,7 +389,7 @@ actor FileSyncService: Wendy_Agent_Services_V1_WendyFileSyncService.ServiceProto
                         ofItemAtPath: destinationURL.path
                     )
                     finalizedPaths.insert(chmod.path)
-                    try await sendAck(for: chmod.path)
+                    try await writeResponse(ackResponse(for: chmod.path))
 
                     logger.info(
                         "File mode updated",

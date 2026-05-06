@@ -32,6 +32,11 @@ func NewRootCmd() *cobra.Command {
 			case "__ble-check", "open-browser":
 				return nil
 			}
+
+			if !cmd.Root().PersistentFlags().Changed("json") && !isInteractiveTerminal() {
+				jsonOutput = true
+			}
+
 			providers.Initialize(cmd.Context())
 
 			cfg, err := config.Load()
@@ -104,6 +109,8 @@ func NewRootCmd() *cobra.Command {
 	// Cloud Commands
 	authCmd := newAuthCmd()
 	authCmd.GroupID = "cloud"
+	cloudCmd := newCloudCmd()
+	cloudCmd.GroupID = "cloud"
 
 	// Device Commands
 	deviceCmd := newDeviceCmd()
@@ -123,6 +130,10 @@ func NewRootCmd() *cobra.Command {
 	utilsCmd.GroupID = "misc"
 	tourCmd := newTourCmd()
 	tourCmd.GroupID = "misc"
+	mcpCmd := newMCPCmd()
+	mcpCmd.GroupID = "misc"
+	completionCmd := newCompletionCmd()
+	completionCmd.GroupID = "misc"
 
 	// Hidden command used by a subprocess to test CoreBluetooth access.
 	// The main process spawns a child process that runs this command so
@@ -144,6 +155,7 @@ func NewRootCmd() *cobra.Command {
 		projectCmd,
 		jsonCmd,
 		authCmd,
+		cloudCmd,
 		deviceCmd,
 		discoverCmd,
 		osCmd,
@@ -152,6 +164,8 @@ func NewRootCmd() *cobra.Command {
 		analyticsCmd,
 		utilsCmd,
 		tourCmd,
+		mcpCmd,
+		completionCmd,
 	)
 
 	root.SetHelpCommandGroupID("misc")

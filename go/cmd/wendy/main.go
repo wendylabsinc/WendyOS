@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,7 +29,7 @@ func main() {
 		if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) {
 			os.Exit(0)
 		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", formatError(err))
+		fmt.Fprintln(os.Stderr, tui.ErrorMessage(formatError(err).Error()))
 		os.Exit(1)
 	}
 }
@@ -136,15 +137,25 @@ func formatError(err error) error {
 		prefix = msg[:idx]
 	}
 
-	isCloudCall := strings.Contains(prefix, "issuing certificate") || strings.Contains(prefix, "refreshing certificate") || strings.Contains(prefix, "connecting to cloud")
+	isPKICoreCall := strings.Contains(prefix, "pki-core")
+	isCloudCall := strings.Contains(prefix, "issuing certificate") ||
+		strings.Contains(prefix, "refreshing certificate") ||
+		strings.Contains(prefix, "creating enrollment token") ||
+		strings.Contains(prefix, "connecting to cloud")
 
 	switch {
 	case strings.Contains(msg, "code = Unavailable") && strings.Contains(msg, "connection refused"):
+		if isPKICoreCall {
+			return fmt.Errorf("%sCould not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine.", prefix)
+		}
 		if isCloudCall {
 			return fmt.Errorf("%sCould not connect to Wendy Cloud. Please try again later.", prefix)
 		}
 		return fmt.Errorf("%sCould not connect to device. Is it powered on and connected to the network?", prefix)
 	case strings.Contains(msg, "code = Unavailable"):
+		if isPKICoreCall {
+			return fmt.Errorf("%sLocal pki-core is unavailable.", prefix)
+		}
 		if isCloudCall {
 			return fmt.Errorf("%sWendy Cloud is unavailable. Please try again later.", prefix)
 		}

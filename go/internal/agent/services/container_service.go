@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -195,12 +198,20 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		return status.Errorf(codes.Internal, "failed to create container: %v", err)
 	}
 
-	return s.streamContainerOutput(ctx, req.GetAppName(), stream)
+	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), stream)
 }
 
 // StartContainer starts an existing container and streams output.
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
-	return s.streamContainerOutput(stream.Context(), req.GetAppName(), stream)
+	return s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), stream)
+}
+
+func postStartAgentHookFromContext(ctx context.Context) string {
+	values := metadata.ValueFromIncomingContext(ctx, appconfig.PostStartAgentHookMetadataKey)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[len(values)-1]
 }
 
 // streamContainerOutput starts a container and streams its stdout/stderr to the client.
@@ -209,9 +220,10 @@ func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, st
 func (s *ContainerService) streamContainerOutput(
 	ctx context.Context,
 	appName string,
+	postStartAgentCommand string,
 	stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse],
 ) error {
-	outputCh, err := s.containerd.StartContainer(ctx, appName)
+	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
 	}
@@ -298,6 +310,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	}
 
 	ctx := stream.Context()
+	postStartAgentCommand := postStartAgentHookFromContext(ctx)
 
 	// Pipe client stdin messages into the container's stdin.
 	stdinR, stdinW := io.Pipe()
@@ -319,7 +332,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 		}
 	}()
 
-	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR)
+	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentCommand)
 	if err != nil {
 		stdinR.Close()
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
@@ -565,6 +578,97 @@ func (s *ContainerService) ListContainers(_ *agentpb.ListContainersRequest, stre
 		}
 	}
 	return nil
+}
+
+// StreamMCP proxies a bidirectional gRPC stream to the container's MCP TCP port.
+// The caller must supply an "app-name" metadata key identifying the target container.
+func (s *ContainerService) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCPChunk, agentpb.MCPChunk]) error {
+	ctx := stream.Context()
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("app-name")
+	if len(vals) == 0 || vals[0] == "" {
+		return status.Errorf(codes.InvalidArgument, "app-name metadata is required")
+	}
+	appName := vals[0]
+
+	mcpPort, err := s.containerd.GetContainerMCPPort(ctx, appName)
+	if err != nil {
+		return status.Errorf(codes.NotFound, "container %q: %v", appName, err)
+	}
+	if mcpPort == 0 {
+		return status.Errorf(codes.NotFound, "container %q has no mcp entitlement", appName)
+	}
+
+	// Verify the container is running before attempting to dial its MCP port.
+	containers, listErr := s.containerd.ListContainers(ctx)
+	if listErr != nil {
+		s.logger.Warn("failed to list containers for running check in StreamMCP", zap.Error(listErr))
+	} else {
+		running := false
+		for _, c := range containers {
+			if c.GetAppName() == appName && c.GetRunningState() == agentpb.AppRunningState_RUNNING {
+				running = true
+				break
+			}
+		}
+		if !running {
+			return status.Errorf(codes.FailedPrecondition, "container %q is not running", appName)
+		}
+	}
+
+	tcpConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", mcpPort))
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "connecting to MCP server for %q on port %d: %v", appName, mcpPort, err)
+	}
+	defer tcpConn.Close()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errc := make(chan error, 2)
+
+	// gRPC → TCP
+	go func() {
+		for {
+			chunk, err := stream.Recv()
+			if err != nil {
+				errc <- err
+				return
+			}
+			if _, err := tcpConn.Write(chunk.Data); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	// TCP → gRPC
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := tcpConn.Read(buf)
+			if n > 0 {
+				if sendErr := stream.Send(&agentpb.MCPChunk{Data: buf[:n]}); sendErr != nil {
+					errc <- sendErr
+					return
+				}
+			}
+			if readErr != nil {
+				errc <- readErr
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errc:
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
 }
 
 // parseAppConfig parses the wendy.json app config bytes.

@@ -194,7 +194,7 @@ func (m *ContainerMonitor) checkContainers(ctx context.Context) {
 		state.LastRestart = time.Now()
 
 		go func(name string) {
-			if _, err := m.containerd.StartContainer(ctx, name); err != nil {
+			if _, err := m.containerd.StartContainer(ctx, name, ""); err != nil {
 				m.logger.Error("Failed to restart container",
 					zap.String("app_name", name),
 					zap.Error(err),
