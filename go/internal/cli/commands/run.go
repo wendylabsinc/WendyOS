@@ -1346,6 +1346,7 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	cmd := execCommandContext(ctx, shell, flag, expanded)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	configurePostStartProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		cliLogln("Warning: postStart hook failed to start: %v", err)
 		return nil
