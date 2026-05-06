@@ -44,6 +44,12 @@ type PickerAddMsg struct {
 // interactive so the user can still select from the collected items.
 type PickerDoneMsg struct{}
 
+// PickerSetMsg replaces all items in the picker. It is intended for
+// authoritative refreshes where missing items should disappear from the list.
+type PickerSetMsg struct {
+	Items []PickerItem
+}
+
 // PickerModel is a Bubble Tea model that presents a live-updating list of
 // items and lets the user select one with arrow keys + Enter.
 type PickerModel struct {
@@ -169,6 +175,23 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PickerDoneMsg:
 		m.scanning = false
+
+	case PickerSetMsg:
+		cursorKey := m.currentCursorKey()
+		m.items = nil
+		m.seenIdx = make(map[string]int, len(msg.Items))
+		for _, item := range msg.Items {
+			key := strings.ToLower(pickerItemKey(item))
+			if idx, ok := m.seenIdx[key]; ok {
+				if m.MergeItem != nil {
+					m.MergeItem(&m.items[idx], item)
+				}
+				continue
+			}
+			m.seenIdx[key] = len(m.items)
+			m.items = append(m.items, item)
+		}
+		m.refreshTableWithCursorKey(cursorKey)
 	}
 
 	return m, nil
@@ -282,13 +305,18 @@ func newPickerTable() bubbleTable.Model {
 	return NewBubbleTable(true, nil)
 }
 
-func (m *PickerModel) refreshTable() {
-	// Remember which item the cursor is on so we can restore it after sorting.
-	var cursorKey string
+func (m *PickerModel) currentCursorKey() string {
 	if cursor := m.table.Cursor(); cursor >= 0 && cursor < len(m.items) {
-		cursorKey = strings.ToLower(pickerItemKey(m.items[cursor]))
+		return strings.ToLower(pickerItemKey(m.items[cursor]))
 	}
+	return ""
+}
 
+func (m *PickerModel) refreshTable() {
+	m.refreshTableWithCursorKey(m.currentCursorKey())
+}
+
+func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 	// Sort items for a stable, predictable display order. When SortKey is set,
 	// it takes precedence; otherwise sort by name (using DedupKey if present).
 	sort.SliceStable(m.items, func(i, j int) bool {
@@ -339,13 +367,20 @@ func (m *PickerModel) refreshTable() {
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 
-	// Restore cursor to the same item, or default to 0 on first render.
-	if cursorKey != "" {
-		if idx, ok := m.seenIdx[cursorKey]; ok {
-			m.table.SetCursor(idx)
+	// Restore cursor to the same item when possible. If that item disappeared,
+	// keep the cursor near its previous position and clamp it into range.
+	if len(rows) > 0 {
+		if cursorKey != "" {
+			if idx, ok := m.seenIdx[cursorKey]; ok {
+				m.table.SetCursor(idx)
+			} else if m.table.Cursor() >= len(rows) {
+				m.table.SetCursor(len(rows) - 1)
+			}
+		} else if m.table.Cursor() < 0 {
+			m.table.SetCursor(0)
+		} else if m.table.Cursor() >= len(rows) {
+			m.table.SetCursor(len(rows) - 1)
 		}
-	} else if len(rows) > 0 && m.table.Cursor() < 0 {
-		m.table.SetCursor(0)
 	}
 
 	m.table.SetWidth(pickerTableWidth(m.table.Columns()))
