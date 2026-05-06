@@ -79,23 +79,7 @@ jobs:
           WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY: ${{ env.INPUT_AGENT_WORKDIR }}
         run: |
           set -euo pipefail
-
-          # Self-hosted macOS runners run as LaunchAgents, which can miss Local
-          # Network permission for mDNS/link-local access. Run through localhost
-          # SSH so the command executes in the logged-in user session, matching
-          # the hardware integration workflow pattern.
-          quote() { printf '%q' "$1"; }
-
-          SSH_ENV="export PATH=$(quote "$PATH")"
-          SSH_ENV+=" GITHUB_ACTIONS=$(quote "${GITHUB_ACTIONS:-}")"
-          SSH_ENV+=" GITHUB_RUN_ID=$(quote "${GITHUB_RUN_ID:-local}")"
-          SSH_ENV+=" GITHUB_RUN_ATTEMPT=$(quote "${GITHUB_RUN_ATTEMPT:-1}")"
-          SSH_ENV+=" WENDY_AGENT_E2E_TEST_FILTERS=$(quote "${WENDY_AGENT_E2E_TEST_FILTERS:-}")"
-          SSH_ENV+=" WENDY_AGENT_E2E_AGENT_SSH=$(quote "${WENDY_AGENT_E2E_AGENT_SSH:-}")"
-          SSH_ENV+=" WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY=$(quote "${WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY:-}")"
-
-          ssh -A -o StrictHostKeyChecking=no localhost \
-            "$SSH_ENV && cd $(quote "$GITHUB_WORKSPACE/swift") && bash ./Scripts/TestE2E.sh"
+          bash ./Scripts/TestE2E.sh
 
       - name: Upload Swift E2E reports zip
         if: always()
