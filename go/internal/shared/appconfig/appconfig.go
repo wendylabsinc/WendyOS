@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -216,7 +216,9 @@ func (c *AppConfig) Validate() error {
 			if e.Path == "" {
 				return fmt.Errorf("entitlement[%d]: persist entitlement requires a path", i)
 			}
-			if !filepath.IsAbs(e.Path) {
+			// Persist paths are container destinations, so validate them as
+			// POSIX paths regardless of the host OS running the CLI.
+			if !path.IsAbs(e.Path) {
 				return fmt.Errorf("entitlement[%d]: persist path must be absolute, got %q", i, e.Path)
 			}
 			if containsDotDot(e.Path) {

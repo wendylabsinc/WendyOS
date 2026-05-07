@@ -156,6 +156,23 @@ func TestValidate_PersistMissingFields(t *testing.T) {
 	}
 }
 
+func TestValidate_PersistPathUsesContainerPathSemantics(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Entitlements: []Entitlement{
+			{Type: EntitlementPersist, Name: "vol1", Path: "/data"},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error for POSIX container path: %v", err)
+	}
+
+	cfg.Entitlements[0].Path = `C:\data`
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() expected error for host-style absolute path, got nil")
+	}
+}
+
 func TestValidate_GPIOWithoutPins(t *testing.T) {
 	cfg := &AppConfig{
 		AppID: "com.example.app",
