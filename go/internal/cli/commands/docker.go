@@ -14,11 +14,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"strconv"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
@@ -1075,26 +1075,70 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 	return registryAddr, proxy.Close, nil
 }
 
+// dockerRegistryProxyAddrs caches one proxy address per AgentConnection. The
+// proxy is allocated once (port 0 → OS-assigned) and reused for all pushes on
+// that connection, so the buildx builder config never changes between concurrent
+// builds and no builder teardown races can kill an in-flight push.
+var (
+	dockerRegistryProxyCacheMu sync.Mutex
+	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]string{}
+)
+
 // resolveRegistryForAgent determines how Docker buildx should reach the
-// agent's registry. Cloud connections provide a RegistryDialer that opens a
-// fresh broker tunnel per TCP connection; local/LAN connections use the normal
-// host-to-device proxy path.
+// agent's registry. The proxy is started once per connection and cached so
+// concurrent pushes to the same device share a stable host:port address.
 func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+	// Fast path: return cached address from a previously started proxy.
+	dockerRegistryProxyCacheMu.Lock()
+	if addr, ok := dockerRegistryProxyAddrs[conn]; ok {
+		dockerRegistryProxyCacheMu.Unlock()
+		return addr, func() {}, nil
+	}
+	dockerRegistryProxyCacheMu.Unlock()
+
+	// Slow path: start a proxy. Use context.Background so the proxy outlives
+	// this particular push and is reused by concurrent or subsequent pushes.
+	var addr string
+	var stopProxy func()
+
 	if conn.RegistryDialer == nil {
-		return resolveRegistry(ctx, conn.Host, port)
+		addr, stopProxy, err = resolveRegistry(context.Background(), conn.Host, port)
+		if err != nil {
+			return "", nil, err
+		}
+	} else {
+		proxy, proxyErr := startRegistryProxyWithDialer(context.Background(), func(ctx context.Context) (net.Conn, error) {
+			return conn.RegistryDialer(ctx, port)
+		})
+		if proxyErr != nil {
+			return "", nil, fmt.Errorf("starting cloud registry proxy: %w", proxyErr)
+		}
+		stopProxy = proxy.Close
+		if runtime.GOOS == "linux" {
+			addr = fmt.Sprintf("127.0.0.1:%d", proxy.Port())
+		} else {
+			addr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
+		}
 	}
 
-	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
-		return conn.RegistryDialer(ctx, port)
-	})
-	if err != nil {
-		return "", nil, fmt.Errorf("starting cloud registry proxy: %w", err)
+	// Store under lock. If another goroutine raced and stored first, discard
+	// our proxy and return theirs.
+	dockerRegistryProxyCacheMu.Lock()
+	if existing, ok := dockerRegistryProxyAddrs[conn]; ok {
+		dockerRegistryProxyCacheMu.Unlock()
+		stopProxy()
+		return existing, func() {}, nil
 	}
+	dockerRegistryProxyAddrs[conn] = addr
+	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
+		dockerRegistryProxyCacheMu.Lock()
+		delete(dockerRegistryProxyAddrs, conn)
+		dockerRegistryProxyCacheMu.Unlock()
+		stopProxy()
+	}))
+	dockerRegistryProxyCacheMu.Unlock()
 
-	if runtime.GOOS == "linux" {
-		return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
-	}
-	return fmt.Sprintf("host.docker.internal:%d", proxy.Port()), proxy.Close, nil
+	return addr, func() {}, nil
 }
 
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
