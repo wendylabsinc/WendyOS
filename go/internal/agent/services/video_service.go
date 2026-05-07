@@ -411,14 +411,15 @@ func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
 	// H.264 encoders: no server-side h264parse required — x264enc/omxh264enc/etc.
 	// output annexb H.264 that the client's h264parse can parse directly.
 	for _, enc := range []string{
-		"v4l2h264enc",  // V4L2 M2M hardware (gst-plugins-good)
-		"omxh264enc",   // OpenMAX hardware (Broadcom, Qualcomm)
-		"avenc_h264",   // libavcodec bridge (gst-libav)
-		"x264enc",      // software (gst-plugins-ugly)
-		"openh264enc",  // software (gst-plugins-bad)
-		"vaapih264enc", // Intel VA-API
-		"nvh264enc",    // NVIDIA
-		"msdkh264enc",  // Intel Media SDK
+		"nvv4l2h264enc", // NVIDIA V4L2 hardware (Jetson L4T, gstreamer1.0-plugins-nvvideo4linux2)
+		"v4l2h264enc",   // V4L2 M2M hardware (gst-plugins-good)
+		"omxh264enc",    // OpenMAX hardware (Broadcom, Qualcomm)
+		"avenc_h264",    // libavcodec bridge (gst-libav)
+		"x264enc",       // software (gst-plugins-ugly)
+		"openh264enc",   // software (gst-plugins-bad)
+		"vaapih264enc",  // Intel VA-API
+		"nvh264enc",     // NVIDIA NVENC (desktop)
+		"msdkh264enc",   // Intel Media SDK
 	} {
 		if hasElem(enc) {
 			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
@@ -495,6 +496,9 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 // H.264 encoders omit server-side h264parse — the annexb output is parsed by the client.
 func encoderSegment(encoder string) string {
 	switch encoder {
+	case "nvv4l2h264enc":
+		// Jetson L4T hardware encoder; NV12 is its preferred input format.
+		return "videoconvert ! video/x-raw,format=NV12 ! nvv4l2h264enc"
 	case "v4l2h264enc":
 		return "videoconvert ! v4l2h264enc ! video/x-h264,profile=baseline"
 	case "x264enc":

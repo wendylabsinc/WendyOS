@@ -168,6 +168,18 @@ func TestBuildGStreamerArgs_V4L2HardwareEncoder(t *testing.T) {
 	}
 }
 
+func TestBuildGStreamerArgs_NVV4L2HardwareEncoder(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "nvv4l2h264enc")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "nvv4l2h264enc") {
+		t.Errorf("expected nvv4l2h264enc in pipeline: %v", args)
+	}
+	if !strings.Contains(joined, "video/x-raw,format=NV12") {
+		t.Errorf("expected NV12 capsfilter for nvv4l2h264enc: %v", args)
+	}
+}
+
 func TestBuildGStreamerArgs_VP8Encoder(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
 	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "vp8enc")
