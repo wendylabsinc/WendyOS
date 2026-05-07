@@ -364,6 +364,7 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 	} else {
 		cols = pickerColumns(rows, activeCols)
 	}
+	m.table.SetRows(nil)
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 
