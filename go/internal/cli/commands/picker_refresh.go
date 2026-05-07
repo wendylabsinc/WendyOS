@@ -17,7 +17,8 @@ type refreshingPickerLoadMsg struct {
 type refreshingPickerModel struct {
 	picker   tui.PickerModel
 	ctx      context.Context
-	interval time.Duration
+	maxDelay time.Duration
+	interval increasingRefreshInterval
 	load     func(context.Context) ([]tui.PickerItem, error)
 	err      error
 }
@@ -31,7 +32,7 @@ func newRefreshingPickerModel(
 	return refreshingPickerModel{
 		picker:   tui.NewPickerWithTitle(title),
 		ctx:      ctx,
-		interval: interval,
+		maxDelay: interval,
 		load:     load,
 	}
 }
@@ -49,7 +50,8 @@ func (m refreshingPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		updated, _ := m.picker.Update(tui.PickerSetMsg{Items: msg.items})
 		m.picker = updated.(tui.PickerModel)
-		return m, delayThen(m.interval, m.loadCmd())
+		delay := m.interval.delay(m.maxDelay)
+		return m, delayThen(delay, m.loadCmd())
 	default:
 		updated, cmd := m.picker.Update(msg)
 		m.picker = updated.(tui.PickerModel)

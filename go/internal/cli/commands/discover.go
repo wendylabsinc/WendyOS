@@ -220,6 +220,9 @@ type discoverModel struct {
 	opts               discovery.DiscoveryOptions
 	collection         *models.DevicesCollection
 	bleSeen            map[string]time.Time // device ID -> time last seen in a BLE scan
+	usbInterval        increasingRefreshInterval
+	ethernetInterval   increasingRefreshInterval
+	externalInterval   increasingRefreshInterval
 	table              bubbleTable.Model
 	quitting           bool
 	hasResults         bool
@@ -415,12 +418,14 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
 		m.refreshTable()
-		return m, delayThen(env.DiscoverUSBInterval(), m.scanUSB())
+		delay := m.usbInterval.delay(env.DiscoverUSBInterval())
+		return m, delayThen(delay, m.scanUSB())
 	case ethScanMsg:
 		m.collection.EthernetInterfaces = msg.devices
 		m.hasResults = true
 		m.refreshTable()
-		return m, delayThen(env.DiscoverEthernetInterval(), m.scanEthernet())
+		delay := m.ethernetInterval.delay(env.DiscoverEthernetInterval())
+		return m, delayThen(delay, m.scanEthernet())
 	case lanScanMsg:
 		// Preserve last known AgentVersion and DeviceType when the gRPC probe
 		// failed. The probe uses a 1500 ms timeout, so transient latency can
@@ -490,7 +495,8 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collection.ExternalDevices = msg.devices
 		m.hasResults = true
 		m.refreshTable()
-		return m, delayThen(env.DiscoverExternalInterval(), m.scanExternal())
+		delay := m.externalInterval.delay(env.DiscoverExternalInterval())
+		return m, delayThen(delay, m.scanExternal())
 	case flashClearMsg:
 		m.flashMessage = ""
 		m.flashIsError = false
