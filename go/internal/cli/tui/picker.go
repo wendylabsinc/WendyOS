@@ -374,7 +374,7 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 		if cursorKey != "" {
 			if idx, ok := m.seenIdx[cursorKey]; ok {
 				m.table.SetCursor(idx)
-			} else if m.table.Cursor() >= len(rows) {
+			} else if m.table.Cursor() < 0 || m.table.Cursor() >= len(rows) {
 				m.table.SetCursor(len(rows) - 1)
 			}
 		} else if m.table.Cursor() < 0 {
