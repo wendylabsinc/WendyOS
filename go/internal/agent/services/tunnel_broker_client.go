@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
@@ -19,7 +20,9 @@ import (
 
 const (
 	brokerHeartbeatInterval = 30 * time.Second
-	brokerMaxBackoff        = 5 * time.Minute
+	brokerMaxBackoff        = 90 * time.Second
+	brokerKeepaliveTime     = 30 * time.Second
+	brokerKeepaliveTimeout  = 10 * time.Second
 )
 
 // TunnelBrokerClient maintains a persistent RegisterPresence stream with the broker
@@ -149,7 +152,14 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 		"x-wendy-client-cert", certHeader,
 		"x-forwarded-client-cert", certHeader,
 	)
-	return []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))}, md, nil
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                brokerKeepaliveTime,
+			Timeout:             brokerKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
+	}, md, nil
 }
 
 func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
