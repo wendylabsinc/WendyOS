@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -373,10 +374,11 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 	if name == "." || name == ".." || name == "/" || name == "" {
 		return
 	}
-	// Validate the container destination: must be absolute with no dot-dot
-	// components. Check the original before cleaning so "a/../b" is rejected
-	// even though Clean would resolve it to a valid absolute path.
-	if !filepath.IsAbs(ent.Path) {
+	// Validate the container destination as a POSIX path: it must be
+	// absolute with no dot-dot components. Check the original before cleaning
+	// so "a/../b" is rejected even though Clean would resolve it to a valid
+	// absolute path.
+	if !path.IsAbs(ent.Path) {
 		return
 	}
 	for _, component := range strings.Split(ent.Path, "/") {
@@ -384,7 +386,7 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 			return
 		}
 	}
-	dest := filepath.Clean(ent.Path)
+	dest := path.Clean(ent.Path)
 	hostPath := filepath.Join("/var/lib/wendy/volumes", name)
 	if err := os.MkdirAll(hostPath, 0o755); err != nil {
 		// Best-effort: the container will fail to start with a clear mount error
