@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +21,126 @@ func mustDetectProjectType(t *testing.T, dir string) string {
 		t.Fatalf("detectProjectType unexpected error: %v", err)
 	}
 	return got
+}
+
+func TestEnsureDockerDaemon_DarwinUsesBundledCLIWhenRuntimeInstalledButDockerMissingFromPath(t *testing.T) {
+	oldRuntimes := dockerRuntimes
+	oldLookPath := dockerLookPathFn
+	oldVersionOK := dockerVersionOKFn
+	oldOpenRuntime := dockerOpenRuntimeFn
+	oldInstallRuntime := dockerInstallRuntimeFn
+	oldInteractive := isInteractiveTerminalFn
+	t.Cleanup(func() {
+		dockerRuntimes = oldRuntimes
+		dockerLookPathFn = oldLookPath
+		dockerVersionOKFn = oldVersionOK
+		dockerOpenRuntimeFn = oldOpenRuntime
+		dockerInstallRuntimeFn = oldInstallRuntime
+		isInteractiveTerminalFn = oldInteractive
+	})
+
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "Docker.app")
+	cliPath := filepath.Join(appPath, "Contents", "Resources", "bin", "docker")
+	if err := os.MkdirAll(filepath.Dir(cliPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cliPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dockerRuntimes = []dockerRuntime{{
+		name:        "Docker Desktop",
+		app:         appPath,
+		cliPaths:    []string{cliPath},
+		cliLinkHint: "link Docker Desktop CLI tools",
+	}}
+	t.Setenv("PATH", filepath.Join(dir, "no-docker-on-path"))
+	cliDir := filepath.Dir(cliPath)
+
+	dockerLookPathFn = func(file string) (string, error) {
+		if file == "docker" && pathHasDir(os.Getenv("PATH"), cliDir) {
+			return cliPath, nil
+		}
+		return "", errors.New("not found")
+	}
+	versionChecks := 0
+	dockerVersionOKFn = func(context.Context) bool {
+		versionChecks++
+		return pathHasDir(os.Getenv("PATH"), cliDir)
+	}
+	dockerOpenRuntimeFn = func(context.Context, string) error {
+		t.Fatal("should not open Docker Desktop once bundled CLI works")
+		return nil
+	}
+	dockerInstallRuntimeFn = func(context.Context) error {
+		t.Fatal("should not prompt/install Docker Desktop when the app is already installed")
+		return nil
+	}
+	isInteractiveTerminalFn = func() bool { return false }
+
+	if err := ensureDockerDaemonForGOOS(context.Background(), "darwin"); err != nil {
+		t.Fatalf("ensureDockerDaemonForGOOS: %v", err)
+	}
+	if !pathHasDir(os.Getenv("PATH"), cliDir) {
+		t.Fatalf("PATH = %q, want bundled CLI dir %q", os.Getenv("PATH"), cliDir)
+	}
+	if versionChecks < 2 {
+		t.Fatalf("version checks = %d, want initial failure and retry after PATH update", versionChecks)
+	}
+}
+
+func TestEnsureDockerDaemon_DarwinRuntimeInstalledButDockerCLIMissingDiagnostic(t *testing.T) {
+	oldRuntimes := dockerRuntimes
+	oldLookPath := dockerLookPathFn
+	oldVersionOK := dockerVersionOKFn
+	oldOpenRuntime := dockerOpenRuntimeFn
+	oldInstallRuntime := dockerInstallRuntimeFn
+	oldInteractive := isInteractiveTerminalFn
+	t.Cleanup(func() {
+		dockerRuntimes = oldRuntimes
+		dockerLookPathFn = oldLookPath
+		dockerVersionOKFn = oldVersionOK
+		dockerOpenRuntimeFn = oldOpenRuntime
+		dockerInstallRuntimeFn = oldInstallRuntime
+		isInteractiveTerminalFn = oldInteractive
+	})
+
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "Docker.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dockerRuntimes = []dockerRuntime{{
+		name:        "Docker Desktop",
+		app:         appPath,
+		cliPaths:    []string{filepath.Join(appPath, "Contents", "Resources", "bin", "docker")},
+		cliLinkHint: "link Docker Desktop CLI tools",
+	}}
+	t.Setenv("PATH", filepath.Join(dir, "no-docker-on-path"))
+	dockerLookPathFn = func(string) (string, error) { return "", errors.New("not found") }
+	dockerVersionOKFn = func(context.Context) bool { return false }
+	dockerOpenRuntimeFn = func(context.Context, string) error {
+		t.Fatal("should not open runtime when no docker CLI is available")
+		return nil
+	}
+	dockerInstallRuntimeFn = func(context.Context) error {
+		t.Fatal("should not prompt/install Docker Desktop when the app is already installed")
+		return nil
+	}
+	isInteractiveTerminalFn = func() bool { return false }
+
+	err := ensureDockerDaemonForGOOS(context.Background(), "darwin")
+	if err == nil {
+		t.Fatal("expected docker CLI missing diagnostic")
+	}
+	msg := err.Error()
+	for _, want := range []string{"Docker Desktop is installed", "docker CLI is not on PATH", "link Docker Desktop CLI tools"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error = %q, want substring %q", msg, want)
+		}
+	}
 }
 
 func TestDetectProjectType_Dockerfile(t *testing.T) {

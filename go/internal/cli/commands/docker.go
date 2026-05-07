@@ -286,66 +286,131 @@ func ensureContainerPlugin(dir string) error {
 	return nil
 }
 
-// dockerRuntimes lists macOS Docker-compatible runtimes in detection order.
-// Each entry maps a human-readable name to its .app bundle path.
-var dockerRuntimes = []struct{ name, app string }{
-	{"OrbStack", "/Applications/OrbStack.app"},
-	{"Docker Desktop", "/Applications/Docker.app"},
-	{"Rancher Desktop", "/Applications/Rancher Desktop.app"},
+type dockerRuntime struct {
+	name        string
+	app         string
+	cliPaths    []string
+	cliLinkHint string
 }
+
+// dockerRuntimes lists macOS Docker-compatible runtimes in detection order.
+// Each entry maps a human-readable name to its .app bundle path and known
+// bundled Docker-compatible CLI locations.
+var dockerRuntimes = []dockerRuntime{
+	{
+		name: "OrbStack",
+		app:  "/Applications/OrbStack.app",
+		cliPaths: []string{
+			"/Applications/OrbStack.app/Contents/MacOS/xbin/docker",
+			"/Applications/OrbStack.app/Contents/Resources/bin/docker",
+		},
+		cliLinkHint: "install OrbStack's command-line tools or add its bundled docker CLI directory to PATH",
+	},
+	{
+		name: "Docker Desktop",
+		app:  "/Applications/Docker.app",
+		cliPaths: []string{
+			"/Applications/Docker.app/Contents/Resources/bin/docker",
+		},
+		cliLinkHint: "open Docker Desktop → Settings → Advanced → Command Line Tools and enable the Docker CLI symlink, or add /Applications/Docker.app/Contents/Resources/bin to PATH",
+	},
+	{
+		name: "Rancher Desktop",
+		app:  "/Applications/Rancher Desktop.app",
+		cliPaths: []string{
+			"/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker",
+		},
+		cliLinkHint: "enable Rancher Desktop's Docker-compatible CLI integration or add its bundled docker CLI directory to PATH",
+	},
+}
+
+var (
+	dockerLookPathFn    = exec.LookPath
+	dockerStatFn        = os.Stat
+	dockerVersionOKFn   = func(ctx context.Context) bool { return exec.CommandContext(ctx, "docker", "version").Run() == nil }
+	dockerOpenRuntimeFn = func(ctx context.Context, appPath string) error {
+		return exec.CommandContext(ctx, "open", "-a", appPath).Run()
+	}
+	dockerInstallRuntimeFn = func(ctx context.Context) error {
+		installCmd := exec.CommandContext(ctx, "brew", "install", "--cask", "docker")
+		installCmd.Stdout = os.Stdout
+		installCmd.Stderr = os.Stderr
+		return installCmd.Run()
+	}
+)
 
 // ensureDockerDaemon verifies the Docker daemon is running. On macOS, when
 // running interactively it prompts the user before launching the installed
 // Docker runtime; in non-interactive mode it launches it automatically.
 // Waits up to 60 s for the daemon to become ready before returning an error.
 func ensureDockerDaemon(ctx context.Context) error {
-	if exec.CommandContext(ctx, "docker", "version").Run() == nil {
+	return ensureDockerDaemonForGOOS(ctx, runtime.GOOS)
+}
+
+func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
+	if dockerVersionOKFn(ctx) {
 		return nil
 	}
 
-	if _, err := exec.LookPath("docker"); err != nil {
-		if runtime.GOOS == "darwin" && isInteractiveTerminalFn() {
-			fmt.Print("Docker is not installed. Install it now with 'brew install --cask docker'? [Y/n] ")
-			reader := bufio.NewReader(os.Stdin)
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(strings.ToLower(answer))
-			if answer != "" && answer != "y" && answer != "yes" {
-				return fmt.Errorf("docker is not installed — run: brew install --cask docker")
-			}
-			fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
-			installCmd := exec.CommandContext(ctx, "brew", "install", "--cask", "docker")
-			installCmd.Stdout = os.Stdout
-			installCmd.Stderr = os.Stderr
-			if err := installCmd.Run(); err != nil {
-				return fmt.Errorf("failed to install Docker: %w", err)
-			}
-			// Fall through to detect and launch the newly installed runtime.
-		} else if runtime.GOOS == "darwin" {
-			return fmt.Errorf("docker is not installed — run: brew install --cask docker")
-		} else {
-			return fmt.Errorf("docker is not installed — please install Docker Desktop or OrbStack")
-		}
-	}
+	_, cliErr := dockerLookPathFn("docker")
+	cliOnPath := cliErr == nil
 
-	if runtime.GOOS == "darwin" {
-		runtimeName, appPath := detectDockerRuntime()
-		if appPath == "" {
-			return fmt.Errorf("no supported Docker runtime found — install Docker Desktop or OrbStack and try again")
+	if goos == "darwin" {
+		rt, hasRuntime := detectDockerRuntimeInfo()
+		if !cliOnPath {
+			if !hasRuntime {
+				if isInteractiveTerminalFn() {
+					fmt.Print("Docker runtime app and docker CLI were not found. Install Docker Desktop now with 'brew install --cask docker'? [Y/n] ")
+					reader := bufio.NewReader(os.Stdin)
+					answer, _ := reader.ReadString('\n')
+					answer = strings.TrimSpace(strings.ToLower(answer))
+					if answer != "" && answer != "y" && answer != "yes" {
+						return fmt.Errorf("Docker runtime app is not installed — install Docker Desktop, OrbStack, or Rancher Desktop")
+					}
+					fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
+					if err := dockerInstallRuntimeFn(ctx); err != nil {
+						return fmt.Errorf("failed to install Docker Desktop: %w", err)
+					}
+					rt, hasRuntime = detectDockerRuntimeInfo()
+				} else {
+					return fmt.Errorf("Docker runtime app is not installed and docker CLI is not on PATH — install Docker Desktop, OrbStack, or Rancher Desktop")
+				}
+			}
+
+			if hasRuntime {
+				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(); ok {
+					rt = cliRuntime
+					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
+					cliOnPath = true
+					if dockerVersionOKFn(ctx) {
+						return nil
+					}
+				} else {
+					return dockerCLIMissingError(rt)
+				}
+			}
+		}
+
+		if !hasRuntime {
+			return fmt.Errorf("no supported Docker runtime app found — install Docker Desktop, OrbStack, or Rancher Desktop and try again")
+		}
+		if !cliOnPath {
+			return dockerCLIMissingError(rt)
 		}
 
 		if isInteractiveTerminalFn() {
-			fmt.Printf("%s is not running. Launch it now? [Y/n] ", runtimeName)
+			fmt.Printf("Docker daemon is not running or is still starting for %s. Open it now? [Y/n] ", rt.name)
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
 			if answer != "" && answer != "y" && answer != "yes" {
-				return fmt.Errorf("docker daemon is not running — please start %s and try again", runtimeName)
+				return fmt.Errorf("docker daemon is not running — please start %s and try again", rt.name)
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "[docker] Launching %s...\n", runtimeName)
-		if err := exec.CommandContext(ctx, "open", "-a", appPath).Run(); err != nil {
-			return fmt.Errorf("docker daemon is not running: could not launch %s: %w", runtimeName, err)
+		fmt.Fprintf(os.Stderr, "[docker] Opening %s...\n", rt.name)
+		if err := dockerOpenRuntimeFn(ctx, rt.app); err != nil {
+			return fmt.Errorf("docker daemon is not running: could not open %s: %w", rt.name, err)
 		}
 		deadline := time.Now().Add(60 * time.Second)
 		for time.Now().Before(deadline) {
@@ -354,26 +419,85 @@ func ensureDockerDaemon(ctx context.Context) error {
 				return ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
-			if exec.CommandContext(ctx, "docker", "version").Run() == nil {
-				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", runtimeName)
+			if dockerVersionOKFn(ctx) {
+				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", rt.name)
 				return nil
 			}
 		}
-		return fmt.Errorf("docker daemon did not become ready within 60 seconds — please start %s manually", runtimeName)
+		return fmt.Errorf("docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
 	}
 
+	if !cliOnPath {
+		return fmt.Errorf("docker CLI is not on PATH — install Docker or add docker to PATH")
+	}
 	return fmt.Errorf("docker daemon is not running — please start Docker before using wendy")
+}
+
+func dockerCLIMissingError(rt dockerRuntime) error {
+	return fmt.Errorf("%s is installed at %s, but docker CLI is not on PATH and Wendy could not find a bundled docker CLI. To fix: %s", rt.name, rt.app, rt.cliLinkHint)
+}
+
+func addBundledDockerCLIForInstalledRuntime() (dockerRuntime, string, bool) {
+	for _, rt := range dockerRuntimes {
+		if !dockerRuntimeInstalled(rt) {
+			continue
+		}
+		if cliPath, ok := addBundledDockerCLIToPath(rt); ok {
+			return rt, cliPath, true
+		}
+	}
+	return dockerRuntime{}, "", false
+}
+
+func addBundledDockerCLIToPath(rt dockerRuntime) (string, bool) {
+	for _, cliPath := range rt.cliPaths {
+		info, err := dockerStatFn(cliPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		dir := filepath.Dir(cliPath)
+		if !pathHasDir(os.Getenv("PATH"), dir) {
+			path := dir
+			if existing := os.Getenv("PATH"); existing != "" {
+				path += string(filepath.ListSeparator) + existing
+			}
+			_ = os.Setenv("PATH", path)
+		}
+		return cliPath, true
+	}
+	return "", false
+}
+
+func pathHasDir(pathEnv, dir string) bool {
+	for _, entry := range filepath.SplitList(pathEnv) {
+		if entry == dir {
+			return true
+		}
+	}
+	return false
 }
 
 // detectDockerRuntime returns the name and .app path of the first installed
 // Docker-compatible runtime found on macOS, or empty strings if none is found.
 func detectDockerRuntime() (name, appPath string) {
-	for _, rt := range dockerRuntimes {
-		if _, err := os.Stat(rt.app); err == nil {
-			return rt.name, rt.app
-		}
+	if rt, ok := detectDockerRuntimeInfo(); ok {
+		return rt.name, rt.app
 	}
 	return "", ""
+}
+
+func detectDockerRuntimeInfo() (dockerRuntime, bool) {
+	for _, rt := range dockerRuntimes {
+		if dockerRuntimeInstalled(rt) {
+			return rt, true
+		}
+	}
+	return dockerRuntime{}, false
+}
+
+func dockerRuntimeInstalled(rt dockerRuntime) bool {
+	_, err := dockerStatFn(rt.app)
+	return err == nil
 }
 
 // ensureBuildxBuilder ensures a buildx builder with the docker-container driver
