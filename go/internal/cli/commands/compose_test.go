@@ -256,6 +256,69 @@ func TestComposeAppConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("x-wendy-entitlements pass through", func(t *testing.T) {
+		body := `services:
+  svc:
+    network_mode: host
+    x-wendy-entitlements:
+      - type: gpu
+      - type: camera
+      - type: audio
+      - type: bluetooth
+      - type: mcp
+        port: 3400
+`
+		svc := parse(t, body)
+		cfg := composeAppConfig("proj", "svc", svc)
+		types := map[string]bool{}
+		var mcpPort int
+		for _, e := range cfg.Entitlements {
+			types[e.Type] = true
+			if e.Type == appconfig.EntitlementMCP {
+				mcpPort = e.Port
+			}
+		}
+		for _, want := range []string{
+			appconfig.EntitlementNetwork, // synthesised from network_mode: host
+			appconfig.EntitlementGPU,
+			appconfig.EntitlementCamera,
+			appconfig.EntitlementAudio,
+			appconfig.EntitlementBluetooth,
+			appconfig.EntitlementMCP,
+		} {
+			if !types[want] {
+				t.Errorf("missing %s entitlement; got %+v", want, cfg.Entitlements)
+			}
+		}
+		if mcpPort != 3400 {
+			t.Errorf("mcp port = %d; want 3400", mcpPort)
+		}
+	})
+
+	t.Run("x-wendy-entitlements with persist alongside named volume", func(t *testing.T) {
+		body := `services:
+  svc:
+    volumes:
+      - models:/models
+    x-wendy-entitlements:
+      - type: gpu
+`
+		svc := parse(t, body)
+		cfg := composeAppConfig("proj", "svc", svc)
+		var hasPersist, hasGPU bool
+		for _, e := range cfg.Entitlements {
+			if e.Type == appconfig.EntitlementPersist && e.Name == "models" && e.Path == "/models" {
+				hasPersist = true
+			}
+			if e.Type == appconfig.EntitlementGPU {
+				hasGPU = true
+			}
+		}
+		if !hasPersist || !hasGPU {
+			t.Fatalf("want both persist (from volume) and gpu (from x-wendy); got %+v", cfg.Entitlements)
+		}
+	})
+
 	t.Run("named volumes become persist entitlements; bind mounts skipped", func(t *testing.T) {
 		svc := parse(t, "services:\n  svc:\n    volumes:\n      - data:/var/lib\n      - ./host:/in/container\n      - /abs/host:/in/container\n      - cache:/cache:ro\n")
 		cfg := composeAppConfig("proj", "svc", svc)

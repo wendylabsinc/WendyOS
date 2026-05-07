@@ -49,6 +49,15 @@ type composeService struct {
 	DependsOn   yaml.Node `yaml:"depends_on"` // list or map
 	Restart     string    `yaml:"restart"`
 	NetworkMode string    `yaml:"network_mode"`
+
+	// WendyEntitlements lets users declare entitlements that don't map to
+	// standard compose syntax — gpu, camera, audio, bluetooth, mcp — directly
+	// in compose.yml. The Compose spec reserves x-prefixed fields for custom
+	// extensions, so non-Wendy compose engines (e.g. `docker compose up`)
+	// silently ignore this field, keeping the file portable. Network and
+	// persist entitlements are still derived from native compose syntax
+	// (network_mode, ports, named volumes); use this for everything else.
+	WendyEntitlements []appconfig.Entitlement `yaml:"x-wendy-entitlements"`
 }
 
 type composeBuildConfig struct {
@@ -264,7 +273,9 @@ func parseComposeVolume(v string) (source, target, mode string) {
 
 // composeAppConfig builds an AppConfig for a compose service.
 // It synthesises network entitlements from ports/network_mode and persist
-// entitlements from named volumes.
+// entitlements from named volumes. Additional entitlements that have no
+// standard compose mapping (gpu, camera, audio, bluetooth, mcp) come from
+// the x-wendy-entitlements extension.
 func composeAppConfig(projectName, serviceName string, svc composeService) *appconfig.AppConfig {
 	appID := projectName + "-" + serviceName
 
@@ -322,6 +333,12 @@ func composeAppConfig(projectName, serviceName string, svc composeService) *appc
 			Path: target,
 		})
 	}
+
+	// Append entitlements declared via the x-wendy-entitlements extension.
+	// These are passed through as-is; the agent validates them when the
+	// container is created, so a malformed entitlement surfaces there with
+	// the same error path as a malformed wendy.json entry.
+	entitlements = append(entitlements, svc.WendyEntitlements...)
 
 	return &appconfig.AppConfig{
 		AppID:        appID,
