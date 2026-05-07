@@ -786,9 +786,11 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
-		"--cache-from", "type=local,src=" + cacheDirSlash,
-		"--cache-to", "type=local,dest=" + cacheDirSlash,
 	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "index.json")); err == nil {
+		args = append(args, "--cache-from", "type=local,src="+cacheDirSlash)
+	}
+	args = append(args, "--cache-to", "type=local,dest="+cacheDirSlash)
 	// Sort keys so the argument order is stable across runs, which keeps
 	// build logs reproducible and avoids flakiness in tests that assert args.
 	keys := make([]string, 0, len(buildArgs))
