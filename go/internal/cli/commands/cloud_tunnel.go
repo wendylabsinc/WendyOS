@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/internal/cli/clouddefaults"
@@ -15,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -68,12 +70,17 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 		return nil, err
 	}
 
-	asset, err := pickCloudDevice(ctx, auth, deviceName)
+	asset, err := pickCloudDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
 	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
 
+	return connectCloudAsset(ctx, auth, asset, brokerURL)
+}
+
+// connectCloudAsset opens a tunnelled mTLS gRPC connection to an already-selected cloud asset.
+func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
 	brokerConn, err := dialCloudBroker(auth, brokerURL)
 	if err != nil {
 		return nil, err
@@ -126,6 +133,34 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 	agentConn.ExtraClosers = append(agentConn.ExtraClosers, closeFunc(closeTunnel), brokerConn)
 	cleanupBroker = false
 	return agentConn, nil
+}
+
+// waitForCloudAgentRestart polls the cloud asset via broker tunnel until the agent answers
+// GetAgentVersion or 60 s elapse. Returns a fresh connection on success.
+func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	time.Sleep(time.Second) // give the agent a moment to begin shutdown
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		conn, err := connectCloudAsset(ctx, auth, asset, brokerURL)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		if probeErr == nil {
+			return conn, nil
+		}
+		conn.Close()
+		time.Sleep(time.Second)
+	}
+	return nil, fmt.Errorf("timed out waiting for agent to restart")
 }
 
 // dialCloudBroker opens an mTLS gRPC connection to the tunnel broker.
@@ -297,10 +332,10 @@ func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Ass
 }
 
 // pickCloudDevice shows a spinner while fetching online compute-device assets,
-// auto-selects when only one matches, and shows an interactive TUI picker when
-// multiple devices are available. If deviceName is non-empty and matches exactly
-// one asset name (case-insensitive), the picker is skipped.
-func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName string) (*cloudpb.Asset, error) {
+// auto-selects when only one matches, and shows an interactive cloud discover
+// TUI when multiple devices are available. brokerURL is forwarded so the TUI
+// can offer in-place device updates via 'u'.
+func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string) (*cloudpb.Asset, error) {
 	if len(auth.Certificates) == 0 {
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
@@ -340,41 +375,22 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	if !isInteractiveTerminal() {
 		return nil, fmt.Errorf("multiple cloud devices found; rerun with --device in a non-interactive environment")
 	}
-	// Multiple devices — show interactive picker.
-	picker := tui.NewPickerWithTitle("Select a cloud device")
-	items := make([]tui.PickerItem, 0, len(assets))
-	for _, a := range assets {
-		aCopy := a
-		items = append(items, tui.PickerItem{
-			Name:        a.GetName(),
-			Description: fmt.Sprintf("asset %d", a.GetId()),
-			Type:        "Cloud",
-			Value:       aCopy,
-		})
-	}
-	p := tea.NewProgram(picker)
-	go func() {
-		p.Send(tui.PickerAddMsg{Items: items})
-		p.Send(tui.PickerDoneMsg{})
-	}()
 
+	// Multiple devices — show interactive cloud discover TUI in picker mode.
+	m := newCloudDiscoverModel(ctx, auth, brokerURL, false, true, assets)
+	p := tea.NewProgram(m)
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("device picker: %w", err)
 	}
-	pm := finalModel.(tui.PickerModel)
-	if pm.Cancelled() {
+	cm := finalModel.(cloudDiscoverModel)
+	if cm.quitting && cm.selected == nil {
 		return nil, ErrUserCancelled
 	}
-	sel := pm.Selected()
-	if sel == nil {
+	if cm.selected == nil {
 		return nil, fmt.Errorf("no device selected")
 	}
-	asset, ok := sel.Value.(*cloudpb.Asset)
-	if !ok {
-		return nil, fmt.Errorf("invalid picker selection")
-	}
-	return asset, nil
+	return cm.selected, nil
 }
 
 func boolPtr(b bool) *bool { return &b }
