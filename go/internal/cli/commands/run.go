@@ -37,6 +37,12 @@ var execCommandContext = exec.CommandContext
 
 const linuxContainersOnMacsUnsupportedMessage = "Linux containers aren't supported on Macs yet. Support is planned for a future release. For now, deploy a native macOS app (platform: darwin) or target a Linux/WendyOS device."
 
+// sendLegacyAppConfig controls whether app_config bytes are included in
+// CreateContainerRequest for backward compatibility with agents that predate
+// manifest-annotation-based entitlements. Set to false (and delete the guarded
+// blocks below) once all deployed agents read entitlements from the OCI manifest.
+const sendLegacyAppConfig = true
+
 // dimWriter writes each line rendered through cliStyle (dim/background).
 // Incomplete lines are buffered until a newline or Flush is called.
 type dimWriter struct {
@@ -688,28 +694,35 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, &dimWriter{}, os.Stderr); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
 
+	if len(appCfg.Entitlements) > 0 {
+		if err := annotateManifestWithEntitlements(ctx, registryAddr, strings.ToLower(product), "latest", appCfg.Entitlements, conn.IsMTLS); err != nil {
+			cliLogln("Warning: could not annotate image manifest with entitlements: %v", err)
+		}
+	}
+
 	// The image is now in the device's registry. The agent will pull it
 	// from localhost:<regPort> when creating the container.
 	deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, strings.ToLower(product))
-
-	appConfigData, err := json.Marshal(appCfg)
-	if err != nil {
-		return fmt.Errorf("marshaling app config: %w", err)
-	}
 
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{
 		ImageName:     deviceImage,
 		AppName:       appCfg.AppID,
-		AppConfig:     appConfigData,
 		RestartPolicy: restartPolicy,
 		UserArgs:      opts.userArgs,
+	}
+	if sendLegacyAppConfig { // COMPAT: delete this block when dropping sendLegacyAppConfig
+		appConfigData, err := json.Marshal(appCfg)
+		if err != nil {
+			return fmt.Errorf("marshaling app config: %w", err)
+		}
+		createReq.AppConfig = appConfigData
 	}
 
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
@@ -1157,19 +1170,20 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// The agent pulls from localhost:<regPort>.
 	deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, repo)
 
-	appConfigData, err := json.Marshal(appCfg)
-	if err != nil {
-		return fmt.Errorf("marshaling app config: %w", err)
-	}
-
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{
 		ImageName:     deviceImage,
 		AppName:       appCfg.AppID,
-		AppConfig:     appConfigData,
 		RestartPolicy: restartPolicy,
 		UserArgs:      opts.userArgs,
+	}
+	if sendLegacyAppConfig { // COMPAT: delete this block when dropping sendLegacyAppConfig
+		appConfigData, err := json.Marshal(appCfg)
+		if err != nil {
+			return fmt.Errorf("marshaling app config: %w", err)
+		}
+		createReq.AppConfig = appConfigData
 	}
 
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)

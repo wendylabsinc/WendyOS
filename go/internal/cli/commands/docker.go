@@ -223,7 +223,7 @@ func generatePythonDockerfile(dir string) (string, error) {
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
 // "host.docker.internal:12345" when proxying).
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, toolchainStdout, toolchainStderr io.Writer) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -233,6 +233,8 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
+	// registryAddr is always a plain-HTTP address: either the device's own
+	// unprovisioned registry or a local proxy that handles TLS on our behalf.
 	swiftArgs := []string{
 		"package",
 		"--swift-sdk=" + sdk,
@@ -242,12 +244,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--product=" + product,
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
-	}
-
-	// Use insecure HTTP when the connection is not mTLS; the registry only
-	// speaks TLS when the device is provisioned and the CLI connected via mTLS.
-	if !useMTLS {
-		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
+		"--allow-insecure-http=destination",
 	}
 
 	cmd := swifttoolchain.SwiftCommandContext(ctx, swiftArgs...)
@@ -946,6 +943,18 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 
 func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
 	if conn.RegistryDialer == nil {
+		if conn.IsMTLS {
+			// Provisioned device with a direct connection: the registry speaks
+			// mTLS with a self-signed cert that the Swift plugin cannot validate.
+			// Stand up a local plain-HTTP → mTLS proxy so the plugin can push
+			// via localhost without caring about certificate trust.
+			target := net.JoinHostPort(conn.Host, strconv.Itoa(port))
+			proxy, err := startMTLSRegistryProxy(ctx, target)
+			if err != nil {
+				return "", nil, fmt.Errorf("starting mTLS registry proxy for Swift: %w", err)
+			}
+			return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+		}
 		return resolveRegistryForSwift(ctx, conn.Host, port)
 	}
 
@@ -956,6 +965,32 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 		return "", nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", err)
 	}
 	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+}
+
+// startMTLSRegistryProxy starts a local plain-TCP listener that tunnels each
+// accepted connection to target over mTLS using the CLI's client certificate.
+// This lets tools that cannot perform mTLS (e.g. swift-container-plugin) push
+// to provisioned devices through a localhost address with plain HTTP.
+func startMTLSRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
+	certInfo := loadCLICert()
+	if certInfo == nil {
+		return nil, fmt.Errorf("no CLI certificates available")
+	}
+	leafPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
+	}
+	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(certInfo.PemPrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf("loading client certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true,
+		Certificates:       []tls.Certificate{tlsCert},
+	}
+	return startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+		return tls.DialWithDialer(&net.Dialer{}, "tcp", target, tlsCfg)
+	}, target)
 }
 
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
@@ -1444,10 +1479,11 @@ func sanitizeDockerImageName(name string) string {
 // the containerd container labels so the two representations stay consistent.
 const ociEntitlementAnnotationPrefix = "sh.wendy/entitlement."
 
-// mediaType constants for Docker v2 and OCI image manifests.
+// mediaType constants for Docker v2, OCI image manifests, and OCI image indexes.
 const (
 	mediaTypeDockerManifestV2 = "application/vnd.docker.distribution.manifest.v2+json"
 	mediaTypeOCIManifestV1    = "application/vnd.oci.image.manifest.v1+json"
+	mediaTypeOCIIndexV1       = "application/vnd.oci.image.index.v1+json"
 )
 
 // cliRegistryAddr converts a Docker-buildx-accessible registry address to one
@@ -1510,9 +1546,15 @@ func annotateManifestWithEntitlements(ctx context.Context, registryAddr, repo, t
 		return nil
 	}
 
+	// Loopback addresses are always our own local proxies that speak plain HTTP;
+	// the proxy handles TLS on our behalf. Only use HTTPS when talking directly
+	// to a provisioned device at a non-loopback address.
 	scheme := "http"
 	if useMTLS {
-		scheme = "https"
+		host, _, _ := net.SplitHostPort(registryAddr)
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			scheme = "https"
+		}
 	}
 
 	client, err := registryHTTPClient(useMTLS)
@@ -1613,39 +1655,39 @@ func buildEntitlementAnnotations(entitlements []appconfig.Entitlement) map[strin
 	return out
 }
 
-// injectManifestAnnotations merges annotations into the manifest JSON and returns
-// the updated bytes together with the correct OCI content-type string.
+// injectManifestAnnotations merges annotations into a manifest or index JSON
+// document and returns the updated bytes with the correct content-type.
 //
-// If the manifest is a Docker v2 manifest its top-level mediaType field is
-// rewritten to the OCI value so that the resulting document is a valid OCI
-// image manifest (OCI manifests define the annotations field; Docker manifests
-// do not). Config and layer descriptor media types are intentionally preserved
-// so containerd continues to handle them correctly.
+// Docker v2 manifests are promoted to OCI manifest format (the only change is
+// the top-level mediaType field) because Docker manifests do not define an
+// annotations field. OCI manifests and OCI indexes already support annotations
+// and are left as-is. Misidentifying an OCI index as a manifest would corrupt
+// the stored blob, so the actual media type is preserved for all OCI content.
 func injectManifestAnnotations(manifestBytes []byte, contentType string, annotations map[string]string) ([]byte, string, error) {
-	// Treat the manifest as an opaque JSON object for surgery.
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(manifestBytes, &m); err != nil {
 		return nil, "", fmt.Errorf("parsing manifest JSON: %w", err)
 	}
 
-	// Determine current format from the Content-Type header or the mediaType
-	// field inside the manifest (some registries omit the header).
-	isOCI := strings.Contains(contentType, "vnd.oci.image.manifest")
-	if !isOCI {
-		if mtRaw, ok := m["mediaType"]; ok {
-			var mt string
-			_ = json.Unmarshal(mtRaw, &mt)
-			isOCI = strings.Contains(mt, "vnd.oci.image.manifest")
+	// Resolve the authoritative media type: prefer the value from inside the
+	// document (registries sometimes omit or mis-set the Content-Type header).
+	actualType := contentType
+	if mtRaw, ok := m["mediaType"]; ok {
+		var mt string
+		if json.Unmarshal(mtRaw, &mt) == nil && mt != "" {
+			actualType = mt
 		}
 	}
 
-	if !isOCI {
-		// Promote to OCI by updating only the top-level mediaType.
+	outputType := actualType
+	if strings.Contains(actualType, "vnd.docker.distribution.manifest.v2") {
+		// Promote Docker v2 → OCI manifest so the annotations field is valid.
+		outputType = mediaTypeOCIManifestV1
 		mtBytes, _ := json.Marshal(mediaTypeOCIManifestV1)
 		m["mediaType"] = mtBytes
 	}
+	// OCI manifest and OCI index both natively support annotations; no rewrite needed.
 
-	// Merge existing annotations with the new entitlement entries.
 	existing := make(map[string]string)
 	if annRaw, ok := m["annotations"]; ok {
 		_ = json.Unmarshal(annRaw, &existing)
@@ -1660,7 +1702,7 @@ func injectManifestAnnotations(manifestBytes []byte, contentType string, annotat
 	m["annotations"] = annBytes
 
 	result, err := json.Marshal(m)
-	return result, mediaTypeOCIManifestV1, err
+	return result, outputType, err
 }
 
 // copyBinary copies a file from src to dst with mode 0755.

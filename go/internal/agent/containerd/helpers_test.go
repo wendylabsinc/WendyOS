@@ -351,3 +351,85 @@ func TestRestartPolicyToLabel_OnFailureNoRetries(t *testing.T) {
 		t.Errorf("restartPolicyToLabel = %q; want %q", got, "on-failure")
 	}
 }
+
+func TestParseEntitlementsFromAnnotations_Single(t *testing.T) {
+	annotations := map[string]string{
+		"sh.wendy/entitlement.network": `{"mode":"host"}`,
+		"sh.wendy/entitlement.gpu":     `{}`,
+	}
+	got := parseEntitlementsFromAnnotations(annotations)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entitlements, got %d", len(got))
+	}
+	// Sorted alphabetically: gpu, network.
+	if got[0].Type != appconfig.EntitlementGPU {
+		t.Errorf("got[0].Type = %q; want %q", got[0].Type, appconfig.EntitlementGPU)
+	}
+	if got[1].Type != appconfig.EntitlementNetwork || got[1].Mode != "host" {
+		t.Errorf("got[1] = %+v; want type=network mode=host", got[1])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_MultipleOfSameType(t *testing.T) {
+	annotations := map[string]string{
+		"sh.wendy/entitlement.persist.0": `{"name":"data","path":"/data"}`,
+		"sh.wendy/entitlement.persist.1": `{"name":"logs","path":"/logs"}`,
+	}
+	got := parseEntitlementsFromAnnotations(annotations)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entitlements, got %d", len(got))
+	}
+	if got[0].Name != "data" || got[0].Path != "/data" {
+		t.Errorf("got[0] = %+v; want name=data path=/data", got[0])
+	}
+	if got[1].Name != "logs" || got[1].Path != "/logs" {
+		t.Errorf("got[1] = %+v; want name=logs path=/logs", got[1])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_RoundTrip(t *testing.T) {
+	original := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementNetwork, Mode: "host"},
+		{Type: appconfig.EntitlementPersist, Name: "data", Path: "/data"},
+		{Type: appconfig.EntitlementPersist, Name: "logs", Path: "/logs"},
+		{Type: appconfig.EntitlementGPU},
+	}
+
+	labels := wendyLabels("app", "1.0", nil, original)
+	annotations := make(map[string]string)
+	for k, v := range labels {
+		if strings.HasPrefix(k, labelKeyEntitlementPrefix) {
+			annotations[k] = v
+		}
+	}
+
+	parsed := parseEntitlementsFromAnnotations(annotations)
+	if len(parsed) != len(original) {
+		t.Fatalf("round-trip: got %d entitlements, want %d", len(parsed), len(original))
+	}
+
+	byType := make(map[string][]appconfig.Entitlement)
+	for _, e := range parsed {
+		byType[e.Type] = append(byType[e.Type], e)
+	}
+	if len(byType[appconfig.EntitlementNetwork]) != 1 || byType[appconfig.EntitlementNetwork][0].Mode != "host" {
+		t.Errorf("network entitlement round-trip failed: %+v", byType[appconfig.EntitlementNetwork])
+	}
+	if len(byType[appconfig.EntitlementPersist]) != 2 {
+		t.Errorf("persist entitlement round-trip failed: %+v", byType[appconfig.EntitlementPersist])
+	}
+	if len(byType[appconfig.EntitlementGPU]) != 1 {
+		t.Errorf("gpu entitlement round-trip failed: %+v", byType[appconfig.EntitlementGPU])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_Empty(t *testing.T) {
+	if got := parseEntitlementsFromAnnotations(nil); len(got) != 0 {
+		t.Errorf("nil annotations: want empty, got %v", got)
+	}
+	if got := parseEntitlementsFromAnnotations(map[string]string{"unrelated": "value"}); len(got) != 0 {
+		t.Errorf("unrelated annotations: want empty, got %v", got)
+	}
+}
