@@ -55,12 +55,15 @@ type Client struct {
 	namespace    string
 	mu           sync.Mutex
 	proxyManager *dbusproxy.Manager // nil if xdg-dbus-proxy is not available
+	isEnrolled   func() bool        // reports whether the device is enrolled; nil → never enrolled
 }
 
 // NewClient creates a new containerd SDK client connected to the given Unix
 // socket address. If address is empty, DefaultAddress is used.
 // proxyMgr may be nil if xdg-dbus-proxy is not available.
-func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) (*Client, error) {
+// isEnrolled is called at container-create time to check whether the device is
+// enrolled; nil is treated as "never enrolled" for backward compatibility.
+func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager, isEnrolled func() bool) (*Client, error) {
 	if address == "" {
 		address = DefaultAddress
 	}
@@ -75,6 +78,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		logger:       logger,
 		namespace:    "default",
 		proxyManager: proxyMgr,
+		isEnrolled:   isEnrolled,
 	}, nil
 }
 
@@ -359,6 +363,7 @@ func (c *Client) readEntitlementsFromManifest(ctx context.Context, image contain
 
 	sig := manifest.Annotations[certs.AnnotationSignature]
 	certPEM := manifest.Annotations[certs.AnnotationSignatureCert]
+	hasEntitlementAnnotations := len(certs.EntitlementAnnotationPayload(manifest.Annotations)) > 0
 	if sig != "" && certPEM != "" {
 		cert, parseErr := certs.ParseLeafCertificate(certPEM)
 		if parseErr != nil {
@@ -369,6 +374,10 @@ func (c *Client) readEntitlementsFromManifest(ctx context.Context, image contain
 			return nil, fmt.Errorf("entitlement signature verification failed: %w", verifyErr)
 		}
 		c.logger.Info("Entitlement annotations verified")
+	} else if hasEntitlementAnnotations && c.isEnrolled != nil && c.isEnrolled() {
+		// Enrolled devices require signed entitlement annotations to prevent privilege
+		// escalation via externally-injected or tampered annotation maps.
+		return nil, fmt.Errorf("device is enrolled but entitlement annotations are unsigned")
 	}
 
 	return parseEntitlementsFromAnnotations(manifest.Annotations), nil

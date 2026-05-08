@@ -137,13 +137,15 @@ func main() {
 		logger.Warn("xdg-dbus-proxy not found, Bluetooth containers will have unfiltered D-Bus access")
 	}
 
+	provisioningSvc := services.NewProvisioningService(logger, configPath)
+
 	// Initialize containerd client (best-effort; may fail on non-Linux or without containerd).
 	var containerdClient services.ContainerdClient
 	containerdAddr := os.Getenv("WENDY_CONTAINERD_ADDR")
 	if containerdAddr == "" {
 		containerdAddr = agentcontainerd.DefaultAddress
 	}
-	ctrdClient, ctrdErr := agentcontainerd.NewClient(logger, containerdAddr, proxyMgr)
+	ctrdClient, ctrdErr := agentcontainerd.NewClient(logger, containerdAddr, proxyMgr, provisioningSvc.Enrolled)
 	if ctrdErr != nil {
 		logger.Warn("Failed to connect to containerd (container features will be unavailable)", zap.Error(ctrdErr))
 	} else {
@@ -173,8 +175,6 @@ func main() {
 	)
 	audioSvc := services.NewAudioService(logger)
 	videoSvc := services.NewVideoService(logger)
-
-	provisioningSvc := services.NewProvisioningService(logger, configPath)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)
 
 	// v2 services

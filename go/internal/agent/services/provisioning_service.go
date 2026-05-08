@@ -101,6 +101,13 @@ func (s *ProvisioningService) ProvisioningInfo() (cloudHost string, orgID, asset
 	return s.cloudHost, s.orgID, s.assetID, s.enrolled
 }
 
+// Enrolled reports whether the device is currently enrolled with a cloud organization.
+func (s *ProvisioningService) Enrolled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enrolled
+}
+
 // IsProvisioned checks whether the agent is enrolled with a cloud organization.
 func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProvisionedRequest) (*agentpb.IsProvisionedResponse, error) {
 	s.mu.Lock()
