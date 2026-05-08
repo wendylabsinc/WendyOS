@@ -266,3 +266,135 @@ func TestGenerateAndCSR_RoundTrip(t *testing.T) {
 		t.Error("CSR public key does not match extracted public key")
 	}
 }
+
+// helpers shared by sign tests
+
+func generateTestKeyAndCert(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parsing certificate: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return key, cert, string(pemBytes)
+}
+
+func TestSignBytesAndVerifyBytes_RoundTrip(t *testing.T) {
+	key, cert, _ := generateTestKeyAndCert(t)
+	data := []byte("hello, wendy")
+
+	sig, err := SignBytes(data, key)
+	if err != nil {
+		t.Fatalf("SignBytes: %v", err)
+	}
+	if err := VerifyBytes(data, sig, cert); err != nil {
+		t.Errorf("VerifyBytes: %v", err)
+	}
+}
+
+func TestVerifyBytes_WrongData(t *testing.T) {
+	key, cert, _ := generateTestKeyAndCert(t)
+	sig, _ := SignBytes([]byte("original"), key)
+	if err := VerifyBytes([]byte("tampered"), sig, cert); err == nil {
+		t.Error("expected verification failure for tampered data")
+	}
+}
+
+func TestParseLeafCertificate_Valid(t *testing.T) {
+	_, want, pemStr := generateTestKeyAndCert(t)
+	got, err := ParseLeafCertificate(pemStr)
+	if err != nil {
+		t.Fatalf("ParseLeafCertificate: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Error("parsed certificate does not match original")
+	}
+}
+
+func TestParseLeafCertificate_Invalid(t *testing.T) {
+	if _, err := ParseLeafCertificate("not pem"); err == nil {
+		t.Error("expected error for invalid PEM")
+	}
+}
+
+func TestEntitlementAnnotationPayload_Stable(t *testing.T) {
+	annotations := map[string]string{
+		"sh.wendy/entitlement.gpu":       `{"port":0}`,
+		"sh.wendy/entitlement.bluetooth": `{}`,
+		"sh.wendy/signature":             "should-be-excluded",
+		"sh.wendy/signature.cert":        "should-be-excluded",
+	}
+	payload := EntitlementAnnotationPayload(annotations)
+	s := string(payload)
+	if strings.Contains(s, "should-be-excluded") {
+		t.Error("payload must not contain signature annotations")
+	}
+	if !strings.Contains(s, "sh.wendy/entitlement.bluetooth") {
+		t.Error("payload missing bluetooth entitlement key")
+	}
+	if !strings.Contains(s, "sh.wendy/entitlement.gpu") {
+		t.Error("payload missing gpu entitlement key")
+	}
+	// Verify ordering: bluetooth comes before gpu alphabetically.
+	btIdx := strings.Index(s, "bluetooth")
+	gpuIdx := strings.Index(s, "gpu")
+	if btIdx > gpuIdx {
+		t.Errorf("keys not sorted: bluetooth at %d, gpu at %d", btIdx, gpuIdx)
+	}
+}
+
+func TestEntitlementAnnotationPayload_Empty(t *testing.T) {
+	if payload := EntitlementAnnotationPayload(nil); len(payload) != 0 {
+		t.Errorf("expected empty payload for nil annotations, got %q", payload)
+	}
+	if payload := EntitlementAnnotationPayload(map[string]string{}); len(payload) != 0 {
+		t.Errorf("expected empty payload for empty annotations, got %q", payload)
+	}
+}
+
+func TestSignAndVerify_EntitlementAnnotations(t *testing.T) {
+	key, cert, certPEM := generateTestKeyAndCert(t)
+	annotations := map[string]string{
+		"sh.wendy/entitlement.gpu":       `{"port":0}`,
+		"sh.wendy/entitlement.bluetooth": `{}`,
+	}
+
+	payload := EntitlementAnnotationPayload(annotations)
+	sig, err := SignBytes(payload, key)
+	if err != nil {
+		t.Fatalf("SignBytes: %v", err)
+	}
+	annotations[AnnotationSignature] = sig
+	annotations[AnnotationSignatureCert] = certPEM
+
+	// Verify using the cert from annotations.
+	parsedCert, err := ParseLeafCertificate(annotations[AnnotationSignatureCert])
+	if err != nil {
+		t.Fatalf("ParseLeafCertificate: %v", err)
+	}
+	verifyPayload := EntitlementAnnotationPayload(annotations) // must ignore signature keys
+	if err := VerifyBytes(verifyPayload, annotations[AnnotationSignature], parsedCert); err != nil {
+		t.Errorf("end-to-end verification failed: %v", err)
+	}
+
+	// Tamper with an entitlement value and confirm verification fails.
+	annotations["sh.wendy/entitlement.gpu"] = `{"port":9999}`
+	tamperedPayload := EntitlementAnnotationPayload(annotations)
+	if err := VerifyBytes(tamperedPayload, sig, cert); err == nil {
+		t.Error("expected verification failure after tampering")
+	}
+}

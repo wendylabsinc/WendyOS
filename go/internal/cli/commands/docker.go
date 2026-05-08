@@ -1905,6 +1905,21 @@ func annotateManifestWithEntitlements(ctx context.Context, registryAddr, repo, t
 	// Build per-entitlement annotation map.
 	annotations := buildEntitlementAnnotations(entitlements)
 
+	// Sign the entitlement annotations with the developer certificate if one is
+	// available. A missing or non-EC cert is silently skipped so that unsigned
+	// images still work with unprovisioned or un-authenticated devices.
+	if certInfo := loadCLICert(); certInfo != nil && certInfo.PemPrivateKey != "" && certInfo.PemCertificate != "" {
+		if key, keyErr := certs.ParseECPrivateKey(certInfo.PemPrivateKey); keyErr == nil {
+			payload := certs.EntitlementAnnotationPayload(annotations)
+			if sig, sigErr := certs.SignBytes(payload, key); sigErr == nil {
+				if leafPEM, leafErr := certs.LeafCertificatePEM(certInfo.PemCertificate); leafErr == nil {
+					annotations[certs.AnnotationSignature] = sig
+					annotations[certs.AnnotationSignatureCert] = leafPEM
+				}
+			}
+		}
+	}
+
 	// Inject annotations, promoting to OCI manifest format if needed.
 	updated, updatedType, err := injectManifestAnnotations(manifestBytes, getResp.Header.Get("Content-Type"), annotations)
 	if err != nil {

@@ -38,6 +38,7 @@ import (
 	localoci "github.com/wendylabsinc/wendy/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/internal/agent/services"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -341,7 +342,9 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 }
 
 // readEntitlementsFromManifest reads sh.wendy/entitlement.* annotations from
-// the OCI image manifest stored in the content store.
+// the OCI image manifest stored in the content store. If a sh.wendy/signature
+// annotation is present the entitlement payload is verified; a failed
+// verification is treated as a hard error to prevent tampered entitlements.
 func (c *Client) readEntitlementsFromManifest(ctx context.Context, image containerd.Image) ([]appconfig.Entitlement, error) {
 	manifestBytes, err := content.ReadBlob(ctx, c.client.ContentStore(), image.Target())
 	if err != nil {
@@ -353,6 +356,21 @@ func (c *Client) readEntitlementsFromManifest(ctx context.Context, image contain
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
 	}
+
+	sig := manifest.Annotations[certs.AnnotationSignature]
+	certPEM := manifest.Annotations[certs.AnnotationSignatureCert]
+	if sig != "" && certPEM != "" {
+		cert, parseErr := certs.ParseLeafCertificate(certPEM)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parsing signature certificate: %w", parseErr)
+		}
+		payload := certs.EntitlementAnnotationPayload(manifest.Annotations)
+		if verifyErr := certs.VerifyBytes(payload, sig, cert); verifyErr != nil {
+			return nil, fmt.Errorf("entitlement signature verification failed: %w", verifyErr)
+		}
+		c.logger.Info("Entitlement annotations verified")
+	}
+
 	return parseEntitlementsFromAnnotations(manifest.Annotations), nil
 }
 
