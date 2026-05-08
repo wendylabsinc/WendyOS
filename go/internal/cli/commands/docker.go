@@ -324,6 +324,20 @@ var dockerRuntimes = []dockerRuntime{
 	},
 }
 
+// windowsDockerRuntimes lists Windows Docker-compatible runtimes whose
+// installers normally add docker.exe to PATH, plus their bundled CLI locations
+// for repairing PATH when the installer entry is missing from the environment.
+var windowsDockerRuntimes = []dockerRuntime{
+	{
+		name: "Docker Desktop",
+		app:  `C:\Program Files\Docker\Docker\Docker Desktop.exe`,
+		cliPaths: []string{
+			`C:\Program Files\Docker\Docker\resources\bin\docker.exe`,
+		},
+		cliLinkHint: `repair or reinstall Docker Desktop, or add C:\Program Files\Docker\Docker\resources\bin to PATH`,
+	},
+}
+
 var (
 	dockerLookPathFn    = exec.LookPath
 	dockerStatFn        = os.Stat
@@ -356,7 +370,7 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 	cliOnPath := cliErr == nil
 
 	if goos == "darwin" {
-		rt, hasRuntime := detectDockerRuntimeInfo()
+		rt, hasRuntime := detectDockerRuntimeInfoForGOOS(goos)
 		if !cliOnPath {
 			if !hasRuntime {
 				if isInteractiveTerminalFn() {
@@ -371,14 +385,14 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 					if err := dockerInstallRuntimeFn(ctx); err != nil {
 						return fmt.Errorf("failed to install Docker Desktop: %w", err)
 					}
-					rt, hasRuntime = detectDockerRuntimeInfo()
+					rt, hasRuntime = detectDockerRuntimeInfoForGOOS(goos)
 				} else {
 					return fmt.Errorf("Docker runtime app is not installed and docker CLI is not on PATH — install Docker Desktop, OrbStack, or Rancher Desktop")
 				}
 			}
 
 			if hasRuntime {
-				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(); ok {
+				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(goos); ok {
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
@@ -427,6 +441,29 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 		return fmt.Errorf("docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
 	}
 
+	if goos == "windows" {
+		rt, hasRuntime := detectDockerRuntimeInfoForGOOS(goos)
+		if !cliOnPath {
+			if hasRuntime {
+				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(goos); ok {
+					rt = cliRuntime
+					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
+					cliOnPath = true
+					if dockerVersionOKFn(ctx) {
+						return nil
+					}
+				} else {
+					return dockerCLIMissingError(rt)
+				}
+			} else {
+				return fmt.Errorf("docker CLI is not on PATH — install Docker Desktop or add docker to PATH")
+			}
+		}
+		if hasRuntime {
+			return fmt.Errorf("docker daemon is not running — please start %s before using wendy", rt.name)
+		}
+	}
+
 	if !cliOnPath {
 		return fmt.Errorf("docker CLI is not on PATH — install Docker or add docker to PATH")
 	}
@@ -437,8 +474,8 @@ func dockerCLIMissingError(rt dockerRuntime) error {
 	return fmt.Errorf("%s is installed at %s, but docker CLI is not on PATH and Wendy could not find a bundled docker CLI. To fix: %s", rt.name, rt.app, rt.cliLinkHint)
 }
 
-func addBundledDockerCLIForInstalledRuntime() (dockerRuntime, string, bool) {
-	for _, rt := range dockerRuntimes {
+func addBundledDockerCLIForInstalledRuntime(goos string) (dockerRuntime, string, bool) {
+	for _, rt := range dockerRuntimesForGOOS(goos) {
 		if !dockerRuntimeInstalled(rt) {
 			continue
 		}
@@ -480,19 +517,34 @@ func pathHasDir(pathEnv, dir string) bool {
 // detectDockerRuntime returns the name and .app path of the first installed
 // Docker-compatible runtime found on macOS, or empty strings if none is found.
 func detectDockerRuntime() (name, appPath string) {
-	if rt, ok := detectDockerRuntimeInfo(); ok {
+	if rt, ok := detectDockerRuntimeInfoForGOOS("darwin"); ok {
 		return rt.name, rt.app
 	}
 	return "", ""
 }
 
 func detectDockerRuntimeInfo() (dockerRuntime, bool) {
-	for _, rt := range dockerRuntimes {
+	return detectDockerRuntimeInfoForGOOS(runtime.GOOS)
+}
+
+func detectDockerRuntimeInfoForGOOS(goos string) (dockerRuntime, bool) {
+	for _, rt := range dockerRuntimesForGOOS(goos) {
 		if dockerRuntimeInstalled(rt) {
 			return rt, true
 		}
 	}
 	return dockerRuntime{}, false
+}
+
+func dockerRuntimesForGOOS(goos string) []dockerRuntime {
+	switch goos {
+	case "darwin":
+		return dockerRuntimes
+	case "windows":
+		return windowsDockerRuntimes
+	default:
+		return nil
+	}
 }
 
 func dockerRuntimeInstalled(rt dockerRuntime) bool {
