@@ -24,14 +24,14 @@ func mustDetectProjectType(t *testing.T, dir string) string {
 }
 
 func TestEnsureDockerDaemon_DarwinUsesBundledCLIWhenRuntimeInstalledButDockerMissingFromPath(t *testing.T) {
-	oldRuntimes := dockerRuntimes
+	oldRuntimes := darwinDockerRuntimes
 	oldLookPath := dockerLookPathFn
 	oldVersionOK := dockerVersionOKFn
 	oldOpenRuntime := dockerOpenRuntimeFn
 	oldInstallRuntime := dockerInstallRuntimeFn
 	oldInteractive := isInteractiveTerminalFn
 	t.Cleanup(func() {
-		dockerRuntimes = oldRuntimes
+		darwinDockerRuntimes = oldRuntimes
 		dockerLookPathFn = oldLookPath
 		dockerVersionOKFn = oldVersionOK
 		dockerOpenRuntimeFn = oldOpenRuntime
@@ -49,7 +49,7 @@ func TestEnsureDockerDaemon_DarwinUsesBundledCLIWhenRuntimeInstalledButDockerMis
 		t.Fatal(err)
 	}
 
-	dockerRuntimes = []dockerRuntime{{
+	darwinDockerRuntimes = []dockerRuntime{{
 		name:        "Docker Desktop",
 		app:         appPath,
 		cliPaths:    []string{cliPath},
@@ -79,8 +79,8 @@ func TestEnsureDockerDaemon_DarwinUsesBundledCLIWhenRuntimeInstalledButDockerMis
 	}
 	isInteractiveTerminalFn = func() bool { return false }
 
-	if err := ensureDockerDaemonForGOOS(context.Background(), "darwin"); err != nil {
-		t.Fatalf("ensureDockerDaemonForGOOS: %v", err)
+	if err := ensureDockerDaemonForHostOS(context.Background(), dockerHostOSDarwin); err != nil {
+		t.Fatalf("ensureDockerDaemonForHostOS: %v", err)
 	}
 	if !pathHasDir(os.Getenv("PATH"), cliDir) {
 		t.Fatalf("PATH = %q, want bundled CLI dir %q", os.Getenv("PATH"), cliDir)
@@ -91,14 +91,14 @@ func TestEnsureDockerDaemon_DarwinUsesBundledCLIWhenRuntimeInstalledButDockerMis
 }
 
 func TestEnsureDockerDaemon_DarwinRuntimeInstalledButDockerCLIMissingDiagnostic(t *testing.T) {
-	oldRuntimes := dockerRuntimes
+	oldRuntimes := darwinDockerRuntimes
 	oldLookPath := dockerLookPathFn
 	oldVersionOK := dockerVersionOKFn
 	oldOpenRuntime := dockerOpenRuntimeFn
 	oldInstallRuntime := dockerInstallRuntimeFn
 	oldInteractive := isInteractiveTerminalFn
 	t.Cleanup(func() {
-		dockerRuntimes = oldRuntimes
+		darwinDockerRuntimes = oldRuntimes
 		dockerLookPathFn = oldLookPath
 		dockerVersionOKFn = oldVersionOK
 		dockerOpenRuntimeFn = oldOpenRuntime
@@ -112,7 +112,7 @@ func TestEnsureDockerDaemon_DarwinRuntimeInstalledButDockerCLIMissingDiagnostic(
 		t.Fatal(err)
 	}
 
-	dockerRuntimes = []dockerRuntime{{
+	darwinDockerRuntimes = []dockerRuntime{{
 		name:        "Docker Desktop",
 		app:         appPath,
 		cliPaths:    []string{filepath.Join(appPath, "Contents", "Resources", "bin", "docker")},
@@ -131,7 +131,7 @@ func TestEnsureDockerDaemon_DarwinRuntimeInstalledButDockerCLIMissingDiagnostic(
 	}
 	isInteractiveTerminalFn = func() bool { return false }
 
-	err := ensureDockerDaemonForGOOS(context.Background(), "darwin")
+	err := ensureDockerDaemonForHostOS(context.Background(), dockerHostOSDarwin)
 	if err == nil {
 		t.Fatal("expected docker CLI missing diagnostic")
 	}
@@ -187,8 +187,8 @@ func TestEnsureDockerDaemon_WindowsUsesBundledCLIWhenDockerDesktopInstalledButDo
 		return pathHasDir(os.Getenv("PATH"), cliDir)
 	}
 
-	if err := ensureDockerDaemonForGOOS(context.Background(), "windows"); err != nil {
-		t.Fatalf("ensureDockerDaemonForGOOS: %v", err)
+	if err := ensureDockerDaemonForHostOS(context.Background(), dockerHostOSWindows); err != nil {
+		t.Fatalf("ensureDockerDaemonForHostOS: %v", err)
 	}
 	if !pathHasDir(os.Getenv("PATH"), cliDir) {
 		t.Fatalf("PATH = %q, want bundled CLI dir %q", os.Getenv("PATH"), cliDir)
@@ -224,7 +224,7 @@ func TestEnsureDockerDaemon_WindowsRuntimeInstalledButDockerCLIMissingDiagnostic
 	dockerLookPathFn = func(string) (string, error) { return "", errors.New("not found") }
 	dockerVersionOKFn = func(context.Context) bool { return false }
 
-	err := ensureDockerDaemonForGOOS(context.Background(), "windows")
+	err := ensureDockerDaemonForHostOS(context.Background(), dockerHostOSWindows)
 	if err == nil {
 		t.Fatal("expected docker CLI missing diagnostic")
 	}

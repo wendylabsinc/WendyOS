@@ -293,10 +293,17 @@ type dockerRuntime struct {
 	cliLinkHint string
 }
 
-// dockerRuntimes lists macOS Docker-compatible runtimes in detection order.
+type dockerHostOS string
+
+const (
+	dockerHostOSDarwin  dockerHostOS = "darwin"
+	dockerHostOSWindows dockerHostOS = "windows"
+)
+
+// darwinDockerRuntimes lists macOS Docker-compatible runtimes in detection order.
 // Each entry maps a human-readable name to its .app bundle path and known
 // bundled Docker-compatible CLI locations.
-var dockerRuntimes = []dockerRuntime{
+var darwinDockerRuntimes = []dockerRuntime{
 	{
 		name: "OrbStack",
 		app:  "/Applications/OrbStack.app",
@@ -358,10 +365,10 @@ var (
 // Docker runtime; in non-interactive mode it launches it automatically.
 // Waits up to 60 s for the daemon to become ready before returning an error.
 func ensureDockerDaemon(ctx context.Context) error {
-	return ensureDockerDaemonForGOOS(ctx, runtime.GOOS)
+	return ensureDockerDaemonForHostOS(ctx, dockerHostOS(runtime.GOOS))
 }
 
-func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
+func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error {
 	if dockerVersionOKFn(ctx) {
 		return nil
 	}
@@ -369,8 +376,8 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 	_, cliErr := dockerLookPathFn("docker")
 	cliOnPath := cliErr == nil
 
-	if goos == "darwin" {
-		rt, hasRuntime := detectDockerRuntimeInfoForGOOS(goos)
+	if hostOS == dockerHostOSDarwin {
+		rt, hasRuntime := detectDockerRuntimeInfoForHostOS(hostOS)
 		if !cliOnPath {
 			if !hasRuntime {
 				if isInteractiveTerminalFn() {
@@ -385,14 +392,14 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 					if err := dockerInstallRuntimeFn(ctx); err != nil {
 						return fmt.Errorf("failed to install Docker Desktop: %w", err)
 					}
-					rt, hasRuntime = detectDockerRuntimeInfoForGOOS(goos)
+					rt, hasRuntime = detectDockerRuntimeInfoForHostOS(hostOS)
 				} else {
 					return fmt.Errorf("Docker runtime app is not installed and docker CLI is not on PATH — install Docker Desktop, OrbStack, or Rancher Desktop")
 				}
 			}
 
 			if hasRuntime {
-				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(goos); ok {
+				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(hostOS); ok {
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
@@ -441,11 +448,11 @@ func ensureDockerDaemonForGOOS(ctx context.Context, goos string) error {
 		return fmt.Errorf("docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
 	}
 
-	if goos == "windows" {
-		rt, hasRuntime := detectDockerRuntimeInfoForGOOS(goos)
+	if hostOS == dockerHostOSWindows {
+		rt, hasRuntime := detectDockerRuntimeInfoForHostOS(hostOS)
 		if !cliOnPath {
 			if hasRuntime {
-				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(goos); ok {
+				if cliRuntime, cliPath, ok := addBundledDockerCLIForInstalledRuntime(hostOS); ok {
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
@@ -474,8 +481,8 @@ func dockerCLIMissingError(rt dockerRuntime) error {
 	return fmt.Errorf("%s is installed at %s, but docker CLI is not on PATH and Wendy could not find a bundled docker CLI. To fix: %s", rt.name, rt.app, rt.cliLinkHint)
 }
 
-func addBundledDockerCLIForInstalledRuntime(goos string) (dockerRuntime, string, bool) {
-	for _, rt := range dockerRuntimesForGOOS(goos) {
+func addBundledDockerCLIForInstalledRuntime(hostOS dockerHostOS) (dockerRuntime, string, bool) {
+	for _, rt := range dockerRuntimesForHostOS(hostOS) {
 		if !dockerRuntimeInstalled(rt) {
 			continue
 		}
@@ -517,18 +524,18 @@ func pathHasDir(pathEnv, dir string) bool {
 // detectDockerRuntime returns the name and .app path of the first installed
 // Docker-compatible runtime found on macOS, or empty strings if none is found.
 func detectDockerRuntime() (name, appPath string) {
-	if rt, ok := detectDockerRuntimeInfoForGOOS("darwin"); ok {
+	if rt, ok := detectDockerRuntimeInfoForHostOS(dockerHostOSDarwin); ok {
 		return rt.name, rt.app
 	}
 	return "", ""
 }
 
 func detectDockerRuntimeInfo() (dockerRuntime, bool) {
-	return detectDockerRuntimeInfoForGOOS(runtime.GOOS)
+	return detectDockerRuntimeInfoForHostOS(dockerHostOS(runtime.GOOS))
 }
 
-func detectDockerRuntimeInfoForGOOS(goos string) (dockerRuntime, bool) {
-	for _, rt := range dockerRuntimesForGOOS(goos) {
+func detectDockerRuntimeInfoForHostOS(hostOS dockerHostOS) (dockerRuntime, bool) {
+	for _, rt := range dockerRuntimesForHostOS(hostOS) {
 		if dockerRuntimeInstalled(rt) {
 			return rt, true
 		}
@@ -536,11 +543,11 @@ func detectDockerRuntimeInfoForGOOS(goos string) (dockerRuntime, bool) {
 	return dockerRuntime{}, false
 }
 
-func dockerRuntimesForGOOS(goos string) []dockerRuntime {
-	switch goos {
-	case "darwin":
-		return dockerRuntimes
-	case "windows":
+func dockerRuntimesForHostOS(hostOS dockerHostOS) []dockerRuntime {
+	switch hostOS {
+	case dockerHostOSDarwin:
+		return darwinDockerRuntimes
+	case dockerHostOSWindows:
 		return windowsDockerRuntimes
 	default:
 		return nil
