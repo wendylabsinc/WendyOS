@@ -30,7 +30,7 @@ func TestRefreshingPickerModel_InitLoadsItems(t *testing.T) {
 }
 
 func TestRefreshingPickerModel_LoadResultReplacesItemsAndSchedulesRefresh(t *testing.T) {
-	m := newRefreshingPickerModel(context.Background(), "Select", time.Millisecond, func(context.Context) ([]tui.PickerItem, error) {
+	m := newRefreshingPickerModel(context.Background(), "Select", 3*time.Second, func(context.Context) ([]tui.PickerItem, error) {
 		return nil, nil
 	})
 
@@ -41,6 +41,9 @@ func TestRefreshingPickerModel_LoadResultReplacesItemsAndSchedulesRefresh(t *tes
 		t.Fatal("expected load result to schedule refresh")
 	}
 	rm := updated.(refreshingPickerModel)
+	if rm.interval.next != time.Second {
+		t.Fatalf("next interval = %v, want 1s", rm.interval.next)
+	}
 	if view := rm.View(); !strings.Contains(view, "alpha") {
 		t.Fatalf("expected view to contain refreshed item, got %q", view)
 	}
@@ -52,6 +55,9 @@ func TestRefreshingPickerModel_LoadResultReplacesItemsAndSchedulesRefresh(t *tes
 		t.Fatal("expected second load result to schedule refresh")
 	}
 	rm = updated.(refreshingPickerModel)
+	if rm.interval.next != 2*time.Second {
+		t.Fatalf("next interval = %v, want 2s", rm.interval.next)
+	}
 	view := rm.View()
 	if strings.Contains(view, "alpha") {
 		t.Fatalf("stale item remained after replacement: %q", view)

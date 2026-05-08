@@ -569,7 +569,7 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 const externalDrivePickerRefreshInterval = 2 * time.Second
 
 func pickExternalDrive(ctx context.Context) (drive, error) {
-	item, err := pickRefreshingItem(ctx, "Select target drive (refreshes every 2s)", externalDrivePickerRefreshInterval, func(context.Context) ([]tui.PickerItem, error) {
+	item, err := pickRefreshingItem(ctx, "Select target drive", externalDrivePickerRefreshInterval, func(context.Context) ([]tui.PickerItem, error) {
 		drives, err := listExternalDrives()
 		if err != nil {
 			return nil, fmt.Errorf("listing drives: %w", err)

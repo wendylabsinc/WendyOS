@@ -78,7 +78,7 @@ func TestDelayThen_ActuallyDelays(t *testing.T) {
 }
 
 func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
-	// Use tiny intervals so the test doesn't actually sleep.
+	// Use tiny intervals so the test doesn't actually sleep if a returned command runs.
 	t.Setenv("WENDY_DISCOVER_USB_INTERVAL", "1ms")
 	t.Setenv("WENDY_DISCOVER_ETHERNET_INTERVAL", "1ms")
 	t.Setenv("WENDY_DISCOVER_EXTERNAL_INTERVAL", "1ms")
@@ -106,6 +106,23 @@ func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
 				t.Error("expected non-nil cmd (delayed rescan)")
 			}
 		})
+	}
+}
+
+func TestDiscoverModel_UpdateRampsRescanIntervals(t *testing.T) {
+	t.Setenv("WENDY_DISCOVER_USB_INTERVAL", "3s")
+
+	m := newDiscoverModel(context.Background(), defaultOpts())
+	updated, _ := m.Update(usbScanMsg{devices: []models.USBDevice{{DisplayName: "test"}}})
+	m = updated.(discoverModel)
+	if m.usbInterval.next != time.Second {
+		t.Fatalf("next USB interval = %v, want 1s", m.usbInterval.next)
+	}
+
+	updated, _ = m.Update(usbScanMsg{devices: []models.USBDevice{{DisplayName: "test"}}})
+	m = updated.(discoverModel)
+	if m.usbInterval.next != 2*time.Second {
+		t.Fatalf("next USB interval = %v, want 2s", m.usbInterval.next)
 	}
 }
 
