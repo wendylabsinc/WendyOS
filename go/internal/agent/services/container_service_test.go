@@ -78,14 +78,14 @@ func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, 
 	}
 	return m.CreateContainer(ctx, req, appCfg)
 }
-func (m *mockContainerdClient) StartContainer(_ context.Context, _ string, _ string) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainer(_ context.Context, _ string, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
 	return m.startOutputCh, nil
 }
 
-func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader, _ string) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
@@ -110,11 +110,11 @@ type attachTestMock struct {
 	onStartWithStdin func(appName string, stdin io.Reader, postStartAgentCommand string) (<-chan ContainerOutput, error)
 }
 
-func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan ContainerOutput, error) {
+func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	if m.onStartWithStdin != nil {
 		return m.onStartWithStdin(appName, stdin, postStartAgentCommand)
 	}
-	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin, postStartAgentCommand)
+	return m.mockContainerdClient.StartContainerWithStdin(ctx, appName, stdin, postStartAgentCommand, restartPolicy)
 }
 
 // ---------- bufconn helper ----------

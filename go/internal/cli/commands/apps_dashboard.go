@@ -472,7 +472,10 @@ func (m appsDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			appName := m.rows[cursor].name
 			m.flash = fmt.Sprintf("Starting %s…", appName)
 			return m, func() tea.Msg {
-				stream, err := m.conn.ContainerService.StartContainer(m.ctx, &agentpb.StartContainerRequest{AppName: appName})
+				stream, err := m.conn.ContainerService.StartContainer(m.ctx, &agentpb.StartContainerRequest{
+					AppName:       appName,
+					RestartPolicy: &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED},
+				})
 				if err != nil {
 					return appsDashActionResultMsg{err: fmt.Errorf("starting %s: %w", appName, err)}
 				}

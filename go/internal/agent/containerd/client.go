@@ -19,6 +19,7 @@ import (
 	tasks "github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/api/types"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
@@ -599,12 +600,18 @@ func (c *Client) applyCDIGPU(spec *localoci.Spec) {
 // StartContainer starts the task for a named container and returns a channel
 // that streams stdout/stderr output. When the container exits, a final
 // ContainerOutput with Done=true is sent and the channel is closed.
-func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
 	if err != nil {
 		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	if restartPolicy != nil {
+		if err := c.applyRestartPolicyLabel(ctx, container, restartPolicy); err != nil {
+			return nil, fmt.Errorf("updating restart policy for %q: %w", appName, err)
+		}
 	}
 
 	// Clean up any stale task from a previous run.
@@ -674,12 +681,18 @@ func (c *Client) StartContainer(ctx context.Context, appName, postStartAgentComm
 
 // StartContainerWithStdin is like StartContainer but attaches the provided
 // stdin reader to the container's standard input.
-func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string) (<-chan services.ContainerOutput, error) {
+func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	ctx = c.withNamespace(ctx)
 
 	container, err := c.client.LoadContainer(ctx, appName)
 	if err != nil {
 		return nil, fmt.Errorf("loading container %q: %w", appName, err)
+	}
+
+	if restartPolicy != nil {
+		if err := c.applyRestartPolicyLabel(ctx, container, restartPolicy); err != nil {
+			return nil, fmt.Errorf("updating restart policy for %q: %w", appName, err)
+		}
 	}
 
 	c.deleteStaleTask(ctx, container, appName)
@@ -903,6 +916,22 @@ func (c *Client) recreateContainer(ctx context.Context, ctr containerd.Container
 
 	c.logger.Info("Recreated container to clear orphaned task", zap.String("app_name", appName))
 	return nil
+}
+
+// applyRestartPolicyLabel updates the restart policy label on an existing container.
+func (c *Client) applyRestartPolicyLabel(ctx context.Context, container containerd.Container, restartPolicy *agentpb.RestartPolicy) error {
+	return container.Update(ctx, func(ctx context.Context, client *containerd.Client, ctr *containers.Container) error {
+		if ctr.Labels == nil {
+			ctr.Labels = make(map[string]string)
+		}
+		policyStr := restartPolicyToLabel(restartPolicy)
+		if policyStr != "" {
+			ctr.Labels[labelKeyRestartPolicy] = policyStr
+		} else {
+			delete(ctr.Labels, labelKeyRestartPolicy)
+		}
+		return nil
+	})
 }
 
 // streamOutput reads stdout/stderr from pipes and sends it to the output
