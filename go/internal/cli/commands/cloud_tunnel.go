@@ -138,29 +138,32 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 // waitForCloudAgentRestart polls the cloud asset via broker tunnel until the agent answers
 // GetAgentVersion or 60 s elapse. Returns a fresh connection on success.
 func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
-	deadline := time.Now().Add(60 * time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 	time.Sleep(time.Second) // give the agent a moment to begin shutdown
-	for time.Now().Before(deadline) {
+	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("timed out waiting for agent to restart")
 		default:
 		}
-		conn, err := connectCloudAsset(ctx, auth, asset, brokerURL)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)
+		conn, err := connectCloudAsset(attemptCtx, auth, asset, brokerURL)
 		if err != nil {
+			attemptCancel()
 			time.Sleep(time.Second)
 			continue
 		}
-		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
 		_, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-		cancel()
+		probeCancel()
+		attemptCancel()
 		if probeErr == nil {
 			return conn, nil
 		}
 		conn.Close()
 		time.Sleep(time.Second)
 	}
-	return nil, fmt.Errorf("timed out waiting for agent to restart")
 }
 
 // dialCloudBroker opens an mTLS gRPC connection to the tunnel broker.

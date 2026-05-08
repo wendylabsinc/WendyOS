@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -75,6 +76,7 @@ type cloudDiscoverModel struct {
 	assets         []*cloudpb.Asset
 	versions       map[int32]*agentpb.GetAgentVersionResponse
 	versionPending map[int32]bool
+	versionSem     chan struct{}
 	table          bubbleTable.Model
 	quitting       bool
 	flashMessage   string
@@ -98,6 +100,7 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 		table:          newDiscoverTable(true),
 		versions:       make(map[int32]*agentpb.GetAgentVersionResponse),
 		versionPending: make(map[int32]bool),
+		versionSem:     make(chan struct{}, 5),
 	}
 	if initialAssets != nil {
 		m.assets = initialAssets
@@ -321,7 +324,15 @@ func (m cloudDiscoverModel) fetchVersionCmd(asset *cloudpb.Asset) tea.Cmd {
 	auth := m.auth
 	brokerURL := m.brokerURL
 	id := asset.GetId()
+	sem := m.versionSem
 	return func() tea.Msg {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return cloudAssetVersionMsg{assetID: id}
+		}
+		defer func() { <-sem }()
+
 		fetchCtx, cancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		defer cancel()
 		conn, err := connectCloudAsset(fetchCtx, auth, asset, brokerURL)
@@ -439,8 +450,11 @@ func fetchCloudAssetsFiltered(ctx context.Context, auth *config.AuthConfig, onli
 	var assets []*cloudpb.Asset
 	for {
 		resp, err := stream.Recv()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing devices: %w", err)
 		}
 		if len(assets) >= maxCloudAssets {
 			return nil, fmt.Errorf("cloud returned more than %d devices", maxCloudAssets)
