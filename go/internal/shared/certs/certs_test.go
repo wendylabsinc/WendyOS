@@ -333,8 +333,8 @@ func TestParseLeafCertificate_Invalid(t *testing.T) {
 
 func TestSigningPayload_Stable(t *testing.T) {
 	annotations := map[string]string{
-		"sh.wendy/entitlement.gpu":       `{"port":0}`,
-		"sh.wendy/entitlement.bluetooth": `{}`,
+		"sh.wendy/entitlement.gpu":       "",
+		"sh.wendy/entitlement.bluetooth": "",
 		"sh.wendy/signed.repo":           "myapp",
 		"sh.wendy/signed.at":             "2024-01-01T00:00:00Z",
 		"sh.wendy/signature":             "should-be-excluded",
@@ -428,8 +428,8 @@ func TestSignAndVerify_EntitlementAnnotations(t *testing.T) {
 	key, cert, certPEM := generateTestKeyAndCert(t)
 	digests := []string{"sha256:layer1", "sha256:config"}
 	annotations := map[string]string{
-		"sh.wendy/entitlement.gpu":       `{"port":0}`,
-		"sh.wendy/entitlement.bluetooth": `{}`,
+		"sh.wendy/entitlement.gpu":       "",
+		"sh.wendy/entitlement.bluetooth": "",
 	}
 
 	payload := SigningPayload(digests, annotations)

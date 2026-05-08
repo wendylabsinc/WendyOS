@@ -488,7 +488,7 @@ func TestCheckManifestSignature(t *testing.T) {
 	userKey, userCertPEM := makeTestLeafCert(t, "wendy/user/alice", org1CAKey, org1CACert)
 
 	entitlementAnnotations := func() map[string]string {
-		return map[string]string{"sh.wendy/entitlement.bluetooth": `{}`}
+		return map[string]string{"sh.wendy/entitlement.bluetooth": ""}
 	}
 
 	// Expired leaf cert and its midpoint signing time (used for cert expiry tests).

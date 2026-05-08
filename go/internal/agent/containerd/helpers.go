@@ -4,7 +4,6 @@ package containerd
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -143,22 +142,18 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 			key = fmt.Sprintf("%s%s.%d", labelKeyEntitlementPrefix, e.Type, typeIndex[e.Type])
 			typeIndex[e.Type]++
 		}
-		data, _ := json.Marshal(e)
-		var m map[string]json.RawMessage
-		_ = json.Unmarshal(data, &m)
-		delete(m, "type")
-		stripped, _ := json.Marshal(m)
-		labels[key] = string(stripped)
+		labels[key] = appconfig.EntitlementAnnotationValue(e)
 	}
 
 	return labels
 }
 
 // parseEntitlementsFromAnnotations reconstructs an entitlement list from OCI
-// manifest annotations. It is the inverse of the CLI-side buildEntitlementAnnotations.
+// manifest annotations or containerd container labels. It is the inverse of
+// buildEntitlementAnnotations / wendyLabels.
 // Keys have the form sh.wendy/entitlement.<type> (single) or
-// sh.wendy/entitlement.<type>.<index> (multiple of the same type). The JSON
-// value carries all fields except "type".
+// sh.wendy/entitlement.<type>.<index> (multiple of the same type). Values use
+// the comma-separated key=value format produced by appconfig.EntitlementAnnotationValue.
 func parseEntitlementsFromAnnotations(annotations map[string]string) []appconfig.Entitlement {
 	type indexedEnt struct {
 		entType string
@@ -182,22 +177,11 @@ func parseEntitlementsFromAnnotations(annotations map[string]string) []appconfig
 			}
 		}
 
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(v), &m); err != nil {
-			continue
-		}
-		typeJSON, _ := json.Marshal(entType)
-		m["type"] = typeJSON
-
-		entJSON, err := json.Marshal(m)
-		if err != nil {
-			continue
-		}
-		var ent appconfig.Entitlement
-		if err := json.Unmarshal(entJSON, &ent); err != nil {
-			continue
-		}
-		indexed = append(indexed, indexedEnt{entType: entType, idx: idx, ent: ent})
+		indexed = append(indexed, indexedEnt{
+			entType: entType,
+			idx:     idx,
+			ent:     appconfig.ParseEntitlementAnnotation(entType, v),
+		})
 	}
 
 	sort.Slice(indexed, func(i, j int) bool {

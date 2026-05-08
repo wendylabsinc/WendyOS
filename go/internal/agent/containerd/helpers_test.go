@@ -2,7 +2,6 @@ package containerd
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -266,7 +265,7 @@ func TestWendyLabels_WithMCPPortZero(t *testing.T) {
 	}
 }
 
-func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
+func TestWendyLabels_EntitlementsStoredAsKeyValue(t *testing.T) {
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork, Mode: "host"},
 		{Type: appconfig.EntitlementGPU},
@@ -275,9 +274,9 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 
 	cases := []struct {
 		key      string
-		wantMode string
+		wantVal  string
 	}{
-		{labelKeyEntitlementPrefix + appconfig.EntitlementNetwork, "host"},
+		{labelKeyEntitlementPrefix + appconfig.EntitlementNetwork, "mode=host"},
 		{labelKeyEntitlementPrefix + appconfig.EntitlementGPU, ""},
 	}
 	for _, tc := range cases {
@@ -285,18 +284,8 @@ func TestWendyLabels_EntitlementsStoredAsJSON(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing entitlement label %q", tc.key)
 		}
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(raw), &m); err != nil {
-			t.Fatalf("entitlement label %q is not valid JSON: %v", tc.key, err)
-		}
-		if _, hasType := m["type"]; hasType {
-			t.Errorf("%q value should not contain \"type\" field", tc.key)
-		}
-		if tc.wantMode != "" {
-			var mode string
-			if err := json.Unmarshal(m["mode"], &mode); err != nil || mode != tc.wantMode {
-				t.Errorf("%q mode = %q; want %q", tc.key, mode, tc.wantMode)
-			}
+		if raw != tc.wantVal {
+			t.Errorf("%q value = %q; want %q", tc.key, raw, tc.wantVal)
 		}
 	}
 }
@@ -314,16 +303,9 @@ func TestWendyLabels_DuplicateEntitlementType(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing entitlement label %q", key)
 		}
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(raw), &m); err != nil {
-			t.Fatalf("entitlement label %q is not valid JSON: %v", key, err)
-		}
-		if _, hasType := m["type"]; hasType {
-			t.Errorf("%q value should not contain \"type\" field", key)
-		}
-		var name string
-		if err := json.Unmarshal(m["name"], &name); err != nil || name != want.Name {
-			t.Errorf("%q name = %q; want %q", key, name, want.Name)
+		got := appconfig.ParseEntitlementAnnotation(appconfig.EntitlementPersist, raw)
+		if got.Name != want.Name || got.Path != want.Path {
+			t.Errorf("%q: got name=%q path=%q; want name=%q path=%q", key, got.Name, got.Path, want.Name, want.Path)
 		}
 	}
 }
@@ -354,8 +336,8 @@ func TestRestartPolicyToLabel_OnFailureNoRetries(t *testing.T) {
 
 func TestParseEntitlementsFromAnnotations_Single(t *testing.T) {
 	annotations := map[string]string{
-		"sh.wendy/entitlement.network": `{"mode":"host"}`,
-		"sh.wendy/entitlement.gpu":     `{}`,
+		"sh.wendy/entitlement.network": "mode=host",
+		"sh.wendy/entitlement.gpu":     "",
 	}
 	got := parseEntitlementsFromAnnotations(annotations)
 
@@ -373,8 +355,8 @@ func TestParseEntitlementsFromAnnotations_Single(t *testing.T) {
 
 func TestParseEntitlementsFromAnnotations_MultipleOfSameType(t *testing.T) {
 	annotations := map[string]string{
-		"sh.wendy/entitlement.persist.0": `{"name":"data","path":"/data"}`,
-		"sh.wendy/entitlement.persist.1": `{"name":"logs","path":"/logs"}`,
+		"sh.wendy/entitlement.persist.0": "name=data,path=/data",
+		"sh.wendy/entitlement.persist.1": "name=logs,path=/logs",
 	}
 	got := parseEntitlementsFromAnnotations(annotations)
 
