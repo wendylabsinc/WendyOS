@@ -1187,6 +1187,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	cliLogln("Build and push completed.")
 
+	if len(appCfg.Entitlements) > 0 {
+		hostAddr := cliRegistryAddr(registryAddr)
+		if err := annotateManifestWithEntitlements(ctx, hostAddr, repo, "latest", appCfg.Entitlements, conn.IsMTLS); err != nil {
+			cliLogln("Warning: could not annotate image manifest with entitlements: %v", err)
+		}
+	}
+
 	// Inject debugpy for Python remote debugging.
 	if opts.debug && appCfg.Language == "python" {
 		cliLogln("Injecting debugpy for remote debugging...")
