@@ -1795,10 +1795,10 @@ const ociEntitlementAnnotationPrefix = "sh.wendy/entitlement."
 
 // mediaType constants for Docker v2, OCI image manifests, and OCI image indexes.
 const (
-	mediaTypeDockerManifestV2    = "application/vnd.docker.distribution.manifest.v2+json"
+	mediaTypeDockerManifestV2     = "application/vnd.docker.distribution.manifest.v2+json"
 	mediaTypeDockerManifestListV2 = "application/vnd.docker.distribution.manifest.list.v2+json"
-	mediaTypeOCIManifestV1       = "application/vnd.oci.image.manifest.v1+json"
-	mediaTypeOCIIndexV1          = "application/vnd.oci.image.index.v1+json"
+	mediaTypeOCIManifestV1        = "application/vnd.oci.image.manifest.v1+json"
+	mediaTypeOCIIndexV1           = "application/vnd.oci.image.index.v1+json"
 )
 
 // cliRegistryAddr converts a Docker-buildx-accessible registry address to one

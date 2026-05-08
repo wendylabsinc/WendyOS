@@ -519,4 +519,3 @@ func TestCheckManifestSignature(t *testing.T) {
 		})
 	}
 }
-
