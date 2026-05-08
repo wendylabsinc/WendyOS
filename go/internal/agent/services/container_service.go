@@ -198,12 +198,12 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		return status.Errorf(codes.Internal, "failed to create container: %v", err)
 	}
 
-	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), stream)
+	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), nil, stream)
 }
 
 // StartContainer starts an existing container and streams output.
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
-	return s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), stream)
+	return s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), req.GetRestartPolicy(), stream)
 }
 
 func postStartAgentHookFromContext(ctx context.Context) string {
@@ -221,9 +221,10 @@ func (s *ContainerService) streamContainerOutput(
 	ctx context.Context,
 	appName string,
 	postStartAgentCommand string,
+	restartPolicy *agentpb.RestartPolicy,
 	stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse],
 ) error {
-	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand)
+	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand, restartPolicy)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
 	}
@@ -332,7 +333,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 		}
 	}()
 
-	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentCommand)
+	outputCh, err := s.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentCommand, nil)
 	if err != nil {
 		stdinR.Close()
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
