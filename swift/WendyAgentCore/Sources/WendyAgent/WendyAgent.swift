@@ -579,7 +579,8 @@ public final class WendyAgent {
         }
     }
 
-    nonisolated private static func makeServeTask(server: PosixGRPCServer) -> Task<Void, any Error> {
+    nonisolated private static func makeServeTask(server: PosixGRPCServer) -> Task<Void, any Error>
+    {
         Task {
             try await server.serve()
         }
