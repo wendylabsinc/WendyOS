@@ -534,7 +534,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
-		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, opts)
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, appCfg.Entitlements, opts)
 	}
 
 	// Devices without a reachable WendyOS agent can't execute containers.
@@ -575,7 +575,8 @@ func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
 
 	if target.External != nil && target.Provider != nil {
 		// Docker Desktop provider: use docker compose directly.
-		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), opts)
+		// Compose projects have no wendy.json, so entitlements are nil.
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), nil, opts)
 	}
 
 	if target.Agent == nil {
@@ -948,7 +949,7 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 }
 
 // runWithProvider builds and runs via an external device provider.
-func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
+func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, entitlements []appconfig.Entitlement, opts runOptions) error {
 	projectType, err := resolveRunProjectType(projectPath, opts.buildType)
 	if err != nil {
 		return err
@@ -1009,6 +1010,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		}
 	}
 
+	app.Entitlements = entitlements
 	cliLogln("Build completed.")
 
 	if opts.deploy {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
@@ -267,6 +268,9 @@ func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, ou
 	}
 
 	args := []string{"run", "--name", bc.ContainerName, "--label", "wendy.managed=true"}
+	for _, label := range entitlementLabels(app.Entitlements) {
+		args = append(args, "--label", label)
+	}
 	if detach {
 		args = append(args, "-d")
 	}
@@ -376,4 +380,32 @@ func (p *DockerProvider) RemoveContainer(ctx context.Context, name string) error
 		return fmt.Errorf("docker rm: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// entitlementLabels converts a list of entitlements into Docker --label strings
+// using the same sh.wendy/entitlement.* key format and key=value encoding used
+// by OCI manifest annotations and containerd container labels.
+func entitlementLabels(entitlements []appconfig.Entitlement) []string {
+	typeCounts := make(map[string]int)
+	for _, e := range entitlements {
+		if e.Type != "" {
+			typeCounts[e.Type]++
+		}
+	}
+	typeIndex := make(map[string]int)
+	var labels []string
+	for _, e := range entitlements {
+		if e.Type == "" {
+			continue
+		}
+		var key string
+		if typeCounts[e.Type] == 1 {
+			key = "sh.wendy/entitlement." + e.Type
+		} else {
+			key = fmt.Sprintf("sh.wendy/entitlement.%s.%d", e.Type, typeIndex[e.Type])
+			typeIndex[e.Type]++
+		}
+		labels = append(labels, key+"="+appconfig.EntitlementAnnotationValue(e))
+	}
+	return labels
 }

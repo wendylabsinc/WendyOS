@@ -5,6 +5,7 @@ package providers
 import (
 	"context"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
@@ -36,10 +37,11 @@ type DeviceProvider interface {
 // BuiltApp is the result of a successful Build. The opaque Context field
 // carries provider-specific artifacts (binary path, container ID, etc.).
 type BuiltApp struct {
-	ProviderKey string
-	Device      models.ExternalDevice
-	AppName     string
-	Context     interface{} // provider-specific build artifact
+	ProviderKey  string
+	Device       models.ExternalDevice
+	AppName      string
+	Entitlements []appconfig.Entitlement // from wendy.json; may be nil for Compose projects
+	Context      interface{}             // provider-specific build artifact
 }
 
 // RunOutputType classifies a line of output from a running app.
