@@ -247,7 +247,7 @@ struct `'wendy device update'` {
 
         #expect(!record.terminationStatus.isSuccess)
         #expect(
-            record.standardError?.contains("Could not connect") == true
+            Helper.isConnectionFailure(record.standardError)
                 || record.standardError?.contains("unreachable") == true
                 || record.standardError?.contains("no such") == true
         )
@@ -347,7 +347,7 @@ struct `'wendy device dashboard'` {
 
         #expect(!record.terminationStatus.isSuccess)
         #expect(
-            record.standardError?.contains("Could not connect") == true
+            Helper.isConnectionFailure(record.standardError)
                 || record.standardError?.contains("dashboard") == true
         )
     }
@@ -441,7 +441,7 @@ struct `'wendy device telemetry-stream'` {
 
         #expect(!record.terminationStatus.isSuccess)
         #expect(
-            record.standardError?.contains("Could not connect") == true
+            Helper.isConnectionFailure(record.standardError)
                 || record.standardError?.contains("telemetry") == true
         )
     }

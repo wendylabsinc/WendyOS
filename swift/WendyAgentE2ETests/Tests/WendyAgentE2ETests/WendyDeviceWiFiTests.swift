@@ -55,7 +55,7 @@ struct `'wendy device wifi connect'` {
         #expect(
             record.standardError?.contains("credentials") == true
                 || record.standardError?.contains("rejected") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -136,7 +136,7 @@ struct `'wendy device wifi forget'` {
         #expect(
             record.standardError?.contains("MissingNetwork") == true
                 || record.standardError?.contains("not saved") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -220,7 +220,7 @@ struct `'wendy device wifi rank'` {
         #expect(
             record.standardError?.contains("MissingNetwork") == true
                 || record.standardError?.contains("unknown") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

@@ -114,6 +114,19 @@ enum Helper {
         return "WENDY_ANALYTICS=false"
     }
 
+    static func isConnectionFailure(_ message: String?) -> Bool {
+        guard let message else {
+            return false
+        }
+
+        let lowercased = message.lowercased()
+        return lowercased.contains("could not connect")
+            || lowercased.contains("connection error")
+            || lowercased.contains("connection refused")
+            || lowercased.contains("error reading server preface")
+            || lowercased.contains("use of closed network connection")
+    }
+
     static func expectedGoOS(for os: MachineOS = Machine.cli.os) -> String {
         switch os {
         case .macOS:

@@ -96,7 +96,7 @@ struct `'wendy device volumes remove'` {
         #expect(
             record.standardError?.contains("missing-volume") == true
                 || record.standardError?.contains("not exist") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

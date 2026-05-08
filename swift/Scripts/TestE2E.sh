@@ -17,8 +17,8 @@ AGENT_SSH="${WENDY_AGENT_E2E_AGENT_SSH:-}"
 AGENT_WORKDIR="${WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY:-}"
 SYNC_AGENT="${WENDY_AGENT_E2E_SYNC_AGENT:-auto}"
 VERBOSE="${WENDY_AGENT_E2E_VERBOSE:-false}"
+PROGRESS_INTERVAL="${WENDY_AGENT_E2E_PROGRESS_INTERVAL:-10}"
 TEST_OUTPUT_LOG="${WENDY_AGENT_E2E_TEST_OUTPUT_LOG:-}"
-XUNIT_OUTPUT="${WENDY_AGENT_E2E_XUNIT_OUTPUT:-}"
 TEST_FILTERS=()
 
 usage() {
@@ -36,7 +36,6 @@ Options:
   --artifact-dir DIR    Directory for the final zip artifact.
   --report-zip PATH     Path to the final zip artifact.
   --test-output-log PATH Path to the captured swift test stdout/stderr log.
-  --xunit-output PATH   Path to the SwiftPM xUnit test result XML file.
   --fixtures-dir DIR    Fixture directory exposed to tests.
   --agent-ssh SSH       Optional SSH target for the agent machine; omitted runs locally.
   --agent-workdir DIR   Existing swift/ working directory to use for the agent.
@@ -52,8 +51,8 @@ Environment:
   WENDY_AGENT_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
   WENDY_AGENT_E2E_TEST_RECORDS_DIR          Defaults to package .build records dir.
   WENDY_AGENT_E2E_TEST_OUTPUT_LOG           Defaults to artifact dir swift-e2e-test-output.log.
-  WENDY_AGENT_E2E_XUNIT_OUTPUT              Defaults to artifact dir swift-e2e-test-results.xml.
   WENDY_AGENT_E2E_VERBOSE                   true/false; prints machine commands.
+  WENDY_AGENT_E2E_PROGRESS_INTERVAL         Seconds between progress heartbeats; 0 disables.
 EOF
 }
 
@@ -79,10 +78,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-output-log)
       TEST_OUTPUT_LOG="$2"
-      shift 2
-      ;;
-    --xunit-output)
-      XUNIT_OUTPUT="$2"
       shift 2
       ;;
     --fixtures-dir)
@@ -132,9 +127,6 @@ fi
 if [[ -z "$TEST_OUTPUT_LOG" ]]; then
   TEST_OUTPUT_LOG="$ARTIFACT_DIR/swift-e2e-test-output.log"
 fi
-if [[ -z "$XUNIT_OUTPUT" ]]; then
-  XUNIT_OUTPUT="$ARTIFACT_DIR/swift-e2e-test-results.xml"
-fi
 
 absolute_dir_path() {
   mkdir -p "$1"
@@ -156,18 +148,10 @@ ARTIFACT_DIR="$(absolute_dir_path "$ARTIFACT_DIR")"
 RECORDS_DIR="$(absolute_dir_path "$RECORDS_DIR")"
 REPORT_ZIP="$(absolute_file_path "$REPORT_ZIP")"
 TEST_OUTPUT_LOG="$(absolute_file_path "$TEST_OUTPUT_LOG")"
-XUNIT_OUTPUT="$(absolute_file_path "$XUNIT_OUTPUT")"
-
-XUNIT_OUTPUT_DIR="$(dirname "$XUNIT_OUTPUT")"
-XUNIT_OUTPUT_BASENAME="$(basename "$XUNIT_OUTPUT")"
-XUNIT_OUTPUT_STEM="${XUNIT_OUTPUT_BASENAME%.*}"
 
 mkdir -p "$ARTIFACT_DIR"
-mkdir -p "$(dirname "$TEST_OUTPUT_LOG")" "$XUNIT_OUTPUT_DIR"
+mkdir -p "$(dirname "$TEST_OUTPUT_LOG")"
 rm -f "$TEST_OUTPUT_LOG"
-if [[ -d "$XUNIT_OUTPUT_DIR" ]]; then
-  find "$XUNIT_OUTPUT_DIR" -maxdepth 1 -type f \( -name "$XUNIT_OUTPUT_BASENAME" -o -name "$XUNIT_OUTPUT_STEM-*.xml" \) -delete
-fi
 rm -rf "$RECORDS_DIR"
 mkdir -p "$RECORDS_DIR"
 
@@ -219,6 +203,52 @@ sync_agent_checkout_if_needed() {
   AGENT_WORKDIR="$remote_swift_dir"
 }
 
+emit_progress_message() {
+  local message="$1"
+  printf "%s\n" "$message" | tee -a "$TEST_OUTPUT_LOG" >&2
+}
+
+stop_progress_reporter() {
+  if [[ -n "${PROGRESS_PID:-}" ]]; then
+    kill "$PROGRESS_PID" 2>/dev/null || true
+    wait "$PROGRESS_PID" 2>/dev/null || true
+    PROGRESS_PID=""
+  fi
+}
+
+progress_reporter() {
+  local last_count=""
+  local last_latest=""
+
+  while true; do
+    sleep "$PROGRESS_INTERVAL" || return 0
+
+    local count=0
+    local latest=""
+    local file
+    while IFS= read -r -d '' file; do
+      count=$((count + 1))
+      if [[ -z "$latest" || "$file" -nt "$latest" ]]; then
+        latest="$file"
+      fi
+    done < <(find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.md' -print0 2>/dev/null)
+
+    local latest_name="<none>"
+    if [[ -n "$latest" ]]; then
+      latest_name="$(basename "$latest")"
+    fi
+
+    if [[ "$count" == "$last_count" && "$latest_name" == "$last_latest" ]]; then
+      emit_progress_message "==> Swift E2E progress: still running; $count command record(s), latest: $latest_name"
+    else
+      emit_progress_message "==> Swift E2E progress: $count command record(s), latest: $latest_name"
+    fi
+
+    last_count="$count"
+    last_latest="$latest_name"
+  done
+}
+
 collect_reports() {
   local status="$1"
   local staging_dir="$ARTIFACT_DIR/swift-e2e-test-reports"
@@ -236,12 +266,6 @@ collect_reports() {
   if [[ -f "$TEST_OUTPUT_LOG" ]]; then
     cp "$TEST_OUTPUT_LOG" "$staging_dir/"
   fi
-  if [[ -d "$XUNIT_OUTPUT_DIR" ]]; then
-    find "$XUNIT_OUTPUT_DIR" -maxdepth 1 -type f \( -name "$XUNIT_OUTPUT_BASENAME" -o -name "$XUNIT_OUTPUT_STEM-*.xml" \) -print0 \
-      | while IFS= read -r -d '' file; do
-          cp "$file" "$staging_dir/"
-        done
-  fi
 
   {
     echo "# Swift E2E Test Reports"
@@ -250,8 +274,6 @@ collect_reports() {
     echo "- Records directory: \`$RECORDS_DIR\`"
     echo "- Fixtures directory: \`$FIXTURES_DIR\`"
     echo "- Test output log: \`$TEST_OUTPUT_LOG\`"
-    echo "- xUnit output: \`$XUNIT_OUTPUT\`"
-    echo "- xUnit generated files: \`$XUNIT_OUTPUT_BASENAME\`, \`$XUNIT_OUTPUT_STEM-*.xml\`"
     echo "- Verbose: \`$VERBOSE\`"
     if [[ -n "$AGENT_SSH" ]]; then
       echo "- Agent SSH: \`$AGENT_SSH\`"
@@ -293,11 +315,18 @@ echo "    Package:  $PACKAGE_DIR"
 echo "    Fixtures: $FIXTURES_DIR"
 echo "    Records:  $RECORDS_DIR"
 echo "    Log:      $TEST_OUTPUT_LOG"
-echo "    xUnit:    $XUNIT_OUTPUT"
 echo "    Filters:  ${TEST_FILTERS[*]}"
 echo "    Verbose:  $VERBOSE"
+echo "    Progress: every ${PROGRESS_INTERVAL}s"
 if [[ -n "$AGENT_SSH" ]]; then
   echo "    Agent:   $AGENT_SSH:${AGENT_WORKDIR:-<default>}"
+fi
+
+PROGRESS_PID=""
+if [[ "$PROGRESS_INTERVAL" != "0" ]]; then
+  progress_reporter &
+  PROGRESS_PID="$!"
+  trap stop_progress_reporter EXIT INT TERM
 fi
 
 set +e
@@ -308,9 +337,10 @@ set +e
   WENDY_AGENT_E2E_AGENT_SSH="$AGENT_SSH" \
   WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY="$AGENT_WORKDIR" \
   WENDY_AGENT_E2E_VERBOSE="$VERBOSE" \
-  swift "${SWIFT_TEST_ARGS[@]}" --xunit-output "$XUNIT_OUTPUT"
+  swift "${SWIFT_TEST_ARGS[@]}"
 ) 2>&1 | tee "$TEST_OUTPUT_LOG"
 TEST_STATUS=${PIPESTATUS[0]}
+stop_progress_reporter
 set -e
 
 collect_reports "$TEST_STATUS"

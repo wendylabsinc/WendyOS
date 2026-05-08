@@ -99,7 +99,7 @@ struct `'wendy device audio listen'` {
         #expect(
             record.standardError?.contains("999") == true
                 || record.standardError?.contains("audio") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -140,7 +140,7 @@ struct `'wendy device audio monitor'` {
         #expect(
             record.standardError?.contains("audio") == true
                 || record.standardError?.contains("monitor") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -178,7 +178,7 @@ struct `'wendy device audio set-default'` {
         #expect(
             record.standardError?.contains("999") == true
                 || record.standardError?.contains("unknown") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

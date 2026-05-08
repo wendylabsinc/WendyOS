@@ -247,7 +247,7 @@ struct `'wendy os update'` {
         #expect(!record.terminationStatus.isSuccess)
         #expect(
             record.standardError?.contains("update") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

@@ -55,7 +55,7 @@ struct `'wendy device bluetooth connect'` {
         #expect(
             record.standardError?.contains("00:00:00:00:00:00") == true
                 || record.standardError?.contains("Bluetooth") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -134,7 +134,7 @@ struct `'wendy device bluetooth forget'` {
         #expect(
             record.standardError?.contains("not paired") == true
                 || record.standardError?.contains("Bluetooth") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

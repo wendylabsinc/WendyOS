@@ -96,7 +96,7 @@ struct `'wendy device camera view'` {
         #expect(
             record.standardError?.contains("999") == true
                 || record.standardError?.contains("camera") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }

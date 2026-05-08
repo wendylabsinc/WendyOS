@@ -114,7 +114,7 @@ struct `'wendy device apps remove'` {
         #expect(
             record.standardError?.contains("missing-app") == true
                 || record.standardError?.contains("not installed") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -152,7 +152,7 @@ struct `'wendy device apps start'` {
         #expect(
             record.standardError?.contains("missing-app") == true
                 || record.standardError?.contains("start") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
@@ -190,7 +190,7 @@ struct `'wendy device apps stop'` {
         #expect(
             record.standardError?.contains("missing-app") == true
                 || record.standardError?.contains("stop") == true
-                || record.standardError?.contains("Could not connect") == true
+                || Helper.isConnectionFailure(record.standardError)
         )
     }
 }
