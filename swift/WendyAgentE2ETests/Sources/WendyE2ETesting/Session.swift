@@ -326,11 +326,7 @@ public struct Session: Sendable {
     }
 
     private static func printToStandardError(_ message: String) {
-        // SAFETY: stderr is process-global C runtime state. This helper only
-        // passes the current stream pointer to fputs for a single diagnostic
-        // write and does not mutate or store the pointer.
-        nonisolated(unsafe) let standardError = stderr
-        fputs(message, standardError)
+        _ = try? FileDescriptor.standardError.writeAll(message.utf8)
     }
 
     private static func writeExecutionReport(
