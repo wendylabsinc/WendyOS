@@ -447,14 +447,14 @@ private struct SourceParser {
         guard line.hasPrefix("struct ") else {
             return nil
         }
-        return parseBacktickedName(from: line)
+        return parseBacktickedName(from: line)?.strippingCommandQuotes()
     }
 
     private func parseFunctionTitle(from line: String) -> String? {
         guard line.hasPrefix("func ") else {
             return nil
         }
-        return parseBacktickedName(from: line)
+        return parseBacktickedName(from: line)?.formattingQuotedSpansAsMarkdownCode()
     }
 
     private func parseBacktickedName(from line: String) -> String? {
@@ -464,8 +464,7 @@ private struct SourceParser {
             return nil
         }
 
-        let name = String(line[line.index(after: first)..<last])
-        return name.normalizingReferenceTitle()
+        return String(line[line.index(after: first)..<last])
     }
 
     private func parseMarkTitle(from line: String) -> String? {
@@ -607,24 +606,39 @@ extension String {
         return String(dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
     }
 
-    fileprivate func normalizingReferenceTitle() -> String {
+    fileprivate func strippingCommandQuotes() -> String {
         var result = trimmingCharacters(in: .whitespaces)
         if result.hasPrefix("'") && result.hasSuffix("'") && result.count >= 2 {
             result.removeFirst()
             result.removeLast()
-            return result
         }
-
-        guard result.hasPrefix("'") else {
-            return result
-        }
-        let searchStart = result.index(after: result.startIndex)
-        guard let closingQuote = result[searchStart...].firstIndex(of: "'") else {
-            return result
-        }
-
-        result.remove(at: closingQuote)
-        result.removeFirst()
         return result
+    }
+
+    fileprivate func formattingQuotedSpansAsMarkdownCode() -> String {
+        var result = ""
+        var cursor = startIndex
+
+        while cursor < endIndex {
+            guard self[cursor] == "'" else {
+                result.append(self[cursor])
+                cursor = index(after: cursor)
+                continue
+            }
+
+            let contentStart = index(after: cursor)
+            guard let contentEnd = self[contentStart...].firstIndex(of: "'") else {
+                result.append(self[cursor])
+                cursor = index(after: cursor)
+                continue
+            }
+
+            result.append("`")
+            result.append(contentsOf: self[contentStart..<contentEnd])
+            result.append("`")
+            cursor = index(after: contentEnd)
+        }
+
+        return result.trimmingCharacters(in: .whitespaces)
     }
 }

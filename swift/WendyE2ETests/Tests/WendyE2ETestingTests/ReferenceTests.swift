@@ -35,13 +35,13 @@ struct `reference documentation extraction` {
 
         #expect(
             selectingDevices.entries.map(\.title) == [
-                "--device selects an explicit device",
+                "`--device` selects an explicit device",
                 "uses the configured default device",
             ]
         )
         #expect(
             printingOutput.entries.map(\.title) == [
-                "--json --device prints JSON device information"
+                "`--json --device` prints JSON device information"
             ]
         )
     }
@@ -123,7 +123,7 @@ struct `reference documentation extraction` {
 
         #expect(markdown.contains("# wendy device info"))
         #expect(markdown.contains("## Selecting Devices"))
-        #expect(markdown.contains("### --device selects an explicit device"))
+        #expect(markdown.contains("### `--device` selects an explicit device"))
         #expect(markdown.contains("Selects a device explicitly with `--device`."))
         #expect(!markdown.contains("#### Requirements"))
         #expect(!markdown.contains("_disabled"))
