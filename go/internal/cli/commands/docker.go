@@ -2,11 +2,15 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -22,6 +26,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -1432,6 +1437,230 @@ func sanitizeDockerImageName(name string) string {
 		return "wendy-app"
 	}
 	return result
+}
+
+// ociEntitlementAnnotationPrefix is the OCI manifest annotation key prefix for
+// Wendy entitlements. Follows the same sh.wendy/entitlement.* scheme used by
+// the containerd container labels so the two representations stay consistent.
+const ociEntitlementAnnotationPrefix = "sh.wendy/entitlement."
+
+// mediaType constants for Docker v2 and OCI image manifests.
+const (
+	mediaTypeDockerManifestV2 = "application/vnd.docker.distribution.manifest.v2+json"
+	mediaTypeOCIManifestV1    = "application/vnd.oci.image.manifest.v1+json"
+)
+
+// cliRegistryAddr converts a Docker-buildx-accessible registry address to one
+// reachable directly from the host CLI process. On macOS, buildx uses the
+// "host.docker.internal" alias to cross from the Docker VM to the host; for
+// direct CLI HTTP calls we substitute "127.0.0.1" with the same port.
+func cliRegistryAddr(buildxAddr string) string {
+	host, port, err := net.SplitHostPort(buildxAddr)
+	if err != nil {
+		return buildxAddr
+	}
+	if host == "host.docker.internal" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return buildxAddr
+}
+
+// registryHTTPClient creates an HTTP client for talking to the device registry.
+// When useMTLS is true the client is configured with the CLI leaf certificate
+// and InsecureSkipVerify (device registries use self-signed certs).
+func registryHTTPClient(useMTLS bool) (*http.Client, error) {
+	if !useMTLS {
+		return &http.Client{Timeout: 30 * time.Second}, nil
+	}
+	certInfo := loadCLICert()
+	if certInfo == nil {
+		return nil, fmt.Errorf("mTLS requested but no CLI certificates are available")
+	}
+	leafPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
+	}
+	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(certInfo.PemPrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf("loading client certificate: %w", err)
+	}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // device registries use self-signed certs
+				Certificates:       []tls.Certificate{tlsCert},
+			},
+		},
+	}, nil
+}
+
+// annotateManifestWithEntitlements fetches the OCI image manifest at
+// registryAddr/repo:tag, adds sh.wendy/entitlement.* annotations for each
+// entitlement from the app config, and re-pushes the annotated manifest under
+// the same tag.  If the manifest is in Docker v2 format it is promoted to OCI
+// (by updating the top-level mediaType only) so that the annotations field is
+// standards-compliant and signable by OCI codesigning tooling (e.g. cosign).
+//
+// The annotation format matches the sh.wendy/entitlement.* container-label
+// scheme: each entitlement type gets its own key, and the value is the JSON
+// of the entitlement object (minus the redundant "type" field).
+func annotateManifestWithEntitlements(ctx context.Context, registryAddr, repo, tag string, entitlements []appconfig.Entitlement, useMTLS bool) error {
+	if len(entitlements) == 0 {
+		return nil
+	}
+
+	scheme := "http"
+	if useMTLS {
+		scheme = "https"
+	}
+
+	client, err := registryHTTPClient(useMTLS)
+	if err != nil {
+		return err
+	}
+
+	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, registryAddr, repo, tag)
+
+	// Fetch the existing manifest.
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
+	if err != nil {
+		return err
+	}
+	getReq.Header.Set("Accept", strings.Join([]string{
+		mediaTypeOCIManifestV1,
+		mediaTypeDockerManifestV2,
+	}, ", "))
+
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		return fmt.Errorf("fetching manifest: %w", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetching manifest: HTTP %d", getResp.StatusCode)
+	}
+
+	manifestBytes, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		return fmt.Errorf("reading manifest body: %w", err)
+	}
+
+	// Build per-entitlement annotation map.
+	annotations := buildEntitlementAnnotations(entitlements)
+
+	// Inject annotations, promoting to OCI manifest format if needed.
+	updated, updatedType, err := injectManifestAnnotations(manifestBytes, getResp.Header.Get("Content-Type"), annotations)
+	if err != nil {
+		return fmt.Errorf("injecting annotations: %w", err)
+	}
+
+	// Re-push the annotated manifest under the same tag.
+	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, manifestURL, bytes.NewReader(updated))
+	if err != nil {
+		return err
+	}
+	putReq.Header.Set("Content-Type", updatedType)
+
+	putResp, err := client.Do(putReq)
+	if err != nil {
+		return fmt.Errorf("pushing annotated manifest: %w", err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusCreated && putResp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(putResp.Body)
+		return fmt.Errorf("pushing annotated manifest: HTTP %d: %s", putResp.StatusCode, bytes.TrimSpace(errBody))
+	}
+
+	return nil
+}
+
+// buildEntitlementAnnotations converts a list of entitlements into OCI annotation
+// key/value pairs. The key format is sh.wendy/entitlement.<type>; when multiple
+// entitlements share the same type a numeric suffix (.0, .1, …) is appended.
+// Values are JSON-encoded entitlement objects with the "type" field omitted
+// (matching the containerd container label format in the agent's wendyLabels).
+func buildEntitlementAnnotations(entitlements []appconfig.Entitlement) map[string]string {
+	typeCounts := make(map[string]int)
+	for _, e := range entitlements {
+		typeCounts[e.Type]++
+	}
+	typeIndex := make(map[string]int)
+	out := make(map[string]string)
+	for _, e := range entitlements {
+		var key string
+		if typeCounts[e.Type] == 1 {
+			key = ociEntitlementAnnotationPrefix + e.Type
+		} else {
+			key = fmt.Sprintf("%s%s.%d", ociEntitlementAnnotationPrefix, e.Type, typeIndex[e.Type])
+			typeIndex[e.Type]++
+		}
+		data, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			continue
+		}
+		delete(m, "type")
+		stripped, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		out[key] = string(stripped)
+	}
+	return out
+}
+
+// injectManifestAnnotations merges annotations into the manifest JSON and returns
+// the updated bytes together with the correct OCI content-type string.
+//
+// If the manifest is a Docker v2 manifest its top-level mediaType field is
+// rewritten to the OCI value so that the resulting document is a valid OCI
+// image manifest (OCI manifests define the annotations field; Docker manifests
+// do not). Config and layer descriptor media types are intentionally preserved
+// so containerd continues to handle them correctly.
+func injectManifestAnnotations(manifestBytes []byte, contentType string, annotations map[string]string) ([]byte, string, error) {
+	// Treat the manifest as an opaque JSON object for surgery.
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		return nil, "", fmt.Errorf("parsing manifest JSON: %w", err)
+	}
+
+	// Determine current format from the Content-Type header or the mediaType
+	// field inside the manifest (some registries omit the header).
+	isOCI := strings.Contains(contentType, "vnd.oci.image.manifest")
+	if !isOCI {
+		if mtRaw, ok := m["mediaType"]; ok {
+			var mt string
+			_ = json.Unmarshal(mtRaw, &mt)
+			isOCI = strings.Contains(mt, "vnd.oci.image.manifest")
+		}
+	}
+
+	if !isOCI {
+		// Promote to OCI by updating only the top-level mediaType.
+		mtBytes, _ := json.Marshal(mediaTypeOCIManifestV1)
+		m["mediaType"] = mtBytes
+	}
+
+	// Merge existing annotations with the new entitlement entries.
+	existing := make(map[string]string)
+	if annRaw, ok := m["annotations"]; ok {
+		_ = json.Unmarshal(annRaw, &existing)
+	}
+	for k, v := range annotations {
+		existing[k] = v
+	}
+	annBytes, err := json.Marshal(existing)
+	if err != nil {
+		return nil, "", err
+	}
+	m["annotations"] = annBytes
+
+	result, err := json.Marshal(m)
+	return result, mediaTypeOCIManifestV1, err
 }
 
 // copyBinary copies a file from src to dst with mode 0755.
