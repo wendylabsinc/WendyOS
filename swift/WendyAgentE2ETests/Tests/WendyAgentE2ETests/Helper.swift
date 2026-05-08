@@ -32,12 +32,14 @@ enum Helper {
         return directory
     }
 
+    @discardableResult
     static func writeWendyJSON(_ contents: String, to directory: URL) throws -> URL {
         let file = directory.appendingPathComponent("wendy.json", isDirectory: false)
         try contents.write(to: file, atomically: true, encoding: .utf8)
         return file
     }
 
+    @discardableResult
     static func writeFile(_ contents: String, named name: String, to directory: URL) throws -> URL {
         let file = directory.appendingPathComponent(name, isDirectory: false)
         try contents.write(to: file, atomically: true, encoding: .utf8)
