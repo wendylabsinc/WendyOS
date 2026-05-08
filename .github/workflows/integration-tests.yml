@@ -168,7 +168,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-restart-unless-stopped otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -254,27 +254,28 @@ jobs:
 
       - name: Run integration tests
         run: |
-          TEST_ARGS="-w $(pwd)/bin/wendy"
+          WORKDIR="$(pwd)"
+          TEST_ARGS="-w $WORKDIR/bin/wendy"
 
           if [[ -n "$INPUT_TESTS" ]]; then
             HAS_TESTS=false
             IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
-              # Skip swift-* tests on Linux
+              # Skip Swift tests on Linux
               if [[ "$t" == swift-* ]]; then
-                echo "Skipping Swift test on Linux: $t"
+                echo "Skipping Swift test $t on Linux"
                 continue
               fi
               TEST_ARGS="$TEST_ARGS -t $t"
               HAS_TESTS=true
             done
             if [[ "$HAS_TESTS" == false ]]; then
-              echo "No applicable tests requested for Linux, skipping."
+              echo "No applicable tests requested, skipping."
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-restart-unless-stopped otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -283,7 +284,10 @@ jobs:
             DEVICES=("$INPUT_HOSTNAME")
           else
             echo "==> Discovering LAN devices..."
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s || true)
+            DISCOVER_STDERR=$(mktemp)
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR" || true)
+            cat "$DISCOVER_STDERR" >&2 || true
+            rm -f "$DISCOVER_STDERR"
             DEVICES=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && DEVICES+=("$line")
@@ -299,11 +303,13 @@ jobs:
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
             device="${DEVICES[$i]}"
-            echo "==> Starting tests on $device"
+            BUILDER="wendy-$i"
+            echo "==> Starting tests on $device (builder: $BUILDER)"
             (
-              export WENDY_BUILDX_BUILDER="wendy-linux-$i"
-              trap 'docker buildx rm -f "$WENDY_BUILDX_BUILDER" >/dev/null 2>&1 || true' EXIT
-              scripts/test-ci.sh $TEST_ARGS -h "$device"
+              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
+              rc=$?
+              docker buildx rm "$BUILDER" --force 2>/dev/null || true
+              exit $rc
             ) &
             PIDS[$i]=$!
           done
