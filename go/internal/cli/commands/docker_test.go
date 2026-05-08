@@ -143,6 +143,99 @@ func TestEnsureDockerDaemon_DarwinRuntimeInstalledButDockerCLIMissingDiagnostic(
 	}
 }
 
+func TestEnsureDockerDaemon_WindowsUsesBundledCLIWhenDockerDesktopInstalledButDockerMissingFromPath(t *testing.T) {
+	oldWindowsRuntimes := windowsDockerRuntimes
+	oldLookPath := dockerLookPathFn
+	oldVersionOK := dockerVersionOKFn
+	t.Cleanup(func() {
+		windowsDockerRuntimes = oldWindowsRuntimes
+		dockerLookPathFn = oldLookPath
+		dockerVersionOKFn = oldVersionOK
+	})
+
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "Docker Desktop.exe")
+	cliPath := filepath.Join(dir, "resources", "bin", "docker.exe")
+	if err := os.MkdirAll(filepath.Dir(cliPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(appPath, []byte("exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cliPath, []byte("exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	windowsDockerRuntimes = []dockerRuntime{{
+		name:        "Docker Desktop",
+		app:         appPath,
+		cliPaths:    []string{cliPath},
+		cliLinkHint: "add Docker Desktop CLI tools to PATH",
+	}}
+	t.Setenv("PATH", filepath.Join(dir, "no-docker-on-path"))
+	cliDir := filepath.Dir(cliPath)
+
+	dockerLookPathFn = func(file string) (string, error) {
+		if file == "docker" && pathHasDir(os.Getenv("PATH"), cliDir) {
+			return cliPath, nil
+		}
+		return "", errors.New("not found")
+	}
+	versionChecks := 0
+	dockerVersionOKFn = func(context.Context) bool {
+		versionChecks++
+		return pathHasDir(os.Getenv("PATH"), cliDir)
+	}
+
+	if err := ensureDockerDaemonForGOOS(context.Background(), "windows"); err != nil {
+		t.Fatalf("ensureDockerDaemonForGOOS: %v", err)
+	}
+	if !pathHasDir(os.Getenv("PATH"), cliDir) {
+		t.Fatalf("PATH = %q, want bundled CLI dir %q", os.Getenv("PATH"), cliDir)
+	}
+	if versionChecks < 2 {
+		t.Fatalf("version checks = %d, want initial failure and retry after PATH update", versionChecks)
+	}
+}
+
+func TestEnsureDockerDaemon_WindowsRuntimeInstalledButDockerCLIMissingDiagnostic(t *testing.T) {
+	oldWindowsRuntimes := windowsDockerRuntimes
+	oldLookPath := dockerLookPathFn
+	oldVersionOK := dockerVersionOKFn
+	t.Cleanup(func() {
+		windowsDockerRuntimes = oldWindowsRuntimes
+		dockerLookPathFn = oldLookPath
+		dockerVersionOKFn = oldVersionOK
+	})
+
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "Docker Desktop.exe")
+	if err := os.WriteFile(appPath, []byte("exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	windowsDockerRuntimes = []dockerRuntime{{
+		name:        "Docker Desktop",
+		app:         appPath,
+		cliPaths:    []string{filepath.Join(dir, "resources", "bin", "docker.exe")},
+		cliLinkHint: "repair Docker Desktop CLI tools",
+	}}
+	t.Setenv("PATH", filepath.Join(dir, "no-docker-on-path"))
+	dockerLookPathFn = func(string) (string, error) { return "", errors.New("not found") }
+	dockerVersionOKFn = func(context.Context) bool { return false }
+
+	err := ensureDockerDaemonForGOOS(context.Background(), "windows")
+	if err == nil {
+		t.Fatal("expected docker CLI missing diagnostic")
+	}
+	msg := err.Error()
+	for _, want := range []string{"Docker Desktop is installed", "docker CLI is not on PATH", "repair Docker Desktop CLI tools"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error = %q, want substring %q", msg, want)
+		}
+	}
+}
+
 func TestDetectProjectType_Dockerfile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine"), 0o644); err != nil {
