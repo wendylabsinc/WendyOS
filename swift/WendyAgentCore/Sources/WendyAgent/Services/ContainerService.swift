@@ -3,6 +3,7 @@ import Foundation
 import GRPCCore
 import Logging
 import OpenTelemetryGRPC
+import SwiftProtobuf
 import WendyAgentGRPC
 
 actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
@@ -927,7 +928,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         tarProcess.arguments = ["-xzf", blobPath, "-C", destinationDirectory]
 
         let status = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Int32, Error>) in
+            (continuation: CheckedContinuation<Int32, any Error>) in
             tarProcess.terminationHandler = { p in
                 continuation.resume(returning: p.terminationStatus)
             }

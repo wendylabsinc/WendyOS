@@ -147,14 +147,14 @@ public final class WendyAgent {
     private let logger = Logger(label: "sh.wendy.agent")
 
     private var mainServer: PosixGRPCServer?
-    private var mainServerTask: Task<Void, Error>?
+    private var mainServerTask: Task<Void, any Error>?
     private var containerService: ContainerService?
 
     private var otelServer: PosixGRPCServer?
-    private var otelServerTask: Task<Void, Error>?
+    private var otelServerTask: Task<Void, any Error>?
 
     private var bonjourRegistration: BonjourRegistration?
-    private var bonjourTask: Task<Void, Error>?
+    private var bonjourTask: Task<Void, any Error>?
 
     private var monitorTask: Task<Void, Never>?
     private var runIdentifier: UInt64 = 0
@@ -373,9 +373,9 @@ public final class WendyAgent {
     }
 
     private func monitorRuntimeTasks(
-        mainServerTask: Task<Void, Error>,
-        otelServerTask: Task<Void, Error>,
-        bonjourTask: Task<Void, Error>,
+        mainServerTask: Task<Void, any Error>,
+        otelServerTask: Task<Void, any Error>,
+        bonjourTask: Task<Void, any Error>,
         runIdentifier: UInt64
     ) async {
         await withTaskGroup(of: Void.self) { group in
@@ -407,7 +407,7 @@ public final class WendyAgent {
     }
 
     private func monitorRuntimeTask(
-        _ task: Task<Void, Error>,
+        _ task: Task<Void, any Error>,
         subsystem: String,
         runIdentifier: UInt64
     ) async {
@@ -564,9 +564,9 @@ public final class WendyAgent {
 
     nonisolated private static func makeMonitorTask(
         agent: WendyAgent,
-        mainServerTask: Task<Void, Error>,
-        otelServerTask: Task<Void, Error>,
-        bonjourTask: Task<Void, Error>,
+        mainServerTask: Task<Void, any Error>,
+        otelServerTask: Task<Void, any Error>,
+        bonjourTask: Task<Void, any Error>,
         runIdentifier: UInt64
     ) -> Task<Void, Never> {
         Task.detached {
@@ -579,7 +579,7 @@ public final class WendyAgent {
         }
     }
 
-    nonisolated private static func makeServeTask(server: PosixGRPCServer) -> Task<Void, Error> {
+    nonisolated private static func makeServeTask(server: PosixGRPCServer) -> Task<Void, any Error> {
         Task {
             try await server.serve()
         }
@@ -589,7 +589,7 @@ public final class WendyAgent {
         serviceName: String,
         port: Int,
         listeningAddressError: any Error,
-        serveTask: Task<Void, Error>
+        serveTask: Task<Void, any Error>
     ) async -> any Error {
         do {
             try await serveTask.value
@@ -635,7 +635,7 @@ public final class WendyAgent {
     }
 
     private static func errorMessage(for error: any Error) -> String {
-        if let localizedError = error as? LocalizedError,
+        if let localizedError = error as? any LocalizedError,
             let description = localizedError.errorDescription,
             !description.isEmpty
         {

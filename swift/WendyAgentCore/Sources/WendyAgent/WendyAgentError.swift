@@ -1,4 +1,4 @@
-import Foundation
+public import Foundation
 
 public enum WendyAgentError: CustomStringConvertible, LocalizedError, Sendable {
     case stoppedDuringStartup

@@ -22,8 +22,8 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/grpc/grpc-swift
 
-import GRPCCore
-import GRPCProtobuf
+public import GRPCCore
+public import GRPCProtobuf
 
 // MARK: - opentelemetry.proto.collector.logs.v1.LogsService
 

@@ -1,6 +1,8 @@
 import CryptoKit
 import Foundation
 import GRPCCore
+import Logging
+import SwiftProtobuf
 import Testing
 import WendyAgentGRPC
 

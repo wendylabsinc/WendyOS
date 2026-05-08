@@ -243,7 +243,7 @@ struct DockerCLI: Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let resultTask = Task<String, Error> {
+        let resultTask = Task<String, any Error> {
             try await withCheckedThrowingContinuation { continuation in
                 process.terminationHandler = { p in
                     let stdout =

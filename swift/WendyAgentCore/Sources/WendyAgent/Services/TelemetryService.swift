@@ -1,6 +1,7 @@
 import GRPCCore
 import Logging
 import OpenTelemetryGRPC
+import SwiftProtobuf
 import WendyAgentGRPC
 
 /// Service that streams telemetry data to CLI clients.
