@@ -340,6 +340,22 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
 }
 
+// readEntitlementsFromManifest reads sh.wendy/entitlement.* annotations from
+// the OCI image manifest stored in the content store.
+func (c *Client) readEntitlementsFromManifest(ctx context.Context, image containerd.Image) ([]appconfig.Entitlement, error) {
+	manifestBytes, err := content.ReadBlob(ctx, c.client.ContentStore(), image.Target())
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest blob: %w", err)
+	}
+	var manifest struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return nil, fmt.Errorf("parsing manifest: %w", err)
+	}
+	return parseEntitlementsFromAnnotations(manifest.Annotations), nil
+}
+
 func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainerProgress {
 	switch progress.Phase {
 	case "start":
@@ -444,6 +460,15 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 		}
+	}
+
+	// Read entitlements from image manifest annotations. When present, these are
+	// the authoritative source (codesigned with the image) and override whatever
+	// was passed in app_config.
+	if manifestEntitlements, readErr := c.readEntitlementsFromManifest(ctx, image); readErr != nil {
+		c.logger.Warn("could not read entitlement annotations from manifest", zap.Error(readErr))
+	} else if len(manifestEntitlements) > 0 {
+		appCfg.Entitlements = manifestEntitlements
 	}
 
 	// Unpack the image into the snapshotter if not already done.

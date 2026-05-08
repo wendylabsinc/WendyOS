@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +149,66 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 	}
 
 	return labels
+}
+
+// parseEntitlementsFromAnnotations reconstructs an entitlement list from OCI
+// manifest annotations. It is the inverse of the CLI-side buildEntitlementAnnotations.
+// Keys have the form sh.wendy/entitlement.<type> (single) or
+// sh.wendy/entitlement.<type>.<index> (multiple of the same type). The JSON
+// value carries all fields except "type".
+func parseEntitlementsFromAnnotations(annotations map[string]string) []appconfig.Entitlement {
+	type indexedEnt struct {
+		entType string
+		idx     int
+		ent     appconfig.Entitlement
+	}
+
+	var indexed []indexedEnt
+	for k, v := range annotations {
+		if !strings.HasPrefix(k, labelKeyEntitlementPrefix) {
+			continue
+		}
+		suffix := k[len(labelKeyEntitlementPrefix):]
+
+		entType := suffix
+		idx := 0
+		if dot := strings.LastIndex(suffix, "."); dot >= 0 {
+			if n, err := strconv.Atoi(suffix[dot+1:]); err == nil {
+				entType = suffix[:dot]
+				idx = n
+			}
+		}
+
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(v), &m); err != nil {
+			continue
+		}
+		typeJSON, _ := json.Marshal(entType)
+		m["type"] = typeJSON
+
+		entJSON, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		var ent appconfig.Entitlement
+		if err := json.Unmarshal(entJSON, &ent); err != nil {
+			continue
+		}
+		indexed = append(indexed, indexedEnt{entType: entType, idx: idx, ent: ent})
+	}
+
+	sort.Slice(indexed, func(i, j int) bool {
+		if indexed[i].entType != indexed[j].entType {
+			return indexed[i].entType < indexed[j].entType
+		}
+		return indexed[i].idx < indexed[j].idx
+	})
+
+	result := make([]appconfig.Entitlement, len(indexed))
+	for i, ie := range indexed {
+		result[i] = ie.ent
+	}
+	return result
 }
 
 // restartPolicyToLabel converts a protobuf RestartPolicy to a label string.
