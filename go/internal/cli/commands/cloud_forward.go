@@ -70,7 +70,7 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 	}
 
 	cliLogln("Fetching device list from cloud...")
-	asset, err := pickCloudDevice(ctx, auth, deviceName)
+	asset, err := pickCloudDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return err
 	}
