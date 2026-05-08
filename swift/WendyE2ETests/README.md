@@ -37,13 +37,12 @@ The disabled stubs are the durable specification. They should describe externall
 
 Good first command areas are local and deterministic:
 
-- `wendy init`
 - `wendy json validate`
 - `wendy project entitlements`
 - `wendy cache`
 - `wendy analytics`
 
-Avoid starting with areas that require live agents, browsers, hardware, streaming, cloud auth, or network discovery.
+When intentionally covering CLI-to-agent behavior, start with the smallest read-only interaction, such as `wendy device version`, before moving to commands that require browsers, hardware, streaming, cloud auth, deployment, or network discovery.
 
 ## Test organization and naming
 
@@ -224,23 +223,21 @@ Those are acceptable only for rough smoke coverage, not for a behavioral spec.
 
 ## Current recommended starting point
 
-Start with `wendy init`.
+Start with `wendy device version`.
 
 Phase: spec stubs only; do not implement test bodies yet.
 
-Goal: enumerate all externally observable behavior of project initialization:
+Goal: enumerate the externally observable behavior of the smallest Wendy CLI to Wendy agent interaction:
 
-- generated `wendy.json`
-- generated language scaffold
-- selected target/language behavior
-- entitlement choices
-- assistant options
-- git initialization choices
-- non-interactive behavior
-- invalid metadata handling
-- existing-file refusal
-- failure non-mutation
+- local macOS app-backed agent lifecycle requirements and gates
+- explicit `--device` connection behavior
+- human-readable version output
+- `--json` output shape and prompt-free behavior
+- `device info` alias behavior
+- missing device selection in non-interactive contexts
+- unreachable device diagnostics
 - stdout/stderr contract
+- exit status
 
 After the stubs read like a complete product/API spec, implement them incrementally.
 

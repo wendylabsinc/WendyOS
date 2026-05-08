@@ -186,19 +186,20 @@ Those are acceptable only for rough smoke coverage, not for a behavioral spec.
 Recommended order, one command area at a time:
 
 1. Make `TestE2E.sh` work out of the box on Ubuntu LTS.
-2. `wendy init` spec stubs, review, then implementation.
+2. `wendy device version` spec stubs, review, then implementation. Start with the CLI-to-agent `GetAgentVersion` interaction, using the local macOS app-backed agent behind macOS gates until a deterministic fake/simulated agent fixture exists for Linux.
 3. top-level CLI, help, completion, info, analytics, json
-4. project configuration
-5. project entitlements
-6. build and run
-7. cache and OS cache
-8. discovery and device selection/default-device behavior
-9. device version, dashboard, logs, telemetry, update
-10. device apps and volumes
-11. device hardware, camera, audio, Bluetooth, WiFi
-12. OS image download, install, list-drives, update
-13. auth and cloud-backed flows
-14. tour and utilities
+4. `wendy init` spec stubs, review, then implementation
+5. project configuration
+6. project entitlements
+7. build and run
+8. cache and OS cache
+9. discovery and device selection/default-device behavior
+10. device dashboard, logs, telemetry, update
+11. device apps and volumes
+12. device hardware, camera, audio, Bluetooth, WiFi
+13. OS image download, install, list-drives, update
+14. auth and cloud-backed flows
+15. tour and utilities
 
 This order is for focus and reviewability only. Later areas are not optional.
 
