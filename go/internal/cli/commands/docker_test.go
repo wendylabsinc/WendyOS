@@ -2,8 +2,18 @@ package commands
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"io"
+	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -766,4 +776,234 @@ func TestFindIPv4ViaNeighborTable_UnknownAddress(t *testing.T) {
 	// commands and read the host's neighbor tables, making it environment-dependent.
 	// Skip it to avoid flakiness/timeouts in unit test environments.
 	t.Skip("disabled: findIPv4ViaNeighborTable depends on host neighbor tables and OS commands")
+}
+
+// testCert holds a certificate and its signing key for use in TLS test setups.
+type testCert struct {
+	cert   *x509.Certificate
+	key    *ecdsa.PrivateKey
+	pemStr string
+}
+
+// generateTestCA creates a self-signed CA certificate.
+func generateTestCA(t *testing.T) *testCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-root-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+	return &testCert{
+		cert:   cert,
+		key:    key,
+		pemStr: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+	}
+}
+
+// generateTestIntermediate creates an intermediate CA signed by the given parent CA.
+func generateTestIntermediate(t *testing.T, parent *testCert) *testCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate intermediate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "test-intermediate-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent.cert, &key.PublicKey, parent.key)
+	if err != nil {
+		t.Fatalf("create intermediate cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse intermediate cert: %v", err)
+	}
+	return &testCert{
+		cert:   cert,
+		key:    key,
+		pemStr: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+	}
+}
+
+// generateTestLeaf creates a leaf certificate signed by the given issuer.
+// eku controls the ExtKeyUsage (use x509.ExtKeyUsageServerAuth or x509.ExtKeyUsageClientAuth).
+// IPAddresses is populated only for server certs (ServerAuth) so hostname verification works.
+func generateTestLeaf(t *testing.T, issuer *testCert, eku x509.ExtKeyUsage) *testCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "test-leaf"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+	}
+	if eku == x509.ExtKeyUsageServerAuth {
+		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, issuer.cert, &key.PublicKey, issuer.key)
+	if err != nil {
+		t.Fatalf("create leaf cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse leaf cert: %v", err)
+	}
+	return &testCert{
+		cert:   cert,
+		key:    key,
+		pemStr: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+	}
+}
+
+// marshalKeyPEM encodes an ECDSA private key to PEM.
+func marshalKeyPEM(t *testing.T, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+}
+
+// startTestTLSServer starts a TLS HTTPS server that responds with 200 OK.
+// tlsCert configures the server's certificate chain (leaf + optional intermediates).
+// clientCA, if non-nil, enables mutual TLS and requires client certs signed by it.
+func startTestTLSServer(t *testing.T, tlsCert tls.Certificate, clientCA *testCert) string {
+	t.Helper()
+	cfg := &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+	if clientCA != nil {
+		pool := x509.NewCertPool()
+		pool.AddCert(clientCA.cert)
+		cfg.ClientCAs = pool
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	if err != nil {
+		t.Fatalf("tls.Listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln.Addr().String()
+}
+
+func TestStartMTLSRegistryHTTPProxy_DirectCA(t *testing.T) {
+	ca := generateTestCA(t)
+	serverLeaf := generateTestLeaf(t, ca, x509.ExtKeyUsageServerAuth)
+	clientLeaf := generateTestLeaf(t, ca, x509.ExtKeyUsageClientAuth)
+
+	serverTLSCert, err := tls.X509KeyPair([]byte(serverLeaf.pemStr), []byte(marshalKeyPEM(t, serverLeaf.key)))
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	addr := startTestTLSServer(t, serverTLSCert, ca)
+
+	proxy, err := startMTLSRegistryHTTPProxy(addr, clientLeaf.pemStr, marshalKeyPEM(t, clientLeaf.key), ca.pemStr)
+	if err != nil {
+		t.Fatalf("startMTLSRegistryHTTPProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestStartMTLSRegistryHTTPProxy_IntermediateChain(t *testing.T) {
+	root := generateTestCA(t)
+	intermediate := generateTestIntermediate(t, root)
+	serverLeaf := generateTestLeaf(t, intermediate, x509.ExtKeyUsageServerAuth)
+	clientLeaf := generateTestLeaf(t, root, x509.ExtKeyUsageClientAuth)
+
+	// Server sends leaf + intermediate in the TLS handshake.
+	serverTLSCert := tls.Certificate{
+		Certificate: [][]byte{serverLeaf.cert.Raw, intermediate.cert.Raw},
+		PrivateKey:  serverLeaf.key,
+	}
+	addr := startTestTLSServer(t, serverTLSCert, root)
+
+	proxy, err := startMTLSRegistryHTTPProxy(addr, clientLeaf.pemStr, marshalKeyPEM(t, clientLeaf.key), root.pemStr)
+	if err != nil {
+		t.Fatalf("startMTLSRegistryHTTPProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestStartMTLSRegistryHTTPProxy_WrongCA(t *testing.T) {
+	trustedCA := generateTestCA(t)
+	untrustedCA := generateTestCA(t)
+	serverLeaf := generateTestLeaf(t, untrustedCA, x509.ExtKeyUsageServerAuth)
+	clientLeaf := generateTestLeaf(t, trustedCA, x509.ExtKeyUsageClientAuth)
+
+	serverTLSCert, err := tls.X509KeyPair([]byte(serverLeaf.pemStr), []byte(marshalKeyPEM(t, serverLeaf.key)))
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	// Don't require client certs on the server side so we test the proxy's cert verification.
+	addr := startTestTLSServer(t, serverTLSCert, nil)
+
+	proxy, err := startMTLSRegistryHTTPProxy(addr, clientLeaf.pemStr, marshalKeyPEM(t, clientLeaf.key), trustedCA.pemStr)
+	if err != nil {
+		t.Fatalf("startMTLSRegistryHTTPProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
+	if err != nil {
+		// Connection-level error is also acceptable (proxy may close the conn).
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode == http.StatusOK {
+		t.Error("expected request to fail when server cert is signed by untrusted CA, got 200")
+	}
 }

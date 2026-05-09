@@ -1245,12 +1245,21 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 				Certificates: []tls.Certificate{cert},
 				// Skip hostname verification: device registry certs are signed by
 				// the Wendy CA but may not include the mDNS hostname as a SAN.
-				// VerifyConnection still validates the full chain against our CA pool.
-				InsecureSkipVerify: true,
+				// VerifyConnection performs full chain + EKU validation instead.
+				InsecureSkipVerify: true, //nolint:gosec
 				VerifyConnection: func(cs tls.ConnectionState) error {
+					if len(cs.PeerCertificates) == 0 {
+						return fmt.Errorf("server presented no certificates")
+					}
+					intermediates := x509.NewCertPool()
+					for _, c := range cs.PeerCertificates[1:] {
+						intermediates.AddCert(c)
+					}
 					opts := x509.VerifyOptions{
-						Roots:       caPool,
-						CurrentTime: time.Now(),
+						Roots:         caPool,
+						Intermediates: intermediates,
+						CurrentTime:   time.Now(),
+						KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 					}
 					_, err := cs.PeerCertificates[0].Verify(opts)
 					return err
