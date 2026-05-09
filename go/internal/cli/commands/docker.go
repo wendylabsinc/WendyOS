@@ -1049,7 +1049,9 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
 	}
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(caPEM))
+	if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("no valid CA certificates found in caPEM")
+	}
 
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -1060,7 +1062,27 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
-				RootCAs:      caPool,
+				// Skip hostname verification: device registry certs are signed by
+				// the Wendy CA but may not include the mDNS hostname as a SAN.
+				// VerifyConnection performs full chain + EKU validation instead.
+				InsecureSkipVerify: true, //nolint:gosec
+				MinVersion:         tls.VersionTLS12,
+				VerifyConnection: func(cs tls.ConnectionState) error {
+					if len(cs.PeerCertificates) == 0 {
+						return fmt.Errorf("server presented no certificates")
+					}
+					intermediates := x509.NewCertPool()
+					for _, c := range cs.PeerCertificates[1:] {
+						intermediates.AddCert(c)
+					}
+					opts := x509.VerifyOptions{
+						Roots:         caPool,
+						Intermediates: intermediates,
+						KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+					}
+					_, err := cs.PeerCertificates[0].Verify(opts)
+					return err
+				},
 			},
 		},
 	}
