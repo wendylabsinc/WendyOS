@@ -1088,16 +1088,18 @@ var (
 // agent's registry. The proxy is started once per connection and cached so
 // concurrent pushes to the same device share a stable host:port address.
 func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
-	// Fast path: return cached address from a previously started proxy.
+	// Hold the lock for the entire operation so concurrent callers block rather
+	// than each starting their own proxy. Proxy creation is just a local
+	// net.Listen call, so the lock is held only briefly.
 	dockerRegistryProxyCacheMu.Lock()
+	defer dockerRegistryProxyCacheMu.Unlock()
+
 	if addr, ok := dockerRegistryProxyAddrs[conn]; ok {
-		dockerRegistryProxyCacheMu.Unlock()
 		return addr, func() {}, nil
 	}
-	dockerRegistryProxyCacheMu.Unlock()
 
-	// Slow path: start a proxy. Use context.Background so the proxy outlives
-	// this particular push and is reused by concurrent or subsequent pushes.
+	// Start a proxy tied to context.Background so it outlives this push and is
+	// reused by subsequent pushes on the same connection.
 	var addr string
 	var stopProxy func()
 
@@ -1121,14 +1123,6 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 		}
 	}
 
-	// Store under lock. If another goroutine raced and stored first, discard
-	// our proxy and return theirs.
-	dockerRegistryProxyCacheMu.Lock()
-	if existing, ok := dockerRegistryProxyAddrs[conn]; ok {
-		dockerRegistryProxyCacheMu.Unlock()
-		stopProxy()
-		return existing, func() {}, nil
-	}
 	dockerRegistryProxyAddrs[conn] = addr
 	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
 		dockerRegistryProxyCacheMu.Lock()
@@ -1136,7 +1130,6 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 		dockerRegistryProxyCacheMu.Unlock()
 		stopProxy()
 	}))
-	dockerRegistryProxyCacheMu.Unlock()
 
 	return addr, func() {}, nil
 }
