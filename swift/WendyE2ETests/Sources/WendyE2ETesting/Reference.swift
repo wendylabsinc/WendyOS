@@ -735,26 +735,384 @@ private func renderHTMLBody(
 }
 
 private func renderHTMLDocument(title: String, body: String) -> String {
-    """
-    <!doctype html>
-    <html lang="en">
-    <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>\(escapeHTMLText(strippingInlineCodeMarkup(from: title)))</title>
-    <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.5; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
-    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    pre { overflow-x: auto; padding: 1rem; background: #f6f8fa; border-radius: 0.5rem; }
-    .metadata { color: #666; font-size: 0.9rem; }
-    hr { border: 0; border-top: 1px solid #ddd; margin: 2rem 0; }
-    </style>
-    </head>
-    <body>
-    \(body)
-    </body>
-    </html>
-    """
+    let plainTitle = strippingInlineCodeMarkup(from: title)
+    return """
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>\(escapeHTMLText(plainTitle))</title>
+          <script>
+            (() => {
+              try {
+                const stored = localStorage.getItem('wendy-e2e-theme');
+                const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                document.documentElement.dataset.theme = stored || preferred;
+              } catch {
+                document.documentElement.dataset.theme = 'light';
+              }
+            })();
+          </script>
+          <style>
+            :root {
+              color-scheme: light;
+              --emerald-50: #ecfdf5;
+              --emerald-100: #d1fae5;
+              --emerald-200: #a7f3d0;
+              --emerald-300: #6ee7b7;
+              --emerald-400: #34d399;
+              --emerald-500: #10b981;
+              --emerald-600: #059669;
+              --emerald-700: #047857;
+              --emerald-800: #065f46;
+              --emerald-900: #064e3b;
+              --emerald-950: #022c22;
+
+              --bg: #f8fafc;
+              --card: rgba(255, 255, 255, .92);
+              --panel: rgba(255, 255, 255, .78);
+              --text: #111827;
+              --muted: #64748b;
+              --line: #e5e7eb;
+              --soft: #f3f4f6;
+              --blue: var(--emerald-600);
+              --shadow: rgba(15, 23, 42, .08);
+              --shadow-strong: rgba(15, 23, 42, .14);
+              --focus-ring: rgba(16, 185, 129, .18);
+              --code-bg: rgba(243, 244, 246, .90);
+            }
+
+            :root[data-theme="dark"] {
+              color-scheme: dark;
+              --bg: #020617;
+              --card: rgba(15, 23, 42, .88);
+              --panel: rgba(30, 41, 59, .58);
+              --text: #f8fafc;
+              --muted: #94a3b8;
+              --line: rgba(148, 163, 184, .22);
+              --soft: rgba(51, 65, 85, .48);
+              --blue: var(--emerald-400);
+              --shadow: rgba(0, 0, 0, .28);
+              --shadow-strong: rgba(0, 0, 0, .38);
+              --focus-ring: rgba(52, 211, 153, .22);
+              --code-bg: rgba(51, 65, 85, .62);
+            }
+
+            * { box-sizing: border-box; }
+
+            body {
+              margin: 0;
+              background: var(--bg);
+              color: var(--text);
+              font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }
+
+            main {
+              max-width: 1080px;
+              margin: 0 auto;
+              padding: 28px 24px 72px;
+            }
+
+            header {
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) auto;
+              gap: 20px;
+              align-items: end;
+              margin-bottom: 18px;
+            }
+
+            .brand-row {
+              display: inline-flex;
+              align-items: center;
+              gap: 10px;
+              margin-bottom: 14px;
+            }
+
+            .brand-mark {
+              display: inline-grid;
+              place-items: center;
+              width: 34px;
+              height: 34px;
+              color: var(--text);
+            }
+
+            .brand-mark svg {
+              display: block;
+              width: 30px;
+              height: 30px;
+              fill: currentColor;
+            }
+
+            .brand-copy {
+              display: grid;
+              gap: 0;
+              line-height: 1.1;
+            }
+
+            .brand-copy strong {
+              font-size: 15px;
+              letter-spacing: -.02em;
+            }
+
+            .brand-copy span {
+              color: var(--muted);
+              font-size: 12px;
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: .08em;
+            }
+
+            .header-side {
+              display: grid;
+              gap: 10px;
+              justify-items: end;
+            }
+
+            .theme-toggle {
+              appearance: none;
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              border: 1px solid var(--line);
+              border-radius: 999px;
+              background: var(--card);
+              color: var(--text);
+              cursor: pointer;
+              font: inherit;
+              font-size: 13px;
+              font-weight: 900;
+              padding: 8px 12px;
+              box-shadow: 0 8px 22px var(--shadow);
+            }
+
+            .theme-toggle:hover {
+              transform: translateY(-1px);
+              box-shadow: 0 10px 26px var(--shadow-strong);
+            }
+
+            .theme-toggle:focus-visible {
+              outline: 3px solid var(--focus-ring);
+              outline-offset: 2px;
+            }
+
+            .theme-toggle-icon {
+              color: var(--blue);
+              font-size: 15px;
+              line-height: 1;
+            }
+
+            .page-title {
+              margin: 0 0 8px;
+              font-size: clamp(28px, 4vw, 40px);
+              line-height: 1.04;
+              letter-spacing: -0.045em;
+            }
+
+            .lead {
+              margin: 0;
+              max-width: 720px;
+              color: var(--muted);
+              font-size: 15px;
+              line-height: 1.45;
+            }
+
+            .card {
+              margin-top: 30px;
+              padding: 22px;
+              background: var(--card);
+              border: 1px solid var(--line);
+              border-radius: 18px;
+              box-shadow: 0 10px 28px var(--shadow);
+            }
+
+            h1, h2, h3, h4, h5 {
+              color: var(--text);
+              letter-spacing: -0.025em;
+            }
+
+            .card > h1:first-child {
+              margin-top: 0;
+              padding-bottom: 10px;
+              border-bottom: 1px solid var(--line);
+              font-size: 28px;
+              line-height: 1.1;
+            }
+
+            h2 {
+              margin: 28px 0 10px;
+              padding-top: 18px;
+              border-top: 1px solid var(--line);
+              font-size: 22px;
+              line-height: 1.2;
+            }
+
+            h3 {
+              margin: 18px 0 7px;
+              font-size: 18px;
+              line-height: 1.35;
+            }
+
+            h4 {
+              margin: 16px 0 8px;
+              color: var(--muted);
+              font-size: 12px;
+              font-weight: 900;
+              letter-spacing: .07em;
+              text-transform: uppercase;
+            }
+
+            h5 {
+              margin: 12px 0 4px;
+              color: var(--muted);
+              font-size: 13px;
+            }
+
+            p { margin: 0 0 12px; }
+
+            ul {
+              margin: 0 0 16px;
+              padding: 0;
+              list-style: none;
+            }
+
+            li {
+              position: relative;
+              padding: 3px 0 3px 20px;
+            }
+
+            li::before {
+              content: "";
+              position: absolute;
+              left: 2px;
+              top: .85em;
+              width: 6px;
+              height: 6px;
+              border-radius: 999px;
+              background: var(--blue);
+            }
+
+            a {
+              color: var(--blue);
+              font-weight: 800;
+              text-decoration: none;
+            }
+
+            a:hover { text-decoration: underline; }
+
+            code {
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+              font-size: .88em;
+              background: var(--code-bg);
+              border: 1px solid var(--line);
+              border-radius: 5px;
+              padding: .12em .34em;
+            }
+
+            pre {
+              overflow-x: auto;
+              margin: 0 0 16px;
+              padding: 1rem;
+              background: var(--soft);
+              border: 1px solid var(--line);
+              border-radius: 12px;
+            }
+
+            pre code {
+              background: transparent;
+              border: 0;
+              padding: 0;
+            }
+
+            .metadata {
+              margin: 8px 0 14px;
+              color: var(--muted);
+              font-size: 13px;
+            }
+
+            hr {
+              border: 0;
+              border-top: 1px solid var(--line);
+              margin: 2rem 0;
+            }
+
+            footer {
+              margin-top: 22px;
+              color: var(--muted);
+              font-size: 13px;
+              text-align: center;
+            }
+
+            @media (max-width: 680px) {
+              main { padding: 24px 16px 56px; }
+              header { grid-template-columns: 1fr; }
+              .header-side { justify-items: stretch; }
+              .theme-toggle { justify-self: start; }
+              .card { padding: 16px; }
+            }
+          </style>
+        </head>
+        <body>
+          <main>
+            <header>
+              <div>
+                <div class="brand-row" aria-label="Wendy E2E Reference">
+                  <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 1024 1024" role="img"><rect x="407.04" y="299.64" width="424.72" height="424.72" transform="translate(-180.62 587.94) rotate(-45)"/><path d="M335.3,743.03l-231.03-231.03,231.03-231.02,231.02,231.02-231.02,231.03ZM179.04,512l156.27,156.27,156.27-156.27-156.27-156.27-156.27,156.27Z"/></svg></span>
+                  <span class="brand-copy"><strong>E2E Reference</strong><span>Wendy Agent</span></span>
+                </div>
+                <h1 class="page-title">\(escapeHTMLText(plainTitle))</h1>
+                <p class="lead">Behavioral reference generated from Swift E2E specs.</p>
+              </div>
+              <div class="header-side">
+                <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">
+                  <span class="theme-toggle-icon" data-theme-toggle-icon aria-hidden="true">◐</span>
+                  <span data-theme-toggle-label>Theme</span>
+                </button>
+              </div>
+            </header>
+
+            <section class="card">
+        \(body)
+            </section>
+
+            <footer>Generated by <code>swift-e2e-testing reference</code></footer>
+          </main>
+          <script>
+            (() => {
+              const themeToggle = document.querySelector('[data-theme-toggle]');
+              const themeToggleIcon = document.querySelector('[data-theme-toggle-icon]');
+              const themeToggleLabel = document.querySelector('[data-theme-toggle-label]');
+
+              function currentTheme() {
+                return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+              }
+
+              function updateThemeToggle() {
+                const theme = currentTheme();
+                if (themeToggle) {
+                  themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+                  themeToggle.setAttribute('title', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
+                }
+                if (themeToggleIcon) themeToggleIcon.textContent = theme === 'dark' ? '☾' : '☼';
+                if (themeToggleLabel) themeToggleLabel.textContent = theme === 'dark' ? 'Dark' : 'Light';
+              }
+
+              function setTheme(theme) {
+                document.documentElement.dataset.theme = theme;
+                try { localStorage.setItem('wendy-e2e-theme', theme); } catch {}
+                updateThemeToggle();
+              }
+
+              themeToggle?.addEventListener('click', () => {
+                setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+              });
+
+              updateThemeToggle();
+            })();
+          </script>
+        </body>
+        </html>
+        """
 }
 
 private func appendHTMLBlocks(_ text: String, to html: inout [String]) {
