@@ -847,6 +847,38 @@ func generateTestIntermediate(t *testing.T, parent *testCert) *testCert {
 	}
 }
 
+// generateTestLeafNoSAN creates a server-auth leaf certificate with no SANs,
+// simulating a device cert that lacks a hostname or IP SAN (the common Wendy case).
+func generateTestLeafNoSAN(t *testing.T, issuer *testCert) *testCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(99),
+		Subject:      pkix.Name{CommonName: "test-leaf-no-san"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		// Deliberately no IPAddresses or DNSNames.
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, issuer.cert, &key.PublicKey, issuer.key)
+	if err != nil {
+		t.Fatalf("create leaf cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse leaf cert: %v", err)
+	}
+	return &testCert{
+		cert:   cert,
+		key:    key,
+		pemStr: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+	}
+}
+
 // generateTestLeaf creates a leaf certificate signed by the given issuer.
 // eku controls the ExtKeyUsage (use x509.ExtKeyUsageServerAuth or x509.ExtKeyUsageClientAuth).
 // IPAddresses is populated only for server certs (ServerAuth) so hostname verification works.
@@ -997,13 +1029,45 @@ func TestStartMTLSRegistryHTTPProxy_WrongCA(t *testing.T) {
 
 	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
 	if err != nil {
-		// Connection-level error is also acceptable (proxy may close the conn).
+		// Transport-level TLS rejection surfaces as a connection error via the proxy.
 		return
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode == http.StatusOK {
-		t.Error("expected request to fail when server cert is signed by untrusted CA, got 200")
+		t.Errorf("expected non-200 when server cert is signed by untrusted CA, got 200")
+	}
+}
+
+func TestStartMTLSRegistryHTTPProxy_NoSAN(t *testing.T) {
+	// Device certs signed by the Wendy CA often lack a SAN for the target
+	// mDNS hostname. Verify the proxy accepts such certs via chain validation
+	// (VerifyConnection) while InsecureSkipVerify bypasses hostname checks.
+	ca := generateTestCA(t)
+	serverLeaf := generateTestLeafNoSAN(t, ca)
+	clientLeaf := generateTestLeaf(t, ca, x509.ExtKeyUsageClientAuth)
+
+	serverTLSCert, err := tls.X509KeyPair([]byte(serverLeaf.pemStr), []byte(marshalKeyPEM(t, serverLeaf.key)))
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	addr := startTestTLSServer(t, serverTLSCert, ca)
+
+	proxy, err := startMTLSRegistryHTTPProxy(addr, clientLeaf.pemStr, marshalKeyPEM(t, clientLeaf.key), ca.pemStr)
+	if err != nil {
+		t.Fatalf("startMTLSRegistryHTTPProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (cert without SAN should be accepted via chain validation)", resp.StatusCode)
 	}
 }

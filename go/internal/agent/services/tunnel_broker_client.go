@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"math"
@@ -28,19 +29,22 @@ const (
 // TunnelBrokerClient maintains a persistent RegisterPresence stream with the broker
 // and dials local TCP connections in response to DialRequest messages.
 type TunnelBrokerClient struct {
-	logger  *zap.Logger
-	url     string
-	orgID   int32
-	assetID int32
+	logger   *zap.Logger
+	url      string
+	orgID    int32
+	assetID  int32
+	chainPEM string
 }
 
 // NewTunnelBrokerClient creates a new TunnelBrokerClient.
-func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32) *TunnelBrokerClient {
+// chainPEM is the Wendy CA certificate chain used to verify the broker's TLS certificate.
+func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32, chainPEM string) *TunnelBrokerClient {
 	return &TunnelBrokerClient{
-		logger:  logger,
-		url:     url,
-		orgID:   orgID,
-		assetID: assetID,
+		logger:   logger,
+		url:      url,
+		orgID:    orgID,
+		assetID:  assetID,
+		chainPEM: chainPEM,
 	}
 }
 
@@ -144,8 +148,28 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 	// client certs (produced by pki-core) at the parsing stage regardless of
 	// ClientAuth level. Identity is verified via the XFCC header at the application
 	// layer instead.
+	//
+	// Broker cert CN is localhost and won't match the cloud host — skip hostname
+	// verification but still validate the chain against the Wendy CA.
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM([]byte(c.chainPEM))
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("broker presented no TLS certificate")
+			}
+			intermediates := x509.NewCertPool()
+			for _, cert := range cs.PeerCertificates[1:] {
+				intermediates.AddCert(cert)
+			}
+			_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+				Roots:         caPool,
+				Intermediates: intermediates,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			return err
+		},
 	}
 	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", c.orgID, c.assetID)
 	md := metadata.Pairs(

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -146,9 +147,26 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 	if err != nil {
 		return nil, fmt.Errorf("loading broker TLS config: %w", err)
 	}
-	// Server cert CN (localhost) won't match the cloud host IP — skip server cert
-	// hostname verification. The cloud verifies the client cert via mTLS.
+	// Broker cert CN is localhost and won't match the cloud host — skip hostname
+	// verification but still validate the chain against the Wendy CA.
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM([]byte(cert.PemCertificateChain))
 	tlsCfg.InsecureSkipVerify = true //nolint:gosec
+	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("broker presented no TLS certificate")
+		}
+		intermediates := x509.NewCertPool()
+		for _, c := range cs.PeerCertificates[1:] {
+			intermediates.AddCert(c)
+		}
+		_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+			Roots:         caPool,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		return err
+	}
 	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)

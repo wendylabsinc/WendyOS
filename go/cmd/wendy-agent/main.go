@@ -238,7 +238,8 @@ func main() {
 			if brokerURL == "" {
 				brokerURL = brokerURLForCloudHost(cloudHost)
 			}
-			client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID)
+			_, chainPEM, _ := provisioningSvc.ProvisioningCerts()
+			client := services.NewTunnelBrokerClient(logger, brokerURL, orgID, assetID, chainPEM)
 			client.Run(ctx)
 		}()
 	}

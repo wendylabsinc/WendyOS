@@ -1232,7 +1232,9 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
 	}
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(caPEM))
+	if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("no valid CA certificates found in caPEM")
+	}
 
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -1247,6 +1249,7 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 				// the Wendy CA but may not include the mDNS hostname as a SAN.
 				// VerifyConnection performs full chain + EKU validation instead.
 				InsecureSkipVerify: true, //nolint:gosec
+				MinVersion:         tls.VersionTLS12,
 				VerifyConnection: func(cs tls.ConnectionState) error {
 					if len(cs.PeerCertificates) == 0 {
 						return fmt.Errorf("server presented no certificates")
