@@ -13,7 +13,7 @@ swift test --filter WendyE2ETests
 For reproducible command records:
 
 ```bash
-WENDY_AGENT_E2E_TEST_RECORDS_DIR="$PWD/.build/e2e-test-records.current" \
+WENDY_E2E_TEST_RECORDS_DIR="$PWD/.build/e2e-test-records.current" \
   swift test --filter WendyE2ETests
 ```
 
@@ -276,7 +276,7 @@ Machine.agent
 ```
 
 Predefined machine OS values are `.macOS`, `.linux`, `.windows`, and `.wendyOS`.
-Use `WENDY_AGENT_E2E_CLI_OS` or `WENDY_AGENT_E2E_AGENT_OS` to override a known
+Use `WENDY_E2E_CLI_OS` or `WENDY_E2E_AGENT_OS` to override a known
 machine's declared OS for a run.
 
 `Session` is the runtime command executor for a machine:
@@ -304,4 +304,4 @@ try await agent
     .run()
 ```
 
-If `ssh` is omitted, sessions run commands locally. `Session.begin(for:verbose:)` enables command echoing for that session; `WENDY_AGENT_E2E_VERBOSE=1` enables it globally.
+If `ssh` is omitted, sessions run commands locally. `Session.begin(for:verbose:)` enables command echoing for that session; `WENDY_E2E_VERBOSE=1` enables it globally.

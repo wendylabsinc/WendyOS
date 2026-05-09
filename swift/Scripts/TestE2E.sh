@@ -9,14 +9,14 @@ DEFAULT_FIXTURES_DIR="$REPO_ROOT/.github/swift-e2e-tests"
 DEFAULT_RECORDS_DIR="$PACKAGE_DIR/.build/e2e-test-records.current"
 DEFAULT_ARTIFACT_DIR="$SWIFT_DIR/Build/E2E"
 
-FIXTURES_DIR="${WENDY_AGENT_E2E_FIXTURES_DIR:-$DEFAULT_FIXTURES_DIR}"
-RECORDS_DIR="${WENDY_AGENT_E2E_TEST_RECORDS_DIR:-$DEFAULT_RECORDS_DIR}"
-ARTIFACT_DIR="${WENDY_AGENT_E2E_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
-REPORT_ZIP="${WENDY_AGENT_E2E_REPORT_ZIP:-$ARTIFACT_DIR/swift-e2e-test-reports.zip}"
-AGENT_SSH="${WENDY_AGENT_E2E_AGENT_SSH:-}"
-AGENT_WORKDIR="${WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY:-}"
-SYNC_AGENT="${WENDY_AGENT_E2E_SYNC_AGENT:-auto}"
-VERBOSE="${WENDY_AGENT_E2E_VERBOSE:-false}"
+FIXTURES_DIR="${WENDY_E2E_FIXTURES_DIR:-$DEFAULT_FIXTURES_DIR}"
+RECORDS_DIR="${WENDY_E2E_TEST_RECORDS_DIR:-$DEFAULT_RECORDS_DIR}"
+ARTIFACT_DIR="${WENDY_E2E_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
+REPORT_ZIP="${WENDY_E2E_REPORT_ZIP:-$ARTIFACT_DIR/swift-e2e-test-reports.zip}"
+AGENT_SSH="${WENDY_E2E_AGENT_SSH:-}"
+AGENT_WORKDIR="${WENDY_E2E_AGENT_WORKING_DIRECTORY:-}"
+SYNC_AGENT="${WENDY_E2E_SYNC_AGENT:-auto}"
+VERBOSE="${WENDY_E2E_VERBOSE:-false}"
 TEST_FILTERS=()
 
 usage() {
@@ -28,7 +28,7 @@ records as a zip artifact.
 
 Options:
   --filter FILTER       Pass a SwiftPM test filter (can be repeated). If omitted,
-                        WENDY_AGENT_E2E_TEST_FILTERS may contain comma-separated
+                        WENDY_E2E_TEST_FILTERS may contain comma-separated
                         filters, otherwise the WendyE2ETests target is run.
   --records-dir DIR     Directory for generated *.md command records.
   --artifact-dir DIR    Directory for the final zip artifact.
@@ -41,13 +41,13 @@ Options:
   --help                Show this help message.
 
 Environment:
-  WENDY_AGENT_E2E_TEST_FILTERS              Comma-separated SwiftPM filters.
-  WENDY_AGENT_E2E_AGENT_SSH                 Optional SSH target for the agent machine.
-  WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY   swift/ directory for the agent.
-  WENDY_AGENT_E2E_SYNC_AGENT                auto, true, or false.
-  WENDY_AGENT_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
-  WENDY_AGENT_E2E_TEST_RECORDS_DIR          Defaults to package .build records dir.
-  WENDY_AGENT_E2E_VERBOSE                   true/false; prints machine commands.
+  WENDY_E2E_TEST_FILTERS              Comma-separated SwiftPM filters.
+  WENDY_E2E_AGENT_SSH                 Optional SSH target for the agent machine.
+  WENDY_E2E_AGENT_WORKING_DIRECTORY   swift/ directory for the agent.
+  WENDY_E2E_SYNC_AGENT                auto, true, or false.
+  WENDY_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
+  WENDY_E2E_TEST_RECORDS_DIR          Defaults to package .build records dir.
+  WENDY_E2E_VERBOSE                   true/false; prints machine commands.
 EOF
 }
 
@@ -103,8 +103,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#TEST_FILTERS[@]} -eq 0 && -n "${WENDY_AGENT_E2E_TEST_FILTERS:-}" ]]; then
-  IFS=',' read -ra RAW_FILTERS <<< "${WENDY_AGENT_E2E_TEST_FILTERS}"
+if [[ ${#TEST_FILTERS[@]} -eq 0 && -n "${WENDY_E2E_TEST_FILTERS:-}" ]]; then
+  IFS=',' read -ra RAW_FILTERS <<< "${WENDY_E2E_TEST_FILTERS}"
   for filter in "${RAW_FILTERS[@]}"; do
     filter="$(echo "$filter" | xargs)"
     [[ -n "$filter" ]] && TEST_FILTERS+=("$filter")
@@ -163,7 +163,7 @@ sync_agent_checkout_if_needed() {
   fi
 
   if ! command -v rsync >/dev/null 2>&1; then
-    echo "ERROR: rsync is required when WENDY_AGENT_E2E_AGENT_SSH is set" >&2
+    echo "ERROR: rsync is required when WENDY_E2E_AGENT_SSH is set" >&2
     exit 1
   fi
 
@@ -256,11 +256,11 @@ fi
 set +e
 (
   cd "$PACKAGE_DIR"
-  WENDY_AGENT_E2E_FIXTURES_DIR="$FIXTURES_DIR" \
-  WENDY_AGENT_E2E_TEST_RECORDS_DIR="$RECORDS_DIR" \
-  WENDY_AGENT_E2E_AGENT_SSH="$AGENT_SSH" \
-  WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY="$AGENT_WORKDIR" \
-  WENDY_AGENT_E2E_VERBOSE="$VERBOSE" \
+  WENDY_E2E_FIXTURES_DIR="$FIXTURES_DIR" \
+  WENDY_E2E_TEST_RECORDS_DIR="$RECORDS_DIR" \
+  WENDY_E2E_AGENT_SSH="$AGENT_SSH" \
+  WENDY_E2E_AGENT_WORKING_DIRECTORY="$AGENT_WORKDIR" \
+  WENDY_E2E_VERBOSE="$VERBOSE" \
   swift "${SWIFT_TEST_ARGS[@]}"
 )
 TEST_STATUS=$?

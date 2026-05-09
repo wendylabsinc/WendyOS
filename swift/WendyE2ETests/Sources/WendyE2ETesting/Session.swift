@@ -23,7 +23,7 @@ public struct Session: Sendable {
     public static func begin(for machine: Machine, verbose: Bool = false) async throws -> Session {
         let session = Session(
             machine: machine,
-            verbose: verbose || Self.envFlag("WENDY_AGENT_E2E_VERBOSE")
+            verbose: verbose || Environment.verbose
         )
 
         if machine.tags.contains(.cli) {
@@ -231,20 +231,6 @@ public struct Session: Sendable {
         }
     }
 
-    private static func envValue(_ name: String) -> String? {
-        guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
-            return nil
-        }
-        return value
-    }
-
-    private static func envFlag(_ name: String) -> Bool {
-        guard let value = envValue(name)?.lowercased() else {
-            return false
-        }
-        return ["1", "true", "yes", "on"].contains(value)
-    }
-
     private func invocation(for command: String) -> Invocation {
         if let ssh = self.machine.ssh {
             return Invocation(
@@ -281,44 +267,29 @@ public struct Session: Sendable {
     }
 
     private static func currentUser() -> User {
-        #if os(Windows)
-            let environment = ProcessInfo.processInfo.environment
+        guard let entry = getpwuid(getuid()) else {
             return User(
-                name: environment["USERNAME"] ?? environment["USER"] ?? "",
-                home: environment["USERPROFILE"] ?? environment["HOME"] ?? "",
-                shell: environment["COMSPEC"] ?? "cmd.exe"
+                name: "",
+                home: FileManager.default.homeDirectoryForCurrentUser.path,
+                shell: "/bin/sh"
             )
-        #else
-            guard let entry = getpwuid(getuid()) else {
-                let environment = ProcessInfo.processInfo.environment
-                return User(
-                    name: environment["USER"] ?? "",
-                    home: environment["HOME"]
-                        ?? FileManager.default.homeDirectoryForCurrentUser.path,
-                    shell: environment["SHELL"] ?? "/bin/sh"
-                )
-            }
+        }
 
-            return User(
-                name: String(cString: entry.pointee.pw_name),
-                home: String(cString: entry.pointee.pw_dir),
-                shell: String(cString: entry.pointee.pw_shell)
-            )
-        #endif
+        return User(
+            name: String(cString: entry.pointee.pw_name),
+            home: String(cString: entry.pointee.pw_dir),
+            shell: String(cString: entry.pointee.pw_shell)
+        )
     }
 
-    private static func loginEnvironment(for user: User) -> Environment {
-        #if os(Windows)
-            .inherit
-        #else
-            .custom([
-                "HOME": user.home,
-                "LOGNAME": user.name,
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                "SHELL": user.shell,
-                "USER": user.name,
-            ])
-        #endif
+    private static func loginEnvironment(for user: User) -> Subprocess.Environment {
+        Subprocess.Environment.custom([
+            "HOME": user.home,
+            "LOGNAME": user.name,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "SHELL": user.shell,
+            "USER": user.name,
+        ])
     }
 
     private static func printCommand(machine: String, command: String) {
@@ -407,8 +378,7 @@ public struct Session: Sendable {
     }
 
     private static func unpreparedRecordsDirectoryURL() -> URL {
-        let environment = ProcessInfo.processInfo.environment
-        if let path = environment["WENDY_AGENT_E2E_TEST_RECORDS_DIR"], !path.isEmpty {
+        if let path = Environment.testRecordsDirectory {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
 
@@ -537,7 +507,7 @@ public struct Session: Sendable {
 private struct Invocation: Sendable {
     let executable: String
     let arguments: [String]
-    let environment: Environment
+    let environment: Subprocess.Environment
     let workingDirectory: FilePath?
 }
 

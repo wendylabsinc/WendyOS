@@ -93,10 +93,10 @@ public struct Machine: Sendable, Equatable {
         Machine(
             id: "cli",
             name: "CLI",
-            os: Self.osOverride("WENDY_AGENT_E2E_CLI_OS") ?? .current,
+            os: Environment.cliOS ?? .current,
             tags: [.cli],
-            ssh: Self.envValue("WENDY_AGENT_E2E_CLI_SSH"),
-            workingDirectory: Self.envValue("WENDY_AGENT_E2E_CLI_WORKING_DIRECTORY")
+            ssh: Environment.cliSSH,
+            workingDirectory: Environment.cliWorkingDirectory
                 ?? Self.repositoryRootDirectoryURL().appendingPathComponent("go").path
         )
     }
@@ -105,10 +105,10 @@ public struct Machine: Sendable, Equatable {
         Machine(
             id: "agent",
             name: "Agent",
-            os: Self.osOverride("WENDY_AGENT_E2E_AGENT_OS") ?? .current,
+            os: Environment.agentOS ?? .current,
             tags: [.agent],
-            ssh: Self.envValue("WENDY_AGENT_E2E_AGENT_SSH"),
-            workingDirectory: Self.envValue("WENDY_AGENT_E2E_AGENT_WORKING_DIRECTORY")
+            ssh: Environment.agentSSH,
+            workingDirectory: Environment.agentWorkingDirectory
                 ?? Self.repositoryRootDirectoryURL().appendingPathComponent("swift").path
         )
     }
@@ -122,17 +122,6 @@ public struct Machine: Sendable, Equatable {
         }
 
         return "\(location):~"
-    }
-
-    private static func envValue(_ name: String) -> String? {
-        guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
-            return nil
-        }
-        return value
-    }
-
-    private static func osOverride(_ name: String) -> MachineOS? {
-        envValue(name).flatMap(MachineOS.init(environmentValue:))
     }
 
     private static func repositoryRootDirectoryURL() -> URL {
