@@ -1208,7 +1208,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		// which starts an mTLS-wrapping proxy for provisioned LAN devices. The
 		// buildx proxy (registryAddr) is plain TCP and cannot perform the TLS
 		// handshake the device registry expects; the Swift resolver handles that.
-		annotationAddr, annotationCleanup, annotResolveErr := resolveRegistryForSwiftAgent(ctx, conn, regPort)
+		annotationAddr, _, annotationCleanup, annotResolveErr := resolveRegistryForSwiftAgent(ctx, conn, regPort)
 		if annotResolveErr != nil {
 			cliLogln("Warning: could not resolve registry for annotation: %v", annotResolveErr)
 		} else {

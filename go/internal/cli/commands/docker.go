@@ -209,7 +209,7 @@ func generatePythonDockerfile(dir string) (string, error) {
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
 // "host.docker.internal:12345" when proxying).
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, toolchainStdout, toolchainStderr io.Writer) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, swiftUseMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -219,8 +219,6 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
-	// registryAddr is always a plain-HTTP address: either the device's own
-	// unprovisioned registry or a local proxy that handles TLS on our behalf.
 	swiftArgs := []string{
 		"package",
 		"--swift-sdk=" + sdk,
@@ -230,7 +228,9 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--product=" + product,
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
-		"--allow-insecure-http=destination",
+	}
+	if !swiftUseMTLS {
+		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
 	}
 
 	cmd := swifttoolchain.SwiftCommandContext(ctx, swiftArgs...)
@@ -1288,7 +1288,7 @@ func startMTLSRegistryProxy(ctx context.Context, target string) (*registryProxy,
 		Certificates:       []tls.Certificate{tlsCert},
 	}
 	dialer := &tls.Dialer{Config: tlsCfg}
-	return startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+	return startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", target)
 	}, target)
 }
