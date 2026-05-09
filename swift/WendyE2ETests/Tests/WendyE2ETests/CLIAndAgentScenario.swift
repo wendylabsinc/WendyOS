@@ -3,20 +3,22 @@ import WendyE2ETesting
 
 final class CLIAndAgentScenario: Scenario, Sendable {
     static var shared: CLIAndAgentScenario {
-        get async {
-            _shared
+        get async throws {
+            try await _shared.value
         }
     }
 
-    let cli: Machine
-    let agent: Machine
+    let cli: Session
+    let agent: Session
 
-    private static let _shared = CLIAndAgentScenario()
+    private static let _shared = Task {
+        try await CLIAndAgentScenario()
+    }
 
-    private init() {
+    private init() async throws {
         let repositoryRootDirectoryURL = Self.repositoryRootDirectoryURL()
 
-        self.cli = Machine(
+        let cli = Machine(
             id: "cli",
             name: "CLI",
             os: Environment.cliOS ?? .current,
@@ -26,7 +28,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
                 ?? repositoryRootDirectoryURL.appendingPathComponent("go").path
         )
 
-        self.agent = Machine(
+        let agent = Machine(
             id: "agent",
             name: "Agent",
             os: Environment.agentOS ?? .current,
@@ -35,6 +37,9 @@ final class CLIAndAgentScenario: Scenario, Sendable {
             workingDirectory: Environment.agentWorkingDirectory
                 ?? repositoryRootDirectoryURL.appendingPathComponent("swift").path
         )
+
+        self.cli = try await Session.begin(for: cli)
+        self.agent = try await Session.begin(for: agent)
     }
 
     private static func repositoryRootDirectoryURL() -> URL {

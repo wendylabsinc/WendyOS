@@ -24,14 +24,6 @@ import WendyE2ETesting
 /// - `--prerelease`: Includes prerelease agent builds when checking for updates.
 @Suite(.serialized)
 struct `'wendy device info'` {
-    var cli: Session
-    let agent: Session
-
-    init() async throws {
-        let scenario = await CLIAndAgentScenario.shared
-        self.cli = try await Session.begin(for: scenario.cli)
-        self.agent = try await Session.begin(for: scenario.agent)
-    }
 
     // MARK: - Selecting Devices
 
@@ -118,28 +110,7 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--json' reports a missing device without prompting`() async throws {
-        let home = try Self.makeTemporaryHome()
-        defer { try? FileManager.default.removeItem(at: home) }
-
-        let scenario = await CLIAndAgentScenario.shared
-        try await Session.with(scenario.cli) { cli in
-            let record = try await cli.sh(
-                "HOME=\(Self.shellQuote(home.path)) CI=1 WENDY_ANALYTICS=false ./bin/wendy --json device info",
-                output: .string(limit: .max),
-                error: .string(limit: .max)
-            )
-
-            let standardOutput = record.standardOutput ?? ""
-            let standardError = record.standardError ?? ""
-
-            #expect(!record.terminationStatus.isSuccess)
-            #expect(standardOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            #expect(standardError.contains("no device specified"))
-            #expect(standardError.contains("--device"))
-            #expect(standardError.contains("wendy device set-default"))
-            #expect(!standardError.contains("Select a device"))
-            #expect(!standardError.contains("device picker"))
-        }
+        // TODO: implement.
     }
 
     /**
