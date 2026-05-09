@@ -527,7 +527,7 @@ func TestStartRegistryProxy(t *testing.T) {
 	// Start the proxy pointing at the fake registry.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	proxy, err := startRegistryProxy(ctx, ln.Addr().String())
+	proxy, err := startRegistryProxy(ctx, "127.0.0.1:0", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
