@@ -488,23 +488,31 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 	} else {
 		pipeline = fmt.Sprintf("%s ! %s ! fdsink fd=1", src, encoderSegment(encoder))
 	}
-	return append([]string{gstPath}, strings.Fields(pipeline)...)
+	// -q suppresses gst-launch's status messages (e.g. "Setting pipeline to PLAYING")
+	// from being written to stdout and corrupting the binary H264 stream.
+	return append([]string{gstPath, "-q"}, strings.Fields(pipeline)...)
 }
 
 // encoderSegment returns the GStreamer pipeline segment for the given encoder element.
 // H.264 encoders omit server-side h264parse — the annexb output is parsed by the client.
+// All H.264 encoders constrain to profile=high so iOS hardware decoders (which only support
+// Baseline/Main/High) can decode the stream; without this x264enc may emit profile 244
+// (High 4:4:4 Predictive) which causes VTDecompressionSession to return -8969 on every frame.
 func encoderSegment(encoder string) string {
 	switch encoder {
 	case "v4l2h264enc":
-		return "videoconvert ! v4l2h264enc ! video/x-h264,profile=baseline"
+		return "videoconvert ! v4l2h264enc ! video/x-h264,profile=high"
 	case "x264enc":
-		return "videoconvert ! x264enc tune=zerolatency"
+		return "videoconvert ! x264enc tune=zerolatency ! video/x-h264,profile=high"
 	case "openh264enc":
-		return "videoconvert ! openh264enc"
+		return "videoconvert ! openh264enc ! video/x-h264,profile=high"
 	case "vp8enc":
 		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
 		return "videoconvert ! vp8enc deadline=1 ! webmmux streamable=true"
 	default:
+		if strings.Contains(strings.ToLower(encoder), "h264") {
+			return "videoconvert ! " + encoder + " ! video/x-h264,profile=high"
+		}
 		return "videoconvert ! " + encoder
 	}
 }

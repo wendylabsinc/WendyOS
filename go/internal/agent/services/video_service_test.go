@@ -141,9 +141,15 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	if len(args) == 0 || args[0] != "/usr/bin/gst-launch-1.0" {
 		t.Errorf("expected first arg to be gst-launch-1.0 path, got %v", args)
 	}
+	if len(args) < 2 || args[1] != "-q" {
+		t.Errorf("expected -q as second arg to suppress stdout noise, got %v", args)
+	}
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "v4l2src") || !strings.Contains(joined, "x264enc") || !strings.Contains(joined, "fdsink") {
 		t.Errorf("pipeline missing expected elements: %v", args)
+	}
+	if !strings.Contains(joined, "profile=high") {
+		t.Errorf("x264enc pipeline must constrain profile=high for iOS compatibility: %v", args)
 	}
 	if strings.Contains(joined, "h264parse") {
 		t.Errorf("server-side pipeline should not include h264parse: %v", args)
