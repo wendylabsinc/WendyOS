@@ -111,10 +111,12 @@ public enum Reference {
     public struct IndexEntry: Sendable, Equatable {
         public var title: String
         public var fileName: String
+        public var anchor: String?
 
-        public init(title: String, fileName: String) {
+        public init(title: String, fileName: String, anchor: String? = nil) {
             self.title = title
             self.fileName = fileName
+            self.anchor = anchor
         }
     }
 
@@ -191,22 +193,11 @@ public enum Reference {
     }
 
     public static func markdownFileName(forTitle title: String) -> String {
-        let scalars = title.lowercased().unicodeScalars
-        var result = ""
-        var previousWasSeparator = false
+        "\(markdownSlug(forTitle: title, fallback: "reference")).md"
+    }
 
-        for scalar in scalars {
-            if CharacterSet.alphanumerics.contains(scalar) {
-                result.unicodeScalars.append(scalar)
-                previousWasSeparator = false
-            } else if !previousWasSeparator {
-                result.append("-")
-                previousWasSeparator = true
-            }
-        }
-
-        let stem = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "\(stem.isEmpty ? "reference" : stem).md"
+    public static func markdownAnchor(forTitle title: String) -> String {
+        markdownSlug(forTitle: title, fallback: "section")
     }
 
     public static func renderMarkdownIndex(
@@ -215,7 +206,8 @@ public enum Reference {
     ) -> String {
         var markdown: [String] = ["# \(title)", ""]
         for entry in entries {
-            markdown.append("- [\(entry.title)](\(entry.fileName))")
+            let target = entry.anchor.map { "\(entry.fileName)#\($0)" } ?? entry.fileName
+            markdown.append("- [\(entry.title)](\(target))")
         }
         return markdown.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             + "\n"
@@ -488,7 +480,7 @@ private struct SourceParser {
         guard line.hasPrefix("struct ") else {
             return nil
         }
-        return parseBacktickedName(from: line)?.strippingCommandQuotes()
+        return parseBacktickedName(from: line)?.formattingQuotedSpansAsMarkdownCode()
     }
 
     private func parseFunctionTitle(from line: String) -> String? {
@@ -538,6 +530,27 @@ private struct SourceParser {
             }
         }
     }
+}
+
+// MARK: - Private Markdown Helpers
+
+private func markdownSlug(forTitle title: String, fallback: String) -> String {
+    let scalars = title.lowercased().unicodeScalars
+    var result = ""
+    var previousWasSeparator = false
+
+    for scalar in scalars {
+        if CharacterSet.alphanumerics.contains(scalar) {
+            result.unicodeScalars.append(scalar)
+            previousWasSeparator = false
+        } else if !previousWasSeparator {
+            result.append("-")
+            previousWasSeparator = true
+        }
+    }
+
+    let slug = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return slug.isEmpty ? fallback : slug
 }
 
 // MARK: - Private Rendering
@@ -645,15 +658,6 @@ extension String {
             return nil
         }
         return String(dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
-    }
-
-    fileprivate func strippingCommandQuotes() -> String {
-        var result = trimmingCharacters(in: .whitespaces)
-        if result.hasPrefix("'") && result.hasSuffix("'") && result.count >= 2 {
-            result.removeFirst()
-            result.removeLast()
-        }
-        return result
     }
 
     fileprivate func formattingQuotedSpansAsMarkdownCode() -> String {

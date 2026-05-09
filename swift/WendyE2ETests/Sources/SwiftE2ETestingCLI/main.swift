@@ -90,6 +90,7 @@ struct SwiftE2ETestingCLI {
                 withIntermediateDirectories: true
             )
 
+            var fileCount = 0
             var indexEntries: [Reference.IndexEntry] = []
             for sourceFile in sourceFiles {
                 let documents = try Reference.parseFile(at: sourceFile)
@@ -104,9 +105,17 @@ struct SwiftE2ETestingCLI {
                     atomically: true,
                     encoding: .utf8
                 )
-                indexEntries.append(
-                    Reference.IndexEntry(title: topLevelDocument.title, fileName: fileName)
-                )
+                fileCount += 1
+                for (documentIndex, document) in documents.enumerated() {
+                    indexEntries.append(
+                        Reference.IndexEntry(
+                            title: document.title,
+                            fileName: fileName,
+                            anchor: documentIndex == 0
+                                ? nil : Reference.markdownAnchor(forTitle: document.title)
+                        )
+                    )
+                }
             }
 
             let indexMarkdown = Reference.renderMarkdownIndex(
@@ -119,7 +128,7 @@ struct SwiftE2ETestingCLI {
                 encoding: .utf8
             )
 
-            return "Wrote \(indexEntries.count) reference document(s) to \(outputDirectory)"
+            return "Wrote \(fileCount) reference file(s) to \(outputDirectory)"
         }
 
         var documents: [Reference.Document] = []

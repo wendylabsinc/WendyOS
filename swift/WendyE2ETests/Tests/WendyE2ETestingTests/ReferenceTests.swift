@@ -8,7 +8,7 @@ struct `reference documentation extraction` {
         let documents = Reference.parseSource(Self.fixtureSource, path: "DeviceInfoTests.swift")
 
         let document = try #require(documents.first)
-        #expect(document.title == "wendy device info")
+        #expect(document.title == "`wendy device info`")
         #expect(document.overview.contains("Shows information reported by a Wendy agent."))
         #expect(document.overview.contains("Synopsis:"))
         #expect(document.sourceLocation.path == "DeviceInfoTests.swift")
@@ -99,8 +99,8 @@ struct `reference documentation extraction` {
 
         #expect(
             documents.map(\.title) == [
-                "wendy device info",
-                "wendy device version",
+                "`wendy device info`",
+                "`wendy device version`",
             ]
         )
         #expect(documents.last?.sections.first?.title == "Compatibility")
@@ -121,7 +121,7 @@ struct `reference documentation extraction` {
         let document = try #require(Reference.parseSource(Self.fixtureSource).first)
         let markdown = Reference.renderMarkdown(document, options: .reference)
 
-        #expect(markdown.contains("# wendy device info"))
+        #expect(markdown.contains("# `wendy device info`"))
         #expect(markdown.contains("## Selecting Devices"))
         #expect(markdown.contains("### `--device` selects an explicit device"))
         #expect(markdown.contains("Selects a device explicitly with `--device`."))
@@ -154,28 +154,46 @@ struct `reference documentation extraction` {
         let documents = Reference.parseSource(Self.fixtureSource)
         let markdown = Reference.renderMarkdown(documents, options: .reference)
 
-        #expect(markdown.contains("# wendy device info"))
-        #expect(markdown.contains("\n\n---\n\n# wendy device version"))
+        #expect(markdown.contains("# `wendy device info`"))
+        #expect(markdown.contains("\n\n---\n\n# `wendy device version`"))
     }
 
     @Test
     func `dasherizes document titles for markdown file names`() {
-        #expect(Reference.markdownFileName(forTitle: "wendy device info") == "wendy-device-info.md")
+        #expect(
+            Reference.markdownFileName(forTitle: "`wendy device info`") == "wendy-device-info.md"
+        )
         #expect(Reference.markdownFileName(forTitle: "wendy --version") == "wendy-version.md")
+        #expect(
+            Reference.markdownAnchor(forTitle: "`wendy device version`") == "wendy-device-version"
+        )
     }
 
     @Test
     func `renders markdown index entries`() {
         let markdown = Reference.renderMarkdownIndex(
             [
-                Reference.IndexEntry(title: "wendy device info", fileName: "wendy-device-info.md"),
+                Reference.IndexEntry(
+                    title: "`wendy device info`",
+                    fileName: "wendy-device-info.md"
+                ),
+                Reference.IndexEntry(
+                    title: "`wendy device version`",
+                    fileName: "wendy-device-info.md",
+                    anchor: "wendy-device-version"
+                ),
                 Reference.IndexEntry(title: "wendy help", fileName: "wendy-help.md"),
             ],
             title: "Wendy E2E Reference"
         )
 
         #expect(markdown.contains("# Wendy E2E Reference"))
-        #expect(markdown.contains("- [wendy device info](wendy-device-info.md)"))
+        #expect(markdown.contains("- [`wendy device info`](wendy-device-info.md)"))
+        #expect(
+            markdown.contains(
+                "- [`wendy device version`](wendy-device-info.md#wendy-device-version)"
+            )
+        )
         #expect(markdown.contains("- [wendy help](wendy-help.md)"))
     }
 

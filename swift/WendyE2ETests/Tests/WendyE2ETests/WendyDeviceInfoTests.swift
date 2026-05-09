@@ -1,4 +1,7 @@
+import Foundation
+import Subprocess
 import Testing
+import WendyE2ETesting
 
 /// Shows information reported by a Wendy agent.
 ///
@@ -162,15 +165,36 @@ struct `'wendy device info'` {
     /**
      JSON mode never opens the interactive picker. If no explicit device or default device is available, the command fails with a configuration diagnostic.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `'--json' reports a missing device without prompting`() async throws {
         // Given: no --device value and no configured default device
+        let home = try Self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
         // When: `wendy --json device info` is run
-        // Then:
-        // - exits unsuccessfully
-        // - emits no JSON payload
-        // - prints a clear diagnostic
-        // - opens no picker
+        try await Session.with(.cli) { cli in
+            let record = try await cli.sh(
+                "HOME=\(Self.shellQuote(home.path)) CI=1 WENDY_ANALYTICS=false ./bin/wendy --json device info",
+                output: .string(limit: .max),
+                error: .string(limit: .max)
+            )
+
+            let standardOutput = record.standardOutput ?? ""
+            let standardError = record.standardError ?? ""
+
+            // Then:
+            // - exits unsuccessfully
+            #expect(!record.terminationStatus.isSuccess)
+            // - emits no JSON payload
+            #expect(standardOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            // - prints a clear diagnostic
+            #expect(standardError.contains("no device specified"))
+            #expect(standardError.contains("--device"))
+            #expect(standardError.contains("wendy device set-default"))
+            // - opens no picker
+            #expect(!standardError.contains("Select a device"))
+            #expect(!standardError.contains("device picker"))
+        }
     }
 
     /**
@@ -252,6 +276,17 @@ struct `'wendy device info'` {
         // - exits unsuccessfully
         // - prints an update-check diagnostic
         // - does not report a misleading up-to-date or update-available status
+    }
+
+    private static func makeTemporaryHome() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wendy-e2e-home-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
