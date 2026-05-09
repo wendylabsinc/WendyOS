@@ -1243,7 +1243,18 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
-				RootCAs:      caPool,
+				// Skip hostname verification: device registry certs are signed by
+				// the Wendy CA but may not include the mDNS hostname as a SAN.
+				// VerifyConnection still validates the full chain against our CA pool.
+				InsecureSkipVerify: true,
+				VerifyConnection: func(cs tls.ConnectionState) error {
+					opts := x509.VerifyOptions{
+						Roots:       caPool,
+						CurrentTime: time.Now(),
+					}
+					_, err := cs.PeerCertificates[0].Verify(opts)
+					return err
+				},
 			},
 		},
 	}
