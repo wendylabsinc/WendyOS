@@ -3,10 +3,14 @@ package commands
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -983,18 +987,91 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
 }
 
-func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, swiftUseMTLS bool, cleanup func(), err error) {
 	if conn.RegistryDialer == nil {
-		return resolveRegistryForSwift(ctx, conn.Host, port)
+		if conn.IsMTLS {
+			// Provisioned LAN device: the registry speaks HTTPS with a cert signed
+			// by the Wendy Cloud Root CA, which is not in the macOS system keychain.
+			// Stand up a local HTTP reverse proxy that terminates TLS with mTLS so
+			// the Swift container plugin can push via plain HTTP on 127.0.0.1.
+			certInfo := loadCLICert()
+			if certInfo == nil {
+				return "", false, nil, fmt.Errorf("mTLS connection but no CLI certificates available")
+			}
+			target := net.JoinHostPort(conn.Host, strconv.Itoa(port))
+			proxy, proxyErr := startMTLSRegistryHTTPProxy(target, certInfo.PemCertificate, certInfo.PemPrivateKey, certInfo.PemCertificateChain)
+			if proxyErr != nil {
+				return "", false, nil, fmt.Errorf("starting mTLS registry proxy for Swift: %w", proxyErr)
+			}
+			return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), false, proxy.Close, nil
+		}
+		addr, addrCleanup, addrErr := resolveRegistryForSwift(ctx, conn.Host, port)
+		return addr, false, addrCleanup, addrErr
 	}
 
-	proxy, err := startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
+	proxy, proxyErr := startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
 		return conn.RegistryDialer(ctx, port)
 	})
-	if err != nil {
-		return "", nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", err)
+	if proxyErr != nil {
+		return "", false, nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", proxyErr)
 	}
-	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), conn.IsMTLS, proxy.Close, nil
+}
+
+// mtlsRegistryHTTPProxy is a plain-HTTP reverse proxy that forwards requests
+// to a provisioned device's HTTPS registry using mTLS. The Swift container
+// plugin connects to 127.0.0.1:PORT via plain HTTP (with --allow-insecure-http)
+// and this proxy handles TLS + client-cert authentication transparently.
+type mtlsRegistryHTTPProxy struct {
+	listener net.Listener
+	server   *http.Server
+}
+
+func (p *mtlsRegistryHTTPProxy) Port() int {
+	return p.listener.Addr().(*net.TCPAddr).Port
+}
+
+func (p *mtlsRegistryHTTPProxy) Close() {
+	_ = p.server.Close()
+}
+
+// startMTLSRegistryHTTPProxy creates a local HTTP reverse proxy on 127.0.0.1
+// that forwards OCI registry requests to target via HTTPS with mTLS. certPEM
+// and keyPEM are the client certificate and key; caPEM is the CA chain used to
+// verify the server certificate (the Wendy Cloud Root CA chain).
+func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsRegistryHTTPProxy, error) {
+	leafPEM, err := certs.LeafCertificatePEM(certPEM)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM([]byte(caPEM))
+
+	rp := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "https"
+			req.URL.Host = target
+			req.Host = target
+		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				RootCAs:      caPool,
+			},
+		},
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{Handler: rp}
+	go func() { _ = srv.Serve(ln) }()
+	return &mtlsRegistryHTTPProxy{listener: ln, server: srv}, nil
 }
 
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
