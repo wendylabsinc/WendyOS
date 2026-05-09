@@ -1066,7 +1066,7 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 		target = net.JoinHostPort(resolved, strconv.Itoa(port))
 	}
 
-	proxy, err := startRegistryProxy(ctx, target)
+	proxy, err := startRegistryProxy(ctx, "0.0.0.0:0", target)
 	if err != nil {
 		return "", nil, fmt.Errorf("starting registry proxy: %w", err)
 	}
@@ -1109,7 +1109,14 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 			return "", nil, err
 		}
 	} else {
-		proxy, proxyErr := startRegistryProxyWithDialer(context.Background(), func(ctx context.Context) (net.Conn, error) {
+		// On Linux buildkitd uses host networking so 127.0.0.1 is reachable.
+		// On macOS it runs inside the Docker Desktop VM and must connect via
+		// host.docker.internal, which requires the proxy to bind on all interfaces.
+		listenAddr := "0.0.0.0:0"
+		if runtime.GOOS == "linux" {
+			listenAddr = "127.0.0.1:0"
+		}
+		proxy, proxyErr := startRegistryProxyWithDialer(context.Background(), listenAddr, func(ctx context.Context) (net.Conn, error) {
 			return conn.RegistryDialer(ctx, port)
 		})
 		if proxyErr != nil {
@@ -1150,9 +1157,9 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 		return fmt.Sprintf("%s:%d", addr, port), func() {}, nil
 	}
 
-	// Link-local: same proxy approach as resolveRegistry.
+	// Link-local: proxy via 127.0.0.1 — Swift runs on the host, not in a VM.
 	target := net.JoinHostPort(host, strconv.Itoa(port))
-	proxy, err := startRegistryProxy(ctx, target)
+	proxy, err := startRegistryProxy(ctx, "127.0.0.1:0", target)
 	if err != nil {
 		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
 	}
@@ -1164,7 +1171,7 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 		return resolveRegistryForSwift(ctx, conn.Host, port)
 	}
 
-	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+	proxy, err := startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
 		return conn.RegistryDialer(ctx, port)
 	})
 	if err != nil {
@@ -1198,18 +1205,20 @@ type registryProxy struct {
 	done     chan struct{}
 }
 
-// startRegistryProxy creates a TCP proxy that listens on all interfaces
-// (required for Docker Desktop VM connectivity) and forwards connections to
-// the target address. The target should use the device's mDNS hostname (not a
-// bare link-local IP) so the host's resolver provides the zone ID.
-func startRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
-	return startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+// startRegistryProxy creates a TCP proxy that listens on listenAddr and
+// forwards connections to the target address. Pass "0.0.0.0:0" when Docker
+// Desktop's VM must reach the proxy via host.docker.internal; pass
+// "127.0.0.1:0" everywhere else so the listener is not exposed on all
+// interfaces. The target should use the device's mDNS hostname (not a bare
+// link-local IP) so the host's resolver provides the zone ID.
+func startRegistryProxy(ctx context.Context, listenAddr string, target string) (*registryProxy, error) {
+	return startRegistryProxyWithDialer(ctx, listenAddr, func(ctx context.Context) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	}, target)
 }
 
-func startRegistryProxyWithDialer(ctx context.Context, dial func(context.Context) (net.Conn, error), target ...string) (*registryProxy, error) {
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+func startRegistryProxyWithDialer(ctx context.Context, listenAddr string, dial func(context.Context) (net.Conn, error), target ...string) (*registryProxy, error) {
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, err
 	}
