@@ -89,30 +89,6 @@ public struct Machine: Sendable, Equatable {
         )
     }
 
-    public static var cli: Machine {
-        Machine(
-            id: "cli",
-            name: "CLI",
-            os: Environment.cliOS ?? .current,
-            tags: [.cli],
-            ssh: Environment.cliSSH,
-            workingDirectory: Environment.cliWorkingDirectory
-                ?? Self.repositoryRootDirectoryURL().appendingPathComponent("go").path
-        )
-    }
-
-    public static var agent: Machine {
-        Machine(
-            id: "agent",
-            name: "Agent",
-            os: Environment.agentOS ?? .current,
-            tags: [.agent],
-            ssh: Environment.agentSSH,
-            workingDirectory: Environment.agentWorkingDirectory
-                ?? Self.repositoryRootDirectoryURL().appendingPathComponent("swift").path
-        )
-    }
-
     // MARK: - Private
 
     private static func defaultID(ssh: String?, workingDirectory: String?) -> String {
@@ -122,19 +98,6 @@ public struct Machine: Sendable, Equatable {
         }
 
         return "\(location):~"
-    }
-
-    private static func repositoryRootDirectoryURL() -> URL {
-        packageRootDirectoryURL()
-            .deletingLastPathComponent()  // swift
-            .deletingLastPathComponent()  // repository root
-    }
-
-    private static func packageRootDirectoryURL() -> URL {
-        URL(fileURLWithPath: #filePath, isDirectory: false)
-            .deletingLastPathComponent()  // Sources/WendyE2ETesting
-            .deletingLastPathComponent()  // Sources
-            .deletingLastPathComponent()  // swift/WendyE2ETests
     }
 }
 

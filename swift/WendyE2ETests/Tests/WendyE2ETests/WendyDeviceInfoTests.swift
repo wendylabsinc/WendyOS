@@ -28,8 +28,8 @@ struct `'wendy device info'` {
     let agent: Session
 
     init() async throws {
-        self.cli = try await Session.begin(for: .cli)
-        self.agent = try await Session.begin(for: .agent)
+        self.cli = try await Session.begin(for: CLIAndAgentScenario.cli)
+        self.agent = try await Session.begin(for: CLIAndAgentScenario.agent)
     }
 
     // MARK: - Selecting Devices
@@ -120,7 +120,7 @@ struct `'wendy device info'` {
         let home = try Self.makeTemporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
-        try await Session.with(.cli) { cli in
+        try await Session.with(CLIAndAgentScenario.cli) { cli in
             let record = try await cli.sh(
                 "HOME=\(Self.shellQuote(home.path)) CI=1 WENDY_ANALYTICS=false ./bin/wendy --json device info",
                 output: .string(limit: .max),

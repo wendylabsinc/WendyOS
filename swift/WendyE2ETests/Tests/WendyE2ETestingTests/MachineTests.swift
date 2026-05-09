@@ -49,20 +49,6 @@ struct `machine` {
         #expect(Machine.current.ssh == nil)
         #expect(Machine.current.workingDirectory == FileManager.default.currentDirectoryPath)
     }
-
-    @Test
-    func `declares known CLI machine`() {
-        #expect(Machine.cli.id == "cli")
-        #expect(Machine.cli.name == "CLI")
-        #expect(Machine.cli.tags == [.cli])
-    }
-
-    @Test
-    func `declares known agent machine`() {
-        #expect(Machine.agent.id == "agent")
-        #expect(Machine.agent.name == "Agent")
-        #expect(Machine.agent.tags == [.agent])
-    }
 }
 
 @Suite
