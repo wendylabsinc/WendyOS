@@ -583,7 +583,9 @@ func mcpDialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.Client
 	// Broker cert CN is localhost and won't match the cloud host — skip hostname
 	// verification but still validate the chain against the Wendy CA.
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(certInfo.PemCertificateChain))
+	if !caPool.AppendCertsFromPEM([]byte(certInfo.PemCertificateChain)) {
+		return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
+	}
 	tlsCfg.InsecureSkipVerify = true //nolint:gosec
 	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
