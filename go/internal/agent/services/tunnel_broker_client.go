@@ -152,7 +152,9 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 	// Broker cert CN is localhost and won't match the cloud host — skip hostname
 	// verification but still validate the chain against the Wendy CA.
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(c.chainPEM))
+	if !caPool.AppendCertsFromPEM([]byte(c.chainPEM)) {
+		return nil, metadata.MD{}, fmt.Errorf("no valid CA certificates in chainPEM")
+	}
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec
 		VerifyConnection: func(cs tls.ConnectionState) error {
@@ -168,6 +170,12 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 				Intermediates: intermediates,
 				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 			})
+			if err != nil {
+				c.logger.Warn("broker TLS chain verification failed",
+					zap.String("subject", cs.PeerCertificates[0].Subject.String()),
+					zap.Error(err),
+				)
+			}
 			return err
 		},
 	}

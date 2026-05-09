@@ -1261,7 +1261,6 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 					opts := x509.VerifyOptions{
 						Roots:         caPool,
 						Intermediates: intermediates,
-						CurrentTime:   time.Now(),
 						KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 					}
 					_, err := cs.PeerCertificates[0].Verify(opts)

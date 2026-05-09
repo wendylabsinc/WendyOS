@@ -1071,3 +1071,37 @@ func TestStartMTLSRegistryHTTPProxy_NoSAN(t *testing.T) {
 		t.Errorf("status = %d, want 200 (cert without SAN should be accepted via chain validation)", resp.StatusCode)
 	}
 }
+
+func TestStartMTLSRegistryHTTPProxy_UntrustedClientCert(t *testing.T) {
+	// The server requires a client cert from trustedCA, but the proxy presents
+	// one from untrustedCA. The server should reject the connection.
+	trustedCA := generateTestCA(t)
+	untrustedCA := generateTestCA(t)
+	serverLeaf := generateTestLeaf(t, trustedCA, x509.ExtKeyUsageServerAuth)
+	clientLeaf := generateTestLeaf(t, untrustedCA, x509.ExtKeyUsageClientAuth)
+
+	serverTLSCert, err := tls.X509KeyPair([]byte(serverLeaf.pemStr), []byte(marshalKeyPEM(t, serverLeaf.key)))
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	// Server requires client certs signed by trustedCA.
+	addr := startTestTLSServer(t, serverTLSCert, trustedCA)
+
+	proxy, err := startMTLSRegistryHTTPProxy(addr, clientLeaf.pemStr, marshalKeyPEM(t, clientLeaf.key), trustedCA.pemStr)
+	if err != nil {
+		t.Fatalf("startMTLSRegistryHTTPProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	resp, err := http.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy.Port())))
+	if err != nil {
+		// Transport-level rejection from the server is acceptable.
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("expected non-200 when proxy presents a client cert from an untrusted CA, got 200")
+	}
+}
