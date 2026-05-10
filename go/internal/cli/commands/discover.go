@@ -206,8 +206,9 @@ type flashClearMsg struct{}
 
 // discoverUpdateDoneMsg is sent when a background device update completes.
 type discoverUpdateDoneMsg struct {
-	deviceName string
-	err        error
+	deviceName  string
+	assetID     int32
+	err         error
 }
 
 // bleRetentionPeriod is how long a BLE device stays visible after it was last

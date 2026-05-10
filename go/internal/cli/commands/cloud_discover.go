@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +39,10 @@ func newCloudDiscoverCmd() *cobra.Command {
 			}
 			if len(auth.Certificates) == 0 {
 				return fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+			}
+
+			if jsonOutput || !isInteractiveTerminal() {
+				return cloudDiscoverJSON(ctx, auth, all)
 			}
 
 			m := newCloudDiscoverModel(ctx, auth, brokerURL, all, false, nil)
@@ -220,6 +225,9 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flashMessage = fmt.Sprintf("Updated %s successfully.", msg.deviceName)
 			m.flashIsError = false
+			// Invalidate cached version so the table shows fresh data after update.
+			delete(m.versions, msg.assetID)
+			delete(m.versionPending, msg.assetID)
 		}
 		return m, clearFlashAfter(10 * time.Second)
 
@@ -354,36 +362,37 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 	brokerURL := m.brokerURL
 	name := asset.GetName()
 	arch := asset.GetArchitecture()
+	id := asset.GetId()
 
 	return func() tea.Msg {
 		conn, err := connectCloudAsset(ctx, auth, asset, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
 		}
 
+		resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+		if err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("querying device: %w", err)}
+		}
 		if arch == "" {
-			resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-			if err != nil {
-				conn.Close()
-				return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("querying device: %w", err)}
-			}
 			arch = resp.GetCpuArchitecture()
-			agentVer := resp.GetVersion()
-			if agentVer != "" && version.Version != "dev" && version.CompareVersions(version.Version, agentVer) <= 0 {
-				conn.Close()
-				return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("device is already up to date (%s)", agentVer)}
-			}
+		}
+		agentVer := resp.GetVersion()
+		if agentVer != "" && version.Version != "dev" && version.CompareVersions(version.Version, agentVer) <= 0 {
+			conn.Close()
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("device is already up to date (%s)", agentVer)}
 		}
 
 		if arch == "" {
 			conn.Close()
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
 		}
 
 		release, err := fetchAgentRelease(false)
 		if err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("fetching release: %w", err)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("fetching release: %w", err)}
 		}
 
 		assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
@@ -396,13 +405,13 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 		}
 		if releaseAsset == nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)}
 		}
 
 		binaryData, err := downloadAgentBinary(*releaseAsset)
 		if err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
 		}
 
 		h := sha256.Sum256(binaryData)
@@ -410,17 +419,34 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 
 		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("uploading: %w", err)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}
 		conn.Close() // agent is restarting
 
 		newConn, err := waitForCloudAgentRestart(ctx, auth, asset, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}
 		newConn.Close()
-		return discoverUpdateDoneMsg{deviceName: name}
+		return discoverUpdateDoneMsg{assetID: id, deviceName: name}
 	}
+}
+
+func cloudDiscoverJSON(ctx context.Context, auth *config.AuthConfig, all bool) error {
+	assets, err := fetchCloudAssetsFiltered(ctx, auth, !all)
+	if err != nil {
+		return err
+	}
+	infos := make([]discoverDeviceInfo, 0, len(assets))
+	for _, a := range assets {
+		infos = append(infos, cloudDeviceInfoFromAsset(a))
+	}
+	data, err := json.MarshalIndent(infos, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 // fetchCloudAssetsFiltered retrieves compute-device assets for the org.
