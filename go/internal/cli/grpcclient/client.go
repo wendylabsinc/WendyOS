@@ -11,11 +11,14 @@ import (
 	"net/url"
 	"strings"
 
+	"time"
+
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -23,6 +26,8 @@ const (
 	grpcInitialConnWindow   = 16 * 1024 * 1024
 	grpcReadBufferSize      = 256 * 1024
 	grpcWriteBufferSize     = 256 * 1024
+	grpcKeepaliveTime       = 30 * time.Second
+	grpcKeepaliveTimeout    = 10 * time.Second
 )
 
 // AgentConnection holds a gRPC connection and typed service clients.
@@ -50,6 +55,11 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
 		grpc.WithReadBufferSize(grpcReadBufferSize),
 		grpc.WithWriteBufferSize(grpcWriteBufferSize),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                grpcKeepaliveTime,
+			Timeout:             grpcKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
@@ -87,6 +97,11 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
 		grpc.WithReadBufferSize(grpcReadBufferSize),
 		grpc.WithWriteBufferSize(grpcWriteBufferSize),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                grpcKeepaliveTime,
+			Timeout:             grpcKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)

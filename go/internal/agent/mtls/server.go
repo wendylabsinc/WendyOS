@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"time"
 
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 // NewTLSConfig creates a TLS config from PEM-encoded certificate, chain, and private key.
@@ -71,7 +73,17 @@ func NewServer(certPEM, chainPEM, keyPEM string, extraOpts ...grpc.ServerOption)
 	}
 
 	creds := credentials.NewTLS(tlsConfig)
-	opts := []grpc.ServerOption{grpc.Creds(creds)}
+	opts := []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             5 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    30 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
+	}
 	opts = append(opts, extraOpts...)
 	return grpc.NewServer(opts...), nil
 }
