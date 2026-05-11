@@ -22,7 +22,7 @@ import WendyE2ETesting
 /// - `--json`: Emits JSON output and disables interactive prompts.
 /// - `--check-updates`: Checks whether a newer agent version is available.
 /// - `--prerelease`: Includes prerelease agent builds when checking for updates.
-@Suite(.serialized)
+@Suite
 struct `'wendy device info'` {
     let scenario = CLIAndAgentScenario()
 
@@ -457,7 +457,7 @@ struct `'wendy device info'` {
 /// Deprecated compatibility alias for `wendy device info`.
 ///
 /// Use `wendy device info` in new scripts and documentation.
-@Suite(.serialized)
+@Suite
 struct `'wendy device version'` {
     let scenario = CLIAndAgentScenario()
 

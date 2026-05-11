@@ -259,7 +259,7 @@ collect_reports() {
 
 sync_agent_checkout_if_needed
 
-SWIFT_TEST_ARGS=("test" "--no-parallel")
+SWIFT_TEST_ARGS=("test")
 if [[ ${#TEST_FILTERS[@]} -eq 1 ]]; then
   SWIFT_TEST_ARGS+=("--filter" "${TEST_FILTERS[0]}")
 else
