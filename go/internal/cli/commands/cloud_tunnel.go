@@ -147,28 +147,33 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 	if err != nil {
 		return nil, fmt.Errorf("loading broker TLS config: %w", err)
 	}
-	// Broker cert CN is localhost and won't match the cloud host — skip hostname
-	// verification but still validate the chain against the Wendy CA.
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM([]byte(cert.PemCertificateChain)) {
-		return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
-	}
-	tlsCfg.InsecureSkipVerify = true //nolint:gosec
-	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 {
-			return fmt.Errorf("broker presented no TLS certificate")
+
+	if !strings.HasSuffix(brokerURL, ":443") {
+		// For non-standard ports (local/on-prem broker) the server presents a cert
+		// signed by the Wendy CA, not a public CA. Skip hostname verification but
+		// validate the chain against the stored Wendy CA bundle.
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM([]byte(cert.PemCertificateChain)) {
+			return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
 		}
-		intermediates := x509.NewCertPool()
-		for _, c := range cs.PeerCertificates[1:] {
-			intermediates.AddCert(c)
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("broker presented no TLS certificate")
+			}
+			intermediates := x509.NewCertPool()
+			for _, c := range cs.PeerCertificates[1:] {
+				intermediates.AddCert(c)
+			}
+			_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+				Roots:         caPool,
+				Intermediates: intermediates,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			return err
 		}
-		_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-			Roots:         caPool,
-			Intermediates: intermediates,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		})
-		return err
 	}
+
 	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
