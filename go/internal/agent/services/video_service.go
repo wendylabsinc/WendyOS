@@ -512,10 +512,11 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 }
 
 // encoderSegment returns the GStreamer pipeline segment for the given encoder element.
-// H.264 encoders force I420 (4:2:0) input so the encoder always produces a profile ≤ High
-// (profile 100), which is universally supported by hardware decoders. Without this, cameras
-// that output 4:4:4 raw video cause x264enc to select profile 244 (High 4:4:4 Predictive),
-// which VideoToolbox and most hardware decoders reject.
+// H.264 encoders force I420 (4:2:0) input to avoid 4:4:4 output paths that can make
+// encoders such as x264enc select profile 244 (High 4:4:4 Predictive), which
+// VideoToolbox and most hardware decoders reject. This input cap does not by itself
+// enforce a specific H.264 output profile; explicit profile caps are added only where needed
+// (for example, v4l2h264enc is capped to baseline below).
 func encoderSegment(encoder string) string {
 	switch encoder {
 	case "v4l2h264enc":
