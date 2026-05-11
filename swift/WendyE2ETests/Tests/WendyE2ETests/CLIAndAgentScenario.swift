@@ -155,27 +155,17 @@ final class CLIAndAgentScenario: Scenario, Sendable {
     }
 
     private static func startAgent(with session: Session, verifiedBy cli: Session) async throws {
+        try await Self.stopAgent(with: session)
+
         switch session.machine.os {
         case .macOS:
-            try await session.sh("make quit && open Build/WendyAgentMac.app")
+            try await session.sh("open Build/WendyAgentMac.app")
         case .linux:
             try await session.sh(
                 """
                 set -e
                 pidfile=/tmp/wendy-agent-e2e.pid
                 logfile=/tmp/wendy-agent-e2e.log
-
-                if [ -f "$pidfile" ]; then
-                  old_pid="$(cat "$pidfile")"
-                  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-                    kill "$old_pid"
-                    sleep 1
-                    if kill -0 "$old_pid" 2>/dev/null; then
-                      kill -9 "$old_pid"
-                    fi
-                  fi
-                  rm -f "$pidfile"
-                fi
 
                 cd ../go
                 nohup ./bin/wendy-agent > "$logfile" 2>&1 &
