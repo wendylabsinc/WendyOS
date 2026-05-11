@@ -519,7 +519,7 @@ func encoderSegment(encoder string) string {
 	case "v4l2h264enc":
 		return "videoconvert ! video/x-raw,format=I420 ! v4l2h264enc ! video/x-h264,profile=baseline"
 	case "x264enc":
-		return "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency"
+		return "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency profile=high"
 	case "openh264enc":
 		return "videoconvert ! video/x-raw,format=I420 ! openh264enc"
 	case "avenc_h264":
