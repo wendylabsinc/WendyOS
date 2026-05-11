@@ -7,38 +7,44 @@ import Testing
 @Suite
 struct `machine` {
     @Test
-    func `creates SSH machine metadata`() {
+    func `creates remote machine metadata`() {
         let machine = Machine(
             name: "SSH",
-            ssh: "ai@example.local",
+            user: "ai",
+            address: "example.local",
             workingDirectory: "~/wendy-agent"
         )
 
         #expect(machine.name == "SSH")
-        #expect(machine.ssh == "ai@example.local")
+        #expect(machine.user == "ai")
+        #expect(machine.address == "example.local")
         #expect(machine.workingDirectory == "~/wendy-agent")
         #expect(machine.id == "ai@example.local:~/wendy-agent")
         #expect(machine.description == "ai@example.local:~/wendy-agent")
     }
 
     @Test
-    func `defaults to SSH user home directory`() {
-        let machine = Machine(name: "SSH", ssh: "ai@example.local")
+    func `defaults remote machine to user home directory`() {
+        let machine = Machine(name: "SSH", user: "ai", address: "example.local")
 
-        #expect(machine.ssh == "ai@example.local")
+        #expect(machine.user == "ai")
+        #expect(machine.address == "example.local")
         #expect(machine.workingDirectory == nil)
         #expect(machine.id == "ai@example.local:~")
         #expect(machine.description == "ai@example.local:~")
     }
 
     @Test
-    func `defaults local machine to current directory`() {
+    func `defaults machine to current host and directory`() {
         let machine = Machine(name: "Local")
 
-        #expect(machine.ssh == nil)
+        #expect(machine.user == nil)
+        #expect(!machine.address.isEmpty)
         #expect(machine.workingDirectory == FileManager.default.currentDirectoryPath)
-        #expect(machine.id == "local:\(FileManager.default.currentDirectoryPath)")
-        #expect(machine.description == "local:\(FileManager.default.currentDirectoryPath)")
+        #expect(machine.id == "\(machine.address):\(FileManager.default.currentDirectoryPath)")
+        #expect(
+            machine.description == "\(machine.address):\(FileManager.default.currentDirectoryPath)"
+        )
     }
 
     @Test
@@ -46,7 +52,8 @@ struct `machine` {
         #expect(Machine.current.id == "current")
         #expect(Machine.current.name == "Current")
         #expect(Machine.current.tags == [.runner])
-        #expect(Machine.current.ssh == nil)
+        #expect(Machine.current.user == nil)
+        #expect(!Machine.current.address.isEmpty)
         #expect(Machine.current.workingDirectory == FileManager.default.currentDirectoryPath)
     }
 
@@ -64,6 +71,13 @@ struct `machine` {
         #expect(machine.env["HOME"] == "/tmp/wendy-e2e-home")
         #expect(machine.env["PATH"] == "/tmp/wendy-e2e-bin:$PATH")
         #expect(machine.env["WENDY_ANALYTICS"] == "false")
+    }
+
+    @Test
+    func `stores a routable address`() {
+        let machine = Machine(name: "Remote", address: "192.168.64.2")
+
+        #expect(machine.address == "192.168.64.2")
     }
 }
 
@@ -84,7 +98,7 @@ struct `session` {
     }
 
     @Test
-    func `runs local shell commands in working directory`() async throws {
+    func `runs SSH commands in working directory`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("machine-local-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -94,14 +108,14 @@ struct `session` {
         let session = try await Session.begin(for: machine)
         try await session.sh("touch local.txt")
 
-        #expect(session.machine.ssh == nil)
+        #expect(!session.machine.address.isEmpty)
         #expect(session.machine.workingDirectory == directory.path)
-        #expect(session.description == "local:\(directory.path)")
+        #expect(session.description == "\(session.machine.address):\(directory.path)")
         #expect(FileManager.default.fileExists(atPath: directory.path + "/local.txt"))
     }
 
     @Test
-    func `sets environment variables before running local commands`() async throws {
+    func `sets environment variables before running SSH commands`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("machine-env-" + UUID().uuidString, isDirectory: true)
         let binDirectory = directory.appendingPathComponent("bin", isDirectory: true)
@@ -147,68 +161,19 @@ struct `session` {
     }
 
     @Test
-    func `runs commands over separate SSH invocations`() async throws {
-        try await Self.withFixtureSession { session, fixture in
+    func `runs commands over SSH`() async throws {
+        try await Self.withTemporarySession { session, directory in
             try await session.sh("touch first.txt")
             try await session.sh("touch second.txt")
 
-            #expect(FileManager.default.fileExists(atPath: fixture.remoteRoot.path + "/first.txt"))
-            #expect(FileManager.default.fileExists(atPath: fixture.remoteRoot.path + "/second.txt"))
-            #expect(try fixture.counter(named: "run-count") == 2)
+            #expect(FileManager.default.fileExists(atPath: directory.path + "/first.txt"))
+            #expect(FileManager.default.fileExists(atPath: directory.path + "/second.txt"))
         }
     }
 
     @Test
-    func `sets environment variables before running SSH commands`() async throws {
-        let fixture = try SSHFixture()
-        defer { fixture.remove() }
-
-        let binDirectory = fixture.remoteRoot.appendingPathComponent("bin", isDirectory: true)
-        let homeDirectory = fixture.remoteRoot.appendingPathComponent("home", isDirectory: true)
-        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(
-            at: homeDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let wendy = binDirectory.appendingPathComponent("wendy")
-        try """
-        #!/bin/sh
-        printf 'HOME=%s\n' "$HOME"
-        printf 'WENDY_ANALYTICS=%s\n' "$WENDY_ANALYTICS"
-        """.write(to: wendy, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: wendy.path
-        )
-
-        let machine = Machine(
-            name: "SSH",
-            ssh: "ai@example.local",
-            workingDirectory: fixture.remoteRoot.path,
-            env: [
-                "HOME": homeDirectory.path,
-                "PATH": "\(binDirectory.path):$PATH",
-                "WENDY_ANALYTICS": "false",
-            ],
-            sshExecutable: fixture.sshScript.path
-        )
-        let session = try await Session.begin(for: machine)
-
-        let record = try await session.sh(
-            "wendy",
-            output: .string(limit: .max),
-            error: .string(limit: .max)
-        )
-
-        #expect(record.terminationStatus.isSuccess)
-        #expect(record.standardOutput == "HOME=\(homeDirectory.path)\nWENDY_ANALYTICS=false\n")
-        #expect(record.standardError == "")
-    }
-
-    @Test
     func `collected output API matches swift-subprocess style`() async throws {
-        try await Self.withFixtureSession { session, _ in
+        try await Self.withTemporarySession { session, _ in
             let record = try await session.sh(
                 "printf 'hello'",
                 output: .string(limit: .max),
@@ -223,7 +188,7 @@ struct `session` {
 
     @Test
     func `collected output callback receives command output`() async throws {
-        try await Self.withFixtureSession { session, _ in
+        try await Self.withTemporarySession { session, _ in
             try await session.sh("printf 'hello'; printf 'oops' >&2") {
                 standardOutput,
                 standardError in
@@ -236,7 +201,7 @@ struct `session` {
 
     @Test
     func `simple shell command throws when the remote command exits non-zero`() async throws {
-        try await Self.withFixtureSession { session, _ in
+        try await Self.withTemporarySession { session, _ in
             await #expect(throws: MachineError.self) {
                 try await session.sh("exit 7")
             }
@@ -359,105 +324,22 @@ struct `session` {
         }
     }
 
-    private static func withFixtureSession<Result>(
-        _ body: (Session, SSHFixture) async throws -> Result
+    private static func withTemporarySession<Result>(
+        _ body: (Session, URL) async throws -> Result
     ) async throws -> Result {
-        let fixture = try SSHFixture()
-        let machine = Machine(
-            name: "SSH",
-            ssh: "ai@example.local",
-            workingDirectory: fixture.remoteRoot.path,
-            sshExecutable: fixture.sshScript.path
+        let directory = try Self.makeTemporaryDirectory()
+        let session = try await Session.begin(
+            for: Machine(name: "SSH", workingDirectory: directory.path)
         )
-        let session = try await Session.begin(for: machine)
 
-        defer { fixture.remove() }
-        return try await body(session, fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        return try await body(session, directory)
     }
-}
 
-private struct SSHFixture {
-    let root: URL
-    let remoteRoot: URL
-    let sshScript: URL
-
-    init() throws {
-        self.root = FileManager.default.temporaryDirectory
+    private static func makeTemporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("machine-ssh-" + UUID().uuidString, isDirectory: true)
-        self.remoteRoot = self.root.appendingPathComponent("remote", isDirectory: true)
-        self.sshScript = self.root.appendingPathComponent("fake-ssh.sh")
-
-        try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(
-            at: self.remoteRoot,
-            withIntermediateDirectories: true
-        )
-
-        try self.writeFakeSSHScript()
-    }
-
-    func remove() {
-        try? FileManager.default.removeItem(at: self.root)
-    }
-
-    func counter(named name: String) throws -> Int {
-        let url = self.root.appendingPathComponent(name)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return 0
-        }
-        let string = try String(contentsOf: url, encoding: .utf8)
-        return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-    }
-
-    private func writeFakeSSHScript() throws {
-        let stateDirectory = Self.shellQuote(self.root.path)
-        let contents = """
-            #!/bin/bash
-            set -euo pipefail
-
-            state_dir=\(stateDirectory)
-            args=()
-
-            increment() {
-              local file="$1"
-              local count=0
-              if [[ -f "$file" ]]; then
-                count=$(<"$file")
-              fi
-              echo $((count + 1)) > "$file"
-            }
-
-            while (($#)); do
-              case "$1" in
-                -T)
-                  shift
-                  ;;
-                -o)
-                  shift 2
-                  ;;
-                *)
-                  args+=("$1")
-                  shift
-                  ;;
-              esac
-            done
-
-            command="${args[1]:-}"
-            run_count="$state_dir/run-count"
-
-            increment "$run_count"
-            printf '%s\n' "$command" >> "$state_dir/commands.log"
-            exec /bin/bash -lc "$command"
-            """
-
-        try contents.write(to: self.sshScript, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: self.sshScript.path
-        )
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }

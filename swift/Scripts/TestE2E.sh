@@ -13,7 +13,8 @@ FIXTURES_DIR="${WENDY_E2E_FIXTURES_DIR:-$DEFAULT_FIXTURES_DIR}"
 RECORDS_DIR="${WENDY_E2E_TEST_RECORDS_DIR:-$DEFAULT_RECORDS_DIR}"
 ARTIFACT_DIR="${WENDY_E2E_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
 REPORT_ZIP="${WENDY_E2E_REPORT_ZIP:-$ARTIFACT_DIR/swift-e2e-test-reports.zip}"
-AGENT_SSH="${WENDY_E2E_AGENT_SSH:-}"
+AGENT_USER="${WENDY_E2E_AGENT_USER:-}"
+AGENT_ADDRESS="${WENDY_E2E_AGENT_ADDRESS:-}"
 AGENT_WORKDIR="${WENDY_E2E_AGENT_WORKING_DIRECTORY:-}"
 SYNC_AGENT="${WENDY_E2E_SYNC_AGENT:-auto}"
 VERBOSE="${WENDY_E2E_VERBOSE:-false}"
@@ -34,15 +35,17 @@ Options:
   --artifact-dir DIR    Directory for the final zip artifact.
   --report-zip PATH     Path to the final zip artifact.
   --fixtures-dir DIR    Fixture directory exposed to tests.
-  --agent-ssh SSH       Optional SSH target for the agent machine; omitted runs locally.
+  --agent-user USER     Optional SSH user for the agent machine.
+  --agent-address HOST  Optional address for the agent machine; defaults to hostname.
   --agent-workdir DIR   Existing swift/ working directory to use for the agent.
-  --no-agent-sync       Do not rsync this checkout to --agent-ssh.
+  --no-agent-sync       Do not rsync this checkout to --agent-address.
   --verbose             Print each E2E machine command before it runs.
   --help                Show this help message.
 
 Environment:
   WENDY_E2E_TEST_FILTERS              Comma-separated SwiftPM filters.
-  WENDY_E2E_AGENT_SSH                 Optional SSH target for the agent machine.
+  WENDY_E2E_AGENT_USER                Optional SSH user for the agent machine.
+  WENDY_E2E_AGENT_ADDRESS             Optional address for the agent machine.
   WENDY_E2E_AGENT_WORKING_DIRECTORY   swift/ directory for the agent.
   WENDY_E2E_SYNC_AGENT                auto, true, or false.
   WENDY_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
@@ -75,8 +78,12 @@ while [[ $# -gt 0 ]]; do
       FIXTURES_DIR="$2"
       shift 2
       ;;
-    --agent-ssh)
-      AGENT_SSH="$2"
+    --agent-user)
+      AGENT_USER="$2"
+      shift 2
+      ;;
+    --agent-address)
+      AGENT_ADDRESS="$2"
       shift 2
       ;;
     --agent-workdir)
@@ -149,8 +156,21 @@ shell_quote() {
   printf "%q" "$1"
 }
 
+ssh_target() {
+  local host="$AGENT_ADDRESS"
+  if [[ "$host" == *:* ]]; then
+    host="[$host]"
+  fi
+
+  if [[ -n "$AGENT_USER" ]]; then
+    printf "%s@%s" "$AGENT_USER" "$host"
+  else
+    printf "%s" "$host"
+  fi
+}
+
 sync_agent_checkout_if_needed() {
-  if [[ -z "$AGENT_SSH" ]]; then
+  if [[ -z "$AGENT_ADDRESS" ]]; then
     return 0
   fi
 
@@ -163,17 +183,20 @@ sync_agent_checkout_if_needed() {
   fi
 
   if ! command -v rsync >/dev/null 2>&1; then
-    echo "ERROR: rsync is required when WENDY_E2E_AGENT_SSH is set" >&2
+    echo "ERROR: rsync is required when WENDY_E2E_AGENT_ADDRESS is set" >&2
     exit 1
   fi
+
+  local agent_target
+  agent_target="$(ssh_target)"
 
   local run_id="${GITHUB_RUN_ID:-local}"
   local run_attempt="${GITHUB_RUN_ATTEMPT:-1}"
   local remote_root="wendy-agent-swift-e2e/${run_id}-${run_attempt}"
   local remote_swift_dir="$remote_root/swift"
 
-  echo "==> Syncing checkout to $AGENT_SSH:$remote_root"
-  ssh -o StrictHostKeyChecking=no "$AGENT_SSH" "mkdir -p $(shell_quote "$remote_root")"
+  echo "==> Syncing checkout to $agent_target:$remote_root"
+  ssh -o StrictHostKeyChecking=no "$agent_target" "mkdir -p $(shell_quote "$remote_root")"
   rsync -az --delete \
     -e 'ssh -o StrictHostKeyChecking=no' \
     --exclude '.git/' \
@@ -182,7 +205,7 @@ sync_agent_checkout_if_needed() {
     --exclude 'swift/WendyAgentCore/.build/' \
     --exclude 'swift/WendyE2ETests/.build/' \
     --exclude 'swift/Build/' \
-    "$REPO_ROOT/" "$AGENT_SSH:$remote_root/"
+    "$REPO_ROOT/" "$agent_target:$remote_root/"
 
   AGENT_WORKDIR="$remote_swift_dir"
 }
@@ -208,8 +231,9 @@ collect_reports() {
     echo "- Records directory: \`$RECORDS_DIR\`"
     echo "- Fixtures directory: \`$FIXTURES_DIR\`"
     echo "- Verbose: \`$VERBOSE\`"
-    if [[ -n "$AGENT_SSH" ]]; then
-      echo "- Agent SSH: \`$AGENT_SSH\`"
+    if [[ -n "$AGENT_ADDRESS" ]]; then
+      echo "- Agent user: \`${AGENT_USER:-<none>}\`"
+      echo "- Agent address: \`$AGENT_ADDRESS\`"
       echo "- Agent working directory: \`${AGENT_WORKDIR:-<default>}\`"
     fi
     echo
@@ -249,8 +273,8 @@ echo "    Fixtures: $FIXTURES_DIR"
 echo "    Records:  $RECORDS_DIR"
 echo "    Filters:  ${TEST_FILTERS[*]}"
 echo "    Verbose:  $VERBOSE"
-if [[ -n "$AGENT_SSH" ]]; then
-  echo "    Agent:   $AGENT_SSH:${AGENT_WORKDIR:-<default>}"
+if [[ -n "$AGENT_ADDRESS" ]]; then
+  echo "    Agent:   $(ssh_target):${AGENT_WORKDIR:-<default>}"
 fi
 
 set +e
@@ -258,7 +282,8 @@ set +e
   cd "$PACKAGE_DIR"
   WENDY_E2E_FIXTURES_DIR="$FIXTURES_DIR" \
   WENDY_E2E_TEST_RECORDS_DIR="$RECORDS_DIR" \
-  WENDY_E2E_AGENT_SSH="$AGENT_SSH" \
+  WENDY_E2E_AGENT_USER="$AGENT_USER" \
+  WENDY_E2E_AGENT_ADDRESS="$AGENT_ADDRESS" \
   WENDY_E2E_AGENT_WORKING_DIRECTORY="$AGENT_WORKDIR" \
   WENDY_E2E_VERBOSE="$VERBOSE" \
   swift "${SWIFT_TEST_ARGS[@]}"

@@ -256,7 +256,7 @@ In a future session, use:
 
 ## Machine and session overview
 
-`Machine` is static metadata: identity, OS, tags, SSH target, and working directory. It does not run commands.
+`Machine` is static metadata: identity, OS, tags, optional SSH user/address, and working directory. It does not run commands.
 
 ```swift
 @Test(.enabled(if: Machine.cli.os == .linux))
@@ -304,4 +304,4 @@ try await agent
     .run()
 ```
 
-If `ssh` is omitted, sessions run commands locally. `Session.begin(for:verbose:)` enables command echoing for that session; `WENDY_E2E_VERBOSE=1` enables it globally.
+Sessions always run over SSH. If `address` is omitted, the current hostname is used; `user` is included in the SSH target when provided. `Session.begin(for:verbose:)` enables command echoing for that session; `WENDY_E2E_VERBOSE=1` enables it globally.

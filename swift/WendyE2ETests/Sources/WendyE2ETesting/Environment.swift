@@ -14,8 +14,12 @@ public enum Environment {
         value("WENDY_E2E_CLI_OS").flatMap(MachineOS.init(environmentValue:))
     }
 
-    public static var cliSSH: String? {
-        value("WENDY_E2E_CLI_SSH")
+    public static var cliUser: String? {
+        value("WENDY_E2E_CLI_USER")
+    }
+
+    public static var cliAddress: String? {
+        value("WENDY_E2E_CLI_ADDRESS")
     }
 
     public static var cliWorkingDirectory: String? {
@@ -26,8 +30,12 @@ public enum Environment {
         value("WENDY_E2E_AGENT_OS").flatMap(MachineOS.init(environmentValue:))
     }
 
-    public static var agentSSH: String? {
-        value("WENDY_E2E_AGENT_SSH")
+    public static var agentUser: String? {
+        value("WENDY_E2E_AGENT_USER")
+    }
+
+    public static var agentAddress: String? {
+        value("WENDY_E2E_AGENT_ADDRESS")
     }
 
     public static var agentWorkingDirectory: String? {

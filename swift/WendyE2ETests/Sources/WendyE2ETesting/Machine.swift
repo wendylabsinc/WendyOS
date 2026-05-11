@@ -45,10 +45,10 @@ public struct Machine: Sendable, Equatable {
     public let name: String
     public let os: MachineOS
     public let tags: Set<MachineTag>
-    public let ssh: String?
+    public let user: String?
+    public let address: String
     public let workingDirectory: String?
     public let env: [String: String]
-    public let sshExecutable: String
 
     // MARK: - Creating Machines
 
@@ -57,16 +57,16 @@ public struct Machine: Sendable, Equatable {
         name: String,
         os: MachineOS = .current,
         tags: Set<MachineTag> = [],
-        ssh: String? = nil,
+        user: String? = nil,
+        address: String? = nil,
         workingDirectory: String? = nil,
-        env: [String: String] = [:],
-        sshExecutable: String = "/usr/bin/ssh"
+        env: [String: String] = [:]
     ) {
         precondition(id?.isEmpty != true, "id must not be empty")
         precondition(!name.isEmpty, "name must not be empty")
-        precondition(ssh?.isEmpty != true, "ssh must not be empty")
+        precondition(user?.isEmpty != true, "user must not be empty")
+        precondition(address?.isEmpty != true, "address must not be empty")
         precondition(workingDirectory?.isEmpty != true, "workingDirectory must not be empty")
-        precondition(!sshExecutable.isEmpty, "sshExecutable must not be empty")
         for key in env.keys {
             precondition(
                 Self.isValidEnvironmentKey(key),
@@ -74,17 +74,24 @@ public struct Machine: Sendable, Equatable {
             )
         }
 
-        let currentDirectoryPathOrNil = ssh == nil ? FileManager.default.currentDirectoryPath : nil
-        let resolvedWorkingDirectory = workingDirectory ?? currentDirectoryPathOrNil
+        let resolvedAddress = address ?? Self.defaultAddress
+        let resolvedWorkingDirectory =
+            workingDirectory ?? (address == nil ? FileManager.default.currentDirectoryPath : nil)
 
-        self.id = id ?? Self.defaultID(ssh: ssh, workingDirectory: resolvedWorkingDirectory)
+        self.id =
+            id
+            ?? Self.defaultID(
+                user: user,
+                address: resolvedAddress,
+                workingDirectory: resolvedWorkingDirectory
+            )
         self.name = name
         self.os = os
         self.tags = tags
-        self.ssh = ssh
+        self.user = user
+        self.address = resolvedAddress
         self.workingDirectory = resolvedWorkingDirectory
         self.env = env
-        self.sshExecutable = sshExecutable
     }
 
     // MARK: - Known Machines
@@ -100,6 +107,10 @@ public struct Machine: Sendable, Equatable {
 
     // MARK: - Private
 
+    private static var defaultAddress: String {
+        ProcessInfo.processInfo.hostName
+    }
+
     private static func isValidEnvironmentKey(_ key: String) -> Bool {
         guard let first = key.first else {
             return false
@@ -113,8 +124,13 @@ public struct Machine: Sendable, Equatable {
         }
     }
 
-    private static func defaultID(ssh: String?, workingDirectory: String?) -> String {
-        let location = ssh ?? "local"
+    private static func defaultID(
+        user: String?,
+        address: String,
+        workingDirectory: String?
+    ) -> String {
+        let location = user.map { "\($0)@\(address)" } ?? address
+
         if let workingDirectory {
             return "\(location):\(workingDirectory)"
         }

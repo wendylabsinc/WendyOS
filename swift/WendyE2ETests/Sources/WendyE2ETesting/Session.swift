@@ -1,14 +1,6 @@
 import Foundation
 public import Subprocess
 
-#if canImport(Darwin)
-    import Darwin
-#elseif canImport(Glibc)
-    import Glibc
-#elseif canImport(Musl)
-    import Musl
-#endif
-
 #if canImport(System)
     import System
 #else
@@ -223,25 +215,20 @@ public struct Session: Sendable {
 
     private func invocation(for command: String) -> Invocation {
         let wrappedCommand = self.wrapped(command)
+        let loginShellCommand = "exec \"${SHELL:-/bin/sh}\" -lc \(Self.shellQuote(wrappedCommand))"
 
-        if let ssh = self.machine.ssh {
-            return Invocation(
-                executable: self.machine.sshExecutable,
-                arguments: [
-                    "-T",
-                    ssh,
-                    wrappedCommand,
-                ],
-                environment: .inherit,
-                workingDirectory: nil
-            )
-        }
-
-        let user = Self.currentUser()
         return Invocation(
-            executable: user.shell,
-            arguments: ["-lc", wrappedCommand],
-            environment: Self.loginEnvironment(for: user),
+            executable: "/usr/bin/ssh",
+            arguments: [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-T",
+                self.sshTarget(address: self.machine.address),
+                loginShellCommand,
+            ],
+            environment: .inherit,
             workingDirectory: nil
         )
     }
@@ -257,6 +244,11 @@ public struct Session: Sendable {
         parts.append(command)
 
         return parts.joined(separator: " && ")
+    }
+
+    private func sshTarget(address: String) -> String {
+        let host = address.contains(":") ? "[\(address)]" : address
+        return self.machine.user.map { "\($0)@\(host)" } ?? host
     }
 
     private static func shellEnvironmentValue(_ value: String) -> String {
@@ -347,32 +339,6 @@ public struct Session: Sendable {
         character == "_" || character.isASCII && (character.isLetter || character.isNumber)
     }
 
-    private static func currentUser() -> User {
-        guard let entry = getpwuid(getuid()) else {
-            return User(
-                name: "",
-                home: FileManager.default.homeDirectoryForCurrentUser.path,
-                shell: "/bin/sh"
-            )
-        }
-
-        return User(
-            name: String(cString: entry.pointee.pw_name),
-            home: String(cString: entry.pointee.pw_dir),
-            shell: String(cString: entry.pointee.pw_shell)
-        )
-    }
-
-    private static func loginEnvironment(for user: User) -> Subprocess.Environment {
-        Subprocess.Environment.custom([
-            "HOME": user.home,
-            "LOGNAME": user.name,
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "SHELL": user.shell,
-            "USER": user.name,
-        ])
-    }
-
     private static func printCommand(machine: String, command: String) {
         Self.printToStandardError("[\(machine)] $ \(command)\n")
     }
@@ -415,12 +381,6 @@ private struct Invocation: Sendable {
     let arguments: [String]
     let environment: Subprocess.Environment
     let workingDirectory: FilePath?
-}
-
-private struct User: Sendable {
-    let name: String
-    let home: String
-    let shell: String
 }
 
 // MARK: - CustomStringConvertible

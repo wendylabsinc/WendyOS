@@ -218,7 +218,8 @@ public struct Reporter: Sendable {
             - Machine ID: `\(machine.id)`
             - OS: `\(machine.os.rawValue)`
             - Tags: `\(tags.isEmpty ? "<none>" : tags)`
-            - SSH: `\(machine.ssh ?? "<none>")`
+            - User: `\(machine.user ?? "<none>")`
+            - Address: `\(machine.address)`
             - Working directory: `\(machine.workingDirectory ?? "<none>")`
             - Command: `\(command)`
             - Process ID: `\(processIdentifier ?? "<unavailable>")`

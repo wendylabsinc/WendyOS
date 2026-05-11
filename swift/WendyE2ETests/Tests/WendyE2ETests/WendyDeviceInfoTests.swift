@@ -33,14 +33,16 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--device' selects an explicit device`() async throws {
-        try await self.scenario.run { cli, _ in
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
             try await cli.sh(
                 """
                 mkdir -p "$HOME/.wendy"
                 printf '{"defaultDevice":"default-device-that-should-not-be-used.invalid"}\n' > "$HOME/.wendy/config.json"
                 """
             )
-            try await cli.sh("wendy --device ::1 device info --json") {
+            try await cli.sh("wendy --device \(agentAddress) device info --json") {
                 terminationStatus,
                 standardOutput,
                 standardError in

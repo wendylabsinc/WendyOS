@@ -61,7 +61,8 @@ final class CLIAndAgentScenario: Scenario, Sendable {
                 name: "CLI",
                 os: Environment.cliOS ?? .current,
                 tags: [.cli],
-                ssh: Environment.cliSSH,
+                user: Environment.cliUser,
+                address: Environment.cliAddress,
                 workingDirectory: cliWorkingDirectory,
                 env: [
                     "HOME": cliHomeDirectory,
@@ -75,7 +76,8 @@ final class CLIAndAgentScenario: Scenario, Sendable {
                 name: "Agent",
                 os: Environment.agentOS ?? .current,
                 tags: [.agent],
-                ssh: Environment.agentSSH,
+                user: Environment.agentUser,
+                address: Environment.agentAddress,
                 workingDirectory: Environment.agentWorkingDirectory
                     ?? repositoryRootDirectoryURL.appendingPathComponent("swift").path
             )
@@ -126,18 +128,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
 
     private func buildAgentIfNeeded(with session: Session) async throws {
         switch session.machine.os {
-        case .macOS:
-            try await session.sh(
-                """
-                set -e
-                stamp=/tmp/wendy-e2e-\(Environment.runID)-agent-built
-                if [ ! -f "$stamp" ]; then
-                  make build-dev
-                  touch "$stamp"
-                fi
-                """
-            )
-        case .linux:
+        case .macOS, .linux:
             try await session.sh(
                 """
                 set -e
@@ -158,14 +149,12 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         try await Self.stopAgent(with: session)
 
         switch session.machine.os {
-        case .macOS:
-            try await session.sh("open Build/WendyAgentMac.app")
-        case .linux:
+        case .macOS, .linux:
             try await session.sh(
                 """
                 set -e
-                pidfile=/tmp/wendy-agent-e2e.pid
-                logfile=/tmp/wendy-agent-e2e.log
+                pidfile=/tmp/wendy-agent-e2e-\(Environment.runID).pid
+                logfile=/tmp/wendy-agent-e2e-\(Environment.runID).log
 
                 cd ../go
                 nohup ./bin/wendy-agent > "$logfile" 2>&1 &
@@ -177,7 +166,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         }
 
         try await cli
-            .command("wendy --device ::1 device info --json >/dev/null")
+            .command("wendy --device \(session.machine.address) device info --json >/dev/null")
             .poll(
                 until: .success,
                 step: .seconds(1),
@@ -190,12 +179,29 @@ final class CLIAndAgentScenario: Scenario, Sendable {
     private static func stopAgent(with session: Session) async throws {
         switch session.machine.os {
         case .macOS:
-            try await session.sh("make quit")
+            try await session.sh(
+                """
+                make quit || true
+                pidfile=/tmp/wendy-agent-e2e-\(Environment.runID).pid
+
+                if [ -f "$pidfile" ]; then
+                  pid="$(cat "$pidfile")"
+                  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                    kill "$pid"
+                    sleep 1
+                    if kill -0 "$pid" 2>/dev/null; then
+                      kill -9 "$pid"
+                    fi
+                  fi
+                  rm -f "$pidfile"
+                fi
+                """
+            )
         case .linux:
             try await session.sh(
                 """
                 set -e
-                pidfile=/tmp/wendy-agent-e2e.pid
+                pidfile=/tmp/wendy-agent-e2e-\(Environment.runID).pid
 
                 if [ -f "$pidfile" ]; then
                   pid="$(cat "$pidfile")"
