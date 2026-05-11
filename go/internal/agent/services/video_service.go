@@ -247,6 +247,7 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 		unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocStreamoff, uintptr(unsafe.Pointer(&bufType))) //nolint:errcheck
 	}()
 
+	var framesSent int
 	for {
 		select {
 		case <-ctx.Done():
@@ -259,14 +260,28 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 		dqbuf.setMemory(v4l2MemoryMmap)
 
 		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocDqbuf, uintptr(unsafe.Pointer(&dqbuf))); errno != 0 {
-			if errno == unix.EINTR {
+			if errno == unix.EINTR || errno == unix.EAGAIN {
 				continue
+			}
+			// Device accepted H264 format but failed before delivering any frame —
+			// fall back to the GStreamer software encoder path.
+			if framesSent == 0 {
+				return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
 			}
 			return status.Errorf(codes.Internal, "VIDIOC_DQBUF: %v", errno)
 		}
 
 		idx := dqbuf.index()
 		n := dqbuf.bytesUsed()
+		if n == 0 {
+			// Empty buffer — requeue and skip.
+			var qbuf v4l2Buf
+			qbuf.setIndex(idx)
+			qbuf.setType(v4l2BufTypeVideoCapture)
+			qbuf.setMemory(v4l2MemoryMmap)
+			unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))) //nolint:errcheck
+			continue
+		}
 		data := make([]byte, n)
 		copy(data, mapped[idx].data[:n])
 
@@ -276,6 +291,7 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 		}); err != nil {
 			return err
 		}
+		framesSent++
 
 		// Re-queue the buffer.
 		var qbuf v4l2Buf
@@ -494,25 +510,25 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 }
 
 // encoderSegment returns the GStreamer pipeline segment for the given encoder element.
-// H.264 encoders omit server-side h264parse — the annexb output is parsed by the client.
-// All H.264 encoders constrain to profile=high so iOS hardware decoders (which only support
-// Baseline/Main/High) can decode the stream; without this x264enc may emit profile 244
-// (High 4:4:4 Predictive) which causes VTDecompressionSession to return -8969 on every frame.
+// H.264 encoders force I420 (4:2:0) input so the encoder always produces a profile ≤ High
+// (profile 100), which is universally supported by hardware decoders. Without this, cameras
+// that output 4:4:4 raw video cause x264enc to select profile 244 (High 4:4:4 Predictive),
+// which VideoToolbox and most hardware decoders reject.
 func encoderSegment(encoder string) string {
 	switch encoder {
 	case "v4l2h264enc":
-		return "videoconvert ! v4l2h264enc ! video/x-h264,profile=high"
+		return "videoconvert ! video/x-raw,format=I420 ! v4l2h264enc ! video/x-h264,profile=baseline"
 	case "x264enc":
-		return "videoconvert ! x264enc tune=zerolatency ! video/x-h264,profile=high"
+		return "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency"
 	case "openh264enc":
-		return "videoconvert ! openh264enc ! video/x-h264,profile=high"
+		return "videoconvert ! video/x-raw,format=I420 ! openh264enc"
+	case "avenc_h264":
+		return "videoconvert ! video/x-raw,format=I420 ! avenc_h264"
 	case "vp8enc":
 		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
 		return "videoconvert ! vp8enc deadline=1 ! webmmux streamable=true"
 	default:
-		if strings.Contains(strings.ToLower(encoder), "h264") {
-			return "videoconvert ! " + encoder + " ! video/x-h264,profile=high"
-		}
-		return "videoconvert ! " + encoder
+		// For other H.264-family encoders, force I420 to avoid 4:4:4 profile selection.
+		return "videoconvert ! video/x-raw,format=I420 ! " + encoder
 	}
 }
