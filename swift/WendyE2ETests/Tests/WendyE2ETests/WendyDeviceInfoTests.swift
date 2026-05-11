@@ -46,6 +46,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("\"version\""))
                 #expect(standardOutput.contains("\"os\""))
@@ -78,6 +79,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("\"version\""))
                 #expect(standardOutput.contains("\"os\""))
@@ -92,6 +94,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput == "{\"defaultDevice\":\"\(agentAddress)\"}\n")
                 #expect(standardError == "")
@@ -146,6 +149,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("Agent Version:"))
                 #expect(standardOutput.contains("OS:"))
@@ -170,6 +174,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
                 #expect(!standardOutput.contains("Select a device"))
@@ -212,6 +217,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
                 #expect(!standardOutput.contains("Select a device"))
@@ -253,6 +259,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
                 #expect(standardError.contains("parsing config"))
@@ -275,6 +282,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
                 #expect(
@@ -299,6 +307,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
                 #expect(standardError.contains("getting agent version"))
@@ -341,6 +350,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("Agent Version:"))
                 #expect(standardOutput.contains("CLI Version:"))
@@ -367,6 +377,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
 
@@ -398,6 +409,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
 
@@ -429,6 +441,7 @@ struct `'wendy device info'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
                 #expect(standardError.contains("checking for updates"))
@@ -468,6 +481,7 @@ struct `'wendy device version'` {
                 terminationStatus,
                 standardOutput,
                 standardError in
+
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
                 #expect(
