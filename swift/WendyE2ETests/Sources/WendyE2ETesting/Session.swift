@@ -504,24 +504,53 @@ public struct Session: Sendable {
         URL(fileURLWithPath: filePath, isDirectory: false).deletingPathExtension().lastPathComponent
     }
 
-    private static func slug(_ value: String) -> String {
+    static func slug(_ value: String) -> String {
         var slug = ""
         var needsSeparator = false
+        var previousKind: SlugCharacterKind?
+        let scalars = Array(value.unicodeScalars)
 
-        for scalar in value.unicodeScalars {
-            switch scalar.value {
-            case 48...57, 65...90, 97...122:
-                if needsSeparator, !slug.isEmpty {
-                    slug.append("-")
-                }
-                slug.append(String(scalar).lowercased())
-                needsSeparator = false
-            default:
+        for index in scalars.indices {
+            let scalar = scalars[index]
+            guard let kind = SlugCharacterKind(scalar) else {
                 needsSeparator = !slug.isEmpty
+                previousKind = nil
+                continue
             }
+
+            let nextKind =
+                scalars.index(after: index) < scalars.endIndex
+                ? SlugCharacterKind(scalars[scalars.index(after: index)]) : nil
+            if !slug.isEmpty,
+                needsSeparator
+                    || Self.needsCamelCaseSeparator(
+                        previousKind: previousKind,
+                        currentKind: kind,
+                        nextKind: nextKind
+                    )
+            {
+                slug.append("-")
+            }
+
+            slug.append(String(scalar).lowercased())
+            needsSeparator = false
+            previousKind = kind
         }
 
         return slug.isEmpty ? "unknown" : slug
+    }
+
+    private static func needsCamelCaseSeparator(
+        previousKind: SlugCharacterKind?,
+        currentKind: SlugCharacterKind,
+        nextKind: SlugCharacterKind?
+    ) -> Bool {
+        switch (previousKind, currentKind, nextKind) {
+        case (.lower?, .upper, _), (.digit?, .upper, _), (.upper?, .upper, .lower?):
+            return true
+        default:
+            return false
+        }
     }
 
     private static func reportHeader(filePath: String, function: String) -> String {
@@ -631,6 +660,25 @@ private struct Invocation: Sendable {
     let arguments: [String]
     let environment: Subprocess.Environment
     let workingDirectory: FilePath?
+}
+
+private enum SlugCharacterKind {
+    case digit
+    case lower
+    case upper
+
+    init?(_ scalar: Unicode.Scalar) {
+        switch scalar.value {
+        case 48...57:
+            self = .digit
+        case 65...90:
+            self = .upper
+        case 97...122:
+            self = .lower
+        default:
+            return nil
+        }
+    }
 }
 
 private struct User: Sendable {

@@ -343,6 +343,15 @@ struct `session` {
     }
 
     @Test
+    func `dasherizes camel-cased function names for command record file names`() {
+        #expect(Session.slug("buildAgent(with:)") == "build-agent-with")
+        #expect(Session.slug("URLParserTests") == "url-parser-tests")
+        #expect(
+            Session.slug("'--json' reports a missing device") == "json-reports-a-missing-device"
+        )
+    }
+
+    @Test
     func `with begins sessions and ends them after the body`() async throws {
         try await Session.with(Machine(name: "Local"), Machine(name: "Local")) { first, second in
             #expect(first.machine.name == "Local")
