@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,11 +190,35 @@ func TestNewDeviceCmd(t *testing.T) {
 		subNames[c.Name()] = true
 	}
 
-	expectedSubs := []string{"version", "set-default", "unset-default", "setup", "update"}
+	expectedSubs := []string{"info", "version", "set-default", "unset-default", "setup", "update"}
 	for _, name := range expectedSubs {
 		if !subNames[name] {
 			t.Errorf("device command missing subcommand %q", name)
 		}
+	}
+	if !subNames["info"] || !subNames["version"] {
+		return
+	}
+	if infoCmd, _, err := cmd.Find([]string{"info"}); err != nil || infoCmd.Hidden {
+		t.Errorf("device info should be visible; cmd=%v err=%v", infoCmd, err)
+	}
+	if versionCmd, _, err := cmd.Find([]string{"version"}); err != nil || !versionCmd.Hidden {
+		t.Errorf("device version should be hidden; cmd=%v err=%v", versionCmd, err)
+	}
+
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("device help: %v", err)
+	}
+	help := buf.String()
+	if !strings.Contains(help, "info") {
+		t.Fatalf("device help missing info command: %s", help)
+	}
+	if strings.Contains(help, "\n  version") {
+		t.Fatalf("device help should not list deprecated version command: %s", help)
 	}
 }
 
@@ -218,7 +243,7 @@ func TestNewCloudDeviceCmd(t *testing.T) {
 		subNames[c.Name()] = true
 	}
 
-	expectedSubs := []string{"version", "set-default", "unset-default", "setup", "update", "wifi", "apps"}
+	expectedSubs := []string{"info", "version", "set-default", "unset-default", "setup", "update", "wifi", "apps"}
 	for _, name := range expectedSubs {
 		if !subNames[name] {
 			t.Errorf("cloud device command missing mirrored subcommand %q", name)

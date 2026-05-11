@@ -231,11 +231,11 @@ echo -e "${BOLD}Phase 3: Device commands${RESET}"
 run_test "wendy device set-default" \
     "$WENDY" device set-default "$HOSTNAME"
 
-run_test "wendy device version" \
-    "$WENDY" device version --device "$HOSTNAME"
+run_test "wendy device info" \
+    "$WENDY" device info --device "$HOSTNAME"
 
-run_test_json "wendy device version --json" \
-    "$WENDY" device version --device "$HOSTNAME" --json
+run_test_json "wendy device info --json" \
+    "$WENDY" device info --device "$HOSTNAME" --json
 
 echo ""
 

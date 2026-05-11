@@ -159,7 +159,7 @@ echo ""
 # ── Device capability detection ──────────────────────────────────────
 
 DEVICE_HAS_GPU=false
-VERSION_JSON=$("$WENDY" device version --json --device "$HOSTNAME" 2>/dev/null || true)
+VERSION_JSON=$("$WENDY" device info --json --device "$HOSTNAME" 2>/dev/null || true)
 if [[ -n "$VERSION_JSON" ]]; then
     GPU_VAL=$(echo "$VERSION_JSON" | jq -r '.hasGpu // false' 2>/dev/null || true)
     if [[ "$GPU_VAL" == "true" ]]; then
