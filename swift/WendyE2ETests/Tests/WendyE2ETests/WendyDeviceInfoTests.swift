@@ -100,7 +100,29 @@ struct `'wendy device info'` {
      */
     @Test
     func `reports invalid CLI configuration before selecting a device`() async throws {
-        // TODO: implement.
+        // REFACTOR: Share scenario setup across non-interactive error tests once
+        // the E2E fixture API settles.
+        let scenario = CLIAndAgentScenario()
+        try await scenario.run { cli, _ in
+            try await cli.sh(
+                """
+                mkdir -p "$HOME/.wendy"
+                printf '{ invalid json\n' > "$HOME/.wendy/config.json"
+                """
+            )
+
+            try await cli.sh("wendy device info --json") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(!terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(standardError.contains("parsing config"))
+                #expect(standardError.contains("invalid character"))
+                #expect(!standardError.contains("Select a device"))
+                #expect(!standardError.contains("getting agent version"))
+            }
+        }
     }
 
     // MARK: - Handling Missing or Unreachable Devices
@@ -110,6 +132,8 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--json' reports a missing device without prompting`() async throws {
+        // REFACTOR: Share scenario setup across non-interactive error tests once
+        // the E2E fixture API settles.
         let scenario = CLIAndAgentScenario()
         try await scenario.run { cli, _ in
             try await cli.sh("wendy device info --json") {
@@ -133,7 +157,23 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--device' reports an unreachable device`() async throws {
-        // TODO: implement.
+        // REFACTOR: Share scenario setup across non-interactive error tests once
+        // the E2E fixture API settles.
+        let scenario = CLIAndAgentScenario()
+        try await scenario.run { cli, _ in
+            try await cli.sh(
+                "wendy --device definitely-not-a-wendy-device.invalid device info --json"
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(!terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(standardError.contains("getting agent version"))
+                #expect(standardError.contains("produced zero addresses"))
+                #expect(!standardError.contains("Select a device"))
+            }
+        }
     }
 
     /**
@@ -200,6 +240,24 @@ struct `'wendy device version'` {
      */
     @Test
     func `'--json' aliases device info without contaminating JSON output`() async throws {
-        // TODO: implement.
+        // REFACTOR: Share scenario setup across non-interactive error tests once
+        // the E2E fixture API settles.
+        let scenario = CLIAndAgentScenario()
+        try await scenario.run { cli, _ in
+            try await cli.sh("wendy device version --json") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(!terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(
+                    standardError.contains(
+                        "no device specified; use --device flag or set a default"
+                    )
+                )
+                #expect(!standardError.localizedCaseInsensitiveContains("deprecated"))
+                #expect(!standardError.contains("Select a device"))
+            }
+        }
     }
 }
