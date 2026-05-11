@@ -42,6 +42,20 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         self.agent = try await Session.begin(for: agent)
     }
 
+    deinit {
+        let cli = self.cli
+        let agent = self.agent
+
+        // WORKAROUND: Swift Testing does not provide an async tear-down hook.
+        // Suite life-cycle is init/deinit based and Swift has no async deinit,
+        // so session clean-up has to be bridged through an unstructured task.
+        // Fix by finding a structured concurrency solution for this.
+        Task {
+            try? await agent.end()
+            try? await cli.end()
+        }
+    }
+
     private static func repositoryRootDirectoryURL() -> URL {
         URL(fileURLWithPath: #filePath, isDirectory: false)
             .deletingLastPathComponent()  // Tests/WendyE2ETests
