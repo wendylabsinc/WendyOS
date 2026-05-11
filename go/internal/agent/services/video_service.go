@@ -279,7 +279,9 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 			qbuf.setIndex(idx)
 			qbuf.setType(v4l2BufTypeVideoCapture)
 			qbuf.setMemory(v4l2MemoryMmap)
-			unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))) //nolint:errcheck
+			if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
+				return status.Errorf(codes.Internal, "VIDIOC_QBUF: %v", errno)
+			}
 			continue
 		}
 		data := make([]byte, n)
