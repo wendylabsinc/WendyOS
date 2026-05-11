@@ -94,7 +94,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
             try await cli.sh("mkdir -p \"$HOME\"")
             try await self.buildCLIIfNeeded(with: cli)
             try await self.buildAgentIfNeeded(with: agent)
-            try await Self.startAgent(with: agent)
+            try await Self.startAgent(with: agent, verifiedBy: cli)
 
             return (cli, agent)
         } catch {
@@ -154,7 +154,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         }
     }
 
-    private static func startAgent(with session: Session) async throws {
+    private static func startAgent(with session: Session, verifiedBy cli: Session) async throws {
         switch session.machine.os {
         case .macOS:
             try await session.sh("make quit && open Build/WendyAgentMac.app")
@@ -185,6 +185,16 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         case .windows, .wendyOS:
             fatalError("Starting the agent is not supported on \(session.machine.os) yet.")
         }
+
+        try await cli
+            .command("wendy --device ::1 device info --json >/dev/null")
+            .poll(
+                until: .success,
+                step: .seconds(1),
+                timeout: .seconds(30),
+                timeoutMessage: "Wendy agent did not become ready"
+            )
+            .run()
     }
 
     private static func stopAgent(with session: Session) async throws {
