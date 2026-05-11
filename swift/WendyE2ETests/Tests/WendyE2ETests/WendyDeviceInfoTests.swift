@@ -466,9 +466,36 @@ struct `'wendy device version'` {
     /**
      The deprecated command reports the same device information as `wendy device info` and directs users to the replacement command.
      */
-    @Test
+    @Test(.disabled("TODO: implement deprecation notice on the CLI side"))
     func `aliases device info with a deprecation notice`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
+            try await cli.sh("wendy --device \(agentAddress) device version") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardError.localizedCaseInsensitiveContains("deprecated"))
+                #expect(standardError.contains("wendy device info"))
+
+                let json = try #require(
+                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                        as? [String: Any]
+                )
+                let version = try #require(json["version"] as? String)
+                let os = try #require(json["os"] as? String)
+                let cpuArchitecture = try #require(json["cpuArchitecture"] as? String)
+                let cliVersion = try #require(json["cliVersion"] as? String)
+
+                #expect(!version.isEmpty)
+                #expect(!os.isEmpty)
+                #expect(!cpuArchitecture.isEmpty)
+                #expect(!cliVersion.isEmpty)
+                #expect(json["hasGpu"] is Bool)
+            }
+        }
     }
 
     /**
