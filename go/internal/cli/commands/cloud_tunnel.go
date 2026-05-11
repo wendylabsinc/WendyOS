@@ -145,7 +145,7 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timed out waiting for agent to restart")
+			return nil, fmt.Errorf("timed out waiting for %s (id=%d) to restart", asset.GetName(), asset.GetId())
 		default:
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)

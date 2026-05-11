@@ -365,6 +365,11 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 	id := asset.GetId()
 
 	return func() tea.Msg {
+		release, err := fetchAgentRelease(false)
+		if err != nil {
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("fetching release: %w", err)}
+		}
+
 		conn, err := connectCloudAsset(ctx, auth, asset, brokerURL)
 		if err != nil {
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
@@ -375,11 +380,12 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("querying device: %w", err)}
 		}
-		if arch == "" {
-			arch = resp.GetCpuArchitecture()
+		// Prefer the architecture reported by the running agent; fall back to cloud metadata.
+		if cpuArch := resp.GetCpuArchitecture(); cpuArch != "" {
+			arch = cpuArch
 		}
 		agentVer := resp.GetVersion()
-		if agentVer != "" && version.Version != "dev" && version.CompareVersions(version.Version, agentVer) <= 0 {
+		if agentVer != "" && version.CompareVersions(release.TagName, agentVer) <= 0 {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("device is already up to date (%s)", agentVer)}
 		}
@@ -387,12 +393,6 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 		if arch == "" {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
-		}
-
-		release, err := fetchAgentRelease(false)
-		if err != nil {
-			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("fetching release: %w", err)}
 		}
 
 		assetPrefix := fmt.Sprintf("wendy-agent-linux-%s-", arch)
