@@ -323,7 +323,34 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--check-updates' reports update status`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+            let command: String
+            switch cli.machine.os {
+            case .macOS:
+                command =
+                    "script -q /dev/null wendy --device \(agentAddress) device info --check-updates"
+            case .linux:
+                command =
+                    "script -q -c 'wendy --device \(agentAddress) device info --check-updates' /dev/null"
+            case .windows, .wendyOS:
+                fatalError("Interactive update checks are not supported on \(cli.machine.os) yet.")
+            }
+
+            try await cli.sh(command) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput.contains("Agent Version:"))
+                #expect(standardOutput.contains("CLI Version:"))
+                #expect(
+                    standardOutput.contains("Update available:")
+                        || standardOutput.contains("Agent is up to date.")
+                )
+                #expect(standardError == "")
+            }
+        }
     }
 
     /**
@@ -331,7 +358,30 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--json --check-updates' includes update status fields`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
+            try await cli.sh(
+                "wendy --json --device \(agentAddress) device info --check-updates"
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(terminationStatus.isSuccess)
+                #expect(standardError == "")
+
+                let json = try #require(
+                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                        as? [String: Any]
+                )
+                let latestVersion = try #require(json["latestVersion"] as? String)
+
+                #expect(!latestVersion.isEmpty)
+                #expect(json["updateAvailable"] is Bool)
+                #expect(json["version"] is String)
+                #expect(json["cliVersion"] is String)
+            }
+        }
     }
 
     /**
@@ -339,7 +389,30 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--prerelease --check-updates' checks prerelease updates`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
+            try await cli.sh(
+                "wendy --json --device \(agentAddress) device info --check-updates --prerelease"
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(terminationStatus.isSuccess)
+                #expect(standardError == "")
+
+                let json = try #require(
+                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                        as? [String: Any]
+                )
+                let latestVersion = try #require(json["latestVersion"] as? String)
+
+                #expect(!latestVersion.isEmpty)
+                #expect(json["updateAvailable"] is Bool)
+                #expect(json["version"] is String)
+                #expect(json["cliVersion"] is String)
+            }
+        }
     }
 
     /**
@@ -347,7 +420,23 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--check-updates' reports update-source failure`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
+            try await cli.sh(
+                "NO_PROXY=\(agentAddress) HTTPS_PROXY=http://127.0.0.1:1 wendy --json --device \(agentAddress) device info --check-updates"
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(!terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(standardError.contains("checking for updates"))
+                #expect(standardError.contains("fetching latest release"))
+                #expect(!standardError.contains("latestVersion"))
+                #expect(!standardError.contains("updateAvailable"))
+            }
+        }
     }
 
 }
