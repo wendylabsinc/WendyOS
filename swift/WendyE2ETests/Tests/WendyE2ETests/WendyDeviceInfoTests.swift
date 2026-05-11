@@ -138,7 +138,34 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--json --device' prints JSON device information`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, agent in
+            let agentAddress = agent.machine.address
+
+            try await cli.sh("wendy --json --device \(agentAddress) device info") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+                #expect(terminationStatus.isSuccess)
+                #expect(standardError == "")
+                #expect(!standardOutput.contains("Select a device"))
+                #expect(!standardOutput.localizedCaseInsensitiveContains("update"))
+
+                let json = try #require(
+                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                        as? [String: Any]
+                )
+                let version = try #require(json["version"] as? String)
+                let os = try #require(json["os"] as? String)
+                let cpuArchitecture = try #require(json["cpuArchitecture"] as? String)
+                let cliVersion = try #require(json["cliVersion"] as? String)
+
+                #expect(!version.isEmpty)
+                #expect(!os.isEmpty)
+                #expect(!cpuArchitecture.isEmpty)
+                #expect(!cliVersion.isEmpty)
+                #expect(json["hasGpu"] is Bool)
+            }
+        }
     }
 
     /**
