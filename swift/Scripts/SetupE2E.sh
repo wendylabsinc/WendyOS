@@ -39,6 +39,7 @@ installUbuntuPackages() {
     lsb-release \
     make \
     openssh-client \
+    openssh-server \
     pkg-config \
     rsync \
     tar \
@@ -124,12 +125,39 @@ installSwiftUbuntuIfNeeded() {
   fi
 }
 
+setupSSHLoopback() {
+  logStep "Setting up SSH loopback for E2E sessions"
+
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+
+  if [ ! -f "$HOME/.ssh/id_ed25519" ]; then
+    ssh-keygen -q -t ed25519 -N "" -C "${USER:-wendy-e2e}@$(hostname)" -f "$HOME/.ssh/id_ed25519"
+  fi
+
+  touch "$HOME/.ssh/authorized_keys"
+  chmod 600 "$HOME/.ssh/authorized_keys"
+
+  local public_key
+  public_key="$(cat "$HOME/.ssh/id_ed25519.pub")"
+  if ! grep -qxF "$public_key" "$HOME/.ssh/authorized_keys"; then
+    printf '%s\n' "$public_key" >> "$HOME/.ssh/authorized_keys"
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl enable --now ssh >/dev/null 2>&1 || sudo systemctl start ssh >/dev/null 2>&1 || true
+  elif command -v service >/dev/null 2>&1; then
+    sudo service ssh start >/dev/null 2>&1 || true
+  fi
+}
+
 setupE2EUbuntu() {
   logStep "Setting up Swift E2E dependencies for Ubuntu"
   export DEBIAN_FRONTEND=noninteractive
 
   installUbuntuPackages
   installSwiftUbuntuIfNeeded
+  setupSSHLoopback
 
   checkCommand bash
   checkCommand curl
@@ -142,6 +170,7 @@ setupE2EUbuntu() {
   checkCommand zip
   checkCommand unzip
   checkCommand ssh "openssh-client"
+  checkCommand sshd "openssh-server"
 }
 
 setupE2EMacOS() {
