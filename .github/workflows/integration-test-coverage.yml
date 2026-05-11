@@ -168,7 +168,7 @@ jobs:
           PYEOF
 
       - name: Open PR with new tests
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
           branch: ci/integration-tests-${{ github.event.pull_request.number }}
