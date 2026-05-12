@@ -31,7 +31,7 @@ const (
 )
 
 const (
-	espFlashBlockSize = 0x4000 // 16 KiB per flash data block
+	espFlashBlockSize = 0x1000 // 4 KiB per flash data block
 	espSyncTimeout    = 3 * time.Second
 	espCmdTimeout     = 10 * time.Second
 	flashBaudRate     = 921600
@@ -41,6 +41,55 @@ const (
 // espFlasher handles serial communication with the ESP32 bootloader.
 type espFlasher struct {
 	port serial.Port
+}
+
+func espLoaderErrorMessage(code byte) string {
+	switch code {
+	case 0x00:
+		return "undefined error"
+	case 0x01:
+		return "invalid input parameter"
+	case 0x02:
+		return "failed to allocate memory"
+	case 0x03:
+		return "failed to send message"
+	case 0x04:
+		return "failed to receive message"
+	case 0x05:
+		return "invalid message format"
+	case 0x06:
+		return "bad execution result"
+	case 0x07:
+		return "checksum error"
+	case 0x08:
+		return "flash write error (CRC mismatch on readback)"
+	case 0x09:
+		return "flash read error"
+	case 0x0a:
+		return "flash read length error"
+	case 0x0b:
+		return "deflate error"
+	case 0x0c:
+		return "deflate Adler32 error"
+	case 0x0d:
+		return "deflate parameter error"
+	case 0x0e:
+		return "invalid RAM binary size"
+	case 0x0f:
+		return "invalid RAM binary address"
+	case 0x64:
+		return "invalid parameter"
+	case 0x65:
+		return "invalid format"
+	case 0x66:
+		return "description too long"
+	case 0x67:
+		return "bad encoding description"
+	case 0x69:
+		return "insufficient storage"
+	default:
+		return fmt.Sprintf("unknown error code 0x%02x", code)
+	}
 }
 
 // slipEncode wraps data in SLIP framing.
@@ -78,6 +127,18 @@ func (f *espFlasher) readByte() (byte, error) {
 		// n == 0: port timeout, but our deadline hasn't passed — retry.
 	}
 	return 0, fmt.Errorf("serial read timed out")
+}
+
+// Ensure that all bytes are sent.
+func (f *espFlasher) writeData(data []byte) error {
+	for len(data) > 0 {
+		n, err := f.port.Write(data)
+		if err != nil {
+			return fmt.Errorf("write data error: %w", err)
+		}
+		data = data[n:]
+	}
+	return nil
 }
 
 // slipDecode reads the next non-empty SLIP frame from the port.
@@ -155,7 +216,7 @@ func (f *espFlasher) sendCommand(opcode byte, data []byte, checksum byte) ([]byt
 	pkt := buildCommand(opcode, data, checksum)
 	encoded := slipEncode(pkt)
 
-	if _, err := f.port.Write(encoded); err != nil {
+	if err := f.writeData(encoded); err != nil {
 		return nil, fmt.Errorf("writing command 0x%02x: %w", opcode, err)
 	}
 
@@ -182,12 +243,18 @@ func (f *espFlasher) sendCommand(opcode byte, data []byte, checksum byte) ([]byt
 			continue
 		}
 
-		// Bytes 2:4 = size, 4:8 = value/error.
-		// Check the status field: last 4 bytes of the 8-byte header encode
-		// the return value. For most commands, a non-zero "error" field at
-		// byte offset 8+size-1 (the status struct appended by ROM loader)
-		// indicates failure. We return the payload and let callers check.
-		return resp[8:], nil
+		// Check payload
+		payload := resp[8:]
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("bad protocol: response for 0x%02x too short (%d bytes)", opcode, len(payload))
+		}
+		if payload[0] != 0 || payload[1] != 0 {
+			if payload[0] != 1 {
+				return nil, fmt.Errorf("bad protocol: unexpected status 0x%02x for command 0x%02x", payload[0], opcode)
+			}
+			return nil, fmt.Errorf("command 0x%02x rejected: %s", opcode, espLoaderErrorMessage(payload[1]))
+		}
+		return resp[4:], nil
 	}
 
 	return nil, fmt.Errorf("no valid response for 0x%02x after 10 frames", opcode)
@@ -290,11 +357,12 @@ func (f *espFlasher) spiSetParams(totalSize uint32) error {
 
 // flashBegin starts a flash write operation, erasing the target region.
 func (f *espFlasher) flashBegin(size, blockCount, blockSize, offset uint32) error {
-	data := make([]byte, 16)
+	data := make([]byte, 20)
 	binary.LittleEndian.PutUint32(data[0:4], size)
 	binary.LittleEndian.PutUint32(data[4:8], blockCount)
 	binary.LittleEndian.PutUint32(data[8:12], blockSize)
 	binary.LittleEndian.PutUint32(data[12:16], offset)
+	binary.LittleEndian.PutUint32(data[16:20], 0) // 0 = no encryption
 
 	f.port.SetReadTimeout(30 * time.Second) // erase can be slow
 	_, err := f.sendCommand(espCmdFlashBegin, data, 0)
@@ -334,6 +402,24 @@ func (f *espFlasher) flashEnd(reboot bool) error {
 	return err
 }
 
+// Reset the chip and eventually enter download mode.
+// It uses the ESP32 USB-Serial/JTAG peripheral. ESP-IDF's USB-JTAG driver watches for this
+// specific DTR/RTS pattern and triggers a software reset into download mode.
+// This matches esptool's USBJTAGSerialReset strategy.
+func espResetViaUsbJtag(port serial.Port, enterBootloader bool) {
+	port.SetDTR(false)
+	port.SetRTS(false)
+	time.Sleep(100 * time.Millisecond)
+	port.SetDTR(enterBootloader)  // GPIO0=LOW (download mode selected)
+	port.SetRTS(false)
+	time.Sleep(100 * time.Millisecond)
+	port.SetRTS(true)  // EN=LOW (assert reset)
+	port.SetDTR(false)
+	time.Sleep(100 * time.Millisecond)
+	port.SetRTS(false) // EN=HIGH (release reset → boots into download mode)
+	time.Sleep(50 * time.Millisecond)
+}
+
 // flashFirmware is the main entry point: flash a .bin file to the ESP32.
 func flashFirmware(portPath, firmwarePath string, progressFn func(pct float64)) error {
 	firmware, err := os.ReadFile(firmwarePath)
@@ -352,25 +438,22 @@ func flashFirmware(portPath, firmwarePath string, progressFn func(pct float64)) 
 	if err != nil {
 		return fmt.Errorf("opening serial port %s: %w", portPath, err)
 	}
-	defer port.Close()
 
 	f := &espFlasher{port: port}
+	defer func() { f.port.Close() }()
 
-	// Enter bootloader: toggle DTR/RTS to reset into download mode.
-	// Sequence: assert RTS (EN low) → assert DTR (IO0 low) → release RTS → release DTR.
-	port.SetDTR(false)
-	port.SetRTS(true)
-	time.Sleep(100 * time.Millisecond)
-	port.SetDTR(true)
-	port.SetRTS(false)
-	time.Sleep(100 * time.Millisecond)
-	port.SetDTR(false)
-	time.Sleep(50 * time.Millisecond)
-
-	// Drain any boot output.
+	// Step 1: Enter bootloader.
+	espResetViaUsbJtag(port, true)
+	f.port.Close()
+	time.Sleep(1500 * time.Millisecond) // wait for USB re-enumeration
+	newPort, err := serial.Open(portPath, mode)
+	if err != nil {
+		return fmt.Errorf("reopening port after reset: %w", err)
+	}
+	f.port = newPort
 	f.drain()
 
-	// Step 1: Sync.
+	// Verify that the bootloader is responding
 	if err := f.sync(); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
@@ -393,7 +476,6 @@ func flashFirmware(portPath, firmwarePath string, progressFn func(pct float64)) 
 	// Step 5: Flash the firmware.
 	totalSize := uint32(len(firmware))
 	blockCount := (totalSize + espFlashBlockSize - 1) / espFlashBlockSize
-
 	if err := f.flashBegin(totalSize, blockCount, espFlashBlockSize, 0); err != nil {
 		return fmt.Errorf("flash begin: %w", err)
 	}
@@ -421,10 +503,9 @@ func flashFirmware(portPath, firmwarePath string, progressFn func(pct float64)) 
 		}
 	}
 
-	// Step 6: Finish and reboot.
-	if err := f.flashEnd(true); err != nil {
-		return fmt.Errorf("flash end: %w", err)
-	}
+	// Step 6: Reboot.
+	// Please note that we never succeeded in using flashEnd() here.
+	espResetViaUsbJtag(port, false)
 
 	return nil
 }
