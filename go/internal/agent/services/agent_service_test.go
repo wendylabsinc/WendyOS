@@ -303,6 +303,38 @@ func TestUpdateAgent_LockExclusion(t *testing.T) {
 	svc.updateMu.Unlock()
 }
 
+func TestUpdateOS_NonWendyOSFailsBeforeMender(t *testing.T) {
+	orig := isWendyOSHost
+	isWendyOSHost = func() bool { return false }
+	t.Cleanup(func() { isWendyOSHost = orig })
+
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	stream, err := client.UpdateOS(context.Background(), &agentpb.UpdateOSRequest{
+		ArtifactUrl: "http://example.invalid/update.mender",
+	})
+	if err != nil {
+		t.Fatalf("UpdateOS: %v", err)
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("UpdateOS Recv: %v", err)
+	}
+	failed := resp.GetFailed()
+	if failed == nil {
+		t.Fatalf("UpdateOS response = %T, want failed", resp.GetResponseType())
+	}
+	if failed.GetErrorMessage() != osUpdateUnsupportedForHostMessage {
+		t.Fatalf("error message = %q, want %q", failed.GetErrorMessage(), osUpdateUnsupportedForHostMessage)
+	}
+}
+
 func TestUpdateAgent_ConcurrentLock(t *testing.T) {
 	logger := zap.NewNop()
 	svc := NewAgentService(logger, &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,6 +39,46 @@ func newOSCmd() *cobra.Command {
 	return cmd
 }
 
+const (
+	osUpdateUnsupportedMessage      = "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install."
+	linuxOSUpdateUnsupportedMessage = "This Linux host has wendy-agent installed, but it cannot be updated with WendyOS OTA artifacts. Use the Linux distribution’s package manager, such as apt, dnf, or pacman, to update this machine."
+	wendyOSMissingMenderMessage     = "This WendyOS image does not support OTA updates because mender-update was not found. Reinstall or upgrade to a WendyOS image with OTA support."
+	cannotChooseOTAArtifactMessage  = "Cannot choose an OTA artifact for this device. Provide a specific .mender artifact, or update/reinstall WendyOS so the device reports a supported device type."
+)
+
+func validateOSUpdateIdentity(versionResp *agentpb.GetAgentVersionResponse) error {
+	if isWendyOSUpdateTarget(versionResp) {
+		return nil
+	}
+	if versionResp.GetOs() == "linux" {
+		return errors.New(linuxOSUpdateUnsupportedMessage)
+	}
+	return errors.New(osUpdateUnsupportedMessage)
+}
+
+func validateOSUpdateTarget(versionResp *agentpb.GetAgentVersionResponse) error {
+	if err := validateOSUpdateIdentity(versionResp); err != nil {
+		return err
+	}
+	if !agentVersionHasFeature(versionResp, "mender") {
+		return errors.New(wendyOSMissingMenderMessage)
+	}
+	return nil
+}
+
+func isWendyOSUpdateTarget(versionResp *agentpb.GetAgentVersionResponse) bool {
+	return versionResp.GetOsVersion() != "" || versionResp.GetDeviceType() != ""
+}
+
+func agentVersionHasFeature(versionResp *agentpb.GetAgentVersionResponse, feature string) bool {
+	for _, f := range versionResp.GetFeatureset() {
+		if f == feature {
+			return true
+		}
+	}
+	return false
+}
+
 func newOSUpdateCmd() *cobra.Command {
 	var artifactURL string
 	var nightly bool
@@ -59,7 +100,7 @@ so the device can download it directly.`,
 				return fmt.Errorf("provide either a local artifact path or --artifact-url, not both")
 			}
 
-			conn, err := connectToAgent(ctx)
+			conn, err := connectToAgent(ctx, SuppressUpdateCheck())
 			if err != nil {
 				return err
 			}
@@ -67,11 +108,17 @@ so the device can download it directly.`,
 			// it is replaced by the agent pre-update step below.
 			defer func() { conn.Close() }()
 
-			// Step 1: Ensure the agent is at the latest release before updating the OS.
+			// Step 1: Validate that this target is in the WendyOS OTA family before
+			// updating the agent as a prerequisite for the OS-image update path.
 			versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 			if err != nil {
 				return fmt.Errorf("querying device version: %w", err)
 			}
+			if err := validateOSUpdateIdentity(versionResp); err != nil {
+				return err
+			}
+
+			// Step 2: Ensure the agent is at the latest release before updating the OS.
 			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly)
 			if err != nil {
 				return err
@@ -82,51 +129,38 @@ so the device can download it directly.`,
 				return fmt.Errorf("querying device version after agent update: %w", err)
 			}
 
-			// Check mender support after the agent update (a fresh agent may have it).
-			hasMender := false
-			for _, f := range versionResp.GetFeatureset() {
-				if f == "mender" {
-					hasMender = true
-					break
-				}
-			}
-			if !hasMender {
-				return fmt.Errorf("device does not support OTA updates (mender-update not found)")
+			if err := validateOSUpdateTarget(versionResp); err != nil {
+				return err
 			}
 
-			// Step 2: Show current OS version.
+			// Step 3: Show current OS version.
 			if osVer := versionResp.GetOsVersion(); osVer != "" {
 				fmt.Printf("Current OS version: %s\n", osVer)
 			}
 
-			// No artifact provided — try to auto-detect from device type, then picker.
+			// No artifact provided — auto-detect from the reported device type.
 			if len(args) == 0 && artifactURL == "" {
 				deviceType := versionResp.GetDeviceType()
-				if deviceType != "" {
-					otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType, nightly)
-					if autoErr == nil {
-						if osVer := versionResp.GetOsVersion(); osVer != "" && latestVer != "" {
-							// Strip the "WendyOS-" display prefix before comparing so that
-							// "WendyOS-0.10.4" and "0.12.0-nightly" compare correctly.
-							normalizedOsVer := strings.TrimPrefix(osVer, "WendyOS-")
-							alreadyCurrent := nightly && latestVer == normalizedOsVer ||
-								!nightly && version.CompareVersions(latestVer, normalizedOsVer) <= 0
-							if alreadyCurrent {
-								fmt.Printf("OS is already at the latest version (%s).\n", osVer)
-								return nil
-							}
-							fmt.Printf("Latest OS version: %s\n", latestVer)
-						}
-						artifactURL = otaURL
-					}
+				if deviceType == "" {
+					return errors.New(cannotChooseOTAArtifactMessage)
 				}
-				if artifactURL == "" {
-					url, pickErr := pickOTAArtifactURL()
-					if pickErr != nil {
-						return pickErr
-					}
-					artifactURL = url
+				otaURL, latestVer, autoErr := getLatestOTAInfoForDeviceType(deviceType, nightly)
+				if autoErr != nil {
+					return errors.New(cannotChooseOTAArtifactMessage)
 				}
+				if osVer := versionResp.GetOsVersion(); osVer != "" && latestVer != "" {
+					// Strip the "WendyOS-" display prefix before comparing so that
+					// "WendyOS-0.10.4" and "0.12.0-nightly" compare correctly.
+					normalizedOsVer := strings.TrimPrefix(osVer, "WendyOS-")
+					alreadyCurrent := nightly && latestVer == normalizedOsVer ||
+						!nightly && version.CompareVersions(latestVer, normalizedOsVer) <= 0
+					if alreadyCurrent {
+						fmt.Printf("OS is already at the latest version (%s).\n", osVer)
+						return nil
+					}
+					fmt.Printf("Latest OS version: %s\n", latestVer)
+				}
+				artifactURL = otaURL
 			}
 
 			// If a local path is provided, resolve and serve it.

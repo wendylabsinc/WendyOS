@@ -564,9 +564,23 @@ func (s *AgentService) ForgetBluetoothPeripheral(ctx context.Context, req *agent
 	return &agentpb.ForgetBluetoothPeripheralResponse{}, nil
 }
 
+const osUpdateUnsupportedForHostMessage = "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install."
+
 // menderProgressRe matches percentage patterns in mender output, e.g.
 // "  10%" or "50% 5120 kB" or "Installing:  75%".
 var menderProgressRe = regexp.MustCompile(`(\d{1,3})%`)
+
+var isWendyOSHost = defaultIsWendyOSHost
+
+func defaultIsWendyOSHost() bool {
+	if _, err := os.Stat("/etc/wendy/version.txt"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/etc/wendyos/device-type"); err == nil {
+		return true
+	}
+	return false
+}
 
 // enableJetsonRootfsAB ensures rootfs A/B redundancy is configured on NVIDIA
 // Jetson devices by writing the required UEFI EFI variables. It is a no-op on
@@ -633,6 +647,16 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 // UpdateOS streams OS update progress using mender.
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started", zap.String("artifact_url", req.GetArtifactUrl()))
+
+	if !isWendyOSHost() {
+		return stream.Send(&agentpb.UpdateOSResponse{
+			ResponseType: &agentpb.UpdateOSResponse_Failed_{
+				Failed: &agentpb.UpdateOSResponse_Failed{
+					ErrorMessage: osUpdateUnsupportedForHostMessage,
+				},
+			},
+		})
+	}
 
 	sendProgress := func(phase string, percent int32) {
 		_ = stream.Send(&agentpb.UpdateOSResponse{

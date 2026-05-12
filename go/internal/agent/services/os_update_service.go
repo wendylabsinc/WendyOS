@@ -23,6 +23,16 @@ func NewOSUpdateService(logger *zap.Logger) *OSUpdateService {
 func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpbv2.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started", zap.String("artifact_url", req.GetArtifactUrl()))
 
+	if !isWendyOSHost() {
+		return stream.Send(&agentpbv2.UpdateOSResponse{
+			ResponseType: &agentpbv2.UpdateOSResponse_Failed_{
+				Failed: &agentpbv2.UpdateOSResponse_Failed{
+					ErrorMessage: osUpdateUnsupportedForHostMessage,
+				},
+			},
+		})
+	}
+
 	sendProgress := func(phase string, percent int32) {
 		_ = stream.Send(&agentpbv2.UpdateOSResponse{
 			ResponseType: &agentpbv2.UpdateOSResponse_Progress_{
