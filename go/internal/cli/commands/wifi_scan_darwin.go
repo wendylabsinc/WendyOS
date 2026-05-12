@@ -12,10 +12,9 @@ import (
 	"time"
 )
 
-type localWifiNetwork struct {
-	SSID           string
-	SignalStrength int32 // 0–100 percentage, or 0 if unknown
-}
+// wifiScanCacheHint is empty on macOS: CoreWLAN's scanForNetworks performs
+// a synchronous fresh scan, so the returned set is current.
+const wifiScanCacheHint = ""
 
 const corewlanScanScript = `
 import CoreWLAN
