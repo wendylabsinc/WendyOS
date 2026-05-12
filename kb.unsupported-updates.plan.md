@@ -10,16 +10,16 @@ Running `wendy os update` against an Ubuntu/Linux host with `wendy-agent` instal
 4. call `UpdateOS`,
 5. fail only when `mender install` rejects the artifact.
 
-That device is not WendyOS, so the CLI and agent should refuse the update early with a clear message.
+That setup is not compatible with the current Mender/WendyOS OTA path, so the CLI and agent should refuse the update early with a clear message that explains the appropriate update mechanism for that host.
 
 ## Unsupported combinations to catch
 
 | Device state | Artifact input | Desired behavior |
 | --- | --- | --- |
-| No reachable gRPC agent / BLE-only / Wendy Lite / external provider | any | Friendly “requires a WendyOS LAN device” error |
-| macOS / Windows agent | any | Block before update: OS updates only support WendyOS |
-| Generic Linux, e.g. Ubuntu, no WendyOS markers | none / URL / local | Block before agent/OS artifact work |
-| Generic Linux with `mender-update` installed | none / URL / local | Block before agent/OS artifact work |
+| No reachable gRPC agent / BLE-only / Wendy Lite / external provider | any | Friendly “this target cannot apply OS image updates through `wendy os update`” error with next steps |
+| macOS / Windows agent | any | Block this OS-image update path and point to the host OS/package-manager update flow |
+| Generic Linux, e.g. Ubuntu, no WendyOS markers | none / URL / local | Block before agent/OS artifact work and recommend the distro package manager for host updates |
+| Generic Linux with `mender-update` installed | none / URL / local | Block before agent/OS artifact work and explain that Mender alone does not make it a compatible WendyOS OTA target |
 | WendyOS marker present, but no `mender-update` | any | Friendly “this WendyOS image does not support OTA updates / is missing Mender” |
 | WendyOS + mender, but missing `device_type` | no artifact | Block auto-update: cannot safely choose artifact |
 | WendyOS + mender, unknown `device_type` not in manifest | no artifact | Block auto-update: no OTA artifact for this device type |
@@ -29,19 +29,19 @@ That device is not WendyOS, so the CLI and agent should refuse the update early 
 
 ## Implementation plan
 
-1. **Suppress automatic agent update before OS preflight**
+1. **Suppress automatic agent update before OS-image preflight**
    - Change `newOSUpdateCmd()` in `go/internal/cli/commands/os_cmd.go` to connect with `SuppressUpdateCheck()`.
    - Query `GetAgentVersion` immediately after connecting.
-   - Do not run `ensureAgentUpToDate` until the target is confirmed to be WendyOS.
+   - Do not run `ensureAgentUpToDate` until the target is confirmed to be compatible with this `wendy os update` flow. Agent updates may be valid on other platforms, but this command should not update an agent as a side effect when the OS update itself cannot proceed.
 
-2. **Add a CLI WendyOS preflight helper**
-   - Classify a target as WendyOS only when `GetAgentVersionResponse` includes WendyOS identity, currently `os_version` or `device_type`.
+2. **Add a CLI preflight helper for the current Mender/WendyOS OTA path**
+   - Classify a target as compatible with the current OTA path only when `GetAgentVersionResponse` includes WendyOS identity, currently `os_version` or `device_type`.
    - If neither is present:
-     - for `os == "linux"`, return a friendly Ubuntu/generic Linux message;
-     - for other OS values, return “Operating system updates are only supported on WendyOS devices.”
+     - for `os == "linux"`, return a friendly Ubuntu/generic Linux message that says this installation cannot be updated with WendyOS OTA artifacts and recommends the distro package manager for host OS updates;
+     - for other OS values, return a platform-specific message that says this setup does not support `wendy os update` and points users to the platform's normal update mechanism.
    - Check the feature set for `mender` after WendyOS identity is confirmed.
 
-3. **Run agent update only after WendyOS preflight passes**
+3. **Run agent update only after OS-image preflight passes**
    - After the first preflight succeeds, run existing `ensureAgentUpToDate`.
    - Re-query `GetAgentVersion` after the potential restart.
    - Re-run the preflight before selecting/downloading artifacts.
@@ -54,9 +54,9 @@ That device is not WendyOS, so the CLI and agent should refuse the update early 
    - Do not fall back to `pickOTAArtifactURL()` for a connected device; that can select the wrong artifact.
    - Keep the picker only if there is a separate explicit workflow that is not tied to a connected device.
 
-5. **Keep explicit artifacts supported, but only on WendyOS**
+5. **Keep explicit artifacts supported for compatible OTA targets**
    - If `[artifact-path]` or `--artifact-url` is supplied, skip manifest/device-type auto-selection.
-   - Still require WendyOS identity and `mender` support before invoking `UpdateOS`.
+   - Still require compatibility with the current Mender/WendyOS OTA path before invoking `UpdateOS`.
 
 6. **Add agent-side defense in depth**
    - In `go/internal/agent/services/agent_service.go` (`UpdateOS`) and `go/internal/agent/services/os_update_service.go` (`UpdateOS`), check WendyOS markers before `enableJetsonRootfsAB()` or Mender execution.
@@ -77,4 +77,4 @@ That device is not WendyOS, so the CLI and agent should refuse the update early 
 
 ## Target user-facing error for the reported case
 
-> This device is running Linux with wendy-agent installed, but it is not WendyOS. `wendy os update` only updates WendyOS devices. Use Ubuntu’s normal update tools for this machine, or run `wendy os install` to install WendyOS on supported hardware.
+> This device is running Linux with wendy-agent installed, but this setup cannot be updated with `wendy os update`. Use Ubuntu’s normal update tools, such as `apt`, to update this machine. To use WendyOS OTA updates, install WendyOS on supported hardware with `wendy os install`.
