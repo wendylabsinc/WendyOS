@@ -36,6 +36,7 @@ type AgentService struct {
 	bluetoothManager   BluetoothManager
 	updateMu           sync.Mutex
 	isUpdating         bool
+	isWendyOSHost      func() bool
 }
 
 // NewAgentService creates a new AgentService.
@@ -50,6 +51,7 @@ func NewAgentService(
 		networkManager:     nm,
 		hardwareDiscoverer: hd,
 		bluetoothManager:   bm,
+		isWendyOSHost:      defaultIsWendyOSHost,
 	}
 }
 
@@ -570,12 +572,14 @@ const osUpdateUnsupportedForHostMessage = "This setup cannot be updated with wen
 // "  10%" or "50% 5120 kB" or "Installing:  75%".
 var menderProgressRe = regexp.MustCompile(`(\d{1,3})%`)
 
-var isWendyOSHost = defaultIsWendyOSHost
-
 func defaultIsWendyOSHost() bool {
-	if _, err := os.Stat("/etc/wendy/version.txt"); err == nil {
-		return true
+	// Older WendyOS builds did not write /etc/wendyos/device-type, so keep
+	// /etc/wendy/version.txt as the primary compatibility marker.
+	if data, err := os.ReadFile("/etc/wendy/version.txt"); err == nil {
+		return strings.HasPrefix(strings.TrimSpace(string(data)), "WendyOS-")
 	}
+	// Newer WendyOS images report a board/device type used for OTA artifact
+	// selection. This file is absent on generic Linux agent installs.
 	if _, err := os.Stat("/etc/wendyos/device-type"); err == nil {
 		return true
 	}
@@ -648,7 +652,8 @@ func enableJetsonRootfsAB(logger *zap.Logger) error {
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started", zap.String("artifact_url", req.GetArtifactUrl()))
 
-	if !isWendyOSHost() {
+	if !s.isWendyOSHost() {
+		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))
 		return stream.Send(&agentpb.UpdateOSResponse{
 			ResponseType: &agentpb.UpdateOSResponse_Failed_{
 				Failed: &agentpb.UpdateOSResponse_Failed{

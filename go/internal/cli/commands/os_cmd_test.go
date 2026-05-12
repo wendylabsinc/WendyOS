@@ -43,6 +43,11 @@ func TestValidateOSUpdateTarget(t *testing.T) {
 			want: linuxOSUpdateUnsupportedMessage,
 		},
 		{
+			name: "linux OS version does not imply WendyOS",
+			resp: &agentpb.GetAgentVersionResponse{Os: "linux", OsVersion: strp("22.04")},
+			want: linuxOSUpdateUnsupportedMessage,
+		},
+		{
 			name: "WendyOS without mender is unsupported",
 			resp: &agentpb.GetAgentVersionResponse{Os: "linux", OsVersion: strp("WendyOS-0.10.4")},
 			want: wendyOSMissingMenderMessage,

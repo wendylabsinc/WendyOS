@@ -180,7 +180,10 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     ) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_UpdateOSResponse> {
         throw RPCError(
             code: .unimplemented,
-            message: "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install."
+            message: "This setup cannot be updated with wendy os update. "
+                + "Use this machine’s normal OS update tools instead. "
+                + "To use WendyOS OTA updates, install WendyOS on supported hardware "
+                + "with wendy os install."
         )
     }
 }

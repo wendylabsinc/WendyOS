@@ -79,12 +79,15 @@ func (m *mockBluetoothManager) Forget(_ context.Context, _ string) error        
 
 const bufSize = 1024 * 1024
 
-func startAgentServer(t *testing.T, nm NetworkManager, hd HardwareDiscoverer, bm BluetoothManager) (agentpb.WendyAgentServiceClient, func()) {
+func startAgentServer(t *testing.T, nm NetworkManager, hd HardwareDiscoverer, bm BluetoothManager, opts ...func(*AgentService)) (agentpb.WendyAgentServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
 	logger := zap.NewNop()
 	svc := NewAgentService(logger, nm, hd, bm)
+	for _, opt := range opts {
+		opt(svc)
+	}
 	agentpb.RegisterWendyAgentServiceServer(srv, svc)
 
 	go func() { _ = srv.Serve(lis) }()
@@ -304,14 +307,11 @@ func TestUpdateAgent_LockExclusion(t *testing.T) {
 }
 
 func TestUpdateOS_NonWendyOSFailsBeforeMender(t *testing.T) {
-	orig := isWendyOSHost
-	isWendyOSHost = func() bool { return false }
-	t.Cleanup(func() { isWendyOSHost = orig })
-
 	client, cleanup := startAgentServer(t,
 		&mockNetworkManager{},
 		&mockHardwareDiscoverer{},
 		&mockBluetoothManager{},
+		func(svc *AgentService) { svc.isWendyOSHost = func() bool { return false } },
 	)
 	defer cleanup()
 

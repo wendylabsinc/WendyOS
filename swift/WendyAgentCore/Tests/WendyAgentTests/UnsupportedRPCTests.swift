@@ -475,10 +475,6 @@ private func assertUnsupported(
     } catch let error as RPCError {
         #expect(error.code == .unimplemented)
         #expect(error.message == expectedMessage)
-        #expect(
-            error.message.contains("not supported on macOS")
-                || error.message.contains("cannot be updated with wendy os update")
-        )
     } catch {
         Issue.record("Expected \(name) to throw RPCError, got \(error)")
     }
