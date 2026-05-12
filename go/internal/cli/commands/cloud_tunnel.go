@@ -141,18 +141,30 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	time.Sleep(time.Second) // give the agent a moment to begin shutdown
+	restartErr := func() error {
+		return fmt.Errorf("timed out waiting for %s (id=%d) to restart", asset.GetName(), asset.GetId())
+	}
+	// Give the agent a moment to begin shutdown.
+	select {
+	case <-time.After(time.Second):
+	case <-ctx.Done():
+		return nil, restartErr()
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("timed out waiting for %s (id=%d) to restart", asset.GetName(), asset.GetId())
+			return nil, restartErr()
 		default:
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)
 		conn, err := connectCloudAsset(attemptCtx, auth, asset, brokerURL)
 		if err != nil {
 			attemptCancel()
-			time.Sleep(time.Second)
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, restartErr()
+			}
 			continue
 		}
 		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
@@ -163,7 +175,11 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 			return conn, nil
 		}
 		conn.Close()
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return nil, restartErr()
+		}
 	}
 }
 
@@ -297,38 +313,7 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 
 // fetchCloudAssets retrieves all online compute-device assets for the org.
 func fetchCloudAssets(ctx context.Context, auth *config.AuthConfig) ([]*cloudpb.Asset, error) {
-	cert := auth.Certificates[0]
-	cloudConn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return nil, err
-	}
-	defer cloudConn.Close()
-
-	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	req := &cloudpb.ListAssetsRequest{
-		OrganizationId:  int32(cert.OrganizationID),
-		IsComputeDevice: boolPtr(true),
-		OnlineOnly:      boolPtr(true),
-	}
-	stream, err := assetClient.ListAssets(cloudContext(ctx, auth), req)
-	if err != nil {
-		return nil, fmt.Errorf("listing devices: %w", err)
-	}
-	var assets []*cloudpb.Asset
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("listing devices: %w", err)
-		}
-		if len(assets) >= maxCloudAssets {
-			return nil, fmt.Errorf("cloud returned more than %d devices", maxCloudAssets)
-		}
-		assets = append(assets, resp.GetAsset())
-	}
-	return assets, nil
+	return fetchCloudAssetsFiltered(ctx, auth, true)
 }
 
 // resolveCloudAsset performs name matching and single-device auto-select.

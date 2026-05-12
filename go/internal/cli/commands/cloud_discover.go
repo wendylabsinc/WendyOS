@@ -117,7 +117,17 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 
 func (m cloudDiscoverModel) Init() tea.Cmd {
 	if m.hasResults {
-		return delayThen(cloudDiscoverRefreshInterval, m.scanCmd())
+		cmds := []tea.Cmd{delayThen(cloudDiscoverRefreshInterval, m.scanCmd())}
+		for _, a := range m.assets {
+			id := a.GetId()
+			if !m.versionPending[id] {
+				if _, cached := m.versions[id]; !cached {
+					m.versionPending[id] = true
+					cmds = append(cmds, m.fetchVersionCmd(a))
+				}
+			}
+		}
+		return tea.Batch(cmds...)
 	}
 	return m.scanCmd()
 }
@@ -183,14 +193,14 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = m.assets[cursor]
 				return m, tea.Quit
 			}
-			info := cloudDeviceInfoFromAsset(m.assets[cursor])
+			info := cloudDeviceInfoFromAsset(m.assets[cursor], m.versions[m.assets[cursor].GetId()])
 			m.flashMessage, m.flashIsError = copyDeviceJSON(info)
 			return m, clearFlashAfter(5 * time.Second)
 		case "a":
 			if len(m.assets) > 0 {
 				infos := make([]discoverDeviceInfo, 0, len(m.assets))
 				for _, a := range m.assets {
-					infos = append(infos, cloudDeviceInfoFromAsset(a))
+					infos = append(infos, cloudDeviceInfoFromAsset(a, m.versions[a.GetId()]))
 				}
 				m.flashMessage, m.flashIsError = copyDeviceJSON(infos)
 				if !m.flashIsError {
@@ -261,16 +271,19 @@ func (m cloudDiscoverModel) View() string {
 
 	if m.err != nil {
 		sb.WriteString(fmt.Sprintf("Error: %v\n", m.err))
-	} else if len(m.assets) > 0 {
+	}
+	if len(m.assets) > 0 {
 		sb.WriteString(m.table.View() + "\n")
-	} else if m.hasResults {
-		if m.all {
-			sb.WriteString(dimStyle.Render("No enrolled devices found.") + "\n")
+	} else if m.err == nil {
+		if m.hasResults {
+			if m.all {
+				sb.WriteString(dimStyle.Render("No enrolled devices found.") + "\n")
+			} else {
+				sb.WriteString(dimStyle.Render("No online devices found. Use --all to include offline devices.") + "\n")
+			}
 		} else {
-			sb.WriteString(dimStyle.Render("No online devices found. Use --all to include offline devices.") + "\n")
+			sb.WriteString(dimStyle.Render("Fetching devices from cloud...") + "\n")
 		}
-	} else {
-		sb.WriteString(dimStyle.Render("Fetching devices from cloud...") + "\n")
 	}
 
 	if m.flashMessage != "" {
@@ -317,12 +330,19 @@ func cloudDiscoverTableRows(assets []*cloudpb.Asset, versions map[int32]*agentpb
 	return rows
 }
 
-func cloudDeviceInfoFromAsset(a *cloudpb.Asset) discoverDeviceInfo {
-	return discoverDeviceInfo{
+func cloudDeviceInfoFromAsset(a *cloudpb.Asset, ver *agentpb.GetAgentVersionResponse) discoverDeviceInfo {
+	info := discoverDeviceInfo{
 		Name:    a.GetName(),
-		Type:    a.GetDeviceType(),
+		Type:    humanReadableDeviceType(a.GetDeviceType()),
 		Address: a.GetIpAddress(),
 	}
+	if ver != nil {
+		if info.Type == "" {
+			info.Type = humanReadableDeviceType(ver.GetDeviceType())
+		}
+		info.Version = ver.GetVersion()
+	}
+	return info
 }
 
 const cloudVersionFetchTimeout = 15 * time.Second
@@ -439,7 +459,7 @@ func cloudDiscoverJSON(ctx context.Context, auth *config.AuthConfig, all bool) e
 	}
 	infos := make([]discoverDeviceInfo, 0, len(assets))
 	for _, a := range assets {
-		infos = append(infos, cloudDeviceInfoFromAsset(a))
+		infos = append(infos, cloudDeviceInfoFromAsset(a, nil))
 	}
 	data, err := json.MarshalIndent(infos, "", "  ")
 	if err != nil {
