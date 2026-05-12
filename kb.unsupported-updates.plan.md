@@ -77,20 +77,11 @@ That setup is not compatible with the current Mender/WendyOS OTA path, so the CL
 
 ## User-facing error messages
 
-For `wendy os update`, phrase errors around this OS-image / Mender OTA path being unsupported for the selected setup. Do not say updates in general are WendyOS-only; agent or package updates may still be valid on other platforms.
+For `wendy os update`, keep the messages intentionally broad and phrase them around this OS-image / Mender OTA path being unsupported for the selected setup. Do not say updates in general are WendyOS-only; agent or package updates may still be valid on other platforms.
 
-| Circumstance | User-facing message |
-| --- | --- |
-| Ubuntu / generic Linux with `wendy-agent`, no WendyOS identity | `This device is running Linux with wendy-agent installed, but this setup cannot be updated with wendy os update. Use this OS’s normal update tools, such as apt, dnf, or pacman, to update the machine. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install.` |
-| Generic Linux with `mender-update` installed, but not WendyOS | `Mender is installed on this Linux host, but the device does not report a WendyOS identity. Refusing to install a WendyOS OTA artifact on this setup. Use the host OS package manager for system updates.` |
-| macOS agent | `This macOS setup cannot apply OS-image updates with wendy os update. Update macOS through System Settings, and update Wendy using the installer or package manager you used to install it.` |
-| Windows agent | `This Windows setup cannot apply OS-image updates with wendy os update. Update Windows through Windows Update, and update Wendy using winget or the installer you used to install it.` |
-| Unknown non-WendyOS platform | `This setup cannot apply OS-image updates with wendy os update. Use the platform’s normal update mechanism for system updates.` |
-| Wendy Lite / BLE-only target | `This target cannot apply OS-image updates with wendy os update. Wendy Lite firmware updates use a separate firmware update flow.` |
-| External/local provider target | `This target cannot apply OS-image updates with wendy os update. Select a connected device with a compatible Wendy agent instead.` |
-| WendyOS identity present, but no Mender support | `This WendyOS image does not support OTA updates because mender-update was not found. Reinstall or upgrade to a WendyOS image with OTA support.` |
-| WendyOS present, no explicit artifact, missing device type | `Cannot choose an OTA artifact because the device did not report its WendyOS device type. Provide a specific .mender artifact, or reinstall/update the WendyOS image so it reports a device type.` |
-| WendyOS device type not in manifest | `No OTA update artifact is published for device type "<device-type>". Check that this device is running a supported WendyOS image, or provide a specific .mender artifact.` |
-| WendyOS device type known, but no stable OTA | `No stable OTA update artifact is available for device type "<device-type>". Try --nightly if appropriate, or provide a specific .mender artifact.` |
-| WendyOS device type known, but no nightly OTA | `No nightly OTA update artifact is available for device type "<device-type>". Retry without --nightly, or provide a specific .mender artifact.` |
-| Agent-side direct RPC from old CLI / MCP on non-compatible setup | `This setup cannot apply WendyOS OTA artifacts. Use the host OS update mechanism for this machine, or install WendyOS on supported hardware to use OTA updates.` |
+| Bucket | Covers | User-facing message |
+| --- | --- | --- |
+| Target is not a compatible WendyOS OTA target | macOS, Windows, unknown non-WendyOS platforms, Wendy Lite / BLE-only targets, external/local provider targets, direct RPC/MCP calls on incompatible setups | `This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install.` |
+| Target looks like Linux with `wendy-agent`, but not WendyOS | Ubuntu / generic Linux with no WendyOS identity, including hosts that also have `mender-update` installed | `This Linux host has wendy-agent installed, but it cannot be updated with WendyOS OTA artifacts. Use the Linux distribution’s package manager, such as apt, dnf, or pacman, to update this machine.` |
+| WendyOS target is missing OTA/Mender support | WendyOS identity present, but `mender-update` is missing | `This WendyOS image does not support OTA updates because mender-update was not found. Reinstall or upgrade to a WendyOS image with OTA support.` |
+| WendyOS target cannot auto-select an artifact | No explicit artifact and the device type is missing, unknown, or has no matching stable/nightly OTA artifact | `Cannot choose an OTA artifact for this device. Provide a specific .mender artifact, or update/reinstall WendyOS so the device reports a supported device type.` |
