@@ -251,7 +251,7 @@ struct UnsupportedRPCTests {
             ),
             (
                 "UpdateOS",
-                "Operating system updates are currently not supported on macOS.",
+                "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install.",
                 {
                     _ = try await service.updateOS(
                         request: ServerRequest(
@@ -475,7 +475,10 @@ private func assertUnsupported(
     } catch let error as RPCError {
         #expect(error.code == .unimplemented)
         #expect(error.message == expectedMessage)
-        #expect(error.message.contains("not supported on macOS"))
+        #expect(
+            error.message.contains("not supported on macOS")
+                || error.message.contains("cannot be updated with wendy os update")
+        )
     } catch {
         Issue.record("Expected \(name) to throw RPCError, got \(error)")
     }

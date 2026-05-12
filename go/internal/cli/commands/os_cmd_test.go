@@ -28,6 +28,11 @@ func TestValidateOSUpdateTarget(t *testing.T) {
 			want: osUpdateUnsupportedMessage,
 		},
 		{
+			name: "macOS version does not imply WendyOS",
+			resp: &agentpb.GetAgentVersionResponse{Os: "darwin", OsVersion: strp("14.4.1")},
+			want: osUpdateUnsupportedMessage,
+		},
+		{
 			name: "linux host with agent is not WendyOS",
 			resp: &agentpb.GetAgentVersionResponse{Os: "linux"},
 			want: linuxOSUpdateUnsupportedMessage,

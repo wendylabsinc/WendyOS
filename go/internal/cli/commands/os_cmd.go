@@ -67,7 +67,7 @@ func validateOSUpdateTarget(versionResp *agentpb.GetAgentVersionResponse) error 
 }
 
 func isWendyOSUpdateTarget(versionResp *agentpb.GetAgentVersionResponse) bool {
-	return versionResp.GetOsVersion() != "" || versionResp.GetDeviceType() != ""
+	return versionResp.GetOs() == "linux" && (versionResp.GetOsVersion() != "" || versionResp.GetDeviceType() != "")
 }
 
 func agentVersionHasFeature(versionResp *agentpb.GetAgentVersionResponse, feature string) bool {
