@@ -13,13 +13,36 @@ import (
 
 // ESP32 bootloader command opcodes.
 const (
-	espCmdFlashBegin   = 0x02
-	espCmdFlashData    = 0x03
-	espCmdFlashEnd     = 0x04
-	espCmdSync         = 0x08
-	espCmdSPISetParams = 0x0B
-	espCmdSPIAttach    = 0x0D
-	espCmdChangeBaud   = 0x0F
+	espCmdFlashBegin      = 0x02
+	espCmdFlashData       = 0x03
+	espCmdFlashEnd        = 0x04
+	espCmdSync            = 0x08
+	espCmdWriteReg        = 0x09
+	espCmdReadReg         = 0x0A
+	espCmdSPISetParams    = 0x0B
+	espCmdSPIAttach       = 0x0D
+	espCmdChangeBaud      = 0x0F
+	espCmdGetSecurityInfo = 0x14
+)
+
+// ESP32-C6 register addresses used during flash initialisation.
+const (
+	regChipMagic = 0x4087f580 // chip magic/identification word
+	regChipID0   = 0x600b0850 // eFuse chip ID word 0
+	regChipID1   = 0x600b0854 // eFuse chip ID word 1
+	regMACLow    = 0x600b0844 // eFuse MAC address low word
+	regMACHigh   = 0x600b0848 // eFuse MAC address high word
+	regEfuseA    = 0x600b0830 // eFuse miscellaneous register A
+	regEfuseB    = 0x600b0838 // eFuse miscellaneous register B
+	regRTCCtrl00 = 0x600b1c00 // RTC control register 0x00
+	regRTCCtrl18 = 0x600b1c18 // RTC control register 0x18
+	regRTCCtrl1C = 0x600b1c1c // RTC control register 0x1c
+	regRTCCtrl20 = 0x600b1c20 // RTC control register 0x20
+	regSPICmd    = 0x60003000 // SPI_MEM_CMD_REG
+	regSPIUser   = 0x60003018 // SPI_MEM_USER_REG
+	regSPIUser1  = 0x60003020 // SPI_MEM_USER1_REG
+	regSPIClock  = 0x60003028 // SPI_MEM_CLOCK_REG
+	regSPIW0     = 0x60003058 // SPI_MEM_W0_REG (data buffer word 0)
 )
 
 // SLIP framing bytes.
@@ -37,6 +60,14 @@ const (
 	flashBaudRate     = 921600
 	initialBaudRate   = 115200
 )
+
+// JedecID holds the three-byte JEDEC flash identification returned by the
+// RDID (0x9f) command.
+type JedecID struct {
+	manufacturer byte // vendor code (e.g. 0xEF = Winbond, 0x20 = Micron)
+	memoryType   byte // memory technology and interface (e.g. 0x40 = SPI NOR)
+	capacity     byte // density code (e.g. 0x17 = 64 Mbit)
+}
 
 // espFlasher handles serial communication with the ESP32 bootloader.
 type espFlasher struct {
@@ -90,6 +121,14 @@ func espLoaderErrorMessage(code byte) string {
 	default:
 		return fmt.Sprintf("unknown error code 0x%02x", code)
 	}
+}
+
+func flashSize(id JedecID) uint32 {
+	const defaultSize = 4 * 1024 * 1024
+	if id.capacity == 0 {
+		return defaultSize
+	}
+	return uint32(1) << id.capacity
 }
 
 // slipEncode wraps data in SLIP framing.
@@ -331,13 +370,255 @@ func (f *espFlasher) changeBaudRate(newBaud int) error {
 	return nil
 }
 
+// getSecurityInfo queries the chip security info (opcode 0x14).
+func (f *espFlasher) getSecurityInfo() (uint32, error) {
+	f.port.SetReadTimeout(espCmdTimeout)
+	resp, err := f.sendCommand(espCmdGetSecurityInfo, nil, 0)
+	if err != nil {
+		return 0, err
+	}
+	if len(resp) < 4 {
+		return 0, fmt.Errorf("getSecurityInfo: response too short (%d bytes)", len(resp))
+	}
+	return binary.LittleEndian.Uint32(resp[:4]), nil
+}
+
+// readReg reads a 32-bit peripheral register at addr.
+// The ROM bootloader returns the value in the header value field (bytes 4–7
+// of the raw response), which sendCommand exposes as result[0:4].
+func (f *espFlasher) readReg(addr uint32) (uint32, error) {
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, addr)
+	f.port.SetReadTimeout(espCmdTimeout)
+	result, err := f.sendCommand(espCmdReadReg, data, 0)
+	if err != nil {
+		return 0, err
+	}
+	if len(result) < 4 {
+		return 0, fmt.Errorf("readReg 0x%08x: short response", addr)
+	}
+	return binary.LittleEndian.Uint32(result[0:4]), nil
+}
+
+// writeReg performs a masked write to a 32-bit peripheral register:
+//
+//	reg[addr] = (reg[addr] & ^mask) | (value & mask)
+//
+// delay is a post-write delay in microseconds (pass 0 for no delay).
+func (f *espFlasher) writeReg(addr, value, mask, delay uint32) error {
+	data := make([]byte, 16)
+	binary.LittleEndian.PutUint32(data[0:4], addr)
+	binary.LittleEndian.PutUint32(data[4:8], value)
+	binary.LittleEndian.PutUint32(data[8:12], mask)
+	binary.LittleEndian.PutUint32(data[12:16], delay)
+	f.port.SetReadTimeout(espCmdTimeout)
+	_, err := f.sendCommand(espCmdWriteReg, data, 0)
+	return err
+}
+
 // spiAttach attaches the SPI flash.
 func (f *espFlasher) spiAttach() error {
-	// ESP32-C6 ROM bootloader expects 4 bytes (SPI config = 0 for defaults).
-	data := make([]byte, 4)
+	data := make([]byte, 8)
 	f.port.SetReadTimeout(espCmdTimeout)
 	_, err := f.sendCommand(espCmdSPIAttach, data, 0)
 	return err
+}
+
+// chipDetect runs the register read/write sequence the ROM bootloader requires
+// for chip identification.  We target ESP32-C6 only, so results are discarded.
+func (f *espFlasher) chipDetect() error {
+	if _, err := f.readReg(regChipMagic); err != nil {
+		return err
+	}
+
+	// RTC / JTAG power-domain initialisation sequence observed in esptool trace.
+	if err := f.writeReg(regRTCCtrl18, 0x50d83aa1, 0xffffffff, 0); err != nil {
+		return err
+	}
+	if err := f.writeReg(regRTCCtrl00, 0x00000000, 0xffffffff, 0); err != nil {
+		return err
+	}
+	if err := f.writeReg(regRTCCtrl18, 0x00000000, 0xffffffff, 0); err != nil {
+		return err
+	}
+	if err := f.writeReg(regRTCCtrl20, 0x50d83aa1, 0xffffffff, 0); err != nil {
+		return err
+	}
+
+	// Read-modify-write: write back the value currently in regRTCCtrl1C.
+	val, err := f.readReg(regRTCCtrl1C)
+	if err != nil {
+		return err
+	}
+	if err := f.writeReg(regRTCCtrl1C, val, 0xffffffff, 0); err != nil {
+		return err
+	}
+	if err := f.writeReg(regRTCCtrl20, 0x00000000, 0xffffffff, 0); err != nil {
+		return err
+	}
+
+	// Chip-ID reads (x3 for regChipID0, x1 for regChipID1).
+	for i := 0; i < 3; i++ {
+		if _, err := f.readReg(regChipID0); err != nil {
+			return err
+		}
+	}
+	if _, err := f.readReg(regChipID1); err != nil {
+		return err
+	}
+
+	// MAC address reads (three sets of low+high words).
+	for i := 0; i < 3; i++ {
+		if _, err := f.readReg(regMACLow); err != nil {
+			return err
+		}
+		if _, err := f.readReg(regMACHigh); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// initFlashChip performs the SPI flash controller register sequence
+// observed in the esptool trace after SPI_ATTACH.
+// It retrives the JEDEC ID and resets the flash chip, in order to start
+// without depeding on previous usages.
+func (f *espFlasher) initFlashChip() (JedecID, error) {
+	user0, err := f.readReg(regSPIUser)
+	if err != nil {
+		return JedecID{}, err
+	}
+	user1, err := f.readReg(regSPIUser1)
+	if err != nil {
+		return JedecID{}, err
+	}
+
+	// Step 1: RDID (0x9f) — read JEDEC ID using a faster clock.
+	if err := f.writeReg(regSPIClock, 0x00000017, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser, 0x90000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, 0x7000009f, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIW0, 0x00000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPICmd, 0x00040000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPICmd); err != nil { // poll until done
+		return JedecID{}, err
+	}
+	// W0 layout: bits 7:0 = Manufacturer, bits 15:8 = MemoryType, bits 23:16 = Capacity.
+	w0, err := f.readReg(regSPIW0)
+	if err != nil {
+		return JedecID{}, err
+	}
+	id := JedecID{
+		manufacturer: byte(w0),
+		memoryType:   byte(w0 >> 8),
+		capacity:     byte(w0 >> 16),
+	}
+	// Restore and verify.
+	if err := f.writeReg(regSPIUser, user0, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, user1, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIUser); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIUser1); err != nil {
+		return JedecID{}, err
+	}
+
+	// Step 2: RSTEN (0x66) — Reset Enable command.
+	if err := f.writeReg(regSPIUser, 0x80000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, 0x70000066, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIW0, 0x00000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPICmd, 0x00040000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPICmd); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIW0); err != nil {
+		return JedecID{}, err
+	}
+	// Restore and verify.
+	if err := f.writeReg(regSPIUser, user0, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, user1, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIUser); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIUser1); err != nil {
+		return JedecID{}, err
+	}
+
+	// Step 3: RST (0x99) — Reset command.
+	if err := f.writeReg(regSPIUser, 0x80000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, 0x70000099, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIW0, 0x00000000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPICmd, 0x00040000, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPICmd); err != nil {
+		return JedecID{}, err
+	}
+	if _, err := f.readReg(regSPIW0); err != nil {
+		return JedecID{}, err
+	}
+	// Final restore (no verify needed after the last attempt).
+	if err := f.writeReg(regSPIUser, user0, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+	if err := f.writeReg(regSPIUser1, user1, 0xffffffff, 0); err != nil {
+		return JedecID{}, err
+	}
+
+	return id, nil
+}
+
+// preFlashChecks performs the eFuse/security register reads observed on the esptool trace.
+func (f *espFlasher) preFlashChecks() error {
+	if _, err := f.readReg(regEfuseB); err != nil {
+		return err
+	}
+	if _, err := f.readReg(regChipID0); err != nil {
+		return err
+	}
+	if _, err := f.readReg(regChipID0); err != nil {
+		return err
+	}
+	if _, err := f.readReg(regEfuseA); err != nil {
+		return err
+	}
+	// Final check immediately before erase/flash-begin.
+	if _, err := f.readReg(regEfuseB); err != nil {
+		return err
+	}
+	return nil
 }
 
 // spiSetParams configures SPI flash parameters.
@@ -410,10 +691,10 @@ func espResetViaUsbJtag(port serial.Port, enterBootloader bool) {
 	port.SetDTR(false)
 	port.SetRTS(false)
 	time.Sleep(100 * time.Millisecond)
-	port.SetDTR(enterBootloader)  // GPIO0=LOW (download mode selected)
+	port.SetDTR(enterBootloader) // GPIO0=LOW (download mode selected)
 	port.SetRTS(false)
 	time.Sleep(100 * time.Millisecond)
-	port.SetRTS(true)  // EN=LOW (assert reset)
+	port.SetRTS(true) // EN=LOW (assert reset)
 	port.SetDTR(false)
 	time.Sleep(100 * time.Millisecond)
 	port.SetRTS(false) // EN=HIGH (release reset → boots into download mode)
@@ -463,17 +744,40 @@ func flashFirmware(portPath, firmwarePath string, progressFn func(pct float64)) 
 		return fmt.Errorf("change baud: %w", err)
 	}
 
-	// Step 3: Attach SPI flash.
+	// Step 3: Security info + chip detection register sequence.
+	// The responses are ignored, but we perform them to stay close to the
+	// classic ROM bootloader init sequence.
+	if _, err := f.getSecurityInfo(); err != nil {
+		return fmt.Errorf("get security info: %w", err)
+	}
+	if err := f.chipDetect(); err != nil {
+		return fmt.Errorf("chip detect: %w", err)
+	}
+
+	// Step 4: Attach SPI flash.
 	if err := f.spiAttach(); err != nil {
 		return fmt.Errorf("SPI attach: %w", err)
 	}
 
-	// Step 4: Set SPI params (4 MB flash).
-	if err := f.spiSetParams(4 * 1024 * 1024); err != nil {
+	// Step 5: Reset flash chip and retrieve its JEDEC ID.
+	jedecId, err := f.initFlashChip()
+	if err != nil {
+		return fmt.Errorf("init flash chip: %w", err)
+	}
+
+	// Step 6: Set SPI params.
+	flashSize := flashSize(jedecId)
+	if err := f.spiSetParams(flashSize); err != nil {
 		return fmt.Errorf("SPI set params: %w", err)
 	}
 
-	// Step 5: Flash the firmware.
+	// Step 7: Pre-flash eFuse/security checks.
+	// Again, something done just to stick to the classic bootloader sequence.
+	if err := f.preFlashChecks(); err != nil {
+		return fmt.Errorf("pre-flash checks: %w", err)
+	}
+
+	// Step 8: Flash the firmware.
 	totalSize := uint32(len(firmware))
 	blockCount := (totalSize + espFlashBlockSize - 1) / espFlashBlockSize
 	if err := f.flashBegin(totalSize, blockCount, espFlashBlockSize, 0); err != nil {
