@@ -1796,6 +1796,33 @@ func detectCurrentWiFiSSID() string {
 				return ssid
 			}
 		}
+	case "windows":
+		out, err := exec.Command("netsh", "wlan", "show", "interfaces").Output()
+		if err != nil {
+			return ""
+		}
+		return parseNetshSSID(string(out))
+	}
+	return ""
+}
+
+// parseNetshSSID extracts the SSID value from the output of
+// `netsh wlan show interfaces`. The output contains many "<label> : <value>"
+// lines; we want the first one whose label is exactly "SSID" (the "BSSID" line
+// must not match). Returns "" if no SSID line is present or the value is empty.
+func parseNetshSSID(out string) string {
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, "SSID") {
+			continue
+		}
+		rest := strings.TrimLeft(line[len("SSID"):], " \t")
+		if !strings.HasPrefix(rest, ":") {
+			continue
+		}
+		if ssid := strings.TrimSpace(rest[1:]); ssid != "" {
+			return ssid
+		}
 	}
 	return ""
 }
