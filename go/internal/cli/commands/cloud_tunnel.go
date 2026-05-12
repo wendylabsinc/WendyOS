@@ -156,7 +156,7 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		if !caPool.AppendCertsFromPEM([]byte(cert.PemCertificateChain)) {
 			return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
 		}
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // Hostname verification is intentionally skipped for non-standard broker endpoints; VerifyConnection validates the chain against the Wendy CA.
 		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("broker presented no TLS certificate")
