@@ -285,11 +285,14 @@ else
 fi
 
 # --- Offer tour ---
-if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]] && [[ -r /dev/tty ]]; then
+if [[ "$YES" != true ]] && command -v "$BINARY_NAME" &>/dev/null && [[ -t 1 ]] && [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; then
   printf "\nWould you like a quick guided tour of the Wendy CLI? [Y/n] "
   read -r tour_answer </dev/tty
   case "$tour_answer" in
-    ""|[yY]|[yY][eE][sS]) "$BINARY_NAME" tour ;;
+    # The installer may be run as `curl ... | bash`, which leaves the script's
+    # stdin attached to the download pipe. Reattach the tour to the controlling
+    # terminal so Bubble Tea sees an interactive stdin and stdout.
+    ""|[yY]|[yY][eE][sS]) "$BINARY_NAME" tour </dev/tty >/dev/tty ;;
   esac
 else
   echo ""
