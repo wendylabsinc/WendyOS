@@ -377,35 +377,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return fmt.Errorf("drive %s not found", flagDrive)
 		}
 	} else {
-		drives, err := listExternalDrives()
-		if err != nil {
-			return fmt.Errorf("listing drives: %w", err)
-		}
-		if len(drives) == 0 {
-			return fmt.Errorf("no external drives found — insert an SD card or USB drive and try again")
-		}
-
-		var driveItems []tui.PickerItem
-		driveMap := make(map[string]drive)
-		for _, d := range drives {
-			desc := d.DevicePath
-			if d.Size != "" {
-				desc += "  " + d.Size
-			}
-			driveItems = append(driveItems, tui.PickerItem{
-				Name:        d.Name,
-				Description: desc,
-				Value:       d.DevicePath,
-			})
-			driveMap[d.DevicePath] = d
-		}
-
 		fmt.Println()
-		sel, err := pickFromItems("Select target drive", driveItems)
+		selectedDrive, err := pickExternalDrive(ctx)
 		if err != nil {
 			return err
 		}
-		targetDrive = driveMap[sel]
+		targetDrive = selectedDrive
 	}
 
 	// Step 3: Confirm destructive write (unless --force).
@@ -587,6 +564,43 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 
 	fmt.Println()
 	return pickFromItems(title, items)
+}
+
+const externalDrivePickerRefreshInterval = 2 * time.Second
+
+func pickExternalDrive(ctx context.Context) (drive, error) {
+	item, err := pickRefreshingItem(ctx, "Select target drive", externalDrivePickerRefreshInterval, func(context.Context) ([]tui.PickerItem, error) {
+		drives, err := listExternalDrives()
+		if err != nil {
+			return nil, fmt.Errorf("listing drives: %w", err)
+		}
+		return externalDrivePickerItems(drives), nil
+	})
+	if err != nil {
+		return drive{}, err
+	}
+	selected, ok := item.Value.(drive)
+	if !ok {
+		return drive{}, fmt.Errorf("invalid drive selection")
+	}
+	return selected, nil
+}
+
+func externalDrivePickerItems(drives []drive) []tui.PickerItem {
+	items := make([]tui.PickerItem, 0, len(drives))
+	for _, d := range drives {
+		desc := d.DevicePath
+		if d.Size != "" {
+			desc += "  " + d.Size
+		}
+		items = append(items, tui.PickerItem{
+			Name:        d.Name,
+			Description: desc,
+			DedupKey:    d.DevicePath,
+			Value:       d,
+		})
+	}
+	return items
 }
 
 // throttledProgress returns a sender that forwards ProgressUpdateMsg to p at

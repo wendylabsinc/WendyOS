@@ -477,6 +477,38 @@ func TestOpenOSImageStream_LegacyImgCacheHit(t *testing.T) {
 	}
 }
 
+func TestExternalDrivePickerItems(t *testing.T) {
+	drives := []drive{
+		{Name: "Sandisk USB", DevicePath: "/dev/disk4", Size: "32 GB", IsRemovable: true},
+		{Name: "USB SSD", DevicePath: "/dev/disk5", IsRemovable: true},
+	}
+
+	items := externalDrivePickerItems(drives)
+	if got := len(items); got != 2 {
+		t.Fatalf("items = %d, want 2", got)
+	}
+	if items[0].Name != "Sandisk USB" {
+		t.Errorf("Name = %q, want Sandisk USB", items[0].Name)
+	}
+	if items[0].Description != "/dev/disk4  32 GB" {
+		t.Errorf("Description = %q, want device path and size", items[0].Description)
+	}
+	if items[0].DedupKey != "/dev/disk4" {
+		t.Errorf("DedupKey = %q, want /dev/disk4", items[0].DedupKey)
+	}
+	if items[1].Description != "/dev/disk5" {
+		t.Errorf("Description without size = %q, want /dev/disk5", items[1].Description)
+	}
+
+	selected, ok := items[0].Value.(drive)
+	if !ok {
+		t.Fatalf("Value has type %T, want drive", items[0].Value)
+	}
+	if selected.DevicePath != drives[0].DevicePath {
+		t.Errorf("selected drive path = %q, want %q", selected.DevicePath, drives[0].DevicePath)
+	}
+}
+
 func TestConfirmOverwriteInternalDrive(t *testing.T) {
 	removable := drive{Name: "Sandisk USB", DevicePath: "/dev/disk4", IsRemovable: true}
 	internal := drive{Name: "Internal SSD", DevicePath: "/dev/disk1", IsRemovable: false}

@@ -295,7 +295,8 @@ func newAppsStartCmd() *cobra.Command {
 			if target.Agent != nil {
 				if detach {
 					if _, err := target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
-						AppName: appName,
+						AppName:       appName,
+						RestartPolicy: &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED},
 					}); err != nil {
 						return fmt.Errorf("starting container: %w", err)
 					}

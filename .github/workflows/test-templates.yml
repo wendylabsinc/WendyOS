@@ -11,6 +11,10 @@ on:
         description: 'Filter to a specific template name (empty = all)'
         required: false
         default: ''
+      exclude_template:
+        description: 'Space-separated template names to skip (e.g. voice-ai-pipecat)'
+        required: false
+        default: 'voice-ai-pipecat'
       language:
         description: 'Filter to a specific language (empty = all)'
         required: false
@@ -32,6 +36,9 @@ on:
       template:
         type: string
         default: ''
+      exclude_template:
+        type: string
+        default: 'voice-ai-pipecat'
       language:
         type: string
         default: ''
@@ -73,6 +80,7 @@ jobs:
         env:
           INPUT_TEMPLATES_BRANCH: ${{ inputs.templates_branch }}
           INPUT_TEMPLATE: ${{ inputs.template }}
+          INPUT_EXCLUDE_TEMPLATE: ${{ inputs.exclude_template }}
           INPUT_LANGUAGE: ${{ inputs.language }}
         run: |
           args=(-w ./bin/wendy --skip-run)
@@ -84,6 +92,10 @@ jobs:
           if [[ -n "$INPUT_TEMPLATE" ]]; then
             args+=(--template "$INPUT_TEMPLATE")
           fi
+
+          for excl in $INPUT_EXCLUDE_TEMPLATE; do
+            args+=(--exclude-template "$excl")
+          done
 
           if [[ -n "$INPUT_LANGUAGE" ]]; then
             args+=(--language "$INPUT_LANGUAGE")
@@ -119,6 +131,7 @@ jobs:
       INPUT_HOSTNAME: ${{ inputs.hostname }}
       INPUT_TEMPLATES_BRANCH: ${{ inputs.templates_branch }}
       INPUT_TEMPLATE: ${{ inputs.template }}
+      INPUT_EXCLUDE_TEMPLATE: ${{ inputs.exclude_template }}
       INPUT_LANGUAGE: ${{ inputs.language }}
     steps:
       - uses: actions/checkout@v6
@@ -147,6 +160,10 @@ jobs:
           if [[ -n "$INPUT_TEMPLATE" ]]; then
             ARGS+=(--template "$INPUT_TEMPLATE")
           fi
+
+          for excl in $INPUT_EXCLUDE_TEMPLATE; do
+            ARGS+=(--exclude-template "$excl")
+          done
 
           if [[ -n "$INPUT_LANGUAGE" ]]; then
             ARGS+=(--language "$INPUT_LANGUAGE")

@@ -6,7 +6,7 @@ import dnssd
 struct BonjourAdvertiser {
     struct Runtime {
         let registration: BonjourRegistration
-        let task: Task<Void, Error>
+        let task: Task<Void, any Error>
     }
 
     let port: Int
@@ -43,8 +43,8 @@ final class BonjourRegistration: @unchecked Sendable {
     private let queue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
 
     private var serviceRef: DNSServiceRef?
-    private var readyContinuation: CheckedContinuation<Void, Error>?
-    private var shutdownContinuation: CheckedContinuation<Void, Error>?
+    private var readyContinuation: CheckedContinuation<Void, any Error>?
+    private var shutdownContinuation: CheckedContinuation<Void, any Error>?
     private var hasRegistered = false
     private var isFinished = false
     private var completionError: (any Error)?
@@ -84,7 +84,7 @@ final class BonjourRegistration: @unchecked Sendable {
         }
     }
 
-    private func startOnQueue(continuation: CheckedContinuation<Void, Error>) {
+    private func startOnQueue(continuation: CheckedContinuation<Void, any Error>) {
         precondition(self.readyContinuation == nil)
         self.readyContinuation = continuation
 
@@ -169,7 +169,7 @@ final class BonjourRegistration: @unchecked Sendable {
     }
 
     private func resume(
-        continuation: CheckedContinuation<Void, Error>,
+        continuation: CheckedContinuation<Void, any Error>,
         with error: (any Error)?
     ) {
         if let error {

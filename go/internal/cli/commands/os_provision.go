@@ -8,15 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/wendyconf"
 	cloudpb "github.com/wendylabsinc/wendy/proto/gen/cloudpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // preProvisionedState is written to the config partition during imaging.
@@ -72,10 +70,7 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 
 	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
 
-	tokenCtx := ctx
-	if auth.APIKey != "" {
-		tokenCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+auth.APIKey))
-	}
+	tokenCtx := cloudContext(ctx, auth)
 
 	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
 		OrganizationId: int32(cert.OrganizationID),

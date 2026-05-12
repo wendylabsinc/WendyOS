@@ -24,6 +24,7 @@ Options:
   --templates-branch BRANCH     Git branch when cloning (default: main)
   --skip-run                    Only test generation, skip deploying to device
   --template NAME               Only test a specific template (e.g. simple-api)
+  --exclude-template NAME       Skip a specific template (repeatable)
   --language LANG               Only test a specific language (e.g. python)
   --help                        Show this help message
 
@@ -48,6 +49,7 @@ TEMPLATES_BRANCH="main"
 SKIP_RUN=false
 FILTER_TEMPLATE=""
 FILTER_LANGUAGE=""
+EXCLUDE_TEMPLATES=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
         --templates-branch)     TEMPLATES_BRANCH="$2"; shift 2 ;;
         --skip-run)             SKIP_RUN=true; shift ;;
         --template)             FILTER_TEMPLATE="$2"; shift 2 ;;
+        --exclude-template)     EXCLUDE_TEMPLATES+=("$2"); shift 2 ;;
         --language)             FILTER_LANGUAGE="$2"; shift 2 ;;
         --help)                 usage ;;
         *)                      echo "Unknown option: $1"; usage ;;
@@ -170,6 +173,16 @@ for lang in "${LANGUAGES[@]}"; do
         app_id="test-${lang}-${tmpl}"
         test_name="${lang}/${tmpl}"
 
+        # Skip excluded templates.
+        excluded=false
+        for excl in "${EXCLUDE_TEMPLATES[@]+"${EXCLUDE_TEMPLATES[@]}"}"; do
+            if [[ "$tmpl" == "$excl" ]]; then excluded=true; break; fi
+        done
+        if [[ "$excluded" == true ]]; then
+            skip_test "init $test_name (excluded)"
+            continue
+        fi
+
         # Some templates only exist for a subset of languages (e.g.
         # camera-feed-yolo is python-only). Skip combinations that aren't in
         # the templates repo rather than counting them as failures.
@@ -199,6 +212,15 @@ for lang in "${LANGUAGES[@]}"; do
         app_id="test-${lang}-${tmpl}"
         project_dir="$WORK_DIR/$lang/$app_id"
         test_name="${lang}/${tmpl}"
+
+        excluded=false
+        for excl in "${EXCLUDE_TEMPLATES[@]+"${EXCLUDE_TEMPLATES[@]}"}"; do
+            if [[ "$tmpl" == "$excl" ]]; then excluded=true; break; fi
+        done
+        if [[ "$excluded" == true ]]; then
+            skip_test "validate $test_name (excluded)"
+            continue
+        fi
 
         if [[ ! -f "$TEMPLATES_DIR/$lang/$tmpl/template.json" ]]; then
             skip_test "validate $test_name (not available for $lang)"

@@ -8,6 +8,13 @@ cd "$SCRIPT_DIR/../WendyAgentCore"
 
 PROTO_DIR="../Proto"
 
+publicize_generated_imports() {
+  find "$@" -name '*.swift' -print0 | xargs -0 perl -0pi -e '
+    s/^(import (GRPCCore|GRPCProtobuf|SwiftProtobuf|Foundation|FoundationEssentials))$/public $1/mg;
+    s/^public public import/public import/mg;
+  '
+}
+
 echo "Generating Wendy Agent gRPC code..."
 rm -rf Sources/WendyAgentGRPC/Proto
 mkdir -p Sources/WendyAgentGRPC/Proto
@@ -58,5 +65,11 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
     "$PROTO_DIR/cloud/organizations.proto" \
     "$PROTO_DIR/cloud/remote_logging.proto" \
     "$PROTO_DIR/cloud/users.proto"
+
+echo "Marking generated public API imports..."
+publicize_generated_imports \
+    Sources/WendyAgentGRPC/Proto \
+    Sources/OpenTelemetryGRPC/Proto \
+    Sources/WendyCloudGRPC/Proto
 
 echo "Proto generation complete."

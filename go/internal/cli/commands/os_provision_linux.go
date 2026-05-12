@@ -36,7 +36,13 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	}
 	defer os.RemoveAll(tmpDir)
 
-	mountCmd := exec.Command("sudo", "mount", "-t", "vfat", partDev, tmpDir)
+	// vfat has no on-disk ownership; the kernel synthesizes each file's uid from
+	// the mounting process. Without uid=/gid=, sudo gives every file to root and
+	// the subsequent non-root WriteFile calls in writeConfigFiles fail with
+	// EACCES. The device applies its own uid when it boots, so this only
+	// affects the host-side view of the mount.
+	mountOpts := fmt.Sprintf("uid=%d,gid=%d", os.Getuid(), os.Getgid())
+	mountCmd := exec.Command("sudo", "mount", "-t", "vfat", "-o", mountOpts, partDev, tmpDir)
 	if out, err := mountCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("mounting config partition %s: %s: %w", partDev, strings.TrimSpace(string(out)), err)
 	}

@@ -3,9 +3,14 @@ package commands
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -13,11 +18,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"strconv"
 
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/swifttoolchain"
@@ -709,13 +714,21 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		registryImage = strings.Replace(registryImage, registryAddr, effectiveAddr, 1)
 	}
 
+	// Use UserCacheDir so the cache lives in the platform's idiomatic location:
+	// %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, $XDG_CACHE_HOME (or
+	// ~/.cache) on Linux.
+	userCache, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("finding user cache directory: %w", err)
+	}
+	cacheDir := filepath.Join(userCache, "wendy", "buildx")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("creating cache directory: %w", err)
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("finding home directory: %w", err)
-	}
-	cacheDir := filepath.Join(home, ".cache", "wendy", "buildx")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return fmt.Errorf("creating cache directory: %w", err)
 	}
 
 	// Use a clean Docker config without a credsStore credential helper.
@@ -727,13 +740,13 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	// pull works fine with an empty auths map.
 	//
 	// We only replace config.json; everything else (cli-plugins, buildx builder
-	// instances, contexts) is symlinked from the original Docker config so that
+	// instances, contexts) is linked from the original Docker config so that
 	// buildx and the "wendy" builder remain discoverable.
 	origDockerConfig := os.Getenv("DOCKER_CONFIG")
 	if origDockerConfig == "" {
 		origDockerConfig = filepath.Join(home, ".docker")
 	}
-	cleanDockerConfigDir := filepath.Join(home, ".cache", "wendy", "docker-config")
+	cleanDockerConfigDir := filepath.Join(userCache, "wendy", "docker-config")
 	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
 		return fmt.Errorf("creating clean docker config directory: %w", err)
 	}
@@ -741,22 +754,47 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
 		return fmt.Errorf("writing clean docker config: %w", err)
 	}
-	// Symlink subdirs that docker/buildx need to find plugins and builder state.
+	// Link subdirs that docker/buildx need to find plugins and builder state.
+	// On Windows os.Symlink requires Developer Mode or admin, so linkOrCopyDir
+	// falls back to a native directory junction and finally to copying.
+	//
+	// Symlinks and junctions transparently follow source updates, so we keep
+	// them across builds. A real (copied) directory is a snapshot that would
+	// go stale if the source changes (new builder, updated cli-plugin); refresh
+	// it on every build by removing it before relinking. Go reports junctions
+	// with ModeSymlink on Windows, so the same check works on both platforms.
 	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		src := filepath.Join(origDockerConfig, subdir)
 		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Lstat(dst); err != nil {
-			// best-effort: ignore if source doesn't exist or symlink fails
-			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if info, err := os.Lstat(dst); err == nil {
+			if info.Mode()&fs.ModeSymlink != 0 {
+				continue
+			}
+			if err := os.RemoveAll(dst); err != nil {
+				fmt.Fprintf(os.Stderr, "[buildx] warning: refreshing %s in clean docker config failed: %v\n", subdir, err)
+				continue
+			}
+		}
+		if err := linkOrCopyDir(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "[buildx] warning: linking %s into clean docker config failed: %v\n", subdir, err)
 		}
 	}
 
+	// buildkitd inside the Linux VM appends "/index.json" to the cache src/dest,
+	// so pass forward-slash paths to avoid mixed-separator warnings on Windows.
+	cacheDirSlash := filepath.ToSlash(cacheDir)
 	args := []string{
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
-		"--cache-from", "type=local,src=" + cacheDir,
-		"--cache-to", "type=local,dest=" + cacheDir,
 	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "index.json")); err == nil {
+		args = append(args, "--cache-from", "type=local,src="+cacheDirSlash)
+	}
+	args = append(args, "--cache-to", "type=local,dest="+cacheDirSlash)
 	// Sort keys so the argument order is stable across runs, which keeps
 	// build logs reproducible and avoids flakiness in tests that assert args.
 	keys := make([]string, 0, len(buildArgs))
@@ -849,7 +887,7 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 		target = net.JoinHostPort(resolved, strconv.Itoa(port))
 	}
 
-	proxy, err := startRegistryProxy(ctx, target)
+	proxy, err := startRegistryProxy(ctx, "0.0.0.0:0", target)
 	if err != nil {
 		return "", nil, fmt.Errorf("starting registry proxy: %w", err)
 	}
@@ -858,26 +896,70 @@ func resolveRegistry(ctx context.Context, host string, port int) (registryAddr s
 	return registryAddr, proxy.Close, nil
 }
 
+// dockerRegistryProxyAddrs caches one proxy address per AgentConnection. The
+// proxy is allocated once (port 0 → OS-assigned) and reused for all pushes on
+// that connection, so the buildx builder config never changes between concurrent
+// builds and no builder teardown races can kill an in-flight push.
+var (
+	dockerRegistryProxyCacheMu sync.Mutex
+	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]string{}
+)
+
 // resolveRegistryForAgent determines how Docker buildx should reach the
-// agent's registry. Cloud connections provide a RegistryDialer that opens a
-// fresh broker tunnel per TCP connection; local/LAN connections use the normal
-// host-to-device proxy path.
+// agent's registry. The proxy is started once per connection and cached so
+// concurrent pushes to the same device share a stable host:port address.
 func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+	// Hold the lock for the entire operation so concurrent callers block rather
+	// than each starting their own proxy. Proxy creation is just a local
+	// net.Listen call, so the lock is held only briefly.
+	dockerRegistryProxyCacheMu.Lock()
+	defer dockerRegistryProxyCacheMu.Unlock()
+
+	if addr, ok := dockerRegistryProxyAddrs[conn]; ok {
+		return addr, func() {}, nil
+	}
+
+	// Start a proxy tied to context.Background so it outlives this push and is
+	// reused by subsequent pushes on the same connection.
+	var addr string
+	var stopProxy func()
+
 	if conn.RegistryDialer == nil {
-		return resolveRegistry(ctx, conn.Host, port)
+		addr, stopProxy, err = resolveRegistry(context.Background(), conn.Host, port)
+		if err != nil {
+			return "", nil, err
+		}
+	} else {
+		// On Linux buildkitd uses host networking so 127.0.0.1 is reachable.
+		// On macOS it runs inside the Docker Desktop VM and must connect via
+		// host.docker.internal, which requires the proxy to bind on all interfaces.
+		listenAddr := "0.0.0.0:0"
+		if runtime.GOOS == "linux" {
+			listenAddr = "127.0.0.1:0"
+		}
+		proxy, proxyErr := startRegistryProxyWithDialer(context.Background(), listenAddr, func(ctx context.Context) (net.Conn, error) {
+			return conn.RegistryDialer(ctx, port)
+		})
+		if proxyErr != nil {
+			return "", nil, fmt.Errorf("starting cloud registry proxy: %w", proxyErr)
+		}
+		stopProxy = proxy.Close
+		if runtime.GOOS == "linux" {
+			addr = fmt.Sprintf("127.0.0.1:%d", proxy.Port())
+		} else {
+			addr = fmt.Sprintf("host.docker.internal:%d", proxy.Port())
+		}
 	}
 
-	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
-		return conn.RegistryDialer(ctx, port)
-	})
-	if err != nil {
-		return "", nil, fmt.Errorf("starting cloud registry proxy: %w", err)
-	}
+	dockerRegistryProxyAddrs[conn] = addr
+	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
+		dockerRegistryProxyCacheMu.Lock()
+		delete(dockerRegistryProxyAddrs, conn)
+		dockerRegistryProxyCacheMu.Unlock()
+		stopProxy()
+	}))
 
-	if runtime.GOOS == "linux" {
-		return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
-	}
-	return fmt.Sprintf("host.docker.internal:%d", proxy.Port()), proxy.Close, nil
+	return addr, func() {}, nil
 }
 
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
@@ -896,27 +978,122 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 		return fmt.Sprintf("%s:%d", addr, port), func() {}, nil
 	}
 
-	// Link-local: same proxy approach as resolveRegistry.
+	// Link-local: proxy via 127.0.0.1 — Swift runs on the host, not in a VM.
 	target := net.JoinHostPort(host, strconv.Itoa(port))
-	proxy, err := startRegistryProxy(ctx, target)
+	proxy, err := startRegistryProxy(ctx, "127.0.0.1:0", target)
 	if err != nil {
 		return "", nil, fmt.Errorf("starting registry proxy for link-local device: %w", err)
 	}
 	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
 }
 
-func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), err error) {
+func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, swiftUseMTLS bool, cleanup func(), err error) {
 	if conn.RegistryDialer == nil {
-		return resolveRegistryForSwift(ctx, conn.Host, port)
+		if conn.IsMTLS {
+			// Provisioned LAN device: the registry speaks HTTPS with a cert signed
+			// by the Wendy Cloud Root CA, which is not in the macOS system keychain.
+			// Stand up a local HTTP reverse proxy that terminates TLS with mTLS so
+			// the Swift container plugin can push via plain HTTP on 127.0.0.1.
+			certInfo := loadCLICert()
+			if certInfo == nil {
+				return "", false, nil, fmt.Errorf("mTLS connection but no CLI certificates available")
+			}
+			target := net.JoinHostPort(conn.Host, strconv.Itoa(port))
+			proxy, proxyErr := startMTLSRegistryHTTPProxy(target, certInfo.PemCertificate, certInfo.PemPrivateKey, certInfo.PemCertificateChain)
+			if proxyErr != nil {
+				return "", false, nil, fmt.Errorf("starting mTLS registry proxy for Swift: %w", proxyErr)
+			}
+			return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), false, proxy.Close, nil
+		}
+		addr, addrCleanup, addrErr := resolveRegistryForSwift(ctx, conn.Host, port)
+		return addr, false, addrCleanup, addrErr
 	}
 
-	proxy, err := startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+	proxy, proxyErr := startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
 		return conn.RegistryDialer(ctx, port)
 	})
-	if err != nil {
-		return "", nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", err)
+	if proxyErr != nil {
+		return "", false, nil, fmt.Errorf("starting cloud registry proxy for Swift: %w", proxyErr)
 	}
-	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), proxy.Close, nil
+	return fmt.Sprintf("127.0.0.1:%d", proxy.Port()), conn.IsMTLS, proxy.Close, nil
+}
+
+// mtlsRegistryHTTPProxy is a plain-HTTP reverse proxy that forwards requests
+// to a provisioned device's HTTPS registry using mTLS. The Swift container
+// plugin connects to 127.0.0.1:PORT via plain HTTP (with --allow-insecure-http)
+// and this proxy handles TLS + client-cert authentication transparently.
+type mtlsRegistryHTTPProxy struct {
+	listener net.Listener
+	server   *http.Server
+}
+
+func (p *mtlsRegistryHTTPProxy) Port() int {
+	return p.listener.Addr().(*net.TCPAddr).Port
+}
+
+func (p *mtlsRegistryHTTPProxy) Close() {
+	_ = p.server.Close()
+}
+
+// startMTLSRegistryHTTPProxy creates a local HTTP reverse proxy on 127.0.0.1
+// that forwards OCI registry requests to target via HTTPS with mTLS. certPEM
+// and keyPEM are the client certificate and key; caPEM is the CA chain used to
+// verify the server certificate (the Wendy Cloud Root CA chain).
+func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsRegistryHTTPProxy, error) {
+	leafPEM, err := certs.LeafCertificatePEM(certPEM)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("no valid CA certificates found in caPEM")
+	}
+
+	rp := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "https"
+			req.URL.Host = target
+			req.Host = target
+		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				// Skip hostname verification: device registry certs are signed by
+				// the Wendy CA but may not include the mDNS hostname as a SAN.
+				// VerifyConnection performs full chain + EKU validation instead.
+				InsecureSkipVerify: true, //nolint:gosec
+				MinVersion:         tls.VersionTLS12,
+				VerifyConnection: func(cs tls.ConnectionState) error {
+					if len(cs.PeerCertificates) == 0 {
+						return fmt.Errorf("server presented no certificates")
+					}
+					intermediates := x509.NewCertPool()
+					for _, c := range cs.PeerCertificates[1:] {
+						intermediates.AddCert(c)
+					}
+					opts := x509.VerifyOptions{
+						Roots:         caPool,
+						Intermediates: intermediates,
+						KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+					}
+					_, err := cs.PeerCertificates[0].Verify(opts)
+					return err
+				},
+			},
+		},
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{Handler: rp}
+	go func() { _ = srv.Serve(ln) }()
+	return &mtlsRegistryHTTPProxy{listener: ln, server: srv}, nil
 }
 
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a
@@ -944,18 +1121,20 @@ type registryProxy struct {
 	done     chan struct{}
 }
 
-// startRegistryProxy creates a TCP proxy that listens on all interfaces
-// (required for Docker Desktop VM connectivity) and forwards connections to
-// the target address. The target should use the device's mDNS hostname (not a
-// bare link-local IP) so the host's resolver provides the zone ID.
-func startRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
-	return startRegistryProxyWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+// startRegistryProxy creates a TCP proxy that listens on listenAddr and
+// forwards connections to the target address. Pass "0.0.0.0:0" when Docker
+// Desktop's VM must reach the proxy via host.docker.internal; pass
+// "127.0.0.1:0" everywhere else so the listener is not exposed on all
+// interfaces. The target should use the device's mDNS hostname (not a bare
+// link-local IP) so the host's resolver provides the zone ID.
+func startRegistryProxy(ctx context.Context, listenAddr string, target string) (*registryProxy, error) {
+	return startRegistryProxyWithDialer(ctx, listenAddr, func(ctx context.Context) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	}, target)
 }
 
-func startRegistryProxyWithDialer(ctx context.Context, dial func(context.Context) (net.Conn, error), target ...string) (*registryProxy, error) {
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+func startRegistryProxyWithDialer(ctx context.Context, listenAddr string, dial func(context.Context) (net.Conn, error), target ...string) (*registryProxy, error) {
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return nil, err
 	}

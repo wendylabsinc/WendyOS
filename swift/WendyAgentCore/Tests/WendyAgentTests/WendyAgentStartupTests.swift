@@ -6,8 +6,8 @@ import Testing
 
 @Suite("WendyAgent startup")
 struct WendyAgentStartupTests {
-    @Test("startup reports the underlying bind failure when the gRPC port is occupied")
-    func reportsPortConflictCause() async throws {
+    @Test("startup reports a port-in-use error when the gRPC port is occupied")
+    func reportsPortConflict() async throws {
         let occupiedPort = try OccupiedIPv6TCPPort()
         defer { occupiedPort.close() }
 
@@ -20,8 +20,16 @@ struct WendyAgentStartupTests {
             Issue.record("Expected WendyAgent startup to fail on an occupied gRPC port")
             await agent.stop()
         } catch {
+            guard case WendyAgentError.portInUse(let serviceName, let port) = error else {
+                Issue.record("Expected portInUse error, got: \(error)")
+                return
+            }
+
+            #expect(serviceName == "Wendy Agent gRPC")
+            #expect(port == occupiedPort.port)
+
             let description = String(describing: error)
-            #expect(description.contains("Address already in use"))
+            #expect(description.contains("TCP port \(occupiedPort.port) is already in use"))
             #expect(!description.contains("There is no listening address bound"))
         }
     }

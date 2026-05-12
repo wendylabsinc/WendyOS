@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import OpenTelemetryGRPC
+import SwiftProtobuf
 
 /// Actor that broadcasts telemetry data to multiple subscribers.
 /// Used to fan out logs, metrics, and traces from the OTel proxy to CLI clients.

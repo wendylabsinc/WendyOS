@@ -681,14 +681,14 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return err
 	}
 
-	registryAddr, proxyCleanup, err := resolveRegistryForSwiftAgent(ctx, conn, regPort)
+	registryAddr, swiftUseMTLS, proxyCleanup, err := resolveRegistryForSwiftAgent(ctx, conn, regPort)
 	if err != nil {
 		return err
 	}
 	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", product, architecture)
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, conn.IsMTLS, &dimWriter{}, os.Stderr); err != nil {
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, swiftUseMTLS, &dimWriter{}, os.Stderr); err != nil {
 		return fmt.Errorf("building Swift container image: %w", err)
 	}
 	cliLogln("Build and push completed.")
@@ -1041,15 +1041,29 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// Swift projects use a native darwin path for macOS targets and
 	// swift-container-plugin for Linux targets when --build-type=swift
 	// explicitly selects that path or when no Dockerfile is present.
+	// Both paths shell out to a host Swift toolchain:
+	//   - darwin target: `swift build` on the host. Requires a darwin host —
+	//     Linux's swift toolchain cannot cross-compile to macOS.
+	//   - linux target: swift-container-plugin via `swift package`. Requires
+	//     a darwin or linux host — swift-container-plugin does not yet ship
+	//     for Windows.
+	// On a Windows host with a Dockerfile the docker buildx path below
+	// handles the build, so the gates only trip when the host swift path
+	// would actually be taken.
 	if projectType == "swift" {
-		if normalizeBuildType(opts.buildType) == "swift" {
-			if platformOS(platform) == "darwin" {
-				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
+		targetIsDarwin := platformOS(platform) == "darwin"
+		explicitSwift := normalizeBuildType(opts.buildType) == "swift"
+		_, dockerfileStatErr := os.Stat(filepath.Join(cwd, "Dockerfile"))
+		needsHostSwift := explicitSwift || os.IsNotExist(dockerfileStatErr)
+
+		if needsHostSwift {
+			if targetIsDarwin && runtime.GOOS != "darwin" {
+				return fmt.Errorf("`wendy run` for Swift packages targeting darwin requires a darwin host (got %s); provide a Dockerfile to build a Linux image instead", runtime.GOOS)
 			}
-			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
-		}
-		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
-			if platformOS(platform) == "darwin" {
+			if !targetIsDarwin && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+				return fmt.Errorf("`wendy run` for Swift packages is not supported on %s; provide a Dockerfile", runtime.GOOS)
+			}
+			if targetIsDarwin {
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
@@ -1346,10 +1360,15 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	cmd := execCommandContext(ctx, shell, flag, expanded)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	finalizeProcessGroup := configurePostStartProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
+		// Release any OS resources the configure step allocated; the finalizer
+		// no-ops the attach step when cmd.Process is nil.
+		finalizeProcessGroup()
 		cliLogln("Warning: postStart hook failed to start: %v", err)
 		return nil
 	}
+	finalizeProcessGroup()
 	cliLogln("Hook postStart: %s", expanded)
 	return cmd
 }

@@ -105,6 +105,9 @@ message CreateContainerProgressResponse {
 
 message StartContainerRequest {
     string app_name = 1;
+
+    // Optional restart policy override. When unset the agent uses its default.
+    optional RestartPolicy restart_policy = 2;
 }
 
 // AttachContainerRequest is the client-to-server message for AttachContainer.
