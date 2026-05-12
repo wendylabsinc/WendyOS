@@ -11,9 +11,11 @@ import (
 // launchAssistantWithPrompt writes the full prompt to a temp file and asks the
 // assistant to read it. On Windows the assistant binaries (claude, codex) are
 // shipped as `.cmd` shims whose `%*` forwarding re-parses arguments through
-// cmd.exe, which mangles multi-line prompts containing quotes or `%`. The short
-// "Read the file at %q ..." instruction contains no `%` and no embedded
-// newlines, so it survives that re-parsing intact regardless of prompt content.
+// cmd.exe, which mangles multi-line prompts containing embedded quotes, `%`,
+// or newlines. The short instruction interpolates the temp path with `%s` so
+// the argument contains no embedded quotes and no Go-escaped backslashes —
+// just plain text plus the raw filesystem path — which survives `.cmd` re-
+// parsing intact regardless of prompt content.
 func launchAssistantWithPrompt(choice, prompt string) error {
 	tmpPath, cleanup, err := writePromptForAssistant(prompt)
 	if err != nil {
@@ -21,7 +23,7 @@ func launchAssistantWithPrompt(choice, prompt string) error {
 	}
 	defer cleanup()
 
-	short := fmt.Sprintf("Read the file at %q for project context, then help me get started building this project.", tmpPath)
+	short := fmt.Sprintf("Read the Markdown file at this absolute path: %s for project context, then help me get started building this project.", tmpPath)
 
 	cmd := exec.Command(choice, short)
 	cmd.Stdin = os.Stdin
