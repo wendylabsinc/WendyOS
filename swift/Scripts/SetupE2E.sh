@@ -124,6 +124,43 @@ installSwiftUbuntuIfNeeded() {
   fi
 }
 
+sshLoopbackWorks() {
+  ssh \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR \
+    -o ConnectTimeout=10 \
+    localhost true >/dev/null 2>&1
+}
+
+startSSHServiceIfPossible() {
+  case "$(uname -s)" in
+    Darwin)
+      if sshLoopbackWorks; then
+        return 0
+      fi
+
+      if sudo -n /usr/sbin/systemsetup -setremotelogin on >/dev/null 2>&1; then
+        sudo -n /bin/launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true
+        return 0
+      fi
+
+      echo "ERROR: SSH loopback is required for Swift E2E sessions." >&2
+      echo "Enable macOS Remote Login, or allow this runner to run without a sudo prompt:" >&2
+      echo "  sudo systemsetup -setremotelogin on" >&2
+      return 1
+      ;;
+    *)
+      if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl enable --now ssh >/dev/null 2>&1 || sudo systemctl start ssh >/dev/null 2>&1 || true
+      elif command -v service >/dev/null 2>&1; then
+        sudo service ssh start >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
 setupSSHLoopback() {
   logStep "Setting up SSH loopback for E2E sessions"
 
@@ -143,10 +180,12 @@ setupSSHLoopback() {
     printf '%s\n' "$public_key" >> "$HOME/.ssh/authorized_keys"
   fi
 
-  if command -v systemctl >/dev/null 2>&1; then
-    sudo systemctl enable --now ssh >/dev/null 2>&1 || sudo systemctl start ssh >/dev/null 2>&1 || true
-  elif command -v service >/dev/null 2>&1; then
-    sudo service ssh start >/dev/null 2>&1 || true
+  startSSHServiceIfPossible
+
+  if ! sshLoopbackWorks; then
+    echo "ERROR: Could not establish passwordless SSH to localhost." >&2
+    echo "Swift E2E sessions execute local commands through SSH; verify Remote Login/sshd and ~/.ssh/authorized_keys." >&2
+    exit 1
   fi
 }
 
@@ -181,7 +220,11 @@ setupE2EMacOS() {
   checkCommand make
   checkCommand swift
   checkCommand zip
+  checkCommand ssh "openssh-client"
+  checkCommand ssh-keygen
   checkCommand xcodebuild "Xcode command line tools"
+
+  setupSSHLoopback
 }
 
 case "$(uname -s)" in
