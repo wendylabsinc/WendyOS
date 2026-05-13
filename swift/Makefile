@@ -8,7 +8,7 @@ LIMA_E2E_UBUNTU_INSTANCE ?= wendy-e2e-ubuntu-lts
 LIMA_E2E_REPO_ROOT := $(abspath ..)
 LIMA_E2E_SWIFT_DIR := $(abspath .)
 
-.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 ubuntu reference proto build build-cli build-dev run reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
+.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 test-e2e-mac-mini ubuntu reference proto build build-cli build-dev run reset-mac-app-settings reset-mac-app-tcc reset-mac-app quit clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -29,11 +29,17 @@ test: ## Run Swift package tests
 test-e2e: ## Run Swift E2E tests and package command records
 	bash ./Scripts/TestE2E.sh
 
+test-e2e-jetson-orin-nano: DEVICE ?= wendyos-jetson-orin-nano.local
 test-e2e-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano
-	WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/TestE2E.sh --agent-address wendyos-jetson-orin-nano.local
+	WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/TestE2E.sh --agent-address $(DEVICE)
 
+test-e2e-raspberry-pi-5: DEVICE ?= wendyos-raspberry-pi-5.local
 test-e2e-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5
-	WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/TestE2E.sh --agent-address wendyos-raspberry-pi-5.local
+	WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/TestE2E.sh --agent-address $(DEVICE)
+
+test-e2e-mac-mini: DEVICE ?= mac-mini.local
+test-e2e-mac-mini: ## Run Swift E2E tests against Mac mini
+	WENDY_E2E_AGENT_OS=macOS bash ./Scripts/TestE2E.sh --agent-address $(DEVICE)
 
 ubuntu: ## Open an Ubuntu LTS Lima shell for Swift E2E testing
 	@if ! command -v limactl >/dev/null 2>&1; then \
