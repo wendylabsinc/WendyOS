@@ -45,7 +45,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	// returning nil would let the caller print "Successfully installed"
 	// against a half-cleaned-up disk.
 	defer func() {
-		if cleanupErr := unmountAndOfflineDisk(diskNum); cleanupErr != nil {
+		if cleanupErr := unmountAndOfflineDisk(diskNum, d.IsRemovable); cleanupErr != nil {
 			if retErr == nil {
 				retErr = fmt.Errorf("config partition write succeeded but cleanup failed (disk may still be online with phantom drive letters): %w", cleanupErr)
 			} else {
@@ -106,33 +106,38 @@ func updateDisk(diskNum int) error {
 }
 
 // unmountAndOfflineDisk removes drive letters from every partition on the
-// disk and then takes the disk offline. Mirrors the cleanup pattern in
-// writeImageToDisk (disklister_windows.go) — disk-wide rather than
-// partition-scoped because Windows may auto-assign letters to EFI / rootfs
-// / recovery partitions when we brought the disk online, and leaving any of
-// those in place results in phantom drives in Explorer after the install.
+// disk and (for non-removable disks) takes the disk offline. Mirrors the
+// cleanup pattern in writeImageToDisk (disklister_windows.go) — disk-wide
+// rather than partition-scoped because Windows may auto-assign letters to
+// EFI / rootfs / recovery partitions when we brought the disk online, and
+// leaving any of those in place results in phantom drives in Explorer
+// after the install.
 //
 // SilentlyContinue on Remove-PartitionAccessPath: the access paths may
 // already be gone (e.g. user yanked the SD card) and we don't want a
 // secondary error to mask the upstream failure.
 //
-// Set-Disk -IsOffline is gated on BusType because Windows rejects it on
-// removable media ("Not Supported: Removable media cannot be set to
-// offline." — WDY-1178). Removing the partition access paths above is
-// sufficient cleanup for USB sticks / SD cards: the user pulls the
-// media, and there is no persistent online/offline state to worry
-// about. Bus-type list matches isExternalBus.
-func unmountAndOfflineDisk(diskNum int) error {
+// The Set-Disk -IsOffline step is skipped for removable targets — Windows
+// rejects it on USB / SD / MMC and on the PCIE card readers that report
+// as SCSI but are flagged removable by looksLikeCardReader, with "Not
+// Supported: Removable media cannot be set to offline." (WDY-1178).
+// Gating in Go on the same drive.IsRemovable predicate used to select the
+// install target keeps the cleanup predicate in lockstep with selection.
+// Removing the partition access paths above is sufficient for removable
+// media: the user pulls the device, and there is no persistent
+// online/offline state to worry about.
+func unmountAndOfflineDisk(diskNum int, removable bool) error {
 	script := fmt.Sprintf(
 		"Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue | "+
 			"Where-Object { $_.DriveLetter } | "+
 			"ForEach-Object { "+
 			"Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue "+
-			"}; "+
-			"$d = Get-Disk -Number %d -ErrorAction Stop; "+
-			"if ($d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
-		diskNum, diskNum, diskNum,
+			"}",
+		diskNum,
 	)
+	if !removable {
+		script += fmt.Sprintf("; Set-Disk -Number %d -IsOffline $true -ErrorAction Stop", diskNum)
+	}
 	out, err := exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
@@ -229,10 +234,24 @@ func flushVolume(mountPath string) {
 	_ = exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", script).Run()
 }
 
-func ejectDisk(devPath string) {
-	diskNum, err := parseDiskNumber(devPath)
+func ejectDisk(d drive) {
+	// Skip the offline call for removable targets — Windows rejects
+	// Set-Disk -IsOffline $true on USB / SD / MMC and on the PCIE card
+	// readers that report as SCSI but are flagged removable by
+	// looksLikeCardReader (WDY-1178). Gating on d.IsRemovable matches the
+	// same predicate that put the disk in the selectable-target list,
+	// so any path that selected this drive for install will also skip the
+	// offline step.
+	//
+	// For removable media there is nothing useful to do here anyway —
+	// writeConfigPartition's deferred cleanup already removed the drive
+	// letters, and the user pulls the media to "eject" it physically.
+	if d.IsRemovable {
+		return
+	}
+	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot eject %s: %v\n", devPath, err)
+		fmt.Fprintf(os.Stderr, "warning: cannot eject %s: %v\n", d.DevicePath, err)
 		return
 	}
 	// Idempotent: writeConfigPartition's deferred cleanup already took the
@@ -250,14 +269,9 @@ func ejectDisk(devPath string) {
 	// Check IsOffline first so the success path (where writeConfigPartition's
 	// deferred cleanup already offlined the disk) doesn't emit a spurious
 	// warning if the legacy module errors on a redundant Set-Disk.
-	//
-	// Skip the offline call for removable bus types — Windows rejects it
-	// with "Removable media cannot be set to offline." (WDY-1178). On
-	// USB / SD / MMC there is nothing useful to do here: writeConfigPartition's
-	// cleanup already removed drive letters, and the user pulls the media.
 	script := fmt.Sprintf(
 		"$d = Get-Disk -Number %d -ErrorAction Stop; "+
-			"if (-not $d.IsOffline -and $d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
+			"if (-not $d.IsOffline) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
 		diskNum, diskNum,
 	)
 	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()

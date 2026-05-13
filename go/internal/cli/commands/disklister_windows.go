@@ -447,9 +447,10 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	}
 	closeAllHandles()
 
-	// Remove any auto-assigned drive letters, then take the disk offline.
-	// Set-Disk -IsOffline alone doesn't remove letters that Windows already
-	// assigned during the brief window between releasing locks and going offline.
+	// Remove any auto-assigned drive letters, then (for non-removable
+	// disks) take the disk offline. Set-Disk -IsOffline alone doesn't
+	// remove letters that Windows already assigned during the brief window
+	// between releasing locks and going offline.
 	//
 	// Get-Partition -ErrorAction SilentlyContinue: right after Clear-Disk the
 	// partition table re-read may not have completed and the cmdlet emits a
@@ -457,20 +458,25 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	// Set-Disk: no -Confirm (legacy Storage module rejects it; -IsOffline
 	// doesn't prompt) and no -ErrorAction Stop (we log exit status below).
 	//
-	// Gate Set-Disk -IsOffline on a non-removable BusType — Windows rejects
-	// the call on USB / SD / MMC media with "Removable media cannot be set
-	// to offline." (WDY-1178). Removing the partition access paths above is
-	// what actually prevents phantom drive letters; the offline step is only
+	// Skip Set-Disk -IsOffline for removable targets — Windows rejects it
+	// on USB / SD / MMC and on the PCIE card readers that report as SCSI
+	// but are flagged removable by looksLikeCardReader, with "Not
+	// Supported: Removable media cannot be set to offline." (WDY-1178).
+	// Gating in Go on the same drive.IsRemovable predicate used to select
+	// the install target keeps the cleanup predicate in lockstep with
+	// selection. Removing the partition access paths above is what
+	// actually prevents phantom drive letters; the offline step is only
 	// meaningful on fixed disks (where Windows would otherwise auto-mount
 	// partitions on the next rescan).
 	cleanupScript := fmt.Sprintf(
 		"Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue | "+
 			"Where-Object { $_.DriveLetter } | "+
-			"ForEach-Object { Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue }; "+
-			"$d = Get-Disk -Number %d -ErrorAction SilentlyContinue; "+
-			"if ($d -and $d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true }",
-		diskNum, diskNum, diskNum,
+			"ForEach-Object { Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue }",
+		diskNum,
 	)
+	if !d.IsRemovable {
+		cleanupScript += fmt.Sprintf("; Set-Disk -Number %d -IsOffline $true", diskNum)
+	}
 	if output, err := exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", cleanupScript).CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(output))
 		if msg != "" {

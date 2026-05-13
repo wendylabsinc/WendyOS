@@ -548,7 +548,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// agent download — paying 5–30s of network for a guaranteed-skipped
 		// step is the bug from WDY-1118.
 		if hasProvisioningData {
-			ejectDisk(targetDrive.DevicePath)
+			ejectDisk(targetDrive)
 			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
 		}
 		cliNotice("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
@@ -560,7 +560,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 				// dropping their input and printing "Successfully installed"
 				// would be a lie — this is the user-visible failure mode the
 				// ticket calls out. Fail loudly so the user knows to retry.
-				ejectDisk(targetDrive.DevicePath)
+				ejectDisk(targetDrive)
 				return fmt.Errorf("could not write provisioning data to config partition (--wifi / --device-name / --pre-enroll were requested but not applied): %w", err)
 			}
 			cliNotice("Warning: could not write config partition: %v", err)
@@ -568,7 +568,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-	ejectDisk(targetDrive.DevicePath)
+	ejectDisk(targetDrive)
 
 	cliSuccess("\nSuccessfully installed %s %s on %s.", device.Name, imgInfo.Version, targetDrive.Name)
 	cliSuccess("You can now insert the drive into your device and power it on.")
