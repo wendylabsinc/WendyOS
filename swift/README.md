@@ -58,9 +58,10 @@ control:
   verifies the required tools and configures passwordless SSH loopback. On
   Ubuntu it also installs the required packages, Swift if needed, and SSH server
   settings for parallel test bursts.
-- `Scripts/TestE2E.sh` runs the Swift E2E test package, writes command records,
-  and packages the generated reports into `Build/E2E/`. It accepts options such
-  as `--filter`, `--agent-address`, `--agent-user`, and `--verbose`.
+- `Scripts/TestE2E.sh` runs the Swift E2E test package, writes command records
+  into `Build/e2e-report.<run-id>/recording`, and writes the HTML report to
+  `Build/e2e-report.<run-id>/index.html`. It accepts options such as `--filter`,
+  `--agent-address`, `--agent-user`, and `--verbose`.
 
 Typical local setup and run:
 

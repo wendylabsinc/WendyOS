@@ -10,7 +10,15 @@ From this package:
 swift test --filter WendyE2ETests
 ```
 
-For reproducible command records:
+From `swift/`, the helper script writes command records to
+`Build/e2e-report.<run-id>/recording` and the HTML report to
+`Build/e2e-report.<run-id>/index.html`:
+
+```bash
+bash Scripts/TestE2E.sh
+```
+
+For reproducible command records when invoking SwiftPM directly:
 
 ```bash
 WENDY_E2E_RECORDING_DIR="$PWD/.build/e2e-recording.current" \

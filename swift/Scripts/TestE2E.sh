@@ -6,13 +6,46 @@ SWIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SWIFT_DIR/.." && pwd)"
 PACKAGE_DIR="$SWIFT_DIR/WendyE2ETests"
 DEFAULT_FIXTURES_DIR="$REPO_ROOT/.github/swift-e2e-tests"
-DEFAULT_RECORDS_DIR="$PACKAGE_DIR/.build/e2e-recording.current"
-DEFAULT_ARTIFACT_DIR="$SWIFT_DIR/Build/E2E"
+
+default_run_id() {
+  local timestamp
+  timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
+
+  if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+    printf "gh%s-attempt%s-%s-p%s-r%s%s" \
+      "$GITHUB_RUN_ID" \
+      "${GITHUB_RUN_ATTEMPT:-1}" \
+      "$timestamp" \
+      "$$" \
+      "$RANDOM" \
+      "$RANDOM"
+  else
+    printf "%s-p%s-r%s%s" "$timestamp" "$$" "$RANDOM" "$RANDOM"
+  fi
+}
+
+sanitize_run_id() {
+  local value="$1"
+  value="${value//[![:alnum:]._-]/-}"
+  while [[ "$value" == *--* ]]; do
+    value="${value//--/-}"
+  done
+  value="${value#-}"
+  value="${value%-}"
+  printf "%s" "$value"
+}
+
+RUN_ID="$(sanitize_run_id "${WENDY_E2E_RUN_ID:-$(default_run_id)}")"
+if [[ -z "$RUN_ID" ]]; then
+  RUN_ID="$(default_run_id)"
+fi
+
+DEFAULT_REPORT_DIR="$SWIFT_DIR/Build/e2e-report.$RUN_ID"
 
 FIXTURES_DIR="${WENDY_E2E_FIXTURES_DIR:-$DEFAULT_FIXTURES_DIR}"
-RECORDS_DIR="${WENDY_E2E_RECORDING_DIR:-${WENDY_E2E_TEST_RECORDS_DIR:-$DEFAULT_RECORDS_DIR}}"
-ARTIFACT_DIR="${WENDY_E2E_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
-REPORT_ZIP="${WENDY_E2E_REPORT_ZIP:-$ARTIFACT_DIR/e2e-report.zip}"
+REPORT_DIR="${WENDY_E2E_ARTIFACT_DIR:-$DEFAULT_REPORT_DIR}"
+RECORDS_DIR="${WENDY_E2E_RECORDING_DIR:-${WENDY_E2E_TEST_RECORDS_DIR:-}}"
+REPORT_ZIP="${WENDY_E2E_REPORT_ZIP:-}"
 AGENT_USER="${WENDY_E2E_AGENT_USER:-}"
 AGENT_ADDRESS="${WENDY_E2E_AGENT_ADDRESS:-}"
 AGENT_WORKDIR="${WENDY_E2E_AGENT_WORKING_DIRECTORY:-}"
@@ -32,7 +65,7 @@ Options:
                         WENDY_E2E_TEST_FILTERS may contain comma-separated
                         filters, otherwise the WendyE2ETests target is run.
   --records-dir DIR     Directory for generated *.md command recording files.
-  --artifact-dir DIR    Directory for the final zip artifact.
+  --artifact-dir DIR    Directory for generated report files.
   --report-zip PATH     Path to the final zip artifact.
   --fixtures-dir DIR    Fixture directory exposed to tests.
   --agent-user USER     Optional SSH user for the agent machine.
@@ -44,11 +77,13 @@ Options:
 
 Environment:
   WENDY_E2E_TEST_FILTERS              Comma-separated SwiftPM filters.
+  WENDY_E2E_RUN_ID                    Optional run identifier for default paths.
   WENDY_E2E_AGENT_USER                Optional SSH user for the agent machine.
   WENDY_E2E_AGENT_ADDRESS             Optional address for the agent machine.
   WENDY_E2E_AGENT_WORKING_DIRECTORY   swift/ directory for the agent.
   WENDY_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
-  WENDY_E2E_RECORDING_DIR             Defaults to package .build recording dir.
+  WENDY_E2E_ARTIFACT_DIR              Defaults to Build/e2e-report.<run-id>.
+  WENDY_E2E_RECORDING_DIR             Defaults to Build/e2e-report.<run-id>/recording.
   WENDY_E2E_TEST_RECORDS_DIR          Backward-compatible alias for recording dir.
   WENDY_E2E_GENERATE_REPORT           true/false; generates index.html.
   WENDY_E2E_VERBOSE                   true/false; prints machine commands.
@@ -66,13 +101,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --artifact-dir)
-      ARTIFACT_DIR="$2"
-      REPORT_ZIP="$ARTIFACT_DIR/e2e-report.zip"
+      REPORT_DIR="$2"
       shift 2
       ;;
     --report-zip)
       REPORT_ZIP="$2"
-      ARTIFACT_DIR="$(dirname "$REPORT_ZIP")"
       shift 2
       ;;
     --fixtures-dir)
@@ -139,13 +172,25 @@ absolute_file_path() {
   printf "%s/%s" "$dir" "$base"
 }
 
-ARTIFACT_DIR="$(absolute_dir_path "$ARTIFACT_DIR")"
+REPORT_DIR="$(absolute_dir_path "$REPORT_DIR")"
+if [[ -z "$RECORDS_DIR" ]]; then
+  RECORDS_DIR="$REPORT_DIR/recording"
+fi
+if [[ -z "$REPORT_ZIP" ]]; then
+  REPORT_ZIP="$REPORT_DIR.zip"
+fi
 RECORDS_DIR="$(absolute_dir_path "$RECORDS_DIR")"
 REPORT_ZIP="$(absolute_file_path "$REPORT_ZIP")"
+REPORT_RECORDING_DIR="$REPORT_DIR/recording"
 
-mkdir -p "$ARTIFACT_DIR"
-rm -rf "$RECORDS_DIR"
-mkdir -p "$RECORDS_DIR"
+rm -rf "$REPORT_ZIP"
+if [[ "$RECORDS_DIR" == "$REPORT_RECORDING_DIR" ]]; then
+  rm -rf "$REPORT_DIR"
+  mkdir -p "$RECORDS_DIR"
+else
+  rm -rf "$REPORT_DIR" "$RECORDS_DIR"
+  mkdir -p "$REPORT_RECORDING_DIR" "$RECORDS_DIR"
+fi
 
 if [[ ! -d "$FIXTURES_DIR" ]]; then
   echo "ERROR: Swift E2E fixtures directory not found: $FIXTURES_DIR" >&2
@@ -176,38 +221,33 @@ generate_html_report() {
     cd "$PACKAGE_DIR"
     swift run swift-e2e-testing report \
       --records-dir "$RECORDS_DIR" \
-      --output "$RECORDS_DIR/index.html"
+      --output "$REPORT_DIR/index.html"
   )
 }
 
 collect_reports() {
   local status="$1"
-  local staging_dir="$ARTIFACT_DIR/e2e-report"
-  local recording_dir="$staging_dir/recording"
 
-  rm -rf "$staging_dir" "$REPORT_ZIP"
-  mkdir -p "$recording_dir"
+  rm -rf "$REPORT_ZIP"
+  mkdir -p "$REPORT_DIR"
 
-  if [[ -d "$RECORDS_DIR" ]]; then
-    find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.md' -print0 \
-      | while IFS= read -r -d '' file; do
-          cp "$file" "$recording_dir/"
-        done
-  fi
-
-  if [[ "$GENERATE_REPORT" == "true" ]]; then
-    (
-      cd "$PACKAGE_DIR"
-      swift run swift-e2e-testing report \
-        --records-dir "$recording_dir" \
-        --output "$staging_dir/index.html"
-    )
+  if [[ "$RECORDS_DIR" != "$REPORT_RECORDING_DIR" ]]; then
+    rm -rf "$REPORT_RECORDING_DIR"
+    mkdir -p "$REPORT_RECORDING_DIR"
+    if [[ -d "$RECORDS_DIR" ]]; then
+      find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.md' -print0 \
+        | while IFS= read -r -d '' file; do
+            cp "$file" "$REPORT_RECORDING_DIR/"
+          done
+    fi
   fi
 
   {
     echo "# Swift E2E Test Reports"
     echo
     echo "- Exit status: \`$status\`"
+    echo "- Run ID: \`$RUN_ID\`"
+    echo "- Report directory: \`$REPORT_DIR\`"
     echo "- Recording directory: \`$RECORDS_DIR\`"
     echo "- Fixtures directory: \`$FIXTURES_DIR\`"
     echo "- Verbose: \`$VERBOSE\`"
@@ -219,8 +259,8 @@ collect_reports() {
     fi
     echo
     echo "## Files"
-    find "$staging_dir" -type f | sort | sed "s#^$staging_dir/#- #"
-  } > "$staging_dir/README.md"
+    find "$REPORT_DIR" -type f | sort | sed "s#^$REPORT_DIR/#- #"
+  } > "$REPORT_DIR/README.md"
 
   local report_zip_dir
   local report_zip
@@ -230,9 +270,9 @@ collect_reports() {
   report_zip="$report_zip_dir/$(basename "$REPORT_ZIP")"
 
   if command -v zip >/dev/null 2>&1; then
-    (cd "$staging_dir" && zip -qr "$report_zip" .)
+    (cd "$REPORT_DIR" && zip -qr "$report_zip" .)
   else
-    (cd "$ARTIFACT_DIR" && ditto -c -k --keepParent "$(basename "$staging_dir")" "$report_zip")
+    (cd "$(dirname "$REPORT_DIR")" && ditto -c -k --keepParent "$(basename "$REPORT_DIR")" "$report_zip")
   fi
 
   echo "==> Wrote Swift E2E reports zip: $report_zip"
@@ -248,11 +288,13 @@ fi
 
 echo "==> Running Swift E2E tests"
 echo "    Package:  $PACKAGE_DIR"
+echo "    Run ID:   $RUN_ID"
+echo "    Report:   $REPORT_DIR"
 echo "    Fixtures: $FIXTURES_DIR"
 echo "    Recording: $RECORDS_DIR"
 echo "    Filters:  ${TEST_FILTERS[*]}"
 echo "    Verbose:  $VERBOSE"
-echo "    Report:   $GENERATE_REPORT"
+echo "    HTML:     $GENERATE_REPORT"
 if [[ -n "$AGENT_ADDRESS" ]]; then
   echo "    Agent:   $(ssh_target):${AGENT_WORKDIR:-<default>}"
 fi
@@ -260,6 +302,7 @@ fi
 set +e
 (
   cd "$PACKAGE_DIR"
+  WENDY_E2E_RUN_ID="$RUN_ID" \
   WENDY_E2E_FIXTURES_DIR="$FIXTURES_DIR" \
   WENDY_E2E_RECORDING_DIR="$RECORDS_DIR" \
   WENDY_E2E_TEST_RECORDS_DIR="$RECORDS_DIR" \
