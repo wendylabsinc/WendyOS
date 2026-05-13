@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy device unset-default` {
+struct `'wendy device unset-default'` {
     /**
      Displays usage for `wendy device unset-default`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

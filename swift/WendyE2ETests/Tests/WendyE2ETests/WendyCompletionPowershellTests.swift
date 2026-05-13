@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy completion powershell` {
+struct `'wendy completion powershell'` {
     /**
      Displays usage for `wendy completion powershell`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

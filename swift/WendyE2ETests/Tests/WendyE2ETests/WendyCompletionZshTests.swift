@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy completion zsh` {
+struct `'wendy completion zsh'` {
     /**
      Displays usage for `wendy completion zsh`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

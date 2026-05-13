@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy discover` {
+struct `'wendy discover'` {
     /**
      Displays usage for `wendy discover`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

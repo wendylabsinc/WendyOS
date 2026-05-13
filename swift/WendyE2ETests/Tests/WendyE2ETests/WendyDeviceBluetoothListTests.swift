@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy device bluetooth list` {
+struct `'wendy device bluetooth list'` {
     /**
      Displays usage for `wendy device bluetooth list`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device wifi list` {
+struct `'wendy cloud device wifi list'` {
     /**
      Displays usage for `wendy cloud device wifi list`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

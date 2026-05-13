@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy json schema` {
+struct `'wendy json schema'` {
     /**
      Displays usage for `wendy json schema`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

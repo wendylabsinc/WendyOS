@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device apps start` {
+struct `'wendy cloud device apps start'` {
     /**
      Displays usage for `wendy cloud device apps start`. The output includes
      the command synopsis, local flags, inherited global flags, and concise

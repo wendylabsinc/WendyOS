@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy device wifi forget` {
+struct `'wendy device wifi forget'` {
     /**
      Displays usage for `wendy device wifi forget`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

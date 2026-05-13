@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy mcp serve` {
+struct `'wendy mcp serve'` {
     /**
      Displays usage for `wendy mcp serve`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

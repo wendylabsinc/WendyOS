@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy auth refresh-certs` {
+struct `'wendy auth refresh-certs'` {
     /**
      Displays usage for `wendy auth refresh-certs`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

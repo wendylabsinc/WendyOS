@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device apps remove` {
+struct `'wendy cloud device apps remove'` {
     /**
      Displays usage for `wendy cloud device apps remove`. The output includes
      the command synopsis, local flags, inherited global flags, and concise

@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy os list-drives` {
+struct `'wendy os list-drives'` {
     /**
      Displays usage for `wendy os list-drives`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

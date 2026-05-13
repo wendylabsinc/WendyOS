@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device audio set-default` {
+struct `'wendy cloud device audio set-default'` {
     /**
      Displays usage for `wendy cloud device audio set-default`. The output
      includes the command synopsis, local flags, inherited global flags,

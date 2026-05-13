@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud tunnel` {
+struct `'wendy cloud tunnel'` {
     /**
      Displays usage for `wendy cloud tunnel`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

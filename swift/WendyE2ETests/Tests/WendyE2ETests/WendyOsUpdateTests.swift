@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy os update` {
+struct `'wendy os update'` {
     /**
      Displays usage for `wendy os update`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

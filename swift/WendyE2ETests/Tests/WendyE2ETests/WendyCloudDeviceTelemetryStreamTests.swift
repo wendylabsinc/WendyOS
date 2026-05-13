@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device telemetry-stream` {
+struct `'wendy cloud device telemetry-stream'` {
     /**
      Displays usage for `wendy cloud device telemetry-stream`. The output
      includes the command synopsis, local flags, inherited global flags,

@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy utils open-browser` {
+struct `'wendy utils open-browser'` {
     /**
      Displays usage for `wendy utils open-browser`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

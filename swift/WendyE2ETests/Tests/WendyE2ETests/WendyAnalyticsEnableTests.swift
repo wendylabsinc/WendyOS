@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy analytics enable` {
+struct `'wendy analytics enable'` {
     /**
      Displays usage for `wendy analytics enable`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

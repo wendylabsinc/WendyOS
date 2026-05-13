@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cache clear` {
+struct `'wendy cache clear'` {
     /**
      Displays usage for `wendy cache clear`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

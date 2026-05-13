@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy json validate` {
+struct `'wendy json validate'` {
     /**
      Displays usage for `wendy json validate`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

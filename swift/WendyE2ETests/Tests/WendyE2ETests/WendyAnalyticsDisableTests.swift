@@ -15,7 +15,7 @@ import WendyE2ETesting
 /// The command does not accept arguments or flags. It is always
 /// non-interactive and deterministic.
 @Suite
-struct `wendy analytics disable` {
+struct `'wendy analytics disable'` {
     let scenario = CLIAndAgentScenario()
 
     // MARK: - Happy paths

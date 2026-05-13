@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy auth status` {
+struct `'wendy auth status'` {
     /**
      Displays usage for `wendy auth status`. The output includes the command
      synopsis, local flags, inherited global flags, and concise

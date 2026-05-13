@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy cloud device audio monitor` {
+struct `'wendy cloud device audio monitor'` {
     /**
      Displays usage for `wendy cloud device audio monitor`. The output includes
      the command synopsis, local flags, inherited global flags, and concise

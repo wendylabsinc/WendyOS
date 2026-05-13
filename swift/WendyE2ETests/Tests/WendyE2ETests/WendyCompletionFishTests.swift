@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy completion fish` {
+struct `'wendy completion fish'` {
     /**
      Displays usage for `wendy completion fish`. The output includes the
      command synopsis, local flags, inherited global flags, and concise

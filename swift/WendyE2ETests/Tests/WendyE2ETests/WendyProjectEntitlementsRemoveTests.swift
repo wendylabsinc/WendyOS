@@ -1,7 +1,7 @@
 import Testing
 
 @Suite
-struct `wendy project entitlements remove` {
+struct `'wendy project entitlements remove'` {
     /**
      Displays usage for `wendy project entitlements remove`. The output
      includes the command synopsis, local flags, inherited global flags,
