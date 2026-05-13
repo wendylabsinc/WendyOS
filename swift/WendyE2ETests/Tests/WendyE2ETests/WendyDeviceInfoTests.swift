@@ -39,7 +39,7 @@ struct `'wendy device info'` {
             try await cli.sh(
                 """
                 mkdir -p "$HOME/.wendy"
-                printf '{"defaultDevice":"default-device-that-should-not-be-used.invalid"}\n' > "$HOME/.wendy/config.json"
+                printf '%s\n' '{"defaultDevice":"default-device-that-should-not-be-used.invalid"}' > "$HOME/.wendy/config.json"
                 """
             )
             try await cli.sh("wendy --device \(agentAddress) device info --json") {
@@ -71,7 +71,7 @@ struct `'wendy device info'` {
             try await cli.sh(
                 """
                 mkdir -p "$HOME/.wendy"
-                printf '{"defaultDevice":"\(agentAddress)"}\n' > "$HOME/.wendy/config.json"
+                printf '%s\n' '{"defaultDevice":"\(agentAddress)"}' > "$HOME/.wendy/config.json"
                 """
             )
 
@@ -209,7 +209,7 @@ struct `'wendy device info'` {
             try await cli.sh(
                 """
                 mkdir -p "$HOME/.wendy"
-                printf '{"defaultDevice":"\(agentAddress)"}\n' > "$HOME/.wendy/config.json"
+                printf '%s\n' '{"defaultDevice":"\(agentAddress)"}' > "$HOME/.wendy/config.json"
                 """
             )
 
