@@ -291,7 +291,7 @@ Use `Session.with` when a spec needs cleanup-safe session lifetimes:
 ```swift
 try await Session.with(.cli, .agent) { cli, agent in
     try await cli.sh("./bin/wendy --version")
-    try await agent.sh("make build-dev")
+    try await agent.sh("make agent-build")
 }
 ```
 

@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources WendyE2ETests/Sources WendyE2ETests/Tests
 
-.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 test-e2e-mac-mini reference proto build build-cli build-dev agent-start agent-reset-settings agent-reset-permissions agent-reset agent-stop clean
+.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 test-e2e-mac-mini reference proto agent-release build-cli agent-build agent-start agent-reset-settings agent-reset-permissions agent-reset agent-stop clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -49,18 +49,18 @@ proto: ## Generate Swift gRPC code from Proto/
 clean: ## Remove Build/
 	rm -rf Build/
 
-build: ## Build, sign, notarize, and package the macOS app
+agent-release: ## Build, sign, notarize, and package the macOS app
 	VERSION='$(VERSION)' OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh
 
 build-cli: ## Build the Go CLI in ../go
 	$(MAKE) -C ../go build-cli
 
-build-dev: ## Build and package a dev-signed macOS app without notarization
+agent-build: ## Build and package a dev-signed macOS app without notarization
 	OUTPUT_DIR='$(OUTPUT_DIR)' bash ./Scripts/Build.sh --dev
 
 agent-start: ## Stop, build, and open the WendyAgentMac app
 	@$(MAKE) agent-stop
-	@$(MAKE) build-dev
+	@$(MAKE) agent-build
 	open Build/WendyAgentMac.app
 
 agent-reset-settings: ## Reset WendyAgentMac preferences/defaults
