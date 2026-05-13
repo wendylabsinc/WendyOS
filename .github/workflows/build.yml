@@ -904,6 +904,8 @@ jobs:
             desc "Manage your headless device (nightly)"
             homepage "https://github.com/wendylabsinc/wendy-agent"
 
+            depends_on :macos
+
             app "WendyAgentMac.app"
           end
           EOF
@@ -964,6 +966,8 @@ jobs:
             name "Wendy Agent"
             desc "Manage your headless device"
             homepage "https://github.com/wendylabsinc/wendy-agent"
+
+            depends_on :macos
 
             app "WendyAgentMac.app"
           end
