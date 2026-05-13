@@ -278,7 +278,7 @@ collect_reports() {
   echo "==> Wrote Swift E2E reports zip: $report_zip"
 }
 
-SWIFT_TEST_ARGS=("test")
+SWIFT_TEST_ARGS=("test" "--no-parallel")
 if [[ ${#TEST_FILTERS[@]} -eq 1 ]]; then
   SWIFT_TEST_ARGS+=("--filter" "${TEST_FILTERS[0]}")
 else
