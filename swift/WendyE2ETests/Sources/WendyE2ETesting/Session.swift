@@ -119,13 +119,23 @@ public struct Session: Sendable {
         }
 
         let invocation = self.invocation(for: command)
-        let start = ContinuousClock.now
-        let record = try await Self.invoke(
-            invocation,
-            output: output,
-            error: error
-        )
-        let duration = start.duration(to: .now)
+        await SSHInvocationLimiter.shared.acquire()
+
+        let record: ExecutionRecord<Output, Error>
+        let duration: Duration
+        do {
+            let start = ContinuousClock.now
+            record = try await Self.invoke(
+                invocation,
+                output: output,
+                error: error
+            )
+            duration = start.duration(to: .now)
+            await SSHInvocationLimiter.shared.release()
+        } catch {
+            await SSHInvocationLimiter.shared.release()
+            throw error
+        }
 
         self.reporter?.record(
             session: self,
@@ -377,6 +387,37 @@ public struct Session: Sendable {
             output: output,
             error: error
         )
+    }
+}
+
+private actor SSHInvocationLimiter {
+    static let shared = SSHInvocationLimiter(maximumConcurrentInvocations: 8)
+
+    private let maximumConcurrentInvocations: Int
+    private var activeInvocations = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maximumConcurrentInvocations: Int) {
+        self.maximumConcurrentInvocations = maximumConcurrentInvocations
+    }
+
+    func acquire() async {
+        if self.activeInvocations < self.maximumConcurrentInvocations {
+            self.activeInvocations += 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            self.waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if self.waiters.isEmpty {
+            self.activeInvocations -= 1
+        } else {
+            self.waiters.removeFirst().resume()
+        }
     }
 }
 

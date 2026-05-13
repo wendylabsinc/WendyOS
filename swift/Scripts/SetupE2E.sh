@@ -134,6 +134,41 @@ sshLoopbackWorks() {
     localhost true >/dev/null 2>&1
 }
 
+configureSSHDForE2E() {
+  case "$(uname -s)" in
+    Linux)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  logStep "Configuring SSH server for E2E connection bursts"
+
+  local config_dir="/etc/ssh/sshd_config.d"
+  local config_file="$config_dir/99-wendy-e2e.conf"
+
+  sudo mkdir -p "$config_dir"
+  sudo tee "$config_file" >/dev/null <<'EOF'
+# Managed by Wendy Swift E2E setup.
+# The E2E harness runs each command through SSH; parallel tests can briefly
+# exceed OpenSSH's default MaxStartups 10:30:100.
+MaxStartups 1000
+MaxSessions 1000
+EOF
+
+  if ! sudo sshd -t; then
+    echo "ERROR: Generated sshd E2E configuration is invalid: $config_file" >&2
+    exit 1
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl reload ssh >/dev/null 2>&1 || sudo systemctl restart ssh >/dev/null 2>&1 || true
+  elif command -v service >/dev/null 2>&1; then
+    sudo service ssh reload >/dev/null 2>&1 || sudo service ssh restart >/dev/null 2>&1 || true
+  fi
+}
+
 startSSHServiceIfPossible() {
   case "$(uname -s)" in
     Darwin)
@@ -195,6 +230,7 @@ setupE2EUbuntu() {
 
   installUbuntuPackages
   installSwiftUbuntuIfNeeded
+  configureSSHDForE2E
   setupSSHLoopback
 
   checkCommand bash
