@@ -30,8 +30,10 @@ import (
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 	"golang.org/x/term"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func newDeviceCmd() *cobra.Command {
@@ -636,11 +638,6 @@ func newDeviceLogsCmd() *cobra.Command {
 		Short: "Stream logs from containers on the device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
 
 			// --level takes precedence over --min-severity when both are set.
 			if level != "" {
@@ -661,40 +658,68 @@ func newDeviceLogsCmd() *cobra.Command {
 			if minSeverity > 0 {
 				req.MinSeverity = &minSeverity
 			}
-			stream, err := conn.TelemetryService.StreamLogs(ctx, req)
-			if err != nil {
-				return fmt.Errorf("starting log stream: %w", err)
-			}
 
 			for {
-				resp, err := stream.Recv()
-				if err == io.EOF {
-					break
+				if ctx.Err() != nil {
+					return nil
 				}
+
+				conn, err := connectToAgent(ctx)
 				if err != nil {
-					return fmt.Errorf("receiving logs: %w", err)
+					return err
 				}
 
-				logs := resp.GetLogs()
-				if logs == nil {
-					continue
+				stream, err := conn.TelemetryService.StreamLogs(ctx, req)
+				if err != nil {
+					conn.Close()
+					return fmt.Errorf("starting log stream: %w", err)
 				}
 
-				for _, rl := range logs.GetResourceLogs() {
-					svcName := resourceServiceName(rl.GetResource())
-					for _, sl := range rl.GetScopeLogs() {
-						for _, lr := range sl.GetLogRecords() {
-							if jsonOutput {
-								printLogRecordJSON(svcName, lr)
-							} else {
-								printLogRecord(svcName, lr)
+				streamErr := func() error {
+					defer conn.Close()
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							return nil
+						}
+						if err != nil {
+							return err
+						}
+
+						logs := resp.GetLogs()
+						if logs == nil {
+							continue
+						}
+
+						for _, rl := range logs.GetResourceLogs() {
+							svcName := resourceServiceName(rl.GetResource())
+							for _, sl := range rl.GetScopeLogs() {
+								for _, lr := range sl.GetLogRecords() {
+									if jsonOutput {
+										printLogRecordJSON(svcName, lr)
+									} else {
+										printLogRecord(svcName, lr)
+									}
+								}
 							}
 						}
 					}
+				}()
+
+				if streamErr == nil || ctx.Err() != nil {
+					return nil
+				}
+				if !isTransientStreamError(streamErr) {
+					return streamErr
+				}
+
+				fmt.Fprintf(os.Stderr, "Connection lost (%v), reconnecting...\n", streamErr)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(2 * time.Second):
 				}
 			}
-
-			return nil
 		},
 	}
 
@@ -704,6 +729,22 @@ func newDeviceLogsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&level, "level", "", "Minimum log level (trace, debug, info, warn, error, fatal)")
 
 	return cmd
+}
+
+// isTransientStreamError reports whether a stream error is worth retrying.
+// Permanent errors (PermissionDenied, Unauthenticated, NotFound, etc.) are returned
+// directly to the caller; only transport-level failures warrant a reconnect.
+func isTransientStreamError(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return true // raw network error
+	}
+	switch s.Code() {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 var (

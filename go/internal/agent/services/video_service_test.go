@@ -23,7 +23,7 @@ func newTestVideoService(glob func() ([]string, error), readName func(string) (s
 	if readName != nil {
 		svc.readDeviceName = readName
 	}
-	svc.checkCaptureNode = func(string) bool { return true }
+	svc.hasVideoCapture = func(string) bool { return true }
 	return svc
 }
 
@@ -93,7 +93,7 @@ func TestListV4L2Devices_FilterNonCaptureNodes(t *testing.T) {
 		func(base string) (string, error) { return "HD Pro Webcam C920", nil },
 	)
 	// video1 is a metadata node (no V4L2_CAP_VIDEO_CAPTURE).
-	svc.checkCaptureNode = func(path string) bool { return path == "/dev/video0" }
+	svc.hasVideoCapture = func(path string) bool { return path == "/dev/video0" }
 
 	devices, err := svc.listV4L2Devices()
 	if err != nil {
