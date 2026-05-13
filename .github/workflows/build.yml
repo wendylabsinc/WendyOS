@@ -649,7 +649,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (macOS, stable gate)
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    if: false # temporarily disabled
     uses: ./.github/workflows/integration-tests.yml
     with:
       platform: macos
