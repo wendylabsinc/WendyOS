@@ -4,11 +4,7 @@ SHELL := /bin/bash
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources WendyE2ETests/Sources WendyE2ETests/Tests
 
-LIMA_E2E_UBUNTU_INSTANCE ?= wendy-e2e-ubuntu-lts
-LIMA_E2E_REPO_ROOT := $(abspath ..)
-LIMA_E2E_SWIFT_DIR := $(abspath .)
-
-.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 test-e2e-mac-mini ubuntu reference proto build build-cli build-dev agent-start reset-mac-app-settings reset-mac-app-tcc reset-mac-app agent-stop clean
+.PHONY: help format lint test test-e2e test-e2e-jetson-orin-nano test-e2e-raspberry-pi-5 test-e2e-mac-mini reference proto build build-cli build-dev agent-start agent-reset-settings agent-reset-tcc agent-reset agent-stop clean
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -41,29 +37,6 @@ test-e2e-mac-mini: DEVICE ?= mac-mini.local
 test-e2e-mac-mini: ## Run Swift E2E tests against Mac mini
 	WENDY_E2E_AGENT_OS=macOS bash ./Scripts/TestE2E.sh --agent-address $(DEVICE)
 
-ubuntu: ## Open an Ubuntu LTS Lima shell for Swift E2E testing
-	@if ! command -v limactl >/dev/null 2>&1; then \
-		echo "ERROR: limactl is required. Install Lima first: https://lima-vm.io/" >&2; \
-		exit 1; \
-	fi
-	@if ! limactl list -q | grep -Fxq '$(LIMA_E2E_UBUNTU_INSTANCE)'; then \
-		printf "Lima instance '$(LIMA_E2E_UBUNTU_INSTANCE)' not found. Create it now? [y/N] "; \
-		read answer; \
-		case "$$answer" in \
-			[yY]|[yY][eE][sS]) \
-				limactl create --tty=false --name '$(LIMA_E2E_UBUNTU_INSTANCE)' --mount '$(LIMA_E2E_REPO_ROOT):w' template:ubuntu-lts; \
-				;; \
-			*) \
-				echo "Aborted."; \
-				exit 1; \
-				;; \
-		esac; \
-	fi
-	@set -e; \
-		limactl start '$(LIMA_E2E_UBUNTU_INSTANCE)' >/dev/null; \
-		trap 'limactl stop "$(LIMA_E2E_UBUNTU_INSTANCE)" >/dev/null || true' EXIT; \
-		limactl shell --workdir '$(LIMA_E2E_SWIFT_DIR)' '$(LIMA_E2E_UBUNTU_INSTANCE)' bash -lc 'bash Scripts/SetupE2E.sh && { [ ! -f "$${SWIFTLY_HOME_DIR:-$$HOME/.local/share/swiftly}/env.sh" ] || . "$${SWIFTLY_HOME_DIR:-$$HOME/.local/share/swiftly}/env.sh"; } && exec "$$SHELL"'
-
 reference: ## Generate Swift E2E HTML reference documentation and open it
 	rm -rf Build/Reference
 	mkdir -p Build/Reference
@@ -90,13 +63,13 @@ agent-start: ## Stop, build, and open the WendyAgentMac app
 	@$(MAKE) build-dev
 	open Build/WendyAgentMac.app
 
-reset-mac-app-settings: ## Reset WendyAgentMac preferences/defaults
+agent-reset-settings: ## Reset WendyAgentMac preferences/defaults
 	./Scripts/ResetMacAppSettings.sh
 
-reset-mac-app-tcc: ## Reset WendyAgentMac TCC permissions
+agent-reset-tcc: ## Reset WendyAgentMac TCC permissions
 	./Scripts/ResetMacAppTCC.sh
 
-reset-mac-app: reset-mac-app-settings reset-mac-app-tcc ## Reset WendyAgentMac settings and TCC permissions
+agent-reset: agent-reset-settings agent-reset-tcc ## Reset WendyAgentMac settings and TCC permissions
 
 agent-stop: ## Quit WendyAgentMac and fail if it is still running after 10 seconds
 	./Scripts/Quit.sh
