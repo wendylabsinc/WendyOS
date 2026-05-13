@@ -17,6 +17,7 @@ AGENT_USER="${WENDY_E2E_AGENT_USER:-}"
 AGENT_ADDRESS="${WENDY_E2E_AGENT_ADDRESS:-}"
 AGENT_WORKDIR="${WENDY_E2E_AGENT_WORKING_DIRECTORY:-}"
 VERBOSE="${WENDY_E2E_VERBOSE:-false}"
+GENERATE_REPORT="${WENDY_E2E_GENERATE_REPORT:-true}"
 TEST_FILTERS=()
 
 usage() {
@@ -38,6 +39,7 @@ Options:
   --agent-address HOST  Optional address for the agent machine; defaults to hostname.
   --agent-workdir DIR   Existing swift/ working directory to use for the agent.
   --verbose             Print each E2E machine command before it runs.
+  --no-report           Do not generate index.html from command records.
   --help                Show this help message.
 
 Environment:
@@ -47,6 +49,7 @@ Environment:
   WENDY_E2E_AGENT_WORKING_DIRECTORY   swift/ directory for the agent.
   WENDY_E2E_FIXTURES_DIR              Defaults to .github/swift-e2e-tests.
   WENDY_E2E_TEST_RECORDS_DIR          Defaults to package .build records dir.
+  WENDY_E2E_GENERATE_REPORT           true/false; generates index.html.
   WENDY_E2E_VERBOSE                   true/false; prints machine commands.
 EOF
 }
@@ -89,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verbose)
       VERBOSE="true"
+      shift
+      ;;
+    --no-report)
+      GENERATE_REPORT="false"
       shift
       ;;
     --help|-h)
@@ -158,6 +165,20 @@ ssh_target() {
   fi
 }
 
+generate_html_report() {
+  if [[ "$GENERATE_REPORT" != "true" ]]; then
+    return
+  fi
+
+  echo "==> Generating Swift E2E HTML report"
+  (
+    cd "$PACKAGE_DIR"
+    swift run swift-e2e-testing report \
+      --records-dir "$RECORDS_DIR" \
+      --output "$RECORDS_DIR/index.html"
+  )
+}
+
 collect_reports() {
   local status="$1"
   local staging_dir="$ARTIFACT_DIR/swift-e2e-test-reports"
@@ -179,6 +200,7 @@ collect_reports() {
     echo "- Records directory: \`$RECORDS_DIR\`"
     echo "- Fixtures directory: \`$FIXTURES_DIR\`"
     echo "- Verbose: \`$VERBOSE\`"
+    echo "- HTML report: \`$GENERATE_REPORT\`"
     if [[ -n "$AGENT_ADDRESS" ]]; then
       echo "- Agent user: \`${AGENT_USER:-<none>}\`"
       echo "- Agent address: \`$AGENT_ADDRESS\`"
@@ -219,6 +241,7 @@ echo "    Fixtures: $FIXTURES_DIR"
 echo "    Records:  $RECORDS_DIR"
 echo "    Filters:  ${TEST_FILTERS[*]}"
 echo "    Verbose:  $VERBOSE"
+echo "    Report:   $GENERATE_REPORT"
 if [[ -n "$AGENT_ADDRESS" ]]; then
   echo "    Agent:   $(ssh_target):${AGENT_WORKDIR:-<default>}"
 fi
@@ -237,5 +260,6 @@ set +e
 TEST_STATUS=$?
 set -e
 
+generate_html_report
 collect_reports "$TEST_STATUS"
 exit "$TEST_STATUS"
