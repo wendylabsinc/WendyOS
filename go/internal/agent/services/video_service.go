@@ -29,6 +29,9 @@ const (
 	v4l2PixFmtH264          = 0x34363248 // 'H264' little-endian FourCC
 	v4l2FieldNone           = 1
 
+	v4l2CapVideoCapture = 0x00000001 // device supports video capture
+
+	vidiocQuerycap  = 0x80685600
 	vidiocSFmt      = 0xC0D05605
 	vidiocReqbufs   = 0xC0145608
 	vidiocQuerybuf  = 0xC0585609
@@ -76,6 +79,26 @@ func (b *v4l2Buf) bytesUsed() uint32  { return *(*uint32)(unsafe.Pointer(&b[8]))
 func (b *v4l2Buf) setMemory(m uint32) { *(*uint32)(unsafe.Pointer(&b[60])) = m }
 func (b *v4l2Buf) offset() uint32     { return *(*uint32)(unsafe.Pointer(&b[64])) }
 
+// v4l2Capability matches struct v4l2_capability (104 bytes).
+// capabilities field is at offset 84.
+type v4l2Capability [104]byte
+
+func (c *v4l2Capability) caps() uint32 { return *(*uint32)(unsafe.Pointer(&c[84])) }
+
+// isVideoCaptureDevice returns true if path exposes V4L2_CAP_VIDEO_CAPTURE.
+// Devices like the Logitech C920 create multiple /dev/videoN nodes (capture + metadata);
+// only the node with this flag is a usable camera.
+func isVideoCaptureDevice(path string) bool {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer unix.Close(fd) //nolint:errcheck
+	var cap v4l2Capability
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQuerycap, uintptr(unsafe.Pointer(&cap)))
+	return errno == 0 && cap.caps()&v4l2CapVideoCapture != 0
+}
+
 // nativeH264NotSupported is returned when the V4L2 device does not expose H.264 output.
 type nativeH264NotSupported struct{ msg string }
 
@@ -84,9 +107,10 @@ func (e nativeH264NotSupported) Error() string { return e.msg }
 // VideoService implements agentpb.WendyVideoServiceServer.
 type VideoService struct {
 	agentpb.UnimplementedWendyVideoServiceServer
-	logger         *zap.Logger
-	globDevices    func() ([]string, error)
-	readDeviceName func(base string) (string, error)
+	logger           *zap.Logger
+	globDevices      func() ([]string, error)
+	readDeviceName   func(base string) (string, error)
+	checkCaptureNode func(path string) bool
 }
 
 // NewVideoService creates a new VideoService.
@@ -100,10 +124,13 @@ func NewVideoService(logger *zap.Logger) *VideoService {
 			b, err := os.ReadFile(fmt.Sprintf("/sys/class/video4linux/%s/name", base))
 			return strings.TrimSpace(string(b)), err
 		},
+		checkCaptureNode: isVideoCaptureDevice,
 	}
 }
 
 // listV4L2Devices enumerates /dev/video* and reads human-readable names from sysfs.
+// Nodes that do not expose V4L2_CAP_VIDEO_CAPTURE are skipped; USB cameras like the
+// Logitech C920 register a second node for metadata/controls with the same sysfs name.
 func (s *VideoService) listV4L2Devices() ([]*agentpb.VideoDevice, error) {
 	paths, err := s.globDevices()
 	if err != nil {
@@ -111,6 +138,9 @@ func (s *VideoService) listV4L2Devices() ([]*agentpb.VideoDevice, error) {
 	}
 	var devices []*agentpb.VideoDevice
 	for _, path := range paths {
+		if !s.checkCaptureNode(path) {
+			continue
+		}
 		base := filepath.Base(path)
 		numStr := strings.TrimPrefix(base, "video")
 		id, err := strconv.ParseUint(numStr, 10, 32)

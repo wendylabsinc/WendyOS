@@ -14,6 +14,7 @@ import (
 )
 
 // newTestVideoService creates a VideoService with injectable filesystem functions.
+// checkCapture defaults to always-true since tests mock the glob list directly.
 func newTestVideoService(glob func() ([]string, error), readName func(string) (string, error)) *VideoService {
 	svc := NewVideoService(zap.NewNop())
 	if glob != nil {
@@ -22,6 +23,7 @@ func newTestVideoService(glob func() ([]string, error), readName func(string) (s
 	if readName != nil {
 		svc.readDeviceName = readName
 	}
+	svc.checkCaptureNode = func(string) bool { return true }
 	return svc
 }
 
@@ -82,6 +84,26 @@ func TestListV4L2Devices_SysfsReadFailFallsBackToPath(t *testing.T) {
 	}
 	if devices[0].GetName() != "video0" {
 		t.Errorf("expected fallback name 'video0', got %q", devices[0].GetName())
+	}
+}
+
+func TestListV4L2Devices_FilterNonCaptureNodes(t *testing.T) {
+	svc := newTestVideoService(
+		func() ([]string, error) { return []string{"/dev/video0", "/dev/video1"}, nil },
+		func(base string) (string, error) { return "HD Pro Webcam C920", nil },
+	)
+	// video1 is a metadata node (no V4L2_CAP_VIDEO_CAPTURE).
+	svc.checkCaptureNode = func(path string) bool { return path == "/dev/video0" }
+
+	devices, err := svc.listV4L2Devices()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device after filtering metadata node, got %d", len(devices))
+	}
+	if devices[0].GetPath() != "/dev/video0" {
+		t.Errorf("expected /dev/video0, got %q", devices[0].GetPath())
 	}
 }
 
