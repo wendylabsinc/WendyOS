@@ -456,12 +456,20 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	// non-terminating "no MSFT_Partition objects" error we don't want fatal.
 	// Set-Disk: no -Confirm (legacy Storage module rejects it; -IsOffline
 	// doesn't prompt) and no -ErrorAction Stop (we log exit status below).
+	//
+	// Gate Set-Disk -IsOffline on a non-removable BusType — Windows rejects
+	// the call on USB / SD / MMC media with "Removable media cannot be set
+	// to offline." (WDY-1178). Removing the partition access paths above is
+	// what actually prevents phantom drive letters; the offline step is only
+	// meaningful on fixed disks (where Windows would otherwise auto-mount
+	// partitions on the next rescan).
 	cleanupScript := fmt.Sprintf(
 		"Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue | "+
 			"Where-Object { $_.DriveLetter } | "+
 			"ForEach-Object { Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue }; "+
-			"Set-Disk -Number %d -IsOffline $true",
-		diskNum, diskNum,
+			"$d = Get-Disk -Number %d -ErrorAction SilentlyContinue; "+
+			"if ($d -and $d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true }",
+		diskNum, diskNum, diskNum,
 	)
 	if output, err := exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", cleanupScript).CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(output))

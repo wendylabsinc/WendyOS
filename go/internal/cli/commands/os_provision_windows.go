@@ -115,6 +115,13 @@ func updateDisk(diskNum int) error {
 // SilentlyContinue on Remove-PartitionAccessPath: the access paths may
 // already be gone (e.g. user yanked the SD card) and we don't want a
 // secondary error to mask the upstream failure.
+//
+// Set-Disk -IsOffline is gated on BusType because Windows rejects it on
+// removable media ("Not Supported: Removable media cannot be set to
+// offline." — WDY-1178). Removing the partition access paths above is
+// sufficient cleanup for USB sticks / SD cards: the user pulls the
+// media, and there is no persistent online/offline state to worry
+// about. Bus-type list matches isExternalBus.
 func unmountAndOfflineDisk(diskNum int) error {
 	script := fmt.Sprintf(
 		"Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue | "+
@@ -122,8 +129,9 @@ func unmountAndOfflineDisk(diskNum int) error {
 			"ForEach-Object { "+
 			"Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath \"$($_.DriveLetter):\\\" -ErrorAction SilentlyContinue "+
 			"}; "+
-			"Set-Disk -Number %d -IsOffline $true -ErrorAction Stop",
-		diskNum, diskNum,
+			"$d = Get-Disk -Number %d -ErrorAction Stop; "+
+			"if ($d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
+		diskNum, diskNum, diskNum,
 	)
 	out, err := exec.Command(powershellExe, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
@@ -242,9 +250,14 @@ func ejectDisk(devPath string) {
 	// Check IsOffline first so the success path (where writeConfigPartition's
 	// deferred cleanup already offlined the disk) doesn't emit a spurious
 	// warning if the legacy module errors on a redundant Set-Disk.
+	//
+	// Skip the offline call for removable bus types — Windows rejects it
+	// with "Removable media cannot be set to offline." (WDY-1178). On
+	// USB / SD / MMC there is nothing useful to do here: writeConfigPartition's
+	// cleanup already removed drive letters, and the user pulls the media.
 	script := fmt.Sprintf(
 		"$d = Get-Disk -Number %d -ErrorAction Stop; "+
-			"if (-not $d.IsOffline) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
+			"if (-not $d.IsOffline -and $d.BusType -notin @('USB','SD','MMC')) { Set-Disk -Number %d -IsOffline $true -ErrorAction Stop }",
 		diskNum, diskNum,
 	)
 	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
