@@ -101,7 +101,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 		Short:  "Show agent version, OS, architecture, GPU, and hardware info for the target device",
 		Hidden: deprecated,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deprecated {
+			if deprecated && !jsonOutput {
 				cmd.PrintErrln("Warning: 'wendy device version' is deprecated; use 'wendy device info' instead.")
 			}
 

@@ -237,6 +237,10 @@ run_test "wendy device info" \
 run_test_json "wendy device info --json" \
     "$WENDY" device info --device "$HOSTNAME" --json
 
+# Backward compatibility: the hidden deprecated alias must remain machine-readable.
+run_test_json "wendy device version --json (deprecated)" \
+    "$WENDY" device version --device "$HOSTNAME" --json
+
 echo ""
 
 # ── Phase 4: Hardware / peripheral queries ──────────────────────────
