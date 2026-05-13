@@ -186,6 +186,26 @@ func TestRenderDeviceTable(t *testing.T) {
 	}
 }
 
+func TestRenderDeviceTable_PrefersHostnameForLANDisplay(t *testing.T) {
+	collection := &models.DevicesCollection{
+		LANDevices: []models.LANDevice{{
+			DisplayName:  "Calm Zinnia",
+			Hostname:     "wendyos-calm-zinnia.local",
+			IPAddress:    "fe80::ffab:7cf6:ef:21c5%enp0s20f0u9",
+			Port:         50051,
+			AgentVersion: "1.2.3",
+		}},
+	}
+
+	output := renderDeviceTable(collection)
+	if !strings.Contains(output, "wendyos-calm-zinnia.local") {
+		t.Fatalf("expected output to contain hostname, got %q", output)
+	}
+	if strings.Contains(output, "fe80::ffab:7cf6:ef:21c5") {
+		t.Fatalf("expected output to prefer hostname over IPv6 address, got %q", output)
+	}
+}
+
 func TestHumanReadableDeviceType(t *testing.T) {
 	cases := []struct {
 		input string

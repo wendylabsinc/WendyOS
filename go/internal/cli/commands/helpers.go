@@ -36,6 +36,8 @@ const defaultAgentPort = 50051
 
 const lanAddressProbeTimeout = 1500 * time.Millisecond
 
+var discoverLANForAddress = discovery.DiscoverLAN
+
 var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
 	conn, err := connectWithAutoTLS(ctx, address)
 	if err != nil {
@@ -150,13 +152,7 @@ func resolveHostPreferIPv4(host string) string {
 // port. connectWithAutoTLS derives the mTLS port as plaintext+1, so we
 // subtract 1 here to keep that convention working correctly.
 func lanAgentAddresses(dev models.LANDevice) []string {
-	port := dev.Port
-	if port == 0 {
-		port = defaultAgentPort
-	}
-	if dev.IsMTLS && dev.Port != 0 && port > 1 {
-		port-- // advertised port is mTLS; connectWithAutoTLS will add 1 back
-	}
+	port := lanAgentPort(dev)
 
 	var addresses []string
 	seen := make(map[string]bool)
@@ -171,14 +167,85 @@ func lanAgentAddresses(dev models.LANDevice) []string {
 	return addresses
 }
 
-// preferredLANAddress returns the best available address for display and
-// follow-up connection attempts. It prefers IPs over mDNS hostnames.
+func lanAgentPort(dev models.LANDevice) int {
+	port := dev.Port
+	if port == 0 {
+		port = defaultAgentPort
+	}
+	if dev.IsMTLS && dev.Port != 0 && port > 1 {
+		port-- // advertised port is mTLS; connectWithAutoTLS will add 1 back
+	}
+	return port
+}
+
+func lanDisplayHost(dev models.LANDevice) string {
+	if host := strings.TrimSpace(dev.Hostname); host != "" {
+		return host
+	}
+	return strings.TrimSpace(dev.IPAddress)
+}
+
+func lanDisplayAddress(dev models.LANDevice) string {
+	host := lanDisplayHost(dev)
+	if host == "" {
+		return ""
+	}
+	return hostPort(host, lanAgentPort(dev))
+}
+
+// preferredLANAddress returns the best available address for follow-up
+// connection attempts. It prefers IPs over mDNS hostnames.
 func preferredLANAddress(dev models.LANDevice) string {
 	addresses := lanAgentAddresses(dev)
 	if len(addresses) == 0 {
 		return ""
 	}
 	return addresses[0]
+}
+
+func resolveDiscoveredLANAddress(ctx context.Context, address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return address
+	}
+
+	wanted := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if wanted == "" {
+		return address
+	}
+	wantedShort := strings.TrimSuffix(wanted, ".local")
+	if wanted == wantedShort && strings.Contains(wanted, ".") {
+		return address
+	}
+
+	discoverCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	devices, err := discoverLANForAddress(discoverCtx, 3*time.Second)
+	if err != nil {
+		return address
+	}
+	for _, dev := range devices {
+		hostname := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(dev.Hostname), "."))
+		displayName := strings.ToLower(strings.TrimSpace(dev.DisplayName))
+		if hostname != wanted && strings.TrimSuffix(hostname, ".local") != wantedShort && displayName != wanted && displayName != wantedShort {
+			continue
+		}
+		if ip := strings.TrimSpace(dev.IPAddress); ip != "" {
+			return hostPort(ip, mustAtoi(port, defaultAgentPort))
+		}
+	}
+	return address
+}
+
+func mustAtoi(s string, fallback int) int {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 
 // resolveLANAgentVersion tries the discovered LAN addresses in order and
@@ -543,6 +610,7 @@ func connectFromSelectedDevice(target *SelectedDevice, cfg resolveConfig) (*grpc
 // It tries each stored certificate in order so that both production and local
 // pki-core certs are attempted.
 func connectWithAutoTLS(ctx context.Context, plaintextAddr string) (*grpcclient.AgentConnection, error) {
+	plaintextAddr = resolveDiscoveredLANAddress(ctx, plaintextAddr)
 	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
 	allCerts := loadAllCLICerts()
 	if len(allCerts) > 0 {
@@ -1143,7 +1211,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 		p.Send(tui.PickerAddMsg{Items: []tui.PickerItem{{
 			Name:     name,
 			Type:     "LAN",
-			Address:  preferredLANAddress(dev),
+			Address:  lanDisplayAddress(dev),
 			DedupKey: dev.DisplayName,
 			Insecure: insecure,
 			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{

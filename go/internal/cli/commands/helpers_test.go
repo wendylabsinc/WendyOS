@@ -74,6 +74,37 @@ func TestLANAgentAddressesPrefersIPAddress(t *testing.T) {
 	}
 }
 
+func TestLANDisplayAddressPrefersHostname(t *testing.T) {
+	dev := models.LANDevice{
+		IPAddress: "fe80::8c13:12bf:4df8:b976%en24",
+		Hostname:  "wendyos-otter.local",
+		Port:      defaultAgentPort,
+	}
+
+	if got, want := lanDisplayAddress(dev), "wendyos-otter.local:50051"; got != want {
+		t.Fatalf("lanDisplayAddress() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveDiscoveredLANAddressResolvesLocalHostname(t *testing.T) {
+	orig := discoverLANForAddress
+	t.Cleanup(func() { discoverLANForAddress = orig })
+	discoverLANForAddress = func(context.Context, time.Duration) ([]models.LANDevice, error) {
+		return []models.LANDevice{{
+			DisplayName: "Jetson Orin Nano",
+			Hostname:    "wendyos-jetson-orin-nano.local",
+			IPAddress:   "fe80::3409:bb8b:7708:e7e%enx9677c7691091",
+			Port:        defaultAgentPort,
+		}}, nil
+	}
+
+	got := resolveDiscoveredLANAddress(context.Background(), "wendyos-jetson-orin-nano.local:50051")
+	want := "[fe80::3409:bb8b:7708:e7e%enx9677c7691091]:50051"
+	if got != want {
+		t.Fatalf("resolveDiscoveredLANAddress() = %q, want %q", got, want)
+	}
+}
+
 func TestLANAgentAddressesDeduplicatesIdenticalHosts(t *testing.T) {
 	dev := models.LANDevice{
 		IPAddress: "192.168.1.23",
