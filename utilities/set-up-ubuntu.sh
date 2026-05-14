@@ -372,10 +372,11 @@ configure_wendy_utilities_path() {
     set -euo pipefail
     bin_dir="$1"
     bashrc="$HOME/.bashrc"
+    heading_line="# Wendy Utilities"
     path_line="export PATH=\"${bin_dir}:\$PATH\""
 
     touch "$bashrc"
-    grep -qxF "$path_line" "$bashrc" || printf "\n%s\n" "$path_line" >> "$bashrc"
+    grep -qxF "$path_line" "$bashrc" || printf "\n%s\n%s\n" "$heading_line" "$path_line" >> "$bashrc"
   ' bash "$bin_dir"
 
   ok "utilities bin directory is on the Bash PATH"
