@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -582,44 +583,58 @@ func (s *ContainerService) ListContainers(_ *agentpb.ListContainersRequest, stre
 }
 
 // StreamMCP proxies a bidirectional gRPC stream to the container's MCP TCP port.
-// The caller must supply an "app-name" metadata key identifying the target container.
+// The caller supplies either an "mcp-port" metadata key (direct port number) or an
+// "app-name" metadata key (app name; port is looked up from containerd).
 func (s *ContainerService) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCPChunk, agentpb.MCPChunk]) error {
 	ctx := stream.Context()
 	md, _ := metadata.FromIncomingContext(ctx)
-	vals := md.Get("app-name")
-	if len(vals) == 0 || vals[0] == "" {
-		return status.Errorf(codes.InvalidArgument, "app-name metadata is required")
-	}
-	appName := vals[0]
 
-	mcpPort, err := s.containerd.GetContainerMCPPort(ctx, appName)
-	if err != nil {
-		return status.Errorf(codes.NotFound, "container %q: %v", appName, err)
-	}
-	if mcpPort == 0 {
-		return status.Errorf(codes.NotFound, "container %q has no mcp entitlement", appName)
-	}
+	var mcpPort uint32
+	var appName string
 
-	// Verify the container is running before attempting to dial its MCP port.
-	containers, listErr := s.containerd.ListContainers(ctx)
-	if listErr != nil {
-		s.logger.Warn("failed to list containers for running check in StreamMCP", zap.Error(listErr))
-	} else {
-		running := false
-		for _, c := range containers {
-			if c.GetAppName() == appName && c.GetRunningState() == agentpb.AppRunningState_RUNNING {
-				running = true
-				break
-			}
+	if portVals := md.Get("mcp-port"); len(portVals) > 0 && portVals[0] != "" {
+		p, err := strconv.ParseUint(portVals[0], 10, 32)
+		if err != nil || p == 0 {
+			return status.Errorf(codes.InvalidArgument, "invalid mcp-port value")
 		}
-		if !running {
-			return status.Errorf(codes.FailedPrecondition, "container %q is not running", appName)
+		mcpPort = uint32(p)
+	} else {
+		vals := md.Get("app-name")
+		if len(vals) == 0 || vals[0] == "" {
+			return status.Errorf(codes.InvalidArgument, "mcp-port or app-name metadata is required")
+		}
+		appName = vals[0]
+
+		var err error
+		mcpPort, err = s.containerd.GetContainerMCPPort(ctx, appName)
+		if err != nil {
+			return status.Errorf(codes.NotFound, "container %q: %v", appName, err)
+		}
+		if mcpPort == 0 {
+			return status.Errorf(codes.NotFound, "container %q has no mcp entitlement", appName)
+		}
+
+		// Verify the container is running before attempting to dial its MCP port.
+		containers, listErr := s.containerd.ListContainers(ctx)
+		if listErr != nil {
+			s.logger.Warn("failed to list containers for running check in StreamMCP", zap.Error(listErr))
+		} else {
+			running := false
+			for _, c := range containers {
+				if c.GetAppName() == appName && c.GetRunningState() == agentpb.AppRunningState_RUNNING {
+					running = true
+					break
+				}
+			}
+			if !running {
+				return status.Errorf(codes.FailedPrecondition, "container %q is not running", appName)
+			}
 		}
 	}
 
 	tcpConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", mcpPort))
 	if err != nil {
-		return status.Errorf(codes.Unavailable, "connecting to MCP server for %q on port %d: %v", appName, mcpPort, err)
+		return status.Errorf(codes.Unavailable, "connecting to MCP server on port %d: %v", mcpPort, err)
 	}
 	defer tcpConn.Close()
 
