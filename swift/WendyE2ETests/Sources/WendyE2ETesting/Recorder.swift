@@ -9,7 +9,7 @@ public struct Recorder: Sendable {
         function: String,
         line: Int
     ) throws {
-        let identity = Self.testIdentity(filePath: filePath, function: function, line: line)
+        let identity = try Self.testIdentity(filePath: filePath, function: function, line: line)
         let testDirectoryURL = try Self.testDirectoryURL(identity: identity)
         self.testDirectoryPath = testDirectoryURL.path
         self.recordPath = testDirectoryURL.appendingPathComponent("recording.md").path
@@ -141,6 +141,24 @@ public struct Recorder: Sendable {
         let line: Int
     }
 
+    private enum RecorderError: Error, CustomStringConvertible {
+        case sourceUnavailable(filePath: String)
+        case testIdentityUnavailable(filePath: String, function: String, line: Int)
+
+        var description: String {
+            switch self {
+            case .sourceUnavailable(let filePath):
+                return "Could not read Swift E2E test source: \(filePath)"
+            case .testIdentityUnavailable(let filePath, let function, let line):
+                return """
+                    Wendy E2E sessions must be started from an @Test body or from a helper that \
+                    forwards filePath/function/line defaults from the test call site. Could not \
+                    resolve test identity for \(function) at \(filePath):\(line).
+                    """
+            }
+        }
+    }
+
     private let source: Source
 
     private static let e2eTestRecordsDirectoryName: String = {
@@ -231,23 +249,24 @@ public struct Recorder: Sendable {
         URL(fileURLWithPath: filePath, isDirectory: false).deletingPathExtension().lastPathComponent
     }
 
-    private static func testIdentity(filePath: String, function: String, line: Int) -> TestIdentity
+    private static func testIdentity(
+        filePath: String,
+        function: String,
+        line: Int
+    ) throws
+        -> TestIdentity
     {
         let fileName = Self.fileName(from: filePath)
-        let fallbackTestName = Self.normalizedFunctionName(function)
-        let fallback = TestIdentity(
-            filePath: filePath,
-            fileName: fileName,
-            suite: fileName,
-            testName: fallbackTestName
-        )
+        let testName = Self.normalizedFunctionName(function)
 
         guard let source = try? String(contentsOfFile: filePath, encoding: .utf8) else {
-            return fallback
+            throw RecorderError.sourceUnavailable(filePath: filePath)
         }
 
         let declarations = Self.testDeclarations(in: source, fallbackSuite: fileName)
-        if let declaration = Self.testDeclaration(containing: line, in: declarations) {
+        if let declaration = Self.testDeclaration(containing: line, in: declarations),
+            declaration.testName == testName
+        {
             return TestIdentity(
                 filePath: filePath,
                 fileName: fileName,
@@ -256,16 +275,11 @@ public struct Recorder: Sendable {
             )
         }
 
-        if let declaration = declarations.last(where: { $0.testName == fallbackTestName }) {
-            return TestIdentity(
-                filePath: filePath,
-                fileName: fileName,
-                suite: declaration.suite,
-                testName: declaration.testName
-            )
-        }
-
-        return fallback
+        throw RecorderError.testIdentityUnavailable(
+            filePath: filePath,
+            function: function,
+            line: line
+        )
     }
 
     private static func testDeclarations(

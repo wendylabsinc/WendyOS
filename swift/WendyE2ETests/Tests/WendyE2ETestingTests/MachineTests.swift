@@ -314,6 +314,13 @@ struct `session` {
     }
 
     @Test
+    func `requires command recordings to start from test bodies`() {
+        #expect(throws: (any Error).self) {
+            _ = try Recorder(filePath: #filePath, function: "init()", line: #line)
+        }
+    }
+
+    @Test
     func `dasherizes command record file names`() {
         #expect(Recorder.slug("buildAgent(with:)") == "build-agent-with")
         #expect(Recorder.slug("URLParserTests") == "url-parser-tests")
