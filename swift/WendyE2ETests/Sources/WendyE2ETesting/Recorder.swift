@@ -110,7 +110,7 @@ public struct Recorder: Sendable {
     }
 
     public static func recordingDirectoryName(filePath: String, testName: String) -> String {
-        "\(Self.fileName(from: filePath)).\(Self.slug(testName))"
+        "\(Self.recordingFileStem(filePath: filePath)).\(Self.slug(testName))"
     }
 
     static func recordingFileName(filePath: String, suite: String, testName: String) -> String {
@@ -247,6 +247,14 @@ public struct Recorder: Sendable {
 
     private static func fileName(from filePath: String) -> String {
         URL(fileURLWithPath: filePath, isDirectory: false).deletingPathExtension().lastPathComponent
+    }
+
+    private static func recordingFileStem(filePath: String) -> String {
+        var fileName = Self.fileName(from: filePath)
+        if fileName.hasSuffix("Tests") {
+            fileName.removeLast("Tests".count)
+        }
+        return Self.slug(fileName)
     }
 
     private static func testIdentity(

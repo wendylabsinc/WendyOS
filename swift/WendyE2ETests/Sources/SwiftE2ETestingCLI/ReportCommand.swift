@@ -539,7 +539,7 @@ private func parseTests(
             tests[testIndex].nextLine = nextLine
             tests[testIndex].aiItems = extractAIItems(from: body)
             let recordKey =
-                "\(sourceURL.deletingPathExtension().lastPathComponent).\(slug(tests[testIndex].name))"
+                "\(recordFileStem(sourceURL)).\(slug(tests[testIndex].name))"
             tests[testIndex].recordName = "\(recordKey)/recording.md"
             tests[testIndex].commands = records[recordKey, default: []].filter {
                 command in
@@ -843,6 +843,14 @@ private func renderCommands(_ commands: [CommandRun]) -> String {
     }
     chunks.append("</div>")
     return chunks.joined(separator: "\n")
+}
+
+private func recordFileStem(_ sourceURL: URL) -> String {
+    var fileName = sourceURL.deletingPathExtension().lastPathComponent
+    if fileName.hasSuffix("Tests") {
+        fileName.removeLast("Tests".count)
+    }
+    return slug(fileName)
 }
 
 private func slug(_ value: String) -> String {

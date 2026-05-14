@@ -29,7 +29,9 @@ WENDY_E2E_RUN_DIR="$RUN_DIR" swift test --filter WendyE2ETests
 ```
 
 Each implemented test writes recordings under
-`<run-dir>/tests/<test-file-name-without-suffix>.<test-name-dasherized>/`.
+`<run-dir>/tests/<suite-file-stem-dasherized>.<test-name-dasherized>/`, where
+the suite file stem is the test file name with the `Tests` suffix removed. For
+example, `WendyDeviceInfoTests.swift` records under `wendy-device-info.*`.
 The `recording.sh` file replays the captured `sh()` invocations in order for
 manual debugging.
 
