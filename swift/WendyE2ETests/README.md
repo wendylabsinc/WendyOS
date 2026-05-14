@@ -61,18 +61,15 @@ When intentionally covering CLI-to-agent behavior, start with the smallest read-
 
 ## Test organization and naming
 
-Use flattened suites only. Each suite name is the full command phrase being specified; do not use nested suites. Test names complete the sentence.
+Use one flattened suite per E2E test file. The suite name is the full command phrase being specified; do not use nested suites. Test names complete the sentence.
+
+Derive the file name from the suite name using PascalCase. For example, this suite maps to the command stem `WendyDeviceInfo` and, with the package's SwiftPM test-file suffix, lives in `WendyDeviceInfoTests.swift`:
 
 ```swift
 @Suite(.serialized)
-struct `'wendy help'` {
+struct `'wendy device info'` {
     @Test
-    func `prints top-level help`() async throws {
-        // TODO: implement.
-    }
-
-    @Test
-    func `prints help for a nested command`() async throws {
+    func `prints JSON device information`() async throws {
         // TODO: implement.
     }
 }
@@ -81,8 +78,7 @@ struct `'wendy help'` {
 The rendered behavior reads as:
 
 ```text
-wendy help prints top-level help
-wendy help prints help for a nested command
+wendy device info prints JSON device information
 ```
 
 For command variants, keep the flag in the test name when it is a mode of the same command:
@@ -102,9 +98,31 @@ struct `'wendy info'` {
 }
 ```
 
-Use a separate suite only when the variant reads better as its own command phrase, for example `'wendy --version'`.
+Use a separate file and suite only when the variant reads better as its own command phrase, for example `'wendy --version'`.
 
 Name files after command areas, not after our internal spec process. Prefer names like `WendyHelpTests.swift`, `WendyInfoTests.swift`, and `WendyAnalyticsTests.swift`; do not use `BehaviorSpec` in file names.
+
+## Scenarios and test lifecycle
+
+Do not put E2E setup or teardown in suite `init` or `deinit`. Start sessions from an `@Test` body, or from a helper that forwards `filePath`, `function`, and `line` defaults from the test call site.
+
+Use scenarios for setup and teardown instead. A scenario is the lifecycle boundary for a test: it can perform async setup before yielding sessions, run the test body, and perform async teardown afterward. That matters because suite initialization is not a reliable test-body call site for the E2E harness, and because `deinit` is always infallible and non-async. The harness needs the actual `@Test` call site to derive the per-test sandbox and recording paths.
+
+Scenarios also centralize the test harness "magic": they attach the recorder, select the managed `wendy` binary through `PATH`, assign isolated `HOME`, `TMPDIR`, and working directories, and keep command recordings tied to the test that produced them. Starting sessions from suite initialization bypasses that identity and can create shared sandboxes or misleading records.
+
+```swift
+@Suite(.serialized)
+struct `'wendy device info'` {
+    private let scenario = CLIAndAgentScenario()
+
+    @Test
+    func `prints JSON device information`() async throws {
+        try await self.scenario.run { cli, agent in
+            // Test commands go here.
+        }
+    }
+}
+```
 
 ## Inline specification prose
 
