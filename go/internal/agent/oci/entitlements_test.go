@@ -268,23 +268,7 @@ func TestApplyEntitlements_Audio(t *testing.T) {
 	// PipeWire mount is conditional — only added when a real socket exists
 	// on the host at either /run/pipewire/pipewire-0 (system) or
 	// /run/user/*/pipewire-0 (user session).
-	isSocket := func(path string) bool {
-		fi, err := os.Lstat(path)
-		return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
-	}
-	// Mirror applyAudio's socket detection: system path first, then user session.
-	var pipewireSocketSource string
-	if isSocket("/run/pipewire/pipewire-0") {
-		pipewireSocketSource = "/run/pipewire/pipewire-0"
-	} else {
-		userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
-		for _, s := range userSockets {
-			if isSocket(s) {
-				pipewireSocketSource = s
-				break
-			}
-		}
-	}
+	pipewireSocketSource := findPipewireSocket()
 	if pipewireSocketSource != "" {
 		if !hasMountDest(spec, "/run/pipewire/pipewire-0") {
 			t.Error("audio entitlement did not add /run/pipewire/pipewire-0 mount")
@@ -292,10 +276,9 @@ func TestApplyEntitlements_Audio(t *testing.T) {
 		if !hasEnv(spec, "PIPEWIRE_RUNTIME_DIR") {
 			t.Error("audio entitlement did not set PIPEWIRE_RUNTIME_DIR")
 		}
-		// Derive pulse path from the same source directory as applyAudio does.
 		sourceDir := filepath.Dir(pipewireSocketSource)
 		pulseNative := filepath.Join(sourceDir, "pulse", "native")
-		if isSocket(pulseNative) {
+		if isUnixSocket(pulseNative) {
 			if !hasMountDest(spec, "/run/pipewire/pulse-native") {
 				t.Error("audio entitlement did not add /run/pipewire/pulse-native mount")
 			}
@@ -512,6 +495,20 @@ func assertCameraEntitlement(t *testing.T, spec *Spec, entType string) {
 	}
 	if hasCapability(spec, "CAP_SYS_CHROOT") {
 		t.Errorf("%s entitlement must not grant CAP_SYS_CHROOT (WDY-1099)", entType)
+	}
+
+	// PipeWire socket is mounted when present on the host.
+	if pipewireSrc := findPipewireSocket(); pipewireSrc != "" {
+		if !hasMountDest(spec, "/run/pipewire/pipewire-0") {
+			t.Errorf("%s entitlement did not add /run/pipewire/pipewire-0 mount", entType)
+		}
+		if !hasEnv(spec, "PIPEWIRE_RUNTIME_DIR") {
+			t.Errorf("%s entitlement did not set PIPEWIRE_RUNTIME_DIR", entType)
+		}
+	} else {
+		if hasMountDest(spec, "/run/pipewire/pipewire-0") {
+			t.Errorf("%s entitlement should not mount /run/pipewire/pipewire-0 when socket absent", entType)
+		}
 	}
 }
 

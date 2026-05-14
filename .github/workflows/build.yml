@@ -377,6 +377,9 @@ jobs:
             --deb-recommends "nerdctl" \
             --deb-recommends "network-manager | connman" \
             --deb-recommends "bluez" \
+            --deb-recommends "pipewire" \
+            --deb-recommends "pipewire-v4l2" \
+            --deb-recommends "wireplumber" \
             --config-files /etc/default/wendy-agent \
             --config-files /etc/wendy-agent/config.json \
             --config-files /etc/avahi/services/wendy-agent.service \
@@ -427,6 +430,9 @@ jobs:
             --depends "systemd" \
             --depends "ca-certificates" \
             --depends "avahi" \
+            --suggests "pipewire" \
+            --suggests "pipewire-v4l2" \
+            --suggests "wireplumber" \
             --config-files /etc/default/wendy-agent \
             --config-files /etc/wendy-agent/config.json \
             --config-files /etc/avahi/services/wendy-agent.service \

@@ -256,6 +256,28 @@ func applyNetwork(spec *Spec, ent appconfig.Entitlement) {
 	}
 }
 
+// isUnixSocket reports whether path is a Unix domain socket. Uses Lstat so
+// symlinks are not followed — runc can't resolve symlink targets through bind mounts.
+func isUnixSocket(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
+}
+
+// findPipewireSocket returns the path of the first available PipeWire socket,
+// checking the system-wide path first then user session sockets.
+func findPipewireSocket() string {
+	if isUnixSocket("/run/pipewire/pipewire-0") {
+		return "/run/pipewire/pipewire-0"
+	}
+	userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
+	for _, s := range userSockets {
+		if isUnixSocket(s) {
+			return s
+		}
+	}
+	return ""
+}
+
 // applyAudio adds audio device access (ALSA/PipeWire).
 func applyAudio(spec *Spec) {
 	// Add audio group GID.
@@ -278,32 +300,8 @@ func applyAudio(spec *Spec) {
 		Access: "rwm",
 	})
 
-	// isSocket reports whether path is a Unix domain socket. Uses Lstat
-	// so symlinks are not followed — runc can't resolve symlink targets
-	// through bind mounts.
-	isSocket := func(path string) bool {
-		fi, err := os.Lstat(path)
-		return err == nil && fi.Mode()&os.ModeSocket != 0 && fi.Mode()&os.ModeSymlink == 0
-	}
-
-	// Find the PipeWire socket. Check the system path first, then probe
-	// for a user session socket (e.g. /run/user/1000/pipewire-0 on RPi OS
-	// where PipeWire runs as a user service).
-	var pipewireSocketSource string
-	if isSocket("/run/pipewire/pipewire-0") {
-		pipewireSocketSource = "/run/pipewire/pipewire-0"
-	} else {
-		userSockets, _ := filepath.Glob("/run/user/*/pipewire-0")
-		for _, s := range userSockets {
-			if isSocket(s) {
-				pipewireSocketSource = s
-				break
-			}
-		}
-	}
-
+	pipewireSocketSource := findPipewireSocket()
 	if pipewireSocketSource != "" {
-		// Mount the individual socket file into the container.
 		spec.Mounts = append(spec.Mounts, Mount{
 			Destination: "/run/pipewire/pipewire-0",
 			Source:      pipewireSocketSource,
@@ -314,12 +312,11 @@ func applyAudio(spec *Spec) {
 			"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
 		)
 
-		// Check for PulseAudio compat socket in the same source directory.
 		// PipeWire provides a PulseAudio emulation socket that GStreamer's
 		// autoaudiosink needs (pulsesink has the highest rank).
 		sourceDir := filepath.Dir(pipewireSocketSource)
 		pulseNative := filepath.Join(sourceDir, "pulse", "native")
-		if isSocket(pulseNative) {
+		if isUnixSocket(pulseNative) {
 			spec.Mounts = append(spec.Mounts, Mount{
 				Destination: "/run/pipewire/pulse-native",
 				Source:      pulseNative,
@@ -357,6 +354,20 @@ func applyCamera(spec *Spec) {
 		Type:        "bind",
 		Options:     []string{"rbind", "rw", "nosuid", "noexec"},
 	})
+
+	// Mount the PipeWire socket when available so containers can use
+	// pipewire-v4l2 to share /dev/video0 across multiple simultaneous readers.
+	if pipewireSrc := findPipewireSocket(); pipewireSrc != "" {
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/run/pipewire/pipewire-0",
+			Source:      pipewireSrc,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		})
+		spec.Process.Env = append(spec.Process.Env,
+			"PIPEWIRE_RUNTIME_DIR=/run/pipewire",
+		)
+	}
 }
 
 // applyVideo is a deprecated alias for camera/V4L2 device access.
