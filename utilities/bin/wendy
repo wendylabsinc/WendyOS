@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -t 2 ]]; then
+  bold=$'\033[1m'
+  dim=$'\033[2m'
+  green=$'\033[32m'
+  cyan=$'\033[36m'
+  reset=$'\033[0m'
+else
+  bold=""
+  dim=""
+  green=""
+  cyan=""
+  reset=""
+fi
+
+display_repo_path() {
+  local path="$1"
+  local repo_root="$2"
+  local repo_name
+  repo_name="$(basename "$repo_root")"
+
+  case "$path" in
+    "$repo_root"/*)
+      printf '%s/%s' "$repo_name" "${path#"$repo_root"/}"
+      ;;
+    *)
+      printf '%s' "$path"
+      ;;
+  esac
+}
+
+print_padded_line() {
+  local text="$1"
+  local style="${2:-}"
+  local width="$3"
+  local right_padding=$((width - ${#text}))
+
+  if ((right_padding < 0)); then
+    right_padding=0
+  fi
+
+  printf '    %s%s%s%*s    \n' "$style" "$text" "$reset" "$right_padding" ""
+}
+
+print_found_message() {
+  local path="$1"
+  local title='Running development version of wendy:'
+  local width="${#title}"
+  local divider
+
+  if ((${#path} > width)); then
+    width="${#path}"
+  fi
+
+  printf -v divider '%*s' "$width" ''
+  divider="${divider// /━}"
+
+  {
+    printf '\n'
+    printf '    %s%s%s    \n' "$dim" "$divider" "$reset"
+    print_padded_line "$title" "$bold$green" "$width"
+    print_padded_line '' '' "$width"
+    print_padded_line "$path" "$cyan" "$width"
+    printf '    %s%s%s    \n' "$dim" "$divider" "$reset"
+    printf '\n'
+  } >&2
+}
+
+dir="$(pwd -P)"
+
+while true; do
+  candidate="$dir/go/bin/wendy"
+
+  if [[ -d "$dir/go/cmd/wendy" ]]; then
+    pretty_candidate="$(display_repo_path "$candidate" "$dir")"
+    print_found_message "$pretty_candidate"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-no_warn_duplicate_libraries"
+    fi
+    (cd "$dir/go" && go build -o bin/wendy ./cmd/wendy)
+    exec "$candidate" "$@"
+  fi
+
+  parent="$(dirname "$dir")"
+  if [[ "$parent" == "$dir" ]]; then
+    break
+  fi
+
+  dir="$parent"
+done
+
+echo "wendy: could not find go/bin/wendy above $(pwd -P)" >&2
+exit 127
