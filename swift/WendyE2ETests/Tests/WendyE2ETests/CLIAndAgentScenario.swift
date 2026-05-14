@@ -51,9 +51,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
                 line: line
             )
             let repositoryRootDirectoryURL = Self.repositoryRootDirectoryURL()
-            let cliWorkingDirectory =
-                Environment.cliWorkingDirectory
-                ?? repositoryRootDirectoryURL.appendingPathComponent("go").path
+            let cliSourceDirectory = repositoryRootDirectoryURL.appendingPathComponent("go").path
             let testDirectoryURL = URL(
                 fileURLWithPath: recorder.testDirectoryPath,
                 isDirectory: true
@@ -68,10 +66,26 @@ final class CLIAndAgentScenario: Scenario, Sendable {
                 cliUsesRunDirectory
                 ? testDirectoryURL.appendingPathComponent("tmp", isDirectory: true).path
                 : "/tmp/wendy-e2e-cli-tmp-\(UUID().uuidString)"
+            let defaultCLIWorkingDirectory =
+                cliUsesRunDirectory
+                ? URL(fileURLWithPath: cliHomeDirectory, isDirectory: true)
+                    .appendingPathComponent("work", isDirectory: true).path
+                : cliSourceDirectory
+            let cliWorkingDirectory =
+                Environment.cliWorkingDirectory ?? defaultCLIWorkingDirectory
             let cliBinDirectory =
                 cliUsesRunDirectory
-                ? Environment.cliBinDirectory ?? "\(cliWorkingDirectory)/bin"
-                : "\(cliWorkingDirectory)/bin"
+                ? Self.runDirectoryPath("cli", "bin") ?? "\(cliSourceDirectory)/bin"
+                : "\(cliSourceDirectory)/bin"
+
+            if cliUsesRunDirectory {
+                for directory in [cliHomeDirectory, cliTemporaryDirectory, cliWorkingDirectory] {
+                    try FileManager.default.createDirectory(
+                        atPath: directory,
+                        withIntermediateDirectories: true
+                    )
+                }
+            }
 
             let cliMachine = Machine(
                 id: "cli",
@@ -91,7 +105,7 @@ final class CLIAndAgentScenario: Scenario, Sendable {
 
             var agentEnv: [String: String] = [:]
             if Environment.agentAddress == nil,
-                let agentBinDirectory = Environment.agentBinDirectory
+                let agentBinDirectory = Self.runDirectoryPath("agent", "bin")
             {
                 agentEnv["PATH"] = "\(agentBinDirectory):$PATH"
             }
@@ -171,6 +185,18 @@ final class CLIAndAgentScenario: Scenario, Sendable {
         if let firstError {
             throw firstError
         }
+    }
+
+    private static func runDirectoryPath(_ components: String...) -> String? {
+        guard let runDirectory = Environment.runDirectory else {
+            return nil
+        }
+
+        return components.reduce(
+            URL(fileURLWithPath: runDirectory, isDirectory: true)
+        ) { url, component in
+            url.appendingPathComponent(component, isDirectory: true)
+        }.path
     }
 
     private static func repositoryRootDirectoryURL() -> URL {
