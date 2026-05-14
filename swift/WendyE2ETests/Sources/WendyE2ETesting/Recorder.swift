@@ -487,9 +487,9 @@ public struct Recorder: Sendable {
     private static func localCommandSource(command: String, harnessPrefix: [String]) -> String {
         """
         (
-        \(Self.harnessPrefixSource(harnessPrefix))
+        \(Self.indent(Self.harnessPrefixSource(harnessPrefix)))
 
-        \(command)
+        \(Self.indent(command))
         )
         """
     }
@@ -501,9 +501,11 @@ public struct Recorder: Sendable {
     ) -> String {
         """
         \(Self.sshCommandPrefix(machine: machine)) <<'WENDY_E2E_REMOTE_COMMAND'
-        \(Self.harnessPrefixSource(harnessPrefix))
+        (
+        \(Self.indent(Self.harnessPrefixSource(harnessPrefix)))
 
-        \(command)
+        \(Self.indent(command))
+        )
         WENDY_E2E_REMOTE_COMMAND
         """
     }
@@ -516,6 +518,13 @@ public struct Recorder: Sendable {
         return harnessPrefix.map { line in
             line.hasPrefix("cd ") ? "\(line) || exit $?" : line
         }.joined(separator: "\n")
+    }
+
+    private static func indent(_ source: String) -> String {
+        source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in line.isEmpty ? "" : "    \(line)" }
+            .joined(separator: "\n")
     }
 
     private static func sshCommandPrefix(machine: Machine) -> String {
