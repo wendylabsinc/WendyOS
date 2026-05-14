@@ -7,8 +7,9 @@ Usage: $(basename "$0") [OPTIONS]
 
 Prepare macOS for WendyAgent Swift E2E tests.
 
-The setup verifies required developer tools and configures passwordless SSH
-loopback for the current user.
+The setup asks for sudo access, installs Homebrew if needed, installs required
+developer tools, installs Swift via swiftly if needed, and configures
+passwordless SSH loopback for the current user.
 
 Options:
   --help, -h  Show this help message.
@@ -33,6 +34,98 @@ checkCommand() {
   fi
 }
 
+requireSudo() {
+  logStep "Requesting sudo access"
+  sudo -v
+}
+
+installHomebrewIfNeeded() {
+  if command -v brew >/dev/null 2>&1; then
+    return 0
+  fi
+
+  logStep "Installing Homebrew"
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  sourceHomebrewEnvironment
+  hash -r
+}
+
+sourceHomebrewEnvironment() {
+  if command -v brew >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local brew_shellenv=""
+  case "$(uname -m)" in
+    arm64)
+      brew_shellenv="/opt/homebrew/bin/brew shellenv"
+      ;;
+    *)
+      brew_shellenv="/usr/local/bin/brew shellenv"
+      ;;
+  esac
+
+  # shellcheck disable=SC2086
+  if [ -x "${brew_shellenv%% *}" ]; then
+    eval "$($brew_shellenv)"
+  fi
+}
+
+installHomebrewPackages() {
+  logStep "Installing Homebrew E2E dependencies"
+  sourceHomebrewEnvironment
+  brew update
+  brew install bash curl git go make zip
+}
+
+sourceSwiftlyEnvironment() {
+  local env_file="${SWIFTLY_HOME_DIR:-$HOME/.swiftly}/env.sh"
+  if [ -f "$env_file" ]; then
+    # shellcheck disable=SC1090
+    . "$env_file"
+  fi
+}
+
+installSwiftlyMacOSIfNeeded() {
+  sourceSwiftlyEnvironment
+  if command -v swiftly >/dev/null 2>&1; then
+    return 0
+  fi
+
+  logStep "Installing swiftly"
+  local temporary_dir
+  temporary_dir="$(mktemp -d)"
+  trap 'rm -rf "$temporary_dir"' EXIT
+
+  (
+    cd "$temporary_dir"
+    curl -O https://download.swift.org/swiftly/darwin/swiftly.pkg
+    installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+    ~/.swiftly/bin/swiftly init --quiet-shell-followup
+  )
+
+  rm -rf "$temporary_dir"
+  trap - EXIT
+  sourceSwiftlyEnvironment
+  hash -r
+}
+
+installSwiftMacOSIfNeeded() {
+  sourceSwiftlyEnvironment
+  if command -v swift >/dev/null 2>&1; then
+    return 0
+  fi
+
+  installSwiftlyMacOSIfNeeded
+  sourceSwiftlyEnvironment
+  if ! command -v swift >/dev/null 2>&1; then
+    logStep "Installing Swift with swiftly"
+    swiftly install --use latest --assume-yes
+    sourceSwiftlyEnvironment
+    hash -r
+  fi
+}
+
 sshLoopbackWorks() {
   ssh \
     -o BatchMode=yes \
@@ -48,15 +141,8 @@ startSSHServiceIfPossible() {
     return 0
   fi
 
-  if sudo -n /usr/sbin/systemsetup -setremotelogin on >/dev/null 2>&1; then
-    sudo -n /bin/launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true
-    return 0
-  fi
-
-  echo "ERROR: SSH loopback is required for Swift E2E sessions." >&2
-  echo "Enable macOS Remote Login, or allow this runner to run without a sudo prompt:" >&2
-  echo "  sudo systemsetup -setremotelogin on" >&2
-  return 1
+  sudo /usr/sbin/systemsetup -setremotelogin on >/dev/null 2>&1
+  sudo /bin/launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true
 }
 
 setupSSHLoopback() {
@@ -90,18 +176,23 @@ setupSSHLoopback() {
 setupE2EMacOS() {
   logStep "Setting up Swift E2E dependencies for macOS"
 
+  requireSudo
+  installHomebrewIfNeeded
+  installHomebrewPackages
+  installSwiftMacOSIfNeeded
+  setupSSHLoopback
+
   checkCommand bash
   checkCommand curl
   checkCommand git
   checkCommand go
   checkCommand make
   checkCommand swift
+  checkCommand swiftly
   checkCommand zip
   checkCommand ssh "openssh-client"
   checkCommand ssh-keygen
   checkCommand xcodebuild "Xcode command line tools"
-
-  setupSSHLoopback
 }
 
 while [[ $# -gt 0 ]]; do

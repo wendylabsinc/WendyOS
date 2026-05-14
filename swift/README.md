@@ -56,9 +56,10 @@ control:
 
 - `Scripts/SetupE2E.sh` dispatches to `Scripts/SetupE2E.macOS.sh` or
   `Scripts/SetupE2E.ubuntu.sh` to check and prepare the host for E2E runs. On
-  macOS it verifies the required tools and configures passwordless SSH loopback.
-  On Ubuntu it also installs the required packages, Swift if needed, and SSH
-  server settings for parallel test bursts.
+  macOS it asks for sudo access, installs Homebrew if needed, installs required
+  tools, installs Swift via swiftly if needed, and configures passwordless SSH
+  loopback. On Ubuntu it installs the required packages, Swift if needed, and
+  SSH server settings for parallel test bursts.
 - `Scripts/TestE2E.sh` runs the Swift E2E test package, writes command
   recordings into `Build/e2e-report.<run-id>/recording`, Swift Testing results
   into `Build/e2e-report.<run-id>/test-results-swift-testing.xml`, and writes
