@@ -54,7 +54,9 @@ cd go
 go build -o wendy-agent ./cmd/wendy-agent
 ```
 
-### Local Developer Tip
+### Local Developer Tips
+
+#### Wendy CLI wrapper
 
 The repository includes a `utilities/bin/wendy` wrapper that finds the nearest
 `wendy-agent` checkout, rebuilds the Go CLI, and then runs it. Put
@@ -80,7 +82,7 @@ wendy-agent-dev() {
 }
 ```
 
-## Setting Up the Device
+#### Ubuntu setup script
 
 For Ubuntu development devices, this repository includes an interactive setup
 script:
@@ -92,6 +94,8 @@ script:
 It installs common development packages, configures SSH and mDNS, installs the
 Swift toolchain requested by `.swift-version`, optionally installs
 `wendy-agent`, and adds `utilities/bin` to Bash `PATH`.
+
+## Setting Up the Device
 
 The device needs to run the `wendy-agent`. We provide pre-built [WendyOS](https://wendy.sh) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
 
