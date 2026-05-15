@@ -48,7 +48,6 @@ AGENT_OS="${WENDY_E2E_AGENT_OS:-}"
 TRANSPORT="${WENDY_E2E_TRANSPORT:-}"
 ISOLATION="${WENDY_E2E_ISOLATION:-per-test}"
 VERBOSE="${WENDY_E2E_VERBOSE:-false}"
-REPORT="${WENDY_E2E_GENERATE_REPORT:-true}"
 PARALLEL="${WENDY_E2E_PARALLEL:-false}"
 TEST_FILTERS=()
 
@@ -110,8 +109,9 @@ Options:
   --parallel            Allow SwiftPM to run tests in parallel. Only valid when
                         both CLI and agent machines use local transport.
   --no-parallel         Do not run SwiftPM tests in parallel.
-  --report              Generate report.html from the E2E run directory.
-  --no-report           Do not generate report.html from the E2E run directory.
+  --report              Deprecated compatibility option; reports are generated
+                        by Scripts/E2EReport.sh after tests complete.
+  --no-report           Deprecated compatibility option; ignored.
   --verbose             Print each E2E machine command before it runs.
   --no-verbose          Do not print each E2E machine command before it runs.
   --help                Show this help message.
@@ -132,7 +132,6 @@ Environment:
   WENDY_E2E_AGENT_OS                  Optional OS override for the agent machine.
   WENDY_E2E_TRANSPORT                 Optional transport label for report metadata.
   WENDY_E2E_ISOLATION                 none, per-run, or per-test; defaults to per-test.
-  WENDY_E2E_GENERATE_REPORT           Boolean; generates report.html.
   WENDY_E2E_PARALLEL                  Boolean; enables SwiftPM parallel tests.
   WENDY_E2E_VERBOSE                   Boolean; prints machine commands.
 
@@ -198,12 +197,7 @@ while [[ $# -gt 0 ]]; do
       PARALLEL="false"
       shift
       ;;
-    --report)
-      REPORT="true"
-      shift
-      ;;
-    --no-report)
-      REPORT="false"
+    --report|--no-report)
       shift
       ;;
     --verbose)
@@ -266,7 +260,6 @@ fi
 
 ISOLATION="$(normalize_isolation "$ISOLATION")"
 PARALLEL="$(normalize_bool "WENDY_E2E_PARALLEL" "$PARALLEL")"
-REPORT="$(normalize_bool "WENDY_E2E_GENERATE_REPORT" "$REPORT")"
 VERBOSE="$(normalize_bool "WENDY_E2E_VERBOSE" "$VERBOSE")"
 
 if [[ "$PARALLEL" == "true" && "$ISOLATION" != "per-test" ]]; then
@@ -565,18 +558,6 @@ write_run_info() {
   echo "==> Wrote Swift E2E run info: $info_path"
 }
 
-generate_html_report() {
-  if [[ "$REPORT" != "true" ]]; then
-    return
-  fi
-
-  echo "==> Generating Swift E2E HTML report"
-  (
-    cd "$PACKAGE_DIR"
-    swift run swift-e2e-testing report --run-dir "$RUN_DIR"
-  )
-}
-
 write_run_summary() {
   local status="$1"
 
@@ -605,7 +586,7 @@ write_run_summary() {
     echo "- Isolation: \`$ISOLATION\`"
     echo "- Verbose: \`$VERBOSE\`"
     echo "- Parallel: \`$PARALLEL\`"
-    echo "- HTML report: \`$REPORT\`"
+    echo "- HTML report: \`<not generated; run Scripts/E2EReport.sh>\`"
     echo "- Agent user: \`${AGENT_USER:-<none>}\`"
     echo "- Agent address: \`${AGENT_ADDRESS:-<local>}\`"
     echo "- Agent OS: \`${AGENT_OS:-<current>}\`"
@@ -656,12 +637,11 @@ echo "    CLI run:  $CLI_RUN_DIR"
 echo "    Agent run: $AGENT_RUN_DIR"
 echo "    CLI:      $CLI_BIN_DIR/wendy"
 echo "    Tests:    $TESTS_DIR"
-echo "    Report:   $RUN_DIR/report.html"
 echo "    Filters:  ${TEST_FILTERS[*]}"
 echo "    Isolation: $ISOLATION"
 echo "    Verbose:  $VERBOSE"
 echo "    Parallel: $PARALLEL"
-echo "    HTML:     $REPORT"
+echo "    HTML:     <deferred to Scripts/E2EReport.sh>"
 echo "    CLI target: ${CLI_USER:+$CLI_USER@}${CLI_ADDRESS:-<local>}:${CLI_REPO_DIR:-<no-repo>}"
 echo "    CLI OS:   ${CLI_OS:-<current>}"
 if [[ -n "$AGENT_ADDRESS" ]]; then
@@ -683,6 +663,5 @@ TEST_STATUS=$?
 set -e
 
 write_run_info "$TEST_STATUS"
-generate_html_report
 write_run_summary "$TEST_STATUS"
 exit "$TEST_STATUS"

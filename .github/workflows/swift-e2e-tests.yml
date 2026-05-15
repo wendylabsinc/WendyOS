@@ -16,6 +16,9 @@ on:
         type: string
         required: false
         default: ''
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
 
 concurrency:
   group: swift-e2e-tests-${{ github.ref }}
@@ -233,6 +236,26 @@ jobs:
           bash ./Scripts/E2ETest.sh \
             --output-dir Build/e2e \
             --agent-address "${{ matrix.target.device_address }}"
+
+      - name: Analyze Swift E2E results
+        if: always() && matrix.target.status == 'enabled'
+        working-directory: swift
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash ./Scripts/E2EAnalyze.sh \
+            --run-dir "Build/e2e/${{ steps.e2e-run.outputs.run_id }}"
+
+      - name: Render Swift E2E report
+        if: always() && matrix.target.status == 'enabled'
+        working-directory: swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./Scripts/E2EReport.sh \
+            --run-dir "Build/e2e/${{ steps.e2e-run.outputs.run_id }}"
 
       - name: Upload Swift E2E report
         if: always() && matrix.target.status == 'enabled'
