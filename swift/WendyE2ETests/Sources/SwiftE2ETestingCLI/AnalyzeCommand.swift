@@ -30,9 +30,6 @@ struct AnalyzeCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Model name. Defaults depend on provider.")
     var model: String?
 
-    @Option(name: .long, help: "Markdown prompt template file path.")
-    var prompt: String?
-
     @Option(name: .long, help: "Maximum recording characters to include per test.")
     var maxRecordingCharacters = 60_000
 
@@ -59,7 +56,6 @@ struct AnalyzeCommand: AsyncParsableCommand {
         let tests = try parseAnalyzeTests(in: testsURL, records: records, testResults: testResults)
         let reviewableTests = tests.filter { !$0.aiComments.isEmpty }
 
-        let promptTemplate = try loadPromptTemplate(path: prompt)
         let analyzer = try makeAnalyzer(provider: provider, model: model)
         if analyzer.isConfigured {
             print("==> Running Swift E2E AI analysis")
@@ -98,8 +94,7 @@ struct AnalyzeCommand: AsyncParsableCommand {
                 recording: clipped(
                     String(contentsOf: recordURL, encoding: .utf8),
                     limit: maxRecordingCharacters
-                ),
-                template: promptTemplate
+                )
             )
             let markdown = try await analyzer.analyze(request: request)
             try markdown.write(to: analysisURL, atomically: true, encoding: .utf8)
@@ -205,13 +200,8 @@ private struct AnalyzeAIRequest {
     var test: AnalyzeTestCase
     var source: String
     var recording: String
-    var template: String?
 
     var prompt: String {
-        if let template {
-            return renderPromptTemplate(template)
-        }
-
         var lines: [String] = []
         lines.append("You are analyzing a WendyAgent Swift end-to-end test recording.")
         lines.append("Pay special attention to every // AI: comment in the test source.")
@@ -257,27 +247,6 @@ private struct AnalyzeAIRequest {
         lines.append(recording)
         lines.append("```")
         return lines.joined(separator: "\n")
-    }
-
-    private func renderPromptTemplate(_ template: String) -> String {
-        var output = template
-        let replacements: [String: String] = [
-            "{{TEST_NAME}}": "\(test.suite) › \(test.name)",
-            "{{TEST_SUITE}}": test.suite,
-            "{{TEST_FUNCTION}}": test.name,
-            "{{TEST_FILE}}": test.fileName,
-            "{{TEST_LINE}}": String(test.funcLine),
-            "{{TEST_STATUS}}": test.status.statusText,
-            "{{FAILURE_DETAIL}}": test.status.detail ?? "",
-            "{{AI_COMMENTS}}": formattedAIComments,
-            "{{AI_CHECKLIST}}": formattedAIComments,
-            "{{SOURCE}}": source,
-            "{{RECORDING}}": recording,
-        ]
-        for (placeholder, value) in replacements {
-            output = output.replacingOccurrences(of: placeholder, with: value)
-        }
-        return output
     }
 
     private var formattedAIComments: String {
@@ -448,13 +417,6 @@ private struct OpenAIChatResponse: Decodable {
     }
 
     var choices: [Choice]
-}
-
-private func loadPromptTemplate(path: String?) throws -> String? {
-    guard let path, !path.isEmpty else {
-        return nil
-    }
-    return try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
 }
 
 private func makeAnalyzer(provider: AIProvider, model: String?) throws -> any E2EAIAnalyzer {

@@ -9,7 +9,6 @@ RUN_DIR=""
 PACKAGE_DIR="$DEFAULT_PACKAGE_DIR"
 PROVIDER="${WENDY_E2E_AI_PROVIDER:-auto}"
 MODEL="${WENDY_E2E_AI_MODEL:-}"
-PROMPT="${WENDY_E2E_AI_PROMPT:-}"
 OVERWRITE="false"
 EXTRA_ARGS=()
 
@@ -25,7 +24,6 @@ Options:
                      defaults to $DEFAULT_PACKAGE_DIR.
   --provider NAME    AI provider: auto, anthropic, claude, openai, or none; defaults to auto.
   --model NAME       Provider model override.
-  --prompt PATH      Markdown prompt template file path.
   --overwrite        Overwrite existing per-test ai-analysis.md files.
   --help             Show this help message.
 
@@ -36,7 +34,6 @@ Environment:
   OPENAI_MODEL       Optional OpenAI model override.
   WENDY_E2E_AI_PROVIDER  Default provider override.
   WENDY_E2E_AI_MODEL     Default model override.
-  WENDY_E2E_AI_PROMPT    Default prompt template path.
 EOF
 }
 
@@ -79,10 +76,6 @@ while [[ $# -gt 0 ]]; do
       MODEL="$2"
       shift 2
       ;;
-    --prompt)
-      PROMPT="$2"
-      shift 2
-      ;;
     --overwrite)
       OVERWRITE="true"
       shift
@@ -116,9 +109,6 @@ COMMAND_ARGS=(
 if [[ -n "$MODEL" ]]; then
   COMMAND_ARGS+=("--model" "$MODEL")
 fi
-if [[ -n "$PROMPT" ]]; then
-  COMMAND_ARGS+=("--prompt" "$PROMPT")
-fi
 if [[ "$OVERWRITE" == "true" ]]; then
   COMMAND_ARGS+=("--overwrite")
 fi
@@ -130,9 +120,6 @@ echo "    Run dir:  $RUN_DIR"
 echo "    Provider: $PROVIDER"
 if [[ -n "$MODEL" ]]; then
   echo "    Model:    $MODEL"
-fi
-if [[ -n "$PROMPT" ]]; then
-  echo "    Prompt:   $PROMPT"
 fi
 
 (

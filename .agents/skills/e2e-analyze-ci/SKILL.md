@@ -136,9 +136,8 @@ done
 ```
 
 Use `--provider anthropic` (or `--provider claude`) with `ANTHROPIC_API_KEY`,
-or `--provider openai` with `OPENAI_API_KEY`, to force a provider. Pass
-`--prompt path/to/prompt.md` to override the built-in prompt. Use `--overwrite`
-to replace existing per-test outputs.
+or `--provider openai` with `OPENAI_API_KEY`, to force a provider. Use
+`--overwrite` to replace existing per-test outputs.
 
 ## Per-Test Analysis File
 
