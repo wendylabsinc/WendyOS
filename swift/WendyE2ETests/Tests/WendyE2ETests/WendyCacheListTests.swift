@@ -92,9 +92,13 @@ struct `'wendy cache list'` {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
                 """
-                mkdir -p "$HOME/Library/Caches/wendy/unreadable"
-                chmod 000 "$HOME/Library/Caches/wendy/unreadable"
-                trap 'chmod 700 "$HOME/Library/Caches/wendy/unreadable" 2>/dev/null || true' EXIT
+                case "$(uname -s)" in
+                  Darwin) cache_root="$HOME/Library/Caches/wendy" ;;
+                  *) cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/wendy" ;;
+                esac
+                mkdir -p "$cache_root/unreadable"
+                chmod 000 "$cache_root/unreadable"
+                trap 'chmod 700 "$cache_root/unreadable" 2>/dev/null || true' EXIT
                 wendy cache list
                 """
             ) {
