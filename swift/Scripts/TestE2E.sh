@@ -41,7 +41,6 @@ fi
 DEFAULT_RUN_DIR="$SWIFT_DIR/Build/e2e-run.$RUN_ID"
 
 RUN_DIR="${WENDY_E2E_RUN_DIR:-$DEFAULT_RUN_DIR}"
-REPORT_ZIP="${WENDY_E2E_REPORT_ZIP:-}"
 AGENT_USER="${WENDY_E2E_AGENT_USER:-}"
 AGENT_ADDRESS="${WENDY_E2E_AGENT_ADDRESS:-}"
 AGENT_WORKDIR="${WENDY_E2E_AGENT_WORKING_DIRECTORY:-}"
@@ -55,15 +54,13 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Run the WendyAgent Swift E2E tests and package the generated E2E run directory
-as a zip artifact.
+Run the WendyAgent Swift E2E tests and write generated files to an E2E run directory.
 
 Options:
   --filter FILTER       Pass a SwiftPM test filter (can be repeated). If omitted,
                         WENDY_E2E_TEST_FILTERS may contain comma-separated
                         filters, otherwise the WendyE2ETests target is run.
   --run-dir DIR         Directory for all generated E2E run files.
-  --report-zip PATH     Path to the final zip artifact.
   --agent-user USER     Optional SSH user for the agent machine.
   --agent-address HOST  Optional address for the agent machine; defaults to hostname.
   --agent-workdir DIR   Existing swift/ working directory to use for the agent.
@@ -99,10 +96,6 @@ while [[ $# -gt 0 ]]; do
     --recording-dir|--records-dir|--artifact-dir)
       echo "ERROR: $1 is no longer supported; use --run-dir instead." >&2
       exit 64
-      ;;
-    --report-zip)
-      REPORT_ZIP="$2"
-      shift 2
       ;;
     --agent-user)
       AGENT_USER="$2"
@@ -183,29 +176,13 @@ absolute_dir_path() {
   (cd "$1" && pwd)
 }
 
-absolute_file_path() {
-  local path="$1"
-  local dir
-  local base
-  dir="$(dirname "$path")"
-  base="$(basename "$path")"
-  mkdir -p "$dir"
-  dir="$(cd "$dir" && pwd)"
-  printf "%s/%s" "$dir" "$base"
-}
-
 RUN_DIR="$(absolute_dir_path "$RUN_DIR")"
 CLI_BIN_DIR="$RUN_DIR/cli/bin"
 AGENT_BIN_DIR="$RUN_DIR/agent/bin"
 TESTS_DIR="$RUN_DIR/tests"
 TEST_RESULTS_OUTPUT_BASE="$RUN_DIR/test-results.xml"
 
-if [[ -z "$REPORT_ZIP" ]]; then
-  REPORT_ZIP="$RUN_DIR.zip"
-fi
-REPORT_ZIP="$(absolute_file_path "$REPORT_ZIP")"
-
-rm -rf "$REPORT_ZIP" "$RUN_DIR"
+rm -rf "$RUN_DIR"
 mkdir -p \
   "$CLI_BIN_DIR" \
   "$AGENT_BIN_DIR" \
@@ -259,10 +236,9 @@ generate_html_report() {
   )
 }
 
-collect_reports() {
+write_run_summary() {
   local status="$1"
 
-  rm -rf "$REPORT_ZIP"
   mkdir -p "$RUN_DIR"
 
   {
@@ -286,20 +262,7 @@ collect_reports() {
     find "$RUN_DIR" -type f | sort | sed "s#^$RUN_DIR/#- #"
   } > "$RUN_DIR/README.md"
 
-  local report_zip_dir
-  local report_zip
-  report_zip_dir="$(dirname "$REPORT_ZIP")"
-  mkdir -p "$report_zip_dir"
-  report_zip_dir="$(cd "$report_zip_dir" && pwd)"
-  report_zip="$report_zip_dir/$(basename "$REPORT_ZIP")"
-
-  if command -v zip >/dev/null 2>&1; then
-    (cd "$(dirname "$RUN_DIR")" && zip -qr "$report_zip" "$(basename "$RUN_DIR")")
-  else
-    (cd "$(dirname "$RUN_DIR")" && ditto -c -k --keepParent "$(basename "$RUN_DIR")" "$report_zip")
-  fi
-
-  echo "==> Wrote Swift E2E run zip: $report_zip"
+  echo "==> Wrote Swift E2E run summary: $RUN_DIR/README.md"
 }
 
 SWIFT_TEST_ARGS=("test")
@@ -350,5 +313,5 @@ TEST_STATUS=$?
 set -e
 
 generate_html_report
-collect_reports "$TEST_STATUS"
+write_run_summary "$TEST_STATUS"
 exit "$TEST_STATUS"
