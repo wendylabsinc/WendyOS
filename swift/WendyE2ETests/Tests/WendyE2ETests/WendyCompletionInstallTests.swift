@@ -1,7 +1,11 @@
+import Subprocess
 import Testing
+import WendyE2ETesting
 
 @Suite
 struct `'wendy completion install'` {
+    let scenario = CLIAndAgentScenario()
+
     /**
      Displays usage for `wendy completion install`. The output includes the
      command synopsis, local flags, inherited global flags, and concise
@@ -9,9 +13,26 @@ struct `'wendy completion install'` {
      stderr, and leaves configuration, cache, project, cloud, and device
      state untouched.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `prints command help`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh("wendy completion install --help") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput.contains("Detect the current shell"))
+                #expect(standardOutput.contains("Usage:"))
+                #expect(standardOutput.contains("wendy completion install [flags]"))
+                #expect(standardOutput.contains("--shell"))
+                #expect(standardOutput.contains("--print-path"))
+                #expect(standardOutput.contains("--stdout"))
+                #expect(standardOutput.contains("--device"))
+                #expect(standardOutput.contains("--json"))
+                #expect(standardError == "")
+            }
+        }
     }
 
     /**
