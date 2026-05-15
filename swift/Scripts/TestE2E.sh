@@ -93,10 +93,6 @@ while [[ $# -gt 0 ]]; do
       RUN_DIR="$2"
       shift 2
       ;;
-    --recording-dir|--records-dir|--artifact-dir)
-      echo "ERROR: $1 is no longer supported; use --run-dir instead." >&2
-      exit 64
-      ;;
     --agent-user)
       AGENT_USER="$2"
       shift 2
