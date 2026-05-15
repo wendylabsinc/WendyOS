@@ -88,9 +88,22 @@ struct `'wendy cloud tunnel'` {
      Missing auth, unreachable brokers, or rejected tunnels close any
      local listener and return a clear diagnostic.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `reports auth and broker failures without leaving listeners open`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh("wendy cloud tunnel 65535:80") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(!terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(standardError.contains("not logged in"))
+                #expect(standardError.contains("wendy auth login"))
+                #expect(!standardError.contains("Forwarding"))
+                #expect(!standardError.contains("Press Ctrl+C"))
+            }
+        }
     }
 
     /**
