@@ -231,6 +231,6 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 
 // ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
 // Called by the caller after all post-flash operations are complete.
-func ejectDisk(devPath string) {
-	exec.Command("diskutil", "eject", devPath).Run() //nolint:errcheck
+func ejectDisk(d drive) {
+	exec.Command("diskutil", "eject", d.DevicePath).Run() //nolint:errcheck
 }
