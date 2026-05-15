@@ -45,6 +45,7 @@ AGENT_REPO_DIR="${WENDY_E2E_AGENT_REPO_DIR:-}"
 AGENT_USER="${WENDY_E2E_AGENT_USER:-}"
 AGENT_ADDRESS="${WENDY_E2E_AGENT_ADDRESS:-}"
 AGENT_OS="${WENDY_E2E_AGENT_OS:-}"
+TRANSPORT="${WENDY_E2E_TRANSPORT:-}"
 ISOLATION="${WENDY_E2E_ISOLATION:-per-test}"
 VERBOSE="${WENDY_E2E_VERBOSE:-false}"
 REPORT="${WENDY_E2E_GENERATE_REPORT:-true}"
@@ -129,6 +130,7 @@ Environment:
   WENDY_E2E_AGENT_USER                Optional SSH user for the agent machine.
   WENDY_E2E_AGENT_ADDRESS             Optional address for the agent machine.
   WENDY_E2E_AGENT_OS                  Optional OS override for the agent machine.
+  WENDY_E2E_TRANSPORT                 Optional transport label for report metadata.
   WENDY_E2E_ISOLATION                 none, per-run, or per-test; defaults to per-test.
   WENDY_E2E_GENERATE_REPORT           Boolean; generates report.html.
   WENDY_E2E_PARALLEL                  Boolean; enables SwiftPM parallel tests.
@@ -441,7 +443,126 @@ EOF
 
   local version
   version="$(run_cli_command "$command")"
+  WENDY_CLI_VERSION="$version"
   echo "    Version: $version"
+}
+
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf "%s" "$value"
+}
+
+json_string() {
+  printf '"%s"' "$(json_escape "${1:-}")"
+}
+
+json_string_or_null() {
+  if [[ -n "${1:-}" ]]; then
+    json_string "$1"
+  else
+    printf "null"
+  fi
+}
+
+json_bool() {
+  if [[ "${1:-}" == "true" ]]; then
+    printf "true"
+  else
+    printf "false"
+  fi
+}
+
+json_string_array() {
+  local first="true"
+  printf "["
+  for value in "$@"; do
+    if [[ "$first" == "true" ]]; then
+      first="false"
+    else
+      printf ","
+    fi
+    json_string "$value"
+  done
+  printf "]"
+}
+
+write_run_info() {
+  local status="$1"
+  local info_path="$RUN_DIR/info.json"
+
+  mkdir -p "$RUN_DIR"
+
+  local created_at git_commit git_branch git_ref git_remote git_dirty github_sha swift_version go_version
+  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  git_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  git_branch="$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || true)"
+  git_branch="${git_branch:-${GITHUB_REF_NAME:-}}"
+  git_ref="${GITHUB_REF:-}"
+  git_remote="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+  git_dirty="false"
+  if [[ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null || true)" ]]; then
+    git_dirty="true"
+  fi
+  github_sha="${GITHUB_SHA:-}"
+  swift_version="$(swift --version 2>/dev/null | head -n 1 || true)"
+  go_version="$(go version 2>/dev/null || true)"
+
+  {
+    echo "{"
+    printf '  "runID": '; json_string "$RUN_ID"; echo ","
+    printf '  "createdAt": '; json_string "$created_at"; echo ","
+    printf '  "exitStatus": %s,\n' "$status"
+    echo '  "git": {'
+    printf '    "commit": '; json_string_or_null "$git_commit"; echo ","
+    printf '    "branch": '; json_string_or_null "$git_branch"; echo ","
+    printf '    "ref": '; json_string_or_null "$git_ref"; echo ","
+    printf '    "remote": '; json_string_or_null "$git_remote"; echo ","
+    printf '    "dirty": '; json_bool "$git_dirty"; echo
+    echo '  },'
+    echo '  "github": {'
+    printf '    "repository": '; json_string_or_null "${GITHUB_REPOSITORY:-}"; echo ","
+    printf '    "workflow": '; json_string_or_null "${GITHUB_WORKFLOW:-}"; echo ","
+    printf '    "runID": '; json_string_or_null "${GITHUB_RUN_ID:-}"; echo ","
+    printf '    "runAttempt": '; json_string_or_null "${GITHUB_RUN_ATTEMPT:-}"; echo ","
+    printf '    "job": '; json_string_or_null "${GITHUB_JOB:-}"; echo ","
+    printf '    "actor": '; json_string_or_null "${GITHUB_ACTOR:-}"; echo ","
+    printf '    "sha": '; json_string_or_null "$github_sha"; echo
+    echo '  },'
+    echo '  "target": {'
+    printf '    "cliOS": '; json_string_or_null "$CLI_OS"; echo ","
+    printf '    "cliAddress": '; json_string_or_null "$CLI_ADDRESS"; echo ","
+    printf '    "cliUser": '; json_string_or_null "$CLI_USER"; echo ","
+    printf '    "agentOS": '; json_string_or_null "$AGENT_OS"; echo ","
+    printf '    "agentAddress": '; json_string_or_null "$AGENT_ADDRESS"; echo ","
+    printf '    "agentUser": '; json_string_or_null "$AGENT_USER"; echo ","
+    printf '    "transport": '; json_string_or_null "$TRANSPORT"; echo
+    echo '  },'
+    echo '  "paths": {'
+    printf '    "runDirectory": '; json_string "$RUN_DIR"; echo ","
+    printf '    "outputDirectory": '; json_string "$OUTPUT_DIR"; echo ","
+    printf '    "cliRunDirectory": '; json_string "$CLI_RUN_DIR"; echo ","
+    printf '    "agentRunDirectory": '; json_string "$AGENT_RUN_DIR"; echo ","
+    printf '    "testsDirectory": '; json_string "$TESTS_DIR"; echo
+    echo '  },'
+    echo '  "test": {'
+    printf '    "filters": '; json_string_array "${TEST_FILTERS[@]}"; echo ","
+    printf '    "isolation": '; json_string "$ISOLATION"; echo ","
+    printf '    "parallel": '; json_bool "$PARALLEL"; echo
+    echo '  },'
+    echo '  "tools": {'
+    printf '    "swift": '; json_string_or_null "$swift_version"; echo ","
+    printf '    "go": '; json_string_or_null "$go_version"; echo ","
+    printf '    "wendy": '; json_string_or_null "${WENDY_CLI_VERSION:-}"; echo
+    echo '  }'
+    echo "}"
+  } > "$info_path"
+
+  echo "==> Wrote Swift E2E run info: $info_path"
 }
 
 generate_html_report() {
@@ -467,6 +588,7 @@ write_run_summary() {
     echo "- Exit status: \`$status\`"
     echo "- Run ID: \`$RUN_ID\`"
     echo "- Run directory: \`$RUN_DIR\`"
+    echo "- Info: \`$RUN_DIR/info.json\`"
     echo "- Output root directory: \`$OUTPUT_DIR\`"
     echo "- CLI root directory: \`$CLI_ROOT_DIR\`"
     echo "- CLI run directory: \`$CLI_RUN_DIR\`"
@@ -487,6 +609,7 @@ write_run_summary() {
     echo "- Agent user: \`${AGENT_USER:-<none>}\`"
     echo "- Agent address: \`${AGENT_ADDRESS:-<local>}\`"
     echo "- Agent OS: \`${AGENT_OS:-<current>}\`"
+    echo "- Transport: \`${TRANSPORT:-<none>}\`"
     echo
     echo "## Files"
     find "$RUN_DIR" -type f | sort | sed "s#^$RUN_DIR/#- #"
@@ -547,6 +670,7 @@ else
   echo "    Agent:   <local>:${AGENT_REPO_DIR:-<no-repo>}"
 fi
 echo "    Agent OS: ${AGENT_OS:-<current>}"
+echo "    Transport: ${TRANSPORT:-<none>}"
 
 set +e
 (
@@ -558,6 +682,7 @@ set +e
 TEST_STATUS=$?
 set -e
 
+write_run_info "$TEST_STATUS"
 generate_html_report
 write_run_summary "$TEST_STATUS"
 exit "$TEST_STATUS"

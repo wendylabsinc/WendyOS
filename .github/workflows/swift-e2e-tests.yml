@@ -227,6 +227,7 @@ jobs:
           WENDY_E2E_RUN_ID: ${{ steps.e2e-run.outputs.run_id }}
           WENDY_E2E_CLI_OS: ${{ matrix.target.cli_os }}
           WENDY_E2E_AGENT_OS: ${{ matrix.target.agent_os }}
+          WENDY_E2E_TRANSPORT: ${{ matrix.target.transport }}
         run: |
           set -euo pipefail
           bash ./Scripts/TestE2E.sh \
