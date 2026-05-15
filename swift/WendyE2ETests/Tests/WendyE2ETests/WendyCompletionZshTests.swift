@@ -64,9 +64,41 @@ struct `'wendy completion zsh'` {
      local flags, inherited global flags, and documented aliases using the
      syntax of the target shell.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `includes commands, flags, and aliases`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh("wendy completion zsh") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput.contains("requestComp"))
+                #expect(standardOutput.contains("compdef _wendy wendy"))
+                #expect(standardError == "")
+            }
+
+            try await cli.sh("wendy __complete device ''") {
+                terminationStatus,
+                standardOutput,
+                _ in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput.contains("wifi"))
+                #expect(standardOutput.contains("bluetooth"))
+            }
+
+            try await cli.sh("wendy __complete device version --") {
+                terminationStatus,
+                standardOutput,
+                _ in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput.contains("--device"))
+                #expect(standardOutput.contains("--json"))
+                #expect(standardOutput.contains("--check-updates"))
+            }
+        }
     }
 
     /**
