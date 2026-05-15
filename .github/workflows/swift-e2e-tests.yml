@@ -238,7 +238,7 @@ jobs:
         if: always() && matrix.target.status == 'enabled'
         uses: actions/upload-artifact@v5
         with:
-          name: swift-e2e-${{ matrix.target.id }}
+          name: wendy-e2e-${{ steps.e2e-run.outputs.run_id }}
           path: swift/Build/e2e/${{ steps.e2e-run.outputs.run_id }}/**
           if-no-files-found: warn
           retention-days: 14
