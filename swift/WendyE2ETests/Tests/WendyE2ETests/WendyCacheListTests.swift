@@ -1,3 +1,4 @@
+import Foundation
 import Subprocess
 import Testing
 import WendyE2ETesting
@@ -96,9 +97,25 @@ struct `'wendy cache list'` {
      cache entries and byte counts. JSON mode emits no table formatting and
      no stderr on success.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `prints JSON cache entries for automation`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh("wendy --json cache list") {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardError == "")
+                #expect(!standardOutput.contains("Cache is empty"))
+
+                let json = try #require(
+                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                        as? [[String: Any]]
+                )
+                #expect(json.isEmpty)
+            }
+        }
     }
 
     /**

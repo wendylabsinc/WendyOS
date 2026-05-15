@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,10 +30,31 @@ func newCacheCmd() *cobra.Command {
 }
 
 func newCacheListCmd() *cobra.Command {
+	type cacheEntry struct {
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		SizeBytes int64  `json:"sizeBytes"`
+		Size      string `json:"size"`
+	}
+
+	printJSON := func(items []cacheEntry) error {
+		if items == nil {
+			items = []cacheEntry{}
+		}
+		data, err := json.MarshalIndent(items, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List cached items",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			explicitJSON := jsonOutput && cmd.Root().PersistentFlags().Changed("json")
+
 			cacheDir, err := config.CacheDir()
 			if err != nil {
 				return err
@@ -41,6 +63,9 @@ func newCacheListCmd() *cobra.Command {
 			entries, err := os.ReadDir(cacheDir)
 			if err != nil {
 				if os.IsNotExist(err) {
+					if explicitJSON {
+						return printJSON(nil)
+					}
 					fmt.Println("Cache is empty.")
 					return nil
 				}
@@ -48,17 +73,15 @@ func newCacheListCmd() *cobra.Command {
 			}
 
 			if len(entries) == 0 {
+				if explicitJSON {
+					return printJSON(nil)
+				}
 				fmt.Println("Cache is empty.")
 				return nil
 			}
 
 			// Compute sizes up front (needed for both modes).
 			// The os-images directory is expanded so each image is listed individually.
-			type cacheEntry struct {
-				name string
-				path string
-				size int64
-			}
 			var items []cacheEntry
 			for _, entry := range entries {
 				if isCacheDBFile(entry.Name()) {
@@ -80,9 +103,10 @@ func newCacheListCmd() *cobra.Command {
 							return fmt.Errorf("reading os-images cache entry info for %q: %w", img.Name(), err)
 						}
 						items = append(items, cacheEntry{
-							name: "os-images/" + img.Name(),
-							path: imgPath,
-							size: imgInfo.Size(),
+							Name:      "os-images/" + img.Name(),
+							Path:      imgPath,
+							SizeBytes: imgInfo.Size(),
+							Size:      formatSize(imgInfo.Size()),
 						})
 					}
 					continue
@@ -91,7 +115,16 @@ func newCacheListCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("determining cache entry size for %s: %w", entry.Name(), err)
 				}
-				items = append(items, cacheEntry{name: entry.Name(), path: path, size: size})
+				items = append(items, cacheEntry{
+					Name:      entry.Name(),
+					Path:      path,
+					SizeBytes: size,
+					Size:      formatSize(size),
+				})
+			}
+
+			if explicitJSON {
+				return printJSON(items)
 			}
 
 			// Interactive mode when stdin and stdout are both terminals.
@@ -99,9 +132,9 @@ func newCacheListCmd() *cobra.Command {
 				checkItems := make([]tui.ChecklistItem, len(items))
 				for i, item := range items {
 					checkItems[i] = tui.ChecklistItem{
-						Label:       item.name,
-						Description: formatSize(item.size),
-						Value:       item.path,
+						Label:       item.Name,
+						Description: item.Size,
+						Value:       item.Path,
 					}
 				}
 
@@ -141,7 +174,7 @@ func newCacheListCmd() *cobra.Command {
 
 			// Non-interactive (plain listing).
 			for _, item := range items {
-				fmt.Printf("  %s  (%s)\n", item.name, formatSize(item.size))
+				fmt.Printf("  %s  (%s)\n", item.Name, item.Size)
 			}
 			return nil
 		},
