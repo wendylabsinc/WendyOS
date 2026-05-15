@@ -90,15 +90,13 @@ struct `'wendy cache list'` {
     @Test
     func `reports unreadable cache metadata clearly`() async throws {
         try await self.scenario.run { cli, _ in
+            let cacheDirectory = cli.wendyCacheDirectory
+
             try await cli.sh(
                 """
-                case "$(uname -s)" in
-                  Darwin) cache_root="$HOME/Library/Caches/wendy" ;;
-                  *) cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/wendy" ;;
-                esac
-                mkdir -p "$cache_root/unreadable"
-                chmod 000 "$cache_root/unreadable"
-                trap 'chmod 700 "$cache_root/unreadable" 2>/dev/null || true' EXIT
+                mkdir -p "\(cacheDirectory)/unreadable"
+                chmod 000 "\(cacheDirectory)/unreadable"
+                trap 'chmod 700 "\(cacheDirectory)/unreadable" 2>/dev/null || true' EXIT
                 wendy cache list
                 """
             ) {

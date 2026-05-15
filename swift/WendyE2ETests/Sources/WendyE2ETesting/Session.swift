@@ -12,6 +12,29 @@ public struct WendyE2ESession: Sendable {
     public let workingDirectory: String?
     public let env: [String: String]
 
+    public var wendyCacheDirectory: String {
+        let homeDirectory =
+            self.env["HOME"].flatMap(Self.nonEmpty)
+            ?? Self.defaultHomeDirectory(
+                for: self.machine
+            )
+
+        switch self.machine.os {
+        case .macOS:
+            return Self.path(homeDirectory, "Library", "Caches", "wendy")
+        case .linux, .wendyOS:
+            let cacheHome =
+                self.env["XDG_CACHE_HOME"].flatMap(Self.nonEmpty)
+                ?? Self.path(homeDirectory, ".cache")
+            return Self.path(cacheHome, "wendy")
+        case .windows:
+            let localAppData =
+                self.env["LOCALAPPDATA"].flatMap(Self.nonEmpty)
+                ?? Self.path(homeDirectory, "AppData", "Local")
+            return Self.path(localAppData, "wendy")
+        }
+    }
+
     // MARK: - Beginning and Ending Sessions
 
     public static func begin(
@@ -369,6 +392,25 @@ public struct WendyE2ESession: Sendable {
     private func sshTarget(address: String) -> String {
         let host = address.contains(":") ? "[\(address)]" : address
         return self.machine.user.map { "\($0)@\(host)" } ?? host
+    }
+
+    private static func defaultHomeDirectory(for machine: WendyE2EMachine) -> String {
+        if machine.isLocal {
+            FileManager.default.homeDirectoryForCurrentUser.path
+        } else {
+            "$HOME"
+        }
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        value.isEmpty ? nil : value
+    }
+
+    private static func path(_ first: String, _ rest: String...) -> String {
+        rest.reduce(first) { path, component in
+            let suffix = component.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return path.hasSuffix("/") ? "\(path)\(suffix)" : "\(path)/\(suffix)"
+        }
     }
 
     private static func shellEnvironmentValue(_ value: String) -> String {

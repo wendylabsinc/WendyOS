@@ -149,6 +149,49 @@ struct `session` {
     }
 
     @Test
+    func `computes macOS wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "mac", name: "Mac", os: .macOS),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/Library/Caches/wendy")
+    }
+
+    @Test
+    func `computes Linux wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "linux", name: "Linux", os: .linux),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/.cache/wendy")
+    }
+
+    @Test
+    func `uses XDG cache home for Linux wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "linux", name: "Linux", os: .linux),
+            env: [
+                "HOME": "/tmp/e2e-home",
+                "XDG_CACHE_HOME": "/tmp/e2e-cache",
+            ]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-cache/wendy")
+    }
+
+    @Test
+    func `computes WendyOS wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "wendyos", name: "WendyOS", os: .wendyOS),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/.cache/wendy")
+    }
+
+    @Test
     func `creates session directories lazily before running commands`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("machine-lazy-" + UUID().uuidString, isDirectory: true)
