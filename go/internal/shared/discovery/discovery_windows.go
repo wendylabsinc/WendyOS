@@ -14,10 +14,6 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
-func discoverEthernet(_ context.Context) ([]models.EthernetInterface, error) {
-	return nil, nil
-}
-
 // discoverLAN uses hashicorp/mdns to find WendyOS devices on Windows.
 func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 	if timeout == 0 {
