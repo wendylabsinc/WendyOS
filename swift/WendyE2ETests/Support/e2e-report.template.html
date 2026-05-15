@@ -557,7 +557,7 @@
       list-style: none;
     }
 
-    .ai-analysis {
+    .ai-analysis-checklist {
       margin: 0 0 12px;
       padding: 12px 14px;
       border: 1px solid var(--line);
@@ -566,13 +566,39 @@
       font-size: 14px;
     }
 
-    .ai-analysis h4 {
+    .ai-analysis-checklist h4 {
       margin: 0 0 6px;
       color: var(--muted);
       font-size: 12px;
       font-weight: 900;
       letter-spacing: .07em;
       text-transform: uppercase;
+    }
+
+    .ai-analysis-inline {
+      margin: 0 0 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--green-line);
+      border-radius: 12px;
+      background: var(--green-bg);
+      font-size: 14px;
+    }
+
+    .ai-analysis-inline h4 {
+      margin: 0 0 8px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .ai-analysis-inline pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--text);
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
     .checks {
@@ -756,7 +782,7 @@
     Fill every {{PLACEHOLDER}} with escaped text. Duplicate the marked repeat
     blocks as needed, then remove these instructions and any unused example
     sections. This template is intended to list every E2E test, including
-    passed tests, disabled/skipped tests, and tests without // AI: review
+    passed tests, disabled/skipped tests, and tests without // AI: analysis
     comments. For checklist and test statuses, use one of: pass, concern,
     fail, skipped, unknown, no-ai.
 
@@ -765,12 +791,12 @@
     command as a terminal-style run followed by captured output lines. Leave
     stdout lines unmarked. Mark stderr lines with an amber ! in the gutter.
     If a command produced no output, omit the command-output block. Test
-    details should only include command runs, AI analysis when present, and
-    skipped reasons for skipped tests.
+    details should only include command runs, AI analysis checklists when present,
+    generated AI analysis Markdown when present, and skipped reasons for skipped tests.
 
     The filter bar expects every test details row to have data-test-status set
     to pass, skipped, fail, or unknown. Rows with generated AI reports that
-    need human review should set data-has-ai-analysis to true and render the inline
+    need human analysis should set data-has-ai-analysis to true and render the inline
     TEST_AI_FILTER_ANALYSIS block. Activating the AI filter reveals that inline
     Markdown report verbatim under each matching test line. The search field filters
     against the row text content, including suite name, test title, command
@@ -823,15 +849,15 @@
 
       <!-- Repeat this .suite-group once per suite in the file. Do not add a visible suite heading; the suite appears in each test sentence. -->
       <div class="suite-group">
-        <!-- Repeat this details.test-details once per test function in the suite. Set data-has-ai to true when // AI: checklist items are present, and data-has-ai-analysis to true only when a generated Markdown report needs human review. Render TEST_AI_BADGE only when generated AI remarks exist. -->
+        <!-- Repeat this details.test-details once per test function in the suite. Set data-has-ai to true when // AI: checklist items are present, and data-has-ai-analysis to true only when a generated Markdown report needs human analysis. Render TEST_AI_BADGE only when generated AI analysis notes exist. -->
         <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}" data-has-ai="{{TEST_HAS_AI}}" data-has-ai-analysis="{{TEST_HAS_AI_ANALYSIS}}">
           <summary class="test-summary">
             {{TEST_REPORT_LINK}}<span class="test-path">{{TEST_PATH_TEXT}}</span><span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span>{{TEST_AI_BADGE}}{{TEST_AI_FILTER_ANALYSIS}}
           </summary>
           <div class="test-body">
           <!-- Optional: render when the test has // AI: checklist items. -->
-          <section class="ai-analysis">
-            <h4>AI analysis</h4>
+          <section class="ai-analysis-checklist">
+            <h4>AI analysis checklist</h4>
             <ul class="checks">
               <!-- Repeat this li once per checklist item. -->
               <li><span>{{CHECKLIST_ITEM_TEXT}}</span><span class="status {{CHECKLIST_STATUS_CLASS}}" aria-label="{{CHECKLIST_STATUS_TEXT}}"></span></li>

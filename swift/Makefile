@@ -24,7 +24,7 @@ lint: ## Lint Swift code using swift-format
 test: ## Run Swift package tests
 	bash ./Scripts/Test.sh
 
-e2e-test: ## Run Swift E2E tests, analyze results, and open the HTML report on macOS
+e2e-test: ## Run Swift E2E tests, run AI analysis, and open the HTML report on macOS
 	@run_id="$${WENDY_E2E_RUN_ID:-local}"; \
 	status=0; \
 	WENDY_E2E_RUN_ID="$$run_id" bash ./Scripts/E2ETest.sh --output-dir Build/e2e --cli-root-dir Build/e2e --agent-root-dir Build/e2e --parallel || status=$$?; \
@@ -43,7 +43,7 @@ e2e-report: ## Render the Swift E2E HTML report for RUN_DIR=Build/e2e/<run-id>
 	@$(OPEN_E2E_REPORT)
 
 e2e-test-jetson-orin-nano: DEVICE ?= wendyos-jetson-orin-nano.local
-e2e-test-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano, analyze results, and open the HTML report on macOS
+e2e-test-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano, run AI analysis, and open the HTML report on macOS
 	@run_id="$${WENDY_E2E_RUN_ID:-jetson-orin-nano}"; \
 	status=0; \
 	WENDY_E2E_RUN_ID="$$run_id" WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/E2ETest.sh --output-dir Build/e2e --agent-address $(DEVICE) || status=$$?; \
@@ -53,7 +53,7 @@ e2e-test-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano, anal
 	exit $$status
 
 e2e-test-raspberry-pi-5: DEVICE ?= wendyos-raspberry-pi-5.local
-e2e-test-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5, analyze results, and open the HTML report on macOS
+e2e-test-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5, run AI analysis, and open the HTML report on macOS
 	@run_id="$${WENDY_E2E_RUN_ID:-raspberry-pi-5}"; \
 	status=0; \
 	WENDY_E2E_RUN_ID="$$run_id" WENDY_E2E_AGENT_OS=wendyOS bash ./Scripts/E2ETest.sh --output-dir Build/e2e --agent-address $(DEVICE) || status=$$?; \
@@ -63,7 +63,7 @@ e2e-test-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5, analyze 
 	exit $$status
 
 e2e-test-mac-mini: DEVICE ?= mac-mini.local
-e2e-test-mac-mini: ## Run Swift E2E tests against Mac mini, analyze results, and open the HTML report on macOS
+e2e-test-mac-mini: ## Run Swift E2E tests against Mac mini, run AI analysis, and open the HTML report on macOS
 	@run_id="$${WENDY_E2E_RUN_ID:-mac-mini}"; \
 	status=0; \
 	WENDY_E2E_RUN_ID="$$run_id" WENDY_E2E_AGENT_OS=macOS bash ./Scripts/E2ETest.sh --output-dir Build/e2e --agent-address $(DEVICE) || status=$$?; \

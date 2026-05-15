@@ -237,7 +237,7 @@ jobs:
             --output-dir Build/e2e \
             --agent-address "${{ matrix.target.device_address }}"
 
-      - name: Analyze Swift E2E results
+      - name: Analyze Swift E2E results with AI
         if: always() && matrix.target.status == 'enabled'
         working-directory: swift
         shell: bash

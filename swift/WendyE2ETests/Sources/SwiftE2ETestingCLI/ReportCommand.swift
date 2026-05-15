@@ -10,7 +10,7 @@ struct ReportCommand: ParsableCommand {
         commandName: "report",
         abstract: "Generate an HTML report from a Swift E2E recording.",
         discussion: """
-            Generates the same static HTML report used by the E2E review skill,
+            Generates the same static HTML report used by the E2E analysis skill,
             using Swift test sources and an existing E2E recording directory.
             """
     )
@@ -59,11 +59,17 @@ struct ReportCommand: ParsableCommand {
         )
 
         let records = try loadRecords(in: recordingURL)
+        let aiAnalyses = try loadAIAnalyses(in: recordingURL)
         let testResults = try loadTestResults(
             in: recordingURL,
             outputDirectoryURL: outputURL.deletingLastPathComponent()
         )
-        let files = try parseTests(in: testsURL, records: records, testResults: testResults)
+        let files = try parseTests(
+            in: testsURL,
+            records: records,
+            aiAnalyses: aiAnalyses,
+            testResults: testResults
+        )
         try renderReport(
             templateURL: templateURL,
             recordingURL: recordingURL,
@@ -147,6 +153,7 @@ private struct ReportTestCase {
     var nextLine = 0
     var aiItems: [String] = []
     var recordName = ""
+    var aiAnalysisMarkdown = ""
     var commands: [CommandRun] = []
 }
 
@@ -205,6 +212,33 @@ private func loadRecords(in recordingURL: URL) throws -> [String: [CommandRun]] 
         )
     }
     return records
+}
+
+private func loadAIAnalyses(in recordingURL: URL) throws -> [String: String] {
+    guard FileManager.default.fileExists(atPath: recordingURL.path) else {
+        return [:]
+    }
+
+    guard
+        let enumerator = FileManager.default.enumerator(
+            at: recordingURL,
+            includingPropertiesForKeys: nil
+        )
+    else {
+        throw ValidationError("Recording directory cannot be read: \(recordingURL.path)")
+    }
+
+    var analyses: [String: String] = [:]
+    for case let analysisURL as URL in enumerator
+    where analysisURL.lastPathComponent == "ai-analysis.md" {
+        let recordKey = analysisURL.deletingLastPathComponent().lastPathComponent
+        let analysis = try String(contentsOf: analysisURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !recordKey.isEmpty, !analysis.isEmpty {
+            analyses[recordKey] = analysis
+        }
+    }
+    return analyses
 }
 
 private func commandRecordURLs(in recordingURL: URL) throws -> [URL] {
@@ -307,6 +341,7 @@ private func isCommandRecord(_ url: URL) -> Bool {
     url.pathExtension == "md"
         && url.lastPathComponent != "README.md"
         && url.lastPathComponent != "index.md"
+        && url.lastPathComponent != "ai-analysis.md"
 }
 
 private func loadTestResults(
@@ -487,6 +522,7 @@ private func stripBackticks(_ value: String) -> String {
 private func parseTests(
     in testsURL: URL,
     records: [String: [CommandRun]],
+    aiAnalyses: [String: String],
     testResults: [TestResultKey: ReportTestStatus]
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
@@ -541,6 +577,7 @@ private func parseTests(
             let recordKey =
                 "\(recordFileStem(sourceURL)).\(slug(tests[testIndex].name))"
             tests[testIndex].recordName = "\(recordKey)/recording.md"
+            tests[testIndex].aiAnalysisMarkdown = aiAnalyses[recordKey, default: ""]
             tests[testIndex].commands = records[recordKey, default: []].filter {
                 command in
                 command.sourceFile == sourceURL.lastPathComponent
@@ -757,10 +794,16 @@ private func renderCards(
             let statusClass = test.status.statusClass
             let statusText = test.status.statusText
             let hasAI = test.aiItems.isEmpty ? "false" : "true"
+            let hasAIAnalysis = test.aiAnalysisMarkdown.isEmpty ? "false" : "true"
             let recordURL = recordingURL.appendingPathComponent(test.recordName)
             let shellName = test.recordName.replacing(/\.md$/, with: ".sh.txt")
             let shellURL = recordingURL.appendingPathComponent(shellName)
+            let aiAnalysisName = test.recordName.replacing(/recording\.md$/, with: "ai-analysis.md")
+            let aiAnalysisURL = recordingURL.appendingPathComponent(aiAnalysisName)
             let recordLinks = [
+                FileManager.default.fileExists(atPath: aiAnalysisURL.path)
+                    ? "<a class=\"report-button\" href=\"\(escapeHTML(recordLinkPrefix + aiAnalysisName))\">AI</a>"
+                    : "",
                 FileManager.default.fileExists(atPath: shellURL.path)
                     ? "<a class=\"report-button\" href=\"\(escapeHTML(recordLinkPrefix + shellName))\">Shell</a>"
                     : "",
@@ -768,20 +811,22 @@ private func renderCards(
                     ? "<a class=\"report-button\" href=\"\(escapeHTML(recordLinkPrefix + test.recordName))\">Record</a>"
                     : "",
             ].joined()
+            let aiBadge = hasAIAnalysis == "true" ? "<span class=\"badge ai\">AI</span>" : ""
             let pathText = "\(test.suite) › \(test.name)"
 
             cards.append(
-                "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-has-ai=\"\(hasAI)\" data-has-ai-analysis=\"false\">"
+                "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-has-ai=\"\(hasAI)\" data-has-ai-analysis=\"\(hasAIAnalysis)\">"
             )
             cards.append(
-                "<summary class=\"test-summary\">\(recordLinks)<span class=\"test-path\">\(escapeHTML(pathText))</span><span class=\"badge \(statusClass)\">\(statusText)</span></summary>"
+                "<summary class=\"test-summary\">\(recordLinks)<span class=\"test-path\">\(escapeHTML(pathText))</span><span class=\"badge \(statusClass)\">\(statusText)</span>\(aiBadge)</summary>"
             )
 
             var body: [String] = []
             if let detail = test.status.detail {
                 body.append("<p class=\"skip-reason\">\(escapeHTML(detail))</p>")
             }
-            body.append(renderAI(test))
+            body.append(renderAIChecklist(test))
+            body.append(renderAIAnalysis(test.aiAnalysisMarkdown))
             body.append(renderCommands(test.commands))
             cards.append(
                 "<div class=\"test-body\">\(body.filter { !$0.isEmpty }.joined(separator: "\n"))</div>"
@@ -795,7 +840,7 @@ private func renderCards(
     return cards.joined(separator: "\n")
 }
 
-private func renderAI(_ test: ReportTestCase) -> String {
+private func renderAIChecklist(_ test: ReportTestCase) -> String {
     guard !test.aiItems.isEmpty else {
         return ""
     }
@@ -805,7 +850,20 @@ private func renderAI(_ test: ReportTestCase) -> String {
     }.joined()
 
     return
-        "<section class=\"ai-analysis\"><h4>AI analysis</h4><ul class=\"checks\">\(items)</ul></section>"
+        "<section class=\"ai-analysis-checklist\"><h4>AI analysis checklist</h4><ul class=\"checks\">\(items)</ul></section>"
+}
+
+private func renderAIAnalysis(_ markdown: String) -> String {
+    guard !markdown.isEmpty else {
+        return ""
+    }
+
+    return """
+        <section class="ai-analysis-inline">
+        <h4>AI analysis</h4>
+        <pre>\(escapeHTML(markdown))</pre>
+        </section>
+        """
 }
 
 private func renderCommands(_ commands: [CommandRun]) -> String {

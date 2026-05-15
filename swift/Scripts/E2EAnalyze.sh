@@ -10,7 +10,7 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") --run-dir DIR
 
-Stub Anthropic/Claude analysis step for WendyAgent Swift E2E run artifacts.
+Stub Anthropic/Claude AI analysis step for WendyAgent Swift E2E run artifacts.
 
 Options:
   --run-dir DIR  Required E2E run directory produced by E2ETest.sh.
@@ -41,8 +41,8 @@ absolute_existing_dir_path() {
 
 update_readme_block() {
   local readme_path="$1"
-  local start="<!-- swift-e2e-ai-review:start -->"
-  local end="<!-- swift-e2e-ai-review:end -->"
+  local start="<!-- swift-e2e-analyze:start -->"
+  local end="<!-- swift-e2e-analyze:end -->"
   local tmp_path
   tmp_path="$(mktemp)"
 
@@ -62,11 +62,11 @@ update_readme_block() {
       printf '\n'
     fi
     echo "$start"
-    echo "## AI Review"
+    echo "## AI Analysis"
     echo
     echo "- Status: \`skipped\`"
-    echo "- Markdown: \`$RUN_DIR/ai-review.md\`"
-    echo "- JSON: \`$RUN_DIR/ai-review.json\`"
+    echo "- Markdown: \`$RUN_DIR/ai-analysis.md\`"
+    echo "- JSON: \`$RUN_DIR/ai-analysis.json\`"
     echo "$end"
   } > "$readme_path"
 
@@ -99,18 +99,18 @@ fi
 
 RUN_DIR="$(absolute_existing_dir_path "$RUN_DIR")"
 README_PATH="$RUN_DIR/README.md"
-AI_REVIEW_MD="$RUN_DIR/ai-review.md"
-AI_REVIEW_JSON="$RUN_DIR/ai-review.json"
+AI_ANALYSIS_MD="$RUN_DIR/ai-analysis.md"
+AI_ANALYSIS_JSON="$RUN_DIR/ai-analysis.json"
 
 recording_count="0"
 if [[ -d "$RUN_DIR/tests" ]]; then
   recording_count="$(find "$RUN_DIR/tests" -path '*/recording.md' -type f | wc -l | tr -d '[:space:]')"
 fi
 
-cat > "$AI_REVIEW_MD" <<EOF
-# Swift E2E AI Review
+cat > "$AI_ANALYSIS_MD" <<EOF
+# Swift E2E AI Analysis
 
-Anthropic/Claude analysis skipped: E2EAnalyze.sh is currently a no-op stub.
+Anthropic/Claude AI analysis skipped: E2EAnalyze.sh is currently a no-op stub.
 
 - Run directory: \`$RUN_DIR\`
 - Info: \`$RUN_DIR/info.json\`
@@ -118,17 +118,17 @@ Anthropic/Claude analysis skipped: E2EAnalyze.sh is currently a no-op stub.
 - Recording count: \`$recording_count\`
 EOF
 
-cat > "$AI_REVIEW_JSON" <<EOF
+cat > "$AI_ANALYSIS_JSON" <<EOF
 {
   "status": "pass",
-  "summary": "Anthropic/Claude analysis skipped: E2EAnalyze.sh is currently a no-op stub.",
+  "summary": "Anthropic/Claude AI analysis skipped: E2EAnalyze.sh is currently a no-op stub.",
   "findings": []
 }
 EOF
 
 update_readme_block "$README_PATH"
 
-echo "==> Swift E2E Anthropic/Claude analysis skipped (stub)"
+echo "==> Swift E2E Anthropic/Claude AI analysis skipped (stub)"
 echo "    Run dir: $RUN_DIR"
-echo "    Markdown: $AI_REVIEW_MD"
-echo "    JSON: $AI_REVIEW_JSON"
+echo "    Markdown: $AI_ANALYSIS_MD"
+echo "    JSON: $AI_ANALYSIS_JSON"

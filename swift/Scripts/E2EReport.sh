@@ -72,11 +72,11 @@ update_readme_block() {
     echo
     echo "- Status: \`$status\`"
     echo "- HTML report: \`$report_path\`"
-    if [[ -f "$RUN_DIR/ai-review.md" ]]; then
-      echo "- AI review: \`$RUN_DIR/ai-review.md\`"
+    if [[ -f "$RUN_DIR/ai-analysis.md" ]]; then
+      echo "- AI analysis: \`$RUN_DIR/ai-analysis.md\`"
     fi
-    if [[ -f "$RUN_DIR/ai-review.json" ]]; then
-      echo "- AI review JSON: \`$RUN_DIR/ai-review.json\`"
+    if [[ -f "$RUN_DIR/ai-analysis.json" ]]; then
+      echo "- AI analysis JSON: \`$RUN_DIR/ai-analysis.json\`"
     fi
     echo
     echo "### Files after report rendering"
