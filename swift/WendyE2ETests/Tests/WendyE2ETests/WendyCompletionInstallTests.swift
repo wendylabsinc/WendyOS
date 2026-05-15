@@ -50,9 +50,27 @@ struct `'wendy completion install'` {
      selected shell only. Other shell configuration files remain
      unchanged.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `uses the requested shell override`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh(
+                """
+                wendy completion install --shell fish
+                test -f "$HOME/.config/fish/completions/wendy.fish"
+                test ! -e "$HOME/.bashrc"
+                test ! -e "$HOME/.zshrc"
+                """
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput == "")
+                #expect(standardError.contains("wendy.fish"))
+                #expect(standardError.contains("Fish auto-loads completions"))
+            }
+        }
     }
 
     /**
