@@ -262,13 +262,13 @@ case "$(uname -s)" in
         setupE2EUbuntu
         ;;
       *)
-        echo "ERROR: SetupE2E.ubuntu.sh must run on Ubuntu; current Linux distribution: ${distribution:-unknown}" >&2
+        echo "ERROR: E2ESetup.ubuntu.sh must run on Ubuntu; current Linux distribution: ${distribution:-unknown}" >&2
         exit 1
         ;;
     esac
     ;;
   *)
-    echo "ERROR: SetupE2E.ubuntu.sh must run on Ubuntu Linux; current platform: $(uname -s)" >&2
+    echo "ERROR: E2ESetup.ubuntu.sh must run on Ubuntu Linux; current platform: $(uname -s)" >&2
     exit 1
     ;;
 esac

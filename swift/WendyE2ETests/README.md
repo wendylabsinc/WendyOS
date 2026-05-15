@@ -16,7 +16,7 @@ isolated CLI and agent sandboxes, captures Swift Testing results and command
 recordings, and renders `report.html`:
 
 ```bash
-bash Scripts/TestE2E.sh --output-dir Build/e2e
+bash Scripts/E2ETest.sh --output-dir Build/e2e
 ```
 
 For reproducible command recordings when invoking SwiftPM directly:

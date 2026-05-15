@@ -214,7 +214,7 @@ case "$(uname -s)" in
     setupE2EMacOS
     ;;
   *)
-    echo "ERROR: SetupE2E.macOS.sh must run on macOS; current platform: $(uname -s)" >&2
+    echo "ERROR: E2ESetup.macOS.sh must run on macOS; current platform: $(uname -s)" >&2
     exit 1
     ;;
 esac

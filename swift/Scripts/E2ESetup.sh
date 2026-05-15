@@ -31,7 +31,7 @@ done
 
 case "$(uname -s)" in
   Darwin)
-    exec bash "$SCRIPT_DIR/SetupE2E.macOS.sh"
+    exec bash "$SCRIPT_DIR/E2ESetup.macOS.sh"
     ;;
   Linux)
     if command -v lsb_release >/dev/null 2>&1; then
@@ -42,7 +42,7 @@ case "$(uname -s)" in
 
     case "${distribution,,}" in
       ubuntu)
-        exec bash "$SCRIPT_DIR/SetupE2E.ubuntu.sh"
+        exec bash "$SCRIPT_DIR/E2ESetup.ubuntu.sh"
         ;;
       *)
         echo "ERROR: Unsupported Linux distribution for E2E setup: ${distribution:-unknown}" >&2

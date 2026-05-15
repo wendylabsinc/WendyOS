@@ -230,7 +230,7 @@ jobs:
           WENDY_E2E_TRANSPORT: ${{ matrix.target.transport }}
         run: |
           set -euo pipefail
-          bash ./Scripts/TestE2E.sh \
+          bash ./Scripts/E2ETest.sh \
             --output-dir Build/e2e \
             --agent-address "${{ matrix.target.device_address }}"
 
