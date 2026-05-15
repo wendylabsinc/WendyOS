@@ -13,10 +13,9 @@ import (
 	"github.com/wendylabsinc/wendy/internal/shared/nmcli"
 )
 
-type localWifiNetwork struct {
-	SSID           string
-	SignalStrength int32 // 0–100 percentage, or 0 if unknown
-}
+// wifiScanCacheHint is empty on Linux: nmcli's `device wifi rescan` triggers
+// a fresh scan before the list call, so the returned set is current.
+const wifiScanCacheHint = ""
 
 // scanLocalWifiNetworks uses nmcli on Linux to list WiFi networks visible to
 // the host machine.

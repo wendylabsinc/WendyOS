@@ -36,6 +36,20 @@ jobs:
       - name: Run tests
         run: go test ./... -race -count=1 -timeout 120s
 
+      # Compile the Windows-shipping CLI packages so //go:build windows files
+      # (e.g. wifi_scan_windows.go) are at least type-checked in PR CI. The
+      # Linux runner can't execute Windows tests, but cross-compiling them
+      # catches build breaks that would otherwise only surface in the
+      # release workflow. The agent intentionally is not cross-compiled —
+      # it uses Linux-only syscalls and only the CLI ships to Windows.
+      - name: Cross-compile Windows CLI packages
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build ./internal/cli/... ./cmd/wendy/
+          go test -c -o /dev/null ./internal/cli/commands
+
   vet:
     name: Vet
     runs-on: ubuntu-latest
