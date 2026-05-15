@@ -426,10 +426,23 @@
     }
 
     .badge.ai {
+      gap: 5px;
       color: #fff;
       background: #000;
       border: 1px solid #000;
     }
+
+    .ai-status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, .32);
+    }
+
+    .ai-status-dot.pass { background: var(--emerald-400); }
+    .ai-status-dot.concern { background: #f59e0b; }
+    .ai-status-dot.fail { background: #ef4444; }
 
     .ai-filter-review {
       display: none;

@@ -153,8 +153,34 @@ private struct ReportTestCase {
     var nextLine = 0
     var aiItems: [String] = []
     var recordName = ""
-    var aiReviewMarkdown = ""
+    var aiReview: AIReview?
     var commands: [CommandRun] = []
+
+    var aiReviewMarkdown: String {
+        aiReview?.markdown ?? ""
+    }
+}
+
+private struct AIReview {
+    var markdown: String
+    var status: AIReviewStatus?
+}
+
+private enum AIReviewStatus: String {
+    case pass
+    case concern
+    case fail
+
+    var label: String {
+        switch self {
+        case .pass:
+            "pass"
+        case .concern:
+            "concern"
+        case .fail:
+            "fail"
+        }
+    }
 }
 
 private struct ReportTestFile {
@@ -214,7 +240,7 @@ private func loadRecords(in recordingURL: URL) throws -> [String: [CommandRun]] 
     return records
 }
 
-private func loadAIReviews(in recordingURL: URL) throws -> [String: String] {
+private func loadAIReviews(in recordingURL: URL) throws -> [String: AIReview] {
     guard FileManager.default.fileExists(atPath: recordingURL.path) else {
         return [:]
     }
@@ -228,17 +254,32 @@ private func loadAIReviews(in recordingURL: URL) throws -> [String: String] {
         throw ValidationError("Recording directory cannot be read: \(recordingURL.path)")
     }
 
-    var reviews: [String: String] = [:]
+    var reviews: [String: AIReview] = [:]
     for case let reviewURL as URL in enumerator
     where reviewURL.lastPathComponent == "ai-review.md" {
         let recordKey = reviewURL.deletingLastPathComponent().lastPathComponent
         let review = try String(contentsOf: reviewURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !recordKey.isEmpty, !review.isEmpty {
-            reviews[recordKey] = review
+            reviews[recordKey] = AIReview(
+                markdown: review,
+                status: parseAIReviewStatus(from: review)
+            )
         }
     }
     return reviews
+}
+
+private func parseAIReviewStatus(from markdown: String) -> AIReviewStatus? {
+    guard
+        let value = firstMatch(
+            #"(?im)^\s*Status:\s*[\*_` ]*(pass|concern|fail)\b"#,
+            in: markdown
+        )?.lowercased()
+    else {
+        return nil
+    }
+    return AIReviewStatus(rawValue: value)
 }
 
 private func commandRecordURLs(in recordingURL: URL) throws -> [URL] {
@@ -522,7 +563,7 @@ private func stripBackticks(_ value: String) -> String {
 private func parseTests(
     in testsURL: URL,
     records: [String: [CommandRun]],
-    aiReviews: [String: String],
+    aiReviews: [String: AIReview],
     testResults: [TestResultKey: ReportTestStatus]
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
@@ -577,7 +618,7 @@ private func parseTests(
             let recordKey =
                 "\(recordFileStem(sourceURL)).\(slug(tests[testIndex].name))"
             tests[testIndex].recordName = "\(recordKey)/recording.md"
-            tests[testIndex].aiReviewMarkdown = aiReviews[recordKey, default: ""]
+            tests[testIndex].aiReview = aiReviews[recordKey]
             tests[testIndex].commands = records[recordKey, default: []].filter {
                 command in
                 command.sourceFile == sourceURL.lastPathComponent
@@ -811,7 +852,7 @@ private func renderCards(
                     ? "<a class=\"report-button\" href=\"\(escapeHTML(recordLinkPrefix + test.recordName))\">Record</a>"
                     : "",
             ].joined()
-            let aiBadge = hasAIReview == "true" ? "<span class=\"badge ai\">AI</span>" : ""
+            let aiBadge = hasAIReview == "true" ? renderAIReviewBadge(test.aiReview?.status) : ""
             let pathText = "\(test.suite) › \(test.name)"
 
             cards.append(
@@ -838,6 +879,15 @@ private func renderCards(
     }
 
     return cards.joined(separator: "\n")
+}
+
+private func renderAIReviewBadge(_ status: AIReviewStatus?) -> String {
+    guard let status else {
+        return "<span class=\"badge ai\">AI</span>"
+    }
+
+    return
+        "<span class=\"badge ai\" title=\"AI review: \(escapeHTML(status.label))\">AI<span class=\"ai-status-dot \(status.rawValue)\" aria-hidden=\"true\"></span></span>"
 }
 
 private func renderAIChecklist(_ test: ReportTestCase) -> String {
