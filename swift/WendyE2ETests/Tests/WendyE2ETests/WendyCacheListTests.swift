@@ -58,9 +58,28 @@ struct `'wendy cache list'` {
      Configuration files, credentials, and project-local artifacts are not
      scanned or displayed.
      */
-    @Test(.disabled("SPEC STUB: behavior agreed, implementation pending"))
+    @Test
     func `ignores unrelated files outside the cache root`() async throws {
-        // TODO: implement.
+        try await self.scenario.run { cli, _ in
+            try await cli.sh(
+                """
+                mkdir -p "$HOME/.wendy"
+                printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
+                printf 'project artifact\n' > unrelated-project-file.txt
+                wendy cache list
+                """
+            ) {
+                terminationStatus,
+                standardOutput,
+                standardError in
+
+                #expect(terminationStatus.isSuccess)
+                #expect(standardOutput == "Cache is empty.\n")
+                #expect(!standardOutput.contains("do-not-list"))
+                #expect(!standardOutput.contains("unrelated-project-file"))
+                #expect(standardError == "")
+            }
+        }
     }
 
     /**
