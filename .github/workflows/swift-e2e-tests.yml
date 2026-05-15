@@ -23,6 +23,9 @@ jobs:
     # Unsupported entries remain visible as no-op placeholders while supported
     # macOS entries run the Swift E2E harness against their target device.
     runs-on: ${{ matrix.target.runner_id == 'macos-26' && fromJSON('["self-hosted", "macOS"]') || matrix.target.runner_id == 'ubuntu-24-04' && fromJSON('["self-hosted", "linux"]') || 'ubuntu-latest' }}
+    concurrency:
+      group: swift-e2e-${{ matrix.target.device_id }}
+      cancel-in-progress: false
     timeout-minutes: ${{ matrix.target.status == 'enabled' && 120 || 5 }}
     strategy:
       fail-fast: false
