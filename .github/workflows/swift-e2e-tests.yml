@@ -42,6 +42,20 @@ jobs:
             agent_os: wendyOS
             transport: lan
 
+          - id: macos-26-to-mac-mini
+            name: macOS 26 → Mac mini 🚧
+            status: enabled
+            status_label: Enabled
+            runner_id: macos-26
+            runner_name: macOS 26
+            runner_labels: 'self-hosted, macOS, ARM64, macos-26'
+            cli_os: macOS
+            device_id: mac-mini
+            device_name: Mac mini
+            device_address: mac-mini.local
+            agent_os: macOS
+            transport: lan
+
           - id: ubuntu-24-04-to-jetson-orin-nano
             name: Ubuntu 24.04 → Jetson Orin Nano 🚧
             status: not-supported-yet
