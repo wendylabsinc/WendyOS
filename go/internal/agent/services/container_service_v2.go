@@ -105,7 +105,6 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 			for output := range outputCh {
 				s.v1.logManager.Publish(appName, output)
 			}
-			s.v1.logManager.Publish(appName, ContainerOutput{Done: true})
 		}()
 	} else {
 		readCh = outputCh
