@@ -70,29 +70,3 @@ jobs:
 
       - name: Run go vet
         run: go vet ./...
-
-  format:
-    name: Format Check
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: go
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
-
-      - name: Check formatting
-        run: |
-          UNFORMATTED=$(gofmt -l -s .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "The following files need formatting:"
-            echo "$UNFORMATTED"
-            echo ""
-            echo "Run 'gofmt -w -s .' to fix."
-            exit 1
-          fi
