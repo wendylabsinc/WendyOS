@@ -722,6 +722,8 @@ func TestMonitorPolicyIntFromLabel(t *testing.T) {
 		{"always", RestartPolicyAlways, true, 0},
 		{"on-failure", RestartPolicyOnFailure, true, 0},
 		{"on-failure:3", RestartPolicyOnFailure, true, 3},
+		{"on-failure:foo", 0, false, 0},
+		{"on-failure:-1", 0, false, 0},
 		{"unknown-policy", 0, false, 0},
 	}
 	for _, tc := range cases {

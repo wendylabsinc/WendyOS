@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -214,13 +215,7 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 // StartContainer starts an existing container and streams output.
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
 	appName := req.GetAppName()
-	err := s.streamContainerOutput(stream.Context(), appName, postStartAgentHookFromContext(stream.Context()), req.GetRestartPolicy(), stream)
-	if err == nil && s.monitor != nil {
-		// The container started successfully. If it was previously explicitly
-		// stopped, clear that mark so automatic restarts are re-enabled.
-		s.monitor.ClearExplicitStop(appName)
-	}
-	return err
+	return s.streamContainerOutput(stream.Context(), appName, postStartAgentHookFromContext(stream.Context()), req.GetRestartPolicy(), stream)
 }
 
 func postStartAgentHookFromContext(ctx context.Context) string {
@@ -238,32 +233,36 @@ func monitorPolicyIntFromLabel(label string) (policy int, maxRetries int, ok boo
 	if label == "" || label == "no" {
 		return RestartPolicyNo, 0, false
 	}
-	policyStr, retries := parseRestartPolicyLabel(label)
+	policyStr, retries, parseOK := parseRestartPolicyLabel(label)
+	if !parseOK {
+		return 0, 0, false
+	}
 	switch policyStr {
 	case "always":
 		return RestartPolicyAlways, 0, true
 	case "unless-stopped":
 		return RestartPolicyUnlessStopped, 0, true
 	case "on-failure":
-		if retries < 0 {
-			retries = 0
-		}
 		return RestartPolicyOnFailure, retries, true
 	default:
 		return 0, 0, false
 	}
 }
 
-// parseRestartPolicyLabel splits a label like "on-failure:5" into ("on-failure", 5).
-func parseRestartPolicyLabel(label string) (string, int) {
+// parseRestartPolicyLabel splits a label like "on-failure:5" into ("on-failure", 5, true).
+// Returns ok=false when the retry count portion cannot be parsed as a non-negative integer.
+func parseRestartPolicyLabel(label string) (policyStr string, retries int, ok bool) {
 	idx := strings.LastIndex(label, ":")
 	if idx < 0 {
-		return label, 0
+		return label, 0, true
 	}
 	policy := label[:idx]
-	var retries int
-	fmt.Sscanf(label[idx+1:], "%d", &retries)
-	return policy, retries
+	parts := strings.SplitN(label, ":", 2)
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return policy, n, true
 }
 
 // monitorPolicyInt converts an agentpb.RestartPolicy to the integer constant
@@ -304,6 +303,15 @@ func (s *ContainerService) streamContainerOutput(
 	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand, restartPolicy)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+	}
+
+	// The container started successfully. If it was previously explicitly
+	// stopped, clear that mark so automatic restarts are re-enabled.
+	// We clear it here (right after start succeeds) rather than after
+	// streaming completes so that stream errors (e.g. client disconnect)
+	// do not leave ExplicitStop set and suppress future automatic restarts.
+	if s.monitor != nil {
+		s.monitor.ClearExplicitStop(appName)
 	}
 
 	// Register the container with the monitor if a restart policy is in effect.
