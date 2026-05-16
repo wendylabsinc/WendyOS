@@ -156,6 +156,18 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	}
 }
 
+func TestBuildGStreamerArgs_X264ProfileIsCapsFilter(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "x264enc tune=zerolatency profile=high") {
+		t.Fatalf("profile=high must be an output capsfilter, not an x264enc property: %v", args)
+	}
+	if !strings.Contains(joined, "x264enc tune=zerolatency ! video/x-h264,profile=high") {
+		t.Fatalf("expected x264enc output capsfilter for high profile: %v", args)
+	}
+}
+
 func TestBuildGStreamerArgs_WithDimensionsAndFramerate(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 30}
 	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
@@ -236,6 +248,25 @@ func TestFindGStreamerEncoder_PrefersX264(t *testing.T) {
 	}
 	if result.element != "x264enc" {
 		t.Errorf("expected x264enc, got %q", result.element)
+	}
+	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Errorf("expected H264 codec, got %v", result.codec)
+	}
+}
+
+func TestFindGStreamerEncoder_PrefersNVV4L2OverOtherH264Encoders(t *testing.T) {
+	tmpDir := t.TempDir()
+	script := tmpDir + "/gst-inspect-1.0"
+	listing := "x264:  x264enc: H264 video encoder\nvideo4linux2:  v4l2h264enc: V4L2 H264 encoder\nnvvideo4linux2:  nvv4l2h264enc: NVIDIA V4L2 H264 encoder\n"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := findGStreamerEncoder(script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "nvv4l2h264enc" {
+		t.Errorf("expected nvv4l2h264enc, got %q", result.element)
 	}
 	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
 		t.Errorf("expected H264 codec, got %v", result.codec)
