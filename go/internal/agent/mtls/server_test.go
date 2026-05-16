@@ -12,7 +12,42 @@ import (
 	"time"
 )
 
-func testCertificate(t *testing.T, commonName string) (certPEM, keyPEM string) {
+// testLeafCertificate generates a proper leaf (end-entity) certificate for testing.
+func testLeafCertificate(t *testing.T, commonName string) (certPEM, keyPEM string) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating certificate: %v", err)
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshaling key: %v", err)
+	}
+	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	return certPEM, keyPEM
+}
+
+// testCACertificate generates a self-signed CA certificate for testing.
+func testCACertificate(t *testing.T, commonName string) (certPEM, keyPEM string) {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -46,7 +81,7 @@ func testCertificate(t *testing.T, commonName string) (certPEM, keyPEM string) {
 }
 
 func TestNewTLSConfigEmptyChainReturnsError(t *testing.T) {
-	certPEM, keyPEM := testCertificate(t, "leaf")
+	certPEM, keyPEM := testLeafCertificate(t, "leaf")
 
 	_, err := NewTLSConfig(certPEM, "", keyPEM)
 	if err == nil {
@@ -55,8 +90,8 @@ func TestNewTLSConfigEmptyChainReturnsError(t *testing.T) {
 }
 
 func TestNewTLSConfigServesOnlyLeafCertificate(t *testing.T) {
-	leafPEM, keyPEM := testCertificate(t, "leaf")
-	chainPEM, _ := testCertificate(t, "chain")
+	leafPEM, keyPEM := testLeafCertificate(t, "leaf")
+	chainPEM, _ := testCACertificate(t, "chain")
 
 	tlsConfig, err := NewTLSConfig(leafPEM+"\n"+chainPEM, chainPEM, keyPEM)
 	if err != nil {
