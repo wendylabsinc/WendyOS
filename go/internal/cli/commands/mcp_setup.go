@@ -15,7 +15,7 @@ import (
 func newMCPSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Configure the Wendy MCP server in Claude Code and Claude Desktop",
+		Short: "Configure the Wendy MCP server in supported AI tools",
 		Long:  "Detects installed AI tools and adds the wendy MCP server to their configuration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			results := setupMCPForAllTools()

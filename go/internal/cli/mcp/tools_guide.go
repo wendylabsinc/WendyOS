@@ -39,8 +39,8 @@ Cloud-enrolled devices:
 
 ## Deploying a workload
 
-Use cloud_run to run a container image on a cloud-enrolled device:
-  cloud_run(device_name="mydevice", image="ghcr.io/myorg/myapp:latest")
+Use the run tool to build and deploy a local project to a cloud-enrolled device:
+  run(project_path="/path/to/project", device_name="mydevice")
 
 ## Disconnecting
 
