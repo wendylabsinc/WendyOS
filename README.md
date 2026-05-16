@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/media/demo.gif" alt="Wendy on NVIDIA Jetson" width="360">
+</p>
+
 # Wendy Agent & Wendy CLI
 
 ## Installing the CLI
