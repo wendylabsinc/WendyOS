@@ -363,7 +363,6 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 			for output := range outputCh {
 				s.logManager.Publish(appName, output)
 			}
-			s.logManager.Publish(appName, ContainerOutput{Done: true})
 		}()
 	} else {
 		readCh = outputCh
