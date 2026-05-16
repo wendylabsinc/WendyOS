@@ -182,12 +182,7 @@ func queryInterfaceMDNS(_ context.Context, iface *net.Interface, serviceType str
 				}
 			}
 
-			txtRecords := make(map[string]string)
-			for _, txt := range entry.InfoFields {
-				if k, v, ok := strings.Cut(txt, "="); ok {
-					txtRecords[k] = v
-				}
-			}
+			txtRecords := parseMDNSInfoFields(entry.InfoFields)
 
 			services = append(services, MDNSService{
 				InstanceName: entry.Name,
