@@ -243,3 +243,36 @@ func TestContainerLogManager_UnsubscribeNonexistent(t *testing.T) {
 	// Should not panic.
 	lm.Unsubscribe("nonexistent-app", "nonexistent-sub")
 }
+
+// TestContainerLogManager_ConcurrentPublishUnsubscribe verifies that Publish
+// does not panic when a subscriber unsubscribes (closing its channel) while a
+// concurrent Publish is mid-flight copying channels under the lock and then
+// sending to them. The send-on-closed-channel panic must be recovered.
+func TestContainerLogManager_ConcurrentPublishUnsubscribe(t *testing.T) {
+	broadcaster := NewTelemetryBroadcaster()
+	lm := NewContainerLogManager(zap.NewNop(), broadcaster)
+
+	const iterations = 500
+
+	for i := 0; i < iterations; i++ {
+		subID, _ := lm.Subscribe("test-app")
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		// Goroutine 1: publish repeatedly.
+		go func() {
+			defer wg.Done()
+			lm.Publish("test-app", ContainerOutput{Stdout: []byte("msg")})
+		}()
+
+		// Goroutine 2: unsubscribe (closes the channel) concurrently.
+		go func() {
+			defer wg.Done()
+			lm.Unsubscribe("test-app", subID)
+		}()
+
+		wg.Wait()
+	}
+	// If we reach here without panicking, the fix is working.
+}
