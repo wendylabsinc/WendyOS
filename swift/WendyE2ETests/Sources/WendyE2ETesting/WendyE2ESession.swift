@@ -243,8 +243,8 @@ public struct WendyE2ESession: Sendable {
             processID: String(describing: record.processIdentifier),
             status: WendyE2EShellStatus(record.terminationStatus),
             duration: duration,
-            standardOutput: record.standardOutput ?? "",
-            standardError: record.standardError ?? ""
+            stdout: record.standardOutput ?? "",
+            stderr: record.standardError ?? ""
         )
     }
 

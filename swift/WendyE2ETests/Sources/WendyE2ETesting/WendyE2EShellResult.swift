@@ -29,23 +29,15 @@ public struct WendyE2EShellResult: Sendable {
     public let processID: String?
     public let status: WendyE2EShellStatus
     public let duration: Duration
-    public let standardOutput: String
-    public let standardError: String
-
-    public var stdout: String {
-        self.standardOutput
-    }
-
-    public var stderr: String {
-        self.standardError
-    }
+    public let stdout: String
+    public let stderr: String
 
     public var normalizedStdout: String {
-        Self.normalizeLineEndings(self.standardOutput)
+        Self.normalizeLineEndings(self.stdout)
     }
 
     public var normalizedStderr: String {
-        Self.normalizeLineEndings(self.standardError)
+        Self.normalizeLineEndings(self.stderr)
     }
 
     public func requireSuccess() throws {

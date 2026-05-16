@@ -48,7 +48,7 @@ public struct WendyE2ESessionCommand: Sendable {
         if self.pollConfiguration == nil {
             try result.requireSuccess()
         }
-        return try await body(result.standardOutput, result.standardError)
+        return try await body(result.stdout, result.stderr)
     }
 
     // MARK: - Internal
