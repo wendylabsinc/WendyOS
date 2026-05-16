@@ -55,13 +55,22 @@ type ContainerdClient interface {
 	GetContainerMCPPort(ctx context.Context, appName string) (uint32, error)
 }
 
+// Restart policy constants mirror container.RestartPolicy values and are used
+// as the policy argument to ContainerMonitorRegistrar.Register.
+const (
+	RestartPolicyNo            = 0 // never restart
+	RestartPolicyUnlessStopped = 1 // restart unless explicitly stopped
+	RestartPolicyOnFailure     = 2 // restart only on non-zero exit
+	RestartPolicyAlways        = 3 // always restart
+)
+
 // ContainerMonitorRegistrar is the subset of container.ContainerMonitor used by
 // ContainerService. It is declared here (rather than importing the container
 // package) to avoid a circular dependency: container imports services.
 type ContainerMonitorRegistrar interface {
 	// Register adds appName to the monitor with the given restart policy.
-	// policy values mirror container.RestartPolicy: 0=No, 1=UnlessStopped,
-	// 2=OnFailure, 3=Always.
+	// policy values mirror container.RestartPolicy: use the RestartPolicy*
+	// constants defined in this package.
 	Register(appName string, policy int, maxRetries int)
 	// Unregister removes appName from the monitor.
 	Unregister(appName string)

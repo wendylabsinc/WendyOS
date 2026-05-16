@@ -225,24 +225,27 @@ func postStartAgentHookFromContext(ctx context.Context) string {
 }
 
 // monitorPolicyInt converts an agentpb.RestartPolicy to the integer constant
-// used by ContainerMonitorRegistrar (which mirrors container.RestartPolicy):
-//
-//	0 = No, 1 = UnlessStopped, 2 = OnFailure, 3 = Always
+// used by ContainerMonitorRegistrar (which mirrors container.RestartPolicy).
+// Use the RestartPolicy* constants defined in interfaces.go.
 //
 // Returns ok=false when the policy should not be registered (nil or explicit NO).
 func monitorPolicyInt(rp *agentpb.RestartPolicy) (policy int, maxRetries int, ok bool) {
 	if rp == nil {
-		return 0, 0, false
+		return RestartPolicyNo, 0, false
 	}
 	switch rp.GetMode() {
 	case agentpb.RestartPolicyMode_NO:
-		return 0, 0, false
+		return RestartPolicyNo, 0, false
 	case agentpb.RestartPolicyMode_DEFAULT, agentpb.RestartPolicyMode_UNLESS_STOPPED:
-		return 1, 0, true // RestartUnlessStopped
+		return RestartPolicyUnlessStopped, 0, true
 	case agentpb.RestartPolicyMode_ON_FAILURE:
-		return 2, int(rp.GetOnFailureMaxRetries()), true // RestartOnFailure
+		retries := int(rp.GetOnFailureMaxRetries())
+		if retries < 0 {
+			retries = 0
+		}
+		return RestartPolicyOnFailure, retries, true
 	default:
-		return 1, 0, true // default to unless-stopped
+		return RestartPolicyUnlessStopped, 0, true // default to unless-stopped
 	}
 }
 

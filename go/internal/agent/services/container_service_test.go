@@ -473,6 +473,147 @@ func TestAttachContainer(t *testing.T) {
 	}
 }
 
+// ---------- mock monitor registrar ----------
+
+type mockMonitorRegistrar struct {
+	registerCalls     []registerCall
+	explicitStopCalls []string
+}
+
+type registerCall struct {
+	appName    string
+	policy     int
+	maxRetries int
+}
+
+func (m *mockMonitorRegistrar) Register(appName string, policy int, maxRetries int) {
+	m.registerCalls = append(m.registerCalls, registerCall{appName, policy, maxRetries})
+}
+
+func (m *mockMonitorRegistrar) Unregister(_ string) {}
+
+func (m *mockMonitorRegistrar) MarkExplicitStop(appName string) {
+	m.explicitStopCalls = append(m.explicitStopCalls, appName)
+}
+
+// startContainerServerWithMonitor starts a gRPC bufconn server for ContainerService
+// configured with the given ContainerdClient and ContainerMonitorRegistrar.
+func startContainerServerWithMonitor(t *testing.T, client ContainerdClient, mon ContainerMonitorRegistrar) (agentpb.WendyContainerServiceClient, func()) {
+	t.Helper()
+	lis := bufconn.Listen(bufSize)
+	srv := grpc.NewServer()
+	logger := zap.NewNop()
+	svc := NewContainerService(logger, client, WithMonitor(mon))
+	agentpb.RegisterWendyContainerServiceServer(srv, svc)
+
+	go func() { _ = srv.Serve(lis) }()
+
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+
+	cl := agentpb.NewWendyContainerServiceClient(conn)
+	cleanup := func() {
+		conn.Close()
+		srv.Stop()
+		lis.Close()
+	}
+	return cl, cleanup
+}
+
+// TestStartContainer_RegistersMonitor_UnlessStopped verifies that starting a
+// container with an UNLESS_STOPPED restart policy calls Register on the monitor.
+func TestStartContainer_RegistersMonitor_UnlessStopped(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	outputCh <- ContainerOutput{Done: true}
+	close(outputCh)
+
+	mc := &mockContainerdClient{startOutputCh: outputCh}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	stream, err := client.StartContainer(context.Background(), &agentpb.StartContainerRequest{
+		AppName: "my-app",
+		RestartPolicy: &agentpb.RestartPolicy{
+			Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartContainer: %v", err)
+	}
+	// Drain the stream.
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	if len(mon.registerCalls) != 1 {
+		t.Fatalf("Register call count = %d; want 1", len(mon.registerCalls))
+	}
+	got := mon.registerCalls[0]
+	if got.appName != "my-app" {
+		t.Errorf("Register appName = %q; want my-app", got.appName)
+	}
+	if got.policy != RestartPolicyUnlessStopped {
+		t.Errorf("Register policy = %d; want %d (UnlessStopped)", got.policy, RestartPolicyUnlessStopped)
+	}
+}
+
+// TestStopContainer_CallsMarkExplicitStop verifies that StopContainer calls
+// MarkExplicitStop on the monitor before stopping the container.
+func TestStopContainer_CallsMarkExplicitStop(t *testing.T) {
+	mc := &mockContainerdClient{}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	_, err := client.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+		AppName: "my-app",
+	})
+	if err != nil {
+		t.Fatalf("StopContainer: %v", err)
+	}
+
+	if len(mon.explicitStopCalls) != 1 {
+		t.Fatalf("MarkExplicitStop call count = %d; want 1", len(mon.explicitStopCalls))
+	}
+	if mon.explicitStopCalls[0] != "my-app" {
+		t.Errorf("MarkExplicitStop appName = %q; want my-app", mon.explicitStopCalls[0])
+	}
+}
+
+// TestMonitorPolicyInt_NegativeRetries verifies that a negative OnFailureMaxRetries
+// value is clamped to zero and does not result in a negative maxRetries.
+func TestMonitorPolicyInt_NegativeRetries(t *testing.T) {
+	rp := &agentpb.RestartPolicy{
+		Mode:                agentpb.RestartPolicyMode_ON_FAILURE,
+		OnFailureMaxRetries: -5,
+	}
+	policy, maxRetries, ok := monitorPolicyInt(rp)
+	if !ok {
+		t.Fatal("monitorPolicyInt ok = false; want true")
+	}
+	if policy != RestartPolicyOnFailure {
+		t.Errorf("policy = %d; want %d (OnFailure)", policy, RestartPolicyOnFailure)
+	}
+	if maxRetries != 0 {
+		t.Errorf("maxRetries = %d; want 0 (clamped from -5)", maxRetries)
+	}
+}
+
 // ---------- volume tests ----------
 
 func TestListVolumes_Empty(t *testing.T) {
