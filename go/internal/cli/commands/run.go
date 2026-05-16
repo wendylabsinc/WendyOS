@@ -394,6 +394,7 @@ type runOptions struct {
 	noRestart            bool
 	prefix               string
 	product              string
+	service              string
 	userArgs             []string
 }
 
@@ -419,6 +420,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.noRestart, "no-restart", false, "Do not restart on exit")
 	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to run from instead of the current working directory")
 	cmd.Flags().StringVar(&opts.product, "product", "", "Swift Package Manager product to build and run")
+	cmd.Flags().StringVar(&opts.service, "service", "", "Build and run only the named service and its dependencies (multi-service projects)")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 
 	return cmd
@@ -1008,6 +1010,12 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	// Multi-service path: when wendy.json has a services map, build all images
+	// in parallel and manage the app group lifecycle.
+	if len(appCfg.Services) > 0 {
+		return runMultiServiceWithAgent(ctx, conn, cwd, appCfg, opts)
+	}
+
 	// Detect project type and ensure a Dockerfile exists.
 	projectType, err := resolveRunProjectType(cwd, opts.buildType)
 	if err != nil {
