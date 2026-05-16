@@ -24,24 +24,24 @@ import (
 // ---------- mock containerd client ----------
 
 type mockContainerdClient struct {
-	containers          []*agentpb.AppContainer
-	listErr             error
-	stopErr             error
-	deleteErr           error
-	layers              []*agentpb.LayerHeader
-	listLayersErr       error
-	writeLayerErr       error
-	writtenDigest       string
-	writtenData         []byte
-	createErr           error
-	progressPhases      []agentpb.CreateContainerProgress_Phase
-	startOutputCh       chan ContainerOutput
-	startErr            error
-	statsResult         []*agentpb.ContainerStats
-	statsErr            error
-	mcpPort             uint32
-	mcpPortErr          error
-	restartPolicyLabel  string
+	containers            []*agentpb.AppContainer
+	listErr               error
+	stopErr               error
+	deleteErr             error
+	layers                []*agentpb.LayerHeader
+	listLayersErr         error
+	writeLayerErr         error
+	writtenDigest         string
+	writtenData           []byte
+	createErr             error
+	progressPhases        []agentpb.CreateContainerProgress_Phase
+	startOutputCh         chan ContainerOutput
+	startErr              error
+	statsResult           []*agentpb.ContainerStats
+	statsErr              error
+	mcpPort               uint32
+	mcpPortErr            error
+	restartPolicyLabel    string
 	restartPolicyLabelErr error
 }
 
@@ -482,9 +482,9 @@ func TestAttachContainer(t *testing.T) {
 // ---------- mock monitor registrar ----------
 
 type mockMonitorRegistrar struct {
-	registerCalls      []registerCall
-	explicitStopCalls  []string
-	clearStopCalls     []string
+	registerCalls     []registerCall
+	explicitStopCalls []string
+	clearStopCalls    []string
 }
 
 type registerCall struct {
@@ -711,9 +711,9 @@ func TestStartContainer_ClearsExplicitStop(t *testing.T) {
 // TestMonitorPolicyIntFromLabel covers the label-based policy parser.
 func TestMonitorPolicyIntFromLabel(t *testing.T) {
 	cases := []struct {
-		label      string
-		wantPolicy int
-		wantOK     bool
+		label       string
+		wantPolicy  int
+		wantOK      bool
 		wantRetries int
 	}{
 		{"", RestartPolicyNo, false, 0},

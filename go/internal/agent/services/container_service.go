@@ -290,6 +290,41 @@ func monitorPolicyInt(rp *agentpb.RestartPolicy) (policy int, maxRetries int, ok
 	}
 }
 
+// registerContainerWithMonitor registers appName with the monitor using the supplied
+// restart policy. When restartPolicy is nil the persisted containerd label is used.
+// This is factored out so that both streamContainerOutput and AttachContainer can
+// share the same registration logic without duplicating it.
+func (s *ContainerService) registerContainerWithMonitor(ctx context.Context, appName string, restartPolicy *agentpb.RestartPolicy) {
+	if s.monitor == nil {
+		return
+	}
+	if policy, maxRetries, ok := monitorPolicyInt(restartPolicy); ok {
+		s.monitor.Register(appName, policy, maxRetries)
+	} else if restartPolicy != nil {
+		// restartPolicy is non-nil but monitorPolicyInt returned false,
+		// meaning the mode is explicitly NO — remove any existing entry.
+		s.monitor.Unregister(appName)
+	} else {
+		// restartPolicy is nil: look up the persisted label from containerd.
+		if label, labelErr := s.containerd.GetContainerRestartPolicyLabel(ctx, appName); labelErr == nil {
+			if label == "" || label == "no" {
+				// No restart policy persisted — clear any stale registration.
+				s.monitor.Unregister(appName)
+			} else if policy, maxRetries, ok := monitorPolicyIntFromLabel(label); ok {
+				s.monitor.Register(appName, policy, maxRetries)
+			} else {
+				// Unknown label value — treat as no restart policy.
+				s.monitor.Unregister(appName)
+			}
+		} else {
+			s.logger.Warn("failed to read restart policy label; monitor registration skipped",
+				zap.String("app_name", appName),
+				zap.Error(labelErr),
+			)
+		}
+	}
+}
+
 // streamContainerOutput starts a container and streams its stdout/stderr to the client.
 // When a ContainerLogManager is configured, it reads from the log manager subscription
 // instead of directly from containerd, enabling multi-subscriber fan-out and telemetry bridging.
@@ -322,33 +357,7 @@ func (s *ContainerService) streamContainerOutput(
 	// registers the container correctly (e.g. after an agent restart or when the
 	// client does not re-supply the policy on start).
 	// Only unregister when the caller explicitly sets mode==NO.
-	if s.monitor != nil {
-		if policy, maxRetries, ok := monitorPolicyInt(restartPolicy); ok {
-			s.monitor.Register(appName, policy, maxRetries)
-		} else if restartPolicy != nil {
-			// restartPolicy is non-nil but monitorPolicyInt returned false,
-			// meaning the mode is explicitly NO — remove any existing entry.
-			s.monitor.Unregister(appName)
-		} else {
-			// restartPolicy is nil: look up the persisted label from containerd.
-			if label, labelErr := s.containerd.GetContainerRestartPolicyLabel(ctx, appName); labelErr == nil {
-				if label == "" || label == "no" {
-					// No restart policy persisted — clear any stale registration.
-					s.monitor.Unregister(appName)
-				} else if policy, maxRetries, ok := monitorPolicyIntFromLabel(label); ok {
-					s.monitor.Register(appName, policy, maxRetries)
-				} else {
-					// Unknown label value — treat as no restart policy.
-					s.monitor.Unregister(appName)
-				}
-			} else {
-				s.logger.Warn("failed to read restart policy label; monitor registration skipped",
-					zap.String("app_name", appName),
-					zap.Error(labelErr),
-				)
-			}
-		}
-	}
+	s.registerContainerWithMonitor(ctx, appName, restartPolicy)
 
 	// Send started notification.
 	if err := stream.Send(&agentpb.RunContainerLayersResponse{
@@ -459,6 +468,13 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 		stdinR.Close()
 		return status.Errorf(codes.Internal, "failed to start container: %v", err)
 	}
+
+	// Mirror the same monitor bookkeeping as streamContainerOutput: clear any
+	// prior explicit-stop mark and register with the persisted restart policy.
+	if s.monitor != nil {
+		s.monitor.ClearExplicitStop(appName)
+	}
+	s.registerContainerWithMonitor(ctx, appName, nil)
 
 	// Send started notification.
 	if err := stream.Send(&agentpb.RunContainerLayersResponse{

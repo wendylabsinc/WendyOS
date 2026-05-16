@@ -55,7 +55,19 @@ type containerMonitorAdapter struct {
 }
 
 func (a *containerMonitorAdapter) Register(appName string, policy int, maxRetries int) {
-	a.m.Register(appName, container.RestartPolicy(policy), maxRetries)
+	var rp container.RestartPolicy
+	switch policy {
+	case services.RestartPolicyAlways:
+		rp = container.RestartAlways
+	case services.RestartPolicyUnlessStopped:
+		rp = container.RestartUnlessStopped
+	case services.RestartPolicyOnFailure:
+		rp = container.RestartOnFailure
+	default:
+		// Unknown or RestartPolicyNo — skip registration.
+		return
+	}
+	a.m.Register(appName, rp, maxRetries)
 }
 
 func (a *containerMonitorAdapter) Unregister(appName string) {
