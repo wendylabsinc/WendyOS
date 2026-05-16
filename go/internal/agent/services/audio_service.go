@@ -360,6 +360,10 @@ func extractPactlPropertyValue(line string) string {
 // it to the appropriate PipeWire node ID or PulseAudio sink/source name before
 // invoking wpctl/pactl.
 func (s *AudioService) SetDefaultAudioDevice(ctx context.Context, req *agentpb.SetDefaultAudioDeviceRequest) (*agentpb.SetDefaultAudioDeviceResponse, error) {
+	if req.GetDeviceId() == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "device ID 0 is not a valid audio device")
+	}
+
 	alsaCard, alsaDevice := decodeALSAID(req.GetDeviceId())
 
 	// Try PipeWire first: resolve the ALSA card/device to a PipeWire node ID.
@@ -367,21 +371,22 @@ func (s *AudioService) SetDefaultAudioDevice(ctx context.Context, req *agentpb.S
 	if nodeID != "" {
 		cmd := exec.CommandContext(ctx, "wpctl", "set-default", nodeID)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			s.logger.Warn("wpctl set-default failed, trying PulseAudio",
+			s.logger.Error("wpctl set-default failed",
 				zap.String("node_id", nodeID), zap.Error(err),
 				zap.String("output", strings.TrimSpace(string(output))))
-		} else {
-			s.logger.Info("Default audio device set via PipeWire",
-				zap.Uint32("device_id", req.GetDeviceId()),
-				zap.Uint64("alsa_card", alsaCard),
-				zap.Uint64("alsa_device", alsaDevice),
-				zap.String("pw_node_id", nodeID))
-			return &agentpb.SetDefaultAudioDeviceResponse{Success: true}, nil
+			errMsg := fmt.Sprintf("wpctl set-default failed for node %s: %v: %s", nodeID, err, strings.TrimSpace(string(output)))
+			return &agentpb.SetDefaultAudioDeviceResponse{Success: false, ErrorMessage: &errMsg}, nil
 		}
-	} else {
-		s.logger.Debug("PipeWire node not found for ALSA device, trying PulseAudio",
-			zap.Uint64("alsa_card", alsaCard), zap.Uint64("alsa_device", alsaDevice))
+		s.logger.Info("Default audio device set via PipeWire",
+			zap.Uint32("device_id", req.GetDeviceId()),
+			zap.Uint64("alsa_card", alsaCard),
+			zap.Uint64("alsa_device", alsaDevice),
+			zap.String("pw_node_id", nodeID))
+		return &agentpb.SetDefaultAudioDeviceResponse{Success: true}, nil
 	}
+
+	s.logger.Debug("PipeWire node not found for ALSA device, trying PulseAudio",
+		zap.Uint64("alsa_card", alsaCard), zap.Uint64("alsa_device", alsaDevice))
 
 	// Fall back to PulseAudio: resolve the ALSA card/device to a sink/source name.
 	resp, paErr := s.setPulseAudioDefaultByALSA(ctx, req.GetDeviceId(), alsaCard, alsaDevice)
