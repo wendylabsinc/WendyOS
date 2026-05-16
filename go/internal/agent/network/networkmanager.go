@@ -729,9 +729,20 @@ func (n *NMCLINetworkManager) ReorderKnownWiFiNetworksByUUID(ctx context.Context
 	if len(orderedUUIDs) == 0 {
 		return nil
 	}
+	profiles, err := n.listKnownProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	byUUID := make(map[string]knownProfile, len(profiles))
+	for _, p := range profiles {
+		byUUID[p.UUID] = p
+	}
 	top := int32(len(orderedUUIDs))
 	for i, uuid := range orderedUUIDs {
 		newPrio := top - int32(i)
+		if kp, ok := byUUID[uuid]; ok && kp.Priority == newPrio {
+			continue
+		}
 		cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "modify", uuid,
 			"connection.autoconnect-priority", strconv.Itoa(int(newPrio)))
 		if out, err := cmd.CombinedOutput(); err != nil {

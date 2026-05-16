@@ -987,7 +987,7 @@ func (c *Client) streamOutput(
 	// Wait for readers to finish.
 	wg.Wait()
 
-	outputCh <- services.ContainerOutput{Done: true}
+	outputCh <- services.ContainerOutput{Done: true, ExitCode: int32(code)}
 }
 
 // StopContainer sends SIGTERM to the container's task, waits briefly, then

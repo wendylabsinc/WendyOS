@@ -198,12 +198,14 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		return status.Errorf(codes.Internal, "failed to create container: %v", err)
 	}
 
-	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), nil, stream)
+	_, err = s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), nil, stream)
+	return err
 }
 
 // StartContainer starts an existing container and streams output.
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
-	return s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), req.GetRestartPolicy(), stream)
+	_, err := s.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), req.GetRestartPolicy(), stream)
+	return err
 }
 
 func postStartAgentHookFromContext(ctx context.Context) string {
@@ -217,16 +219,17 @@ func postStartAgentHookFromContext(ctx context.Context) string {
 // streamContainerOutput starts a container and streams its stdout/stderr to the client.
 // When a ContainerLogManager is configured, it reads from the log manager subscription
 // instead of directly from containerd, enabling multi-subscriber fan-out and telemetry bridging.
+// Returns the container exit code and any stream error.
 func (s *ContainerService) streamContainerOutput(
 	ctx context.Context,
 	appName string,
 	postStartAgentCommand string,
 	restartPolicy *agentpb.RestartPolicy,
 	stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse],
-) error {
+) (int32, error) {
 	outputCh, err := s.containerd.StartContainer(ctx, appName, postStartAgentCommand, restartPolicy)
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+		return 0, status.Errorf(codes.Internal, "failed to start container: %v", err)
 	}
 
 	// Send started notification.
@@ -235,7 +238,7 @@ func (s *ContainerService) streamContainerOutput(
 			Started: &agentpb.RunContainerLayersResponse_Started{},
 		},
 	}); err != nil {
-		return err
+		return 0, err
 	}
 
 	// If a log manager is configured, start a goroutine that publishes containerd
@@ -262,10 +265,10 @@ func (s *ContainerService) streamContainerOutput(
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return 0, ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
-				return nil
+				return output.ExitCode, nil
 			}
 			if len(output.Stdout) > 0 {
 				if err := stream.Send(&agentpb.RunContainerLayersResponse{
@@ -275,7 +278,7 @@ func (s *ContainerService) streamContainerOutput(
 						},
 					},
 				}); err != nil {
-					return err
+					return 0, err
 				}
 			}
 			if len(output.Stderr) > 0 {
@@ -286,7 +289,7 @@ func (s *ContainerService) streamContainerOutput(
 						},
 					},
 				}); err != nil {
-					return err
+					return 0, err
 				}
 			}
 		}

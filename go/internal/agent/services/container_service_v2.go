@@ -38,7 +38,15 @@ func (s *ContainerServiceV2) StartContainer(req *agentpbv2.StartContainerRequest
 			OnFailureMaxRetries: rp.GetOnFailureMaxRetries(),
 		}
 	}
-	return s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), restartPolicy, &containerStreamV1Adapter{v2stream: stream})
+	exitCode, err := s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), restartPolicy, &containerStreamV1Adapter{v2stream: stream})
+	if err != nil {
+		return err
+	}
+	return stream.Send(&agentpbv2.ContainerStreamResponse{
+		ResponseType: &agentpbv2.ContainerStreamResponse_Exited_{
+			Exited: &agentpbv2.ContainerStreamResponse_Exited{ExitCode: exitCode},
+		},
+	})
 }
 
 // AttachContainer starts a container with stdin support, forwarding I/O bidirectionally.
@@ -109,7 +117,11 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 			return ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
-				return nil
+				return stream.Send(&agentpbv2.ContainerStreamResponse{
+					ResponseType: &agentpbv2.ContainerStreamResponse_Exited_{
+						Exited: &agentpbv2.ContainerStreamResponse_Exited{ExitCode: output.ExitCode},
+					},
+				})
 			}
 			if len(output.Stdout) > 0 {
 				if err := stream.Send(&agentpbv2.ContainerStreamResponse{

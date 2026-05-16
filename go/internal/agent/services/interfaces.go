@@ -62,9 +62,10 @@ type ContainerdClient interface {
 
 // ContainerOutput represents a chunk of output from a running container.
 type ContainerOutput struct {
-	Stdout []byte
-	Stderr []byte
-	Done   bool
+	Stdout   []byte
+	Stderr   []byte
+	Done     bool
+	ExitCode int32
 }
 
 // ContainerMetrics holds a point-in-time CPU and memory snapshot for a container.
