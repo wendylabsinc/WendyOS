@@ -186,19 +186,15 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 	certPEM := cert.GetPemCertificate()
 	chainPEM := cert.GetPemCertificateChain()
 
-	s.enrolled = true
-	s.cloudHost = req.GetCloudHost()
-	s.orgID = req.GetOrganizationId()
-	s.assetID = req.GetAssetId()
-	s.keyPEM = keyPEM
-	s.certPEM = certPEM
-	s.chainPEM = chainPEM
-
+	// Build the state struct from the request/cert values WITHOUT first mutating
+	// s.* fields. Only apply the state to s.* after saveState succeeds so that a
+	// disk-write failure does not leave the agent permanently stuck as "already
+	// provisioned".
 	state := &provisioningState{
 		Enrolled:  true,
-		CloudHost: s.cloudHost,
-		OrgID:     s.orgID,
-		AssetID:   s.assetID,
+		CloudHost: req.GetCloudHost(),
+		OrgID:     req.GetOrganizationId(),
+		AssetID:   req.GetAssetId(),
 		KeyPEM:    keyPEM,
 		CertPEM:   certPEM,
 		ChainPEM:  chainPEM,
@@ -207,6 +203,15 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		s.logger.Error("Failed to persist provisioning state", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "failed to save provisioning state: %v", err)
 	}
+
+	// Persist succeeded — now it is safe to update in-memory state.
+	s.enrolled = true
+	s.cloudHost = state.CloudHost
+	s.orgID = state.OrgID
+	s.assetID = state.AssetID
+	s.keyPEM = keyPEM
+	s.certPEM = certPEM
+	s.chainPEM = chainPEM
 
 	// Write individual PEM files so the container registry can mount and use them.
 	if err := s.writePEMFiles(keyPEM, certPEM, chainPEM); err != nil {
