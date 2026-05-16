@@ -140,6 +140,8 @@ message UpdateAgentRequest {
 
         message Update {
             string sha256 = 1;
+            bytes gpg_signature = 2;
+            bool skip_gpg_verify = 3;
         }
     }
 }
