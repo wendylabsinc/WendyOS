@@ -470,6 +470,35 @@ func TestCopyToClipboard_AllToolsFailReportsErrors(t *testing.T) {
 	}
 }
 
+func TestShouldCaptureClipboardStderr_DisablesLinuxPipes(t *testing.T) {
+	if shouldCaptureClipboardStderr("linux") {
+		t.Fatal("linux clipboard helpers should not capture stderr through pipes")
+	}
+	if !shouldCaptureClipboardStderr("darwin") {
+		t.Fatal("darwin clipboard helper should capture stderr")
+	}
+}
+
+func TestRunClipboardCommand_TimesOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell")
+	}
+
+	start := time.Now()
+	err := runClipboardCommand(exec.Command("sleep", "5"), 25*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("timeout took too long: %v", elapsed)
+	}
+}
+
 func TestCopyToClipboard_NoToolsFound(t *testing.T) {
 	origLookPath := execLookPath
 	origCommand := execCommand
