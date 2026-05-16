@@ -40,28 +40,12 @@ public struct WendyE2EShellResult: Sendable {
         self.standardError
     }
 
-    public var isSuccess: Bool {
-        self.status.isSuccess
-    }
-
-    public var isFailure: Bool {
-        !self.isSuccess
-    }
-
-    public var normalizedStandardOutput: String {
+    public var normalizedStdout: String {
         Self.normalizeLineEndings(self.standardOutput)
     }
 
-    public var normalizedStandardError: String {
-        Self.normalizeLineEndings(self.standardError)
-    }
-
-    public var normalizedStdout: String {
-        self.normalizedStandardOutput
-    }
-
     public var normalizedStderr: String {
-        self.normalizedStandardError
+        Self.normalizeLineEndings(self.standardError)
     }
 
     public func requireSuccess() throws {

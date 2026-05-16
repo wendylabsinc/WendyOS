@@ -72,7 +72,7 @@ struct `session` {
         )
         let result = try await session.posixShell("printf 'wendy-machine-smoke'")
 
-        #expect(result.isSuccess)
+        #expect(result.status.isSuccess)
         #expect(result.stdout == "wendy-machine-smoke")
         #expect(result.stderr == "")
     }
@@ -84,8 +84,8 @@ struct `session` {
         )
         let result = try await session.posixShell("printf 'wendy-machine-smoke'")
 
-        #expect(result.isSuccess)
-        #expect(!result.isFailure)
+        #expect(result.status.isSuccess)
+        #expect(!result.status.isFailure)
         #expect(result.stdout == "wendy-machine-smoke")
         #expect(result.stderr == "")
         #expect(result.normalizedStdout == "wendy-machine-smoke")
@@ -102,7 +102,7 @@ struct `session` {
         )
         let result = try await session.powerShell("Write-Output 'wendy-machine-smoke'")
 
-        #expect(result.isSuccess)
+        #expect(result.status.isSuccess)
         #expect(result.normalizedStdout == "wendy-machine-smoke\n")
         #expect(result.stderr == "")
     }
@@ -164,7 +164,7 @@ struct `session` {
 
         let result = try await session.posixShell("wendy")
 
-        #expect(result.isSuccess)
+        #expect(result.status.isSuccess)
         #expect(result.stdout == "HOME=\(homeDirectory.path)\nWENDY_ANALYTICS=false\n")
         #expect(result.stderr == "")
     }
@@ -290,7 +290,7 @@ struct `session` {
         try await Self.withTemporarySession { session, _ in
             let result = try await session.posixShell("printf 'hello'")
 
-            #expect(result.isSuccess)
+            #expect(result.status.isSuccess)
             #expect(result.stdout == "hello")
             #expect(result.stderr == "")
         }
