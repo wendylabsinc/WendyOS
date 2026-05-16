@@ -232,9 +232,8 @@ struct `session` {
 
         try await session.sh("printf '%s' \"$PWD\"").run { result in
             try result.requireSuccess()
-            let standardOutput = result.stdout
 
-            #expect(standardOutput == workingDirectory.path)
+            #expect(result.stdout == workingDirectory.path)
         }
 
         #expect(FileManager.default.fileExists(atPath: homeDirectory.path))
@@ -301,12 +300,10 @@ struct `session` {
         try await Self.withTemporarySession { session, _ in
             try await session.sh("printf 'hello'; printf 'oops' >&2").run { result in
                 try result.requireSuccess()
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(standardOutput == "hello")
-                #expect(standardError == "oops")
-                #expect(standardOutput.contains(/he.*o/))
+                #expect(result.stdout == "hello")
+                #expect(result.stderr == "oops")
+                #expect(result.stdout.contains(/he.*o/))
             }
         }
     }
@@ -346,11 +343,9 @@ struct `session` {
 
         try await session.sh("printf 'hello'; printf 'oops' >&2").run { result in
             try result.requireSuccess()
-            let standardOutput = result.stdout
-            let standardError = result.stderr
 
-            #expect(standardOutput == "hello")
-            #expect(standardError == "oops")
+            #expect(result.stdout == "hello")
+            #expect(result.stderr == "oops")
         }
     }
 

@@ -17,18 +17,16 @@ struct `'wendy os cache list'` {
     func `prints command help`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy os cache list --help").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("List cached OS images"))
-                #expect(standardOutput.contains("Usage:"))
-                #expect(standardOutput.contains("wendy os cache list [flags]"))
-                #expect(standardOutput.contains("--help"))
-                #expect(standardOutput.contains("--device"))
-                #expect(standardOutput.contains("--json"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("List cached OS images"))
+                #expect(stdout.contains("Usage:"))
+                #expect(stdout.contains("wendy os cache list [flags]"))
+                #expect(stdout.contains("--help"))
+                #expect(stdout.contains("--device"))
+                #expect(stdout.contains("--json"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -42,13 +40,10 @@ struct `'wendy os cache list'` {
     func `lists cached items in a readable table`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy os cache list").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "No cached OS images.\n")
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "No cached OS images.\n")
+                #expect(result.stderr == "")
             }
         }
     }
@@ -69,15 +64,13 @@ struct `'wendy os cache list'` {
                 wendy os cache list
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "No cached OS images.\n")
-                #expect(!standardOutput.contains("do-not-list"))
-                #expect(!standardOutput.contains("unrelated-project-file"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(stdout == "No cached OS images.\n")
+                #expect(!stdout.contains("do-not-list"))
+                #expect(!stdout.contains("unrelated-project-file"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -101,14 +94,11 @@ struct `'wendy os cache list'` {
                 wendy os cache list
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("determining OS cache entry size"))
-                #expect(standardError.contains("unreadable"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(result.stderr.contains("determining OS cache entry size"))
+                #expect(result.stderr.contains("unreadable"))
             }
         }
     }
@@ -122,16 +112,13 @@ struct `'wendy os cache list'` {
     func `prints JSON cache entries for automation`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy --json os cache list").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("No cached OS images"))
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
+                #expect(!result.stdout.contains("No cached OS images"))
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [[String: Any]]
                 )
                 #expect(json.isEmpty)
@@ -149,15 +136,13 @@ struct `'wendy os cache list'` {
     func `rejects undocumented arguments and flags`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy os cache list extra").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("unknown command"))
-                #expect(standardError.contains("extra"))
-                #expect(!standardError.contains("No cached OS images"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("unknown command"))
+                #expect(stderr.contains("extra"))
+                #expect(!stderr.contains("No cached OS images"))
             }
         }
     }

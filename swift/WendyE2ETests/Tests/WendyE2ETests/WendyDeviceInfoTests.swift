@@ -42,19 +42,18 @@ struct `'wendy device info'` {
                 """
             ).run()
             try await cli.sh("wendy --device \(agentAddress) device info --json").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
+                let stderr = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("\"version\""))
-                #expect(standardOutput.contains("\"os\""))
-                #expect(standardOutput.contains("\"cpuArchitecture\""))
-                #expect(standardOutput.contains("\"cliVersion\""))
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Select a device"))
-                #expect(!standardError.contains("Select a device"))
-                #expect(!standardError.contains("default-device-that-should-not-be-used"))
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("\"version\""))
+                #expect(stdout.contains("\"os\""))
+                #expect(stdout.contains("\"cpuArchitecture\""))
+                #expect(stdout.contains("\"cliVersion\""))
+                #expect(stderr == "")
+                #expect(!stdout.contains("Select a device"))
+                #expect(!stderr.contains("Select a device"))
+                #expect(!stderr.contains("default-device-that-should-not-be-used"))
             }
         }
     }
@@ -75,28 +74,23 @@ struct `'wendy device info'` {
             ).run()
 
             try await cli.sh("wendy device info --json").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("\"version\""))
-                #expect(standardOutput.contains("\"os\""))
-                #expect(standardOutput.contains("\"cpuArchitecture\""))
-                #expect(standardOutput.contains("\"cliVersion\""))
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Select a device"))
-                #expect(!standardError.contains("Select a device"))
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("\"version\""))
+                #expect(stdout.contains("\"os\""))
+                #expect(stdout.contains("\"cpuArchitecture\""))
+                #expect(stdout.contains("\"cliVersion\""))
+                #expect(result.stderr == "")
+                #expect(!stdout.contains("Select a device"))
+                #expect(!result.stderr.contains("Select a device"))
             }
 
             try await cli.sh("cat \"$HOME/.wendy/config.json\"").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "{\"defaultDevice\":\"\(agentAddress)\"}\n")
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "{\"defaultDevice\":\"\(agentAddress)\"}\n")
+                #expect(result.stderr == "")
             }
         }
     }
@@ -148,18 +142,16 @@ struct `'wendy device info'` {
             }
 
             try await cli.sh(command).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("Agent Version:"))
-                #expect(standardOutput.contains("OS:"))
-                #expect(standardOutput.contains("Architecture:"))
-                #expect(standardOutput.contains("CLI Version:"))
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Select a device"))
-                #expect(!standardOutput.contains("\"version\""))
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("Agent Version:"))
+                #expect(stdout.contains("OS:"))
+                #expect(stdout.contains("Architecture:"))
+                #expect(stdout.contains("CLI Version:"))
+                #expect(result.stderr == "")
+                #expect(!stdout.contains("Select a device"))
+                #expect(!stdout.contains("\"version\""))
             }
         }
     }
@@ -173,17 +165,15 @@ struct `'wendy device info'` {
             let agentAddress = agent.machine.address
 
             try await cli.sh("wendy --json --device \(agentAddress) device info").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Select a device"))
-                #expect(!standardOutput.localizedCaseInsensitiveContains("update"))
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
+                #expect(!stdout.contains("Select a device"))
+                #expect(!stdout.localizedCaseInsensitiveContains("update"))
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(stdout.utf8))
                         as? [String: Any]
                 )
                 let version = try #require(json["version"] as? String)
@@ -216,16 +206,13 @@ struct `'wendy device info'` {
             ).run()
 
             try await cli.sh("wendy device info").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Select a device"))
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
+                #expect(!result.stdout.contains("Select a device"))
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [String: Any]
                 )
                 let version = try #require(json["version"] as? String)
@@ -258,16 +245,14 @@ struct `'wendy device info'` {
             ).run()
 
             try await cli.sh("wendy device info --json").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("parsing config"))
-                #expect(standardError.contains("invalid character"))
-                #expect(!standardError.contains("Select a device"))
-                #expect(!standardError.contains("getting agent version"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("parsing config"))
+                #expect(stderr.contains("invalid character"))
+                #expect(!stderr.contains("Select a device"))
+                #expect(!stderr.contains("getting agent version"))
             }
         }
     }
@@ -281,18 +266,15 @@ struct `'wendy device info'` {
     func `'--json' reports a missing device without prompting`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy device info --json").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
                 #expect(
-                    standardError.contains(
+                    result.stderr.contains(
                         "no device specified; use --device flag or set a default"
                     )
                 )
-                #expect(!standardError.contains("Select a device"))
+                #expect(!result.stderr.contains("Select a device"))
             }
         }
     }
@@ -306,15 +288,13 @@ struct `'wendy device info'` {
             try await cli.sh(
                 "wendy --device definitely-not-a-wendy-device.invalid device info --json"
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("getting agent version"))
-                #expect(standardError.contains("produced zero addresses"))
-                #expect(!standardError.contains("Select a device"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("getting agent version"))
+                #expect(stderr.contains("produced zero addresses"))
+                #expect(!stderr.contains("Select a device"))
             }
         }
     }
@@ -352,18 +332,16 @@ struct `'wendy device info'` {
             }
 
             try await cli.sh(command).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("Agent Version:"))
-                #expect(standardOutput.contains("CLI Version:"))
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("Agent Version:"))
+                #expect(stdout.contains("CLI Version:"))
                 #expect(
-                    standardOutput.contains("Update available:")
-                        || standardOutput.contains("Agent is up to date.")
+                    stdout.contains("Update available:")
+                        || stdout.contains("Agent is up to date.")
                 )
-                #expect(standardError == "")
+                #expect(result.stderr == "")
             }
         }
     }
@@ -379,15 +357,12 @@ struct `'wendy device info'` {
             try await cli.sh(
                 "wendy --json --device \(agentAddress) device info --check-updates"
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [String: Any]
                 )
                 let latestVersion = try #require(json["latestVersion"] as? String)
@@ -411,15 +386,12 @@ struct `'wendy device info'` {
             try await cli.sh(
                 "wendy --json --device \(agentAddress) device info --check-updates --prerelease"
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [String: Any]
                 )
                 let latestVersion = try #require(json["latestVersion"] as? String)
@@ -443,16 +415,14 @@ struct `'wendy device info'` {
             try await cli.sh(
                 "NO_PROXY=\(agentAddress) HTTPS_PROXY=http://127.0.0.1:1 wendy --json --device \(agentAddress) device info --check-updates"
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("checking for updates"))
-                #expect(standardError.contains("fetching latest release"))
-                #expect(!standardError.contains("latestVersion"))
-                #expect(!standardError.contains("updateAvailable"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("checking for updates"))
+                #expect(stderr.contains("fetching latest release"))
+                #expect(!stderr.contains("latestVersion"))
+                #expect(!stderr.contains("updateAvailable"))
             }
         }
     }
@@ -477,16 +447,13 @@ struct `'wendy device version'` {
             let agentAddress = agent.machine.address
 
             try await cli.sh("wendy --device \(agentAddress) device version").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError.localizedCaseInsensitiveContains("deprecated"))
-                #expect(standardError.contains("wendy device info"))
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.localizedCaseInsensitiveContains("deprecated"))
+                #expect(result.stderr.contains("wendy device info"))
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [String: Any]
                 )
                 let version = try #require(json["version"] as? String)
@@ -510,19 +477,17 @@ struct `'wendy device version'` {
     func `'--json' aliases device info without contaminating JSON output`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy device version --json").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
                 #expect(
-                    standardError.contains(
+                    stderr.contains(
                         "no device specified; use --device flag or set a default"
                     )
                 )
-                #expect(!standardError.localizedCaseInsensitiveContains("deprecated"))
-                #expect(!standardError.contains("Select a device"))
+                #expect(!stderr.localizedCaseInsensitiveContains("deprecated"))
+                #expect(!stderr.contains("Select a device"))
             }
         }
     }

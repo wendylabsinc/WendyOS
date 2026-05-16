@@ -18,28 +18,26 @@ struct `'wendy cloud tunnel'` {
         // duplicated global flags, or formatting that would make setup hard.
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cloud tunnel --help").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
+                #expect(result.status.isSuccess)
                 #expect(
-                    standardOutput.contains(
+                    stdout.contains(
                         "forwards each connection through the Wendy Cloud tunnel broker"
                     )
                 )
-                #expect(standardOutput.contains("Usage:"))
+                #expect(stdout.contains("Usage:"))
                 #expect(
-                    standardOutput.contains(
+                    stdout.contains(
                         "wendy cloud tunnel <local-port>:<remote-port> [flags]"
                     )
                 )
-                #expect(standardOutput.contains("--broker-url"))
-                #expect(standardOutput.contains("--cloud-grpc"))
-                #expect(standardOutput.contains("--device"))
-                #expect(standardOutput.contains("--help"))
-                #expect(standardOutput.contains("--json"))
-                #expect(standardError == "")
+                #expect(stdout.contains("--broker-url"))
+                #expect(stdout.contains("--cloud-grpc"))
+                #expect(stdout.contains("--device"))
+                #expect(stdout.contains("--help"))
+                #expect(stdout.contains("--json"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -72,16 +70,14 @@ struct `'wendy cloud tunnel'` {
     func `rejects invalid port mappings before listening`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cloud tunnel notaport").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("invalid port"))
-                #expect(standardError.contains("notaport"))
-                #expect(!standardError.contains("Fetching device list"))
-                #expect(!standardError.contains("Forwarding"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("invalid port"))
+                #expect(stderr.contains("notaport"))
+                #expect(!stderr.contains("Fetching device list"))
+                #expect(!stderr.contains("Forwarding"))
             }
         }
     }
@@ -97,16 +93,14 @@ struct `'wendy cloud tunnel'` {
         // should not imply that a listener or forwarding session remains active.
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cloud tunnel 65535:80").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("not logged in"))
-                #expect(standardError.contains("wendy auth login"))
-                #expect(!standardError.contains("Forwarding"))
-                #expect(!standardError.contains("Press Ctrl+C"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("not logged in"))
+                #expect(stderr.contains("wendy auth login"))
+                #expect(!stderr.contains("Forwarding"))
+                #expect(!stderr.contains("Press Ctrl+C"))
             }
         }
     }

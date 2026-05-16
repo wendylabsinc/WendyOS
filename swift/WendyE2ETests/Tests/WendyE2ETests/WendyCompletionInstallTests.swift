@@ -19,20 +19,18 @@ struct `'wendy completion install'` {
         // printing scripts to stdout, and choosing a shell explicitly.
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy completion install --help").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("Detect the current shell"))
-                #expect(standardOutput.contains("Usage:"))
-                #expect(standardOutput.contains("wendy completion install [flags]"))
-                #expect(standardOutput.contains("--shell"))
-                #expect(standardOutput.contains("--print-path"))
-                #expect(standardOutput.contains("--stdout"))
-                #expect(standardOutput.contains("--device"))
-                #expect(standardOutput.contains("--json"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("Detect the current shell"))
+                #expect(stdout.contains("Usage:"))
+                #expect(stdout.contains("wendy completion install [flags]"))
+                #expect(stdout.contains("--shell"))
+                #expect(stdout.contains("--print-path"))
+                #expect(stdout.contains("--stdout"))
+                #expect(stdout.contains("--device"))
+                #expect(stdout.contains("--json"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -54,16 +52,14 @@ struct `'wendy completion install'` {
                 grep -q 'wendy-completion' "$HOME/.zshrc"
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("Wrote"))
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("Wrote"))
                 #expect(
-                    standardError.contains("Updated")
-                        || standardError.contains("Already configured")
+                    stderr.contains("Updated")
+                        || stderr.contains("Already configured")
                 )
             }
         }
@@ -85,14 +81,11 @@ struct `'wendy completion install'` {
                 test ! -e "$HOME/.zshrc"
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("wendy.fish"))
-                #expect(standardError.contains("Fish auto-loads completions"))
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(result.stderr.contains("wendy.fish"))
+                #expect(result.stderr.contains("Fish auto-loads completions"))
             }
         }
     }
@@ -112,14 +105,11 @@ struct `'wendy completion install'` {
                 test ! -e "$HOME/.zshrc"
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("/.zfunc/_wendy"))
-                #expect(standardOutput.contains("/.zshrc"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stdout.contains("/.zfunc/_wendy"))
+                #expect(result.stdout.contains("/.zshrc"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -138,14 +128,11 @@ struct `'wendy completion install'` {
                 test ! -d "$HOME/.zsh"
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("#compdef wendy"))
-                #expect(standardOutput.contains("compdef _wendy wendy"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stdout.contains("#compdef wendy"))
+                #expect(result.stdout.contains("compdef _wendy wendy"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -168,14 +155,11 @@ struct `'wendy completion install'` {
                 test "$(grep -c '^# wendy-completion$' "$HOME/.zshrc")" = 1
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("Already configured"))
-                #expect(standardError.contains(".zfunc/_wendy"))
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(result.stderr.contains("Already configured"))
+                #expect(result.stderr.contains(".zfunc/_wendy"))
             }
         }
     }
@@ -190,15 +174,13 @@ struct `'wendy completion install'` {
     func `rejects undocumented arguments and flags`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy completion install extra").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("unknown command"))
-                #expect(standardError.contains("extra"))
-                #expect(!standardError.contains("Wrote"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("unknown command"))
+                #expect(stderr.contains("extra"))
+                #expect(!stderr.contains("Wrote"))
             }
         }
     }

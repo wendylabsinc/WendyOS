@@ -17,18 +17,16 @@ struct `'wendy cache list'` {
     func `prints command help`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cache list --help").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput.contains("List cached items"))
-                #expect(standardOutput.contains("Usage:"))
-                #expect(standardOutput.contains("wendy cache list [flags]"))
-                #expect(standardOutput.contains("--help"))
-                #expect(standardOutput.contains("--device"))
-                #expect(standardOutput.contains("--json"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(stdout.contains("List cached items"))
+                #expect(stdout.contains("Usage:"))
+                #expect(stdout.contains("wendy cache list [flags]"))
+                #expect(stdout.contains("--help"))
+                #expect(stdout.contains("--device"))
+                #expect(stdout.contains("--json"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -42,13 +40,10 @@ struct `'wendy cache list'` {
     func `lists cached items in a readable table`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cache list").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "Cache is empty.\n")
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "Cache is empty.\n")
+                #expect(result.stderr == "")
             }
         }
     }
@@ -69,15 +64,13 @@ struct `'wendy cache list'` {
                 wendy cache list
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stdout = result.stdout
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardOutput == "Cache is empty.\n")
-                #expect(!standardOutput.contains("do-not-list"))
-                #expect(!standardOutput.contains("unrelated-project-file"))
-                #expect(standardError == "")
+                #expect(result.status.isSuccess)
+                #expect(stdout == "Cache is empty.\n")
+                #expect(!stdout.contains("do-not-list"))
+                #expect(!stdout.contains("unrelated-project-file"))
+                #expect(result.stderr == "")
             }
         }
     }
@@ -99,14 +92,11 @@ struct `'wendy cache list'` {
                 wendy cache list
                 """
             ).run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("determining cache entry size"))
-                #expect(standardError.contains("unreadable"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(result.stderr.contains("determining cache entry size"))
+                #expect(result.stderr.contains("unreadable"))
             }
         }
     }
@@ -120,16 +110,13 @@ struct `'wendy cache list'` {
     func `prints JSON cache entries for automation`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy --json cache list").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
 
-                #expect(terminationStatus.isSuccess)
-                #expect(standardError == "")
-                #expect(!standardOutput.contains("Cache is empty"))
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
+                #expect(!result.stdout.contains("Cache is empty"))
 
                 let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(standardOutput.utf8))
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [[String: Any]]
                 )
                 #expect(json.isEmpty)
@@ -147,15 +134,13 @@ struct `'wendy cache list'` {
     func `rejects undocumented arguments and flags`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh("wendy cache list extra").run { result in
-                let terminationStatus = result.status
-                let standardOutput = result.stdout
-                let standardError = result.stderr
+                let stderr = result.stderr
 
-                #expect(!terminationStatus.isSuccess)
-                #expect(standardOutput == "")
-                #expect(standardError.contains("unknown command"))
-                #expect(standardError.contains("extra"))
-                #expect(!standardError.contains("Cache is empty"))
+                #expect(!result.status.isSuccess)
+                #expect(result.stdout == "")
+                #expect(stderr.contains("unknown command"))
+                #expect(stderr.contains("extra"))
+                #expect(!stderr.contains("Cache is empty"))
             }
         }
     }
