@@ -15,27 +15,29 @@ import (
 // other fields were set before saveState was called, leaving the agent
 // permanently stuck as "already provisioned" even though nothing was persisted.
 func TestStartProvisioning_SaveStateFailure(t *testing.T) {
-	// Create a temp dir for config, then make it read-only so saveState fails.
+	// Create a temp dir for config.
 	tmpDir, err := os.MkdirTemp("", "wendy-prov-savestate-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Pre-create the config dir as read-only so os.WriteFile inside saveState fails.
-	if err := os.Chmod(tmpDir, 0o500); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
-
 	logger := zap.NewNop()
 	svc := NewProvisioningService(logger, tmpDir)
+
+	// Block saveState by creating a directory at the state file path. When the
+	// code tries to open that path for writing it gets EISDIR, which fails
+	// deterministically on all platforms and regardless of the running user.
+	if err := os.Mkdir(svc.statePath(), 0o755); err != nil {
+		t.Fatalf("Mkdir(statePath): %v", err)
+	}
 
 	// Attach a fake cloud dialer so the network call succeeds.
 	dialer, cleanup := startFakeCloudServer(t, "cert-pem", "chain-pem")
 	t.Cleanup(cleanup)
 	svc.CloudDialer = dialer
 
-	// First provisioning attempt — saveState will fail because the dir is read-only.
+	// First provisioning attempt — saveState will fail because the state path is a directory.
 	_, err = svc.StartProvisioning(context.Background(), &agentpb.StartProvisioningRequest{
 		OrganizationId: 7,
 		CloudHost:      "fail.wendy.io",
@@ -45,9 +47,9 @@ func TestStartProvisioning_SaveStateFailure(t *testing.T) {
 		t.Fatal("expected StartProvisioning to return an error when saveState fails")
 	}
 
-	// Restore write permission so the second attempt can succeed.
-	if err := os.Chmod(tmpDir, 0o700); err != nil {
-		t.Fatalf("Chmod restore: %v", err)
+	// Remove the blocking directory so the second attempt can write the state file.
+	if err := os.Remove(svc.statePath()); err != nil {
+		t.Fatalf("Remove(statePath): %v", err)
 	}
 
 	// Second provisioning attempt — must NOT be rejected as "already provisioned".
