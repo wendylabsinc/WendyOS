@@ -244,10 +244,10 @@ func TestContainerLogManager_UnsubscribeNonexistent(t *testing.T) {
 	lm.Unsubscribe("nonexistent-app", "nonexistent-sub")
 }
 
-// TestContainerLogManager_ConcurrentPublishUnsubscribe verifies that Publish
-// does not panic when a subscriber unsubscribes (closing its channel) while a
-// concurrent Publish is mid-flight copying channels under the lock and then
-// sending to them. The send-on-closed-channel panic must be recovered.
+// TestContainerLogManager_ConcurrentPublishUnsubscribe verifies that concurrent
+// calls to Publish and Unsubscribe do not panic or cause a data race.
+// The logSubscriber mutex ensures that closing a channel and sending to it
+// cannot race, so no send-on-closed-channel panic can occur.
 func TestContainerLogManager_ConcurrentPublishUnsubscribe(t *testing.T) {
 	broadcaster := NewTelemetryBroadcaster()
 	lm := NewContainerLogManager(zap.NewNop(), broadcaster)
@@ -260,7 +260,7 @@ func TestContainerLogManager_ConcurrentPublishUnsubscribe(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 
-		// Goroutine 1: publish repeatedly.
+		// Goroutine 1: publish once, racing against the unsubscribe below.
 		go func() {
 			defer wg.Done()
 			lm.Publish("test-app", ContainerOutput{Stdout: []byte("msg")})

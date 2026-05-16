@@ -19,7 +19,8 @@ type logSubscriber struct {
 }
 
 // send attempts a non-blocking send to the subscriber.
-// Returns false if the subscriber has already been closed.
+// It is a no-op if the subscriber is already closed; the mutex ensures this
+// check and the channel send cannot race with close.
 func (s *logSubscriber) send(output ContainerOutput) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
