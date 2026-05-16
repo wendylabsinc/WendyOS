@@ -20,6 +20,29 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
+// wpctlSetDefault executes "wpctl set-default <id>" and returns the combined
+// output and any error. It is a package-level variable so that tests can inject
+// a mock implementation without spawning a real wpctl process.
+var wpctlSetDefault = func(ctx context.Context, id string) ([]byte, error) {
+	return exec.CommandContext(ctx, "wpctl", "set-default", id).CombinedOutput()
+}
+
+// pactlSetDefault executes "pactl <set-default-sink|set-default-source> <name>"
+// and returns the combined output and any error. It is a package-level variable
+// so that tests can inject a mock implementation without spawning a real pactl process.
+var pactlSetDefault = func(ctx context.Context, subcmd, name string) ([]byte, error) {
+	return exec.CommandContext(ctx, "pactl", subcmd, name).CombinedOutput()
+}
+
+// resolvePipeWireNodeIDsFn resolves the ALSA card/device pair to PipeWire node
+// IDs. Overriding this variable in tests avoids executing pw-dump.
+var resolvePipeWireNodeIDsFn = resolvePipeWireNodeIDs
+
+// resolvePulseAudioSinkOrSourceFn resolves the ALSA card/device pair to
+// PulseAudio sink/source matches. Overriding this variable in tests avoids
+// executing pactl.
+var resolvePulseAudioSinkOrSourceFn = resolvePulseAudioSinkOrSource
+
 // AudioService implements agentpb.WendyAudioServiceServer.
 type AudioService struct {
 	agentpb.UnimplementedWendyAudioServiceServer
@@ -219,10 +242,11 @@ func resolvePipeWireNodeIDs(ctx context.Context, card, device uint64) []string {
 }
 
 // filterPipeWireNodeIDs returns the string node IDs from nodes whose type is
-// PipeWire:Interface:Node, whose media.class contains "Audio", and whose ALSA
-// card/device properties (either legacy or api.alsa.* variants) match the
-// given card and device numbers. Extracted from resolvePipeWireNodeIDs to
-// allow unit testing without executing pw-dump.
+// PipeWire:Interface:Node, whose media.class is exactly "Audio/Sink" or
+// "Audio/Source" (excluding virtual/monitor nodes such as "Audio/Source/Virtual"),
+// and whose ALSA card/device properties (either legacy or api.alsa.* variants)
+// match the given card and device numbers. Extracted from resolvePipeWireNodeIDs
+// to allow unit testing without executing pw-dump.
 func filterPipeWireNodeIDs(nodes []pwDumpNode, card, device uint64) []string {
 	cardStr := fmt.Sprintf("%d", card)
 	deviceStr := fmt.Sprintf("%d", device)
@@ -342,16 +366,21 @@ func parsePulseAudioOutput(output string, card, device uint64, category string) 
 		// ALSA properties appear in the Properties section as:
 		//   alsa.card = "N"
 		//   alsa.device = "M"
-		if strings.Contains(line, "alsa.card") && strings.Contains(line, "=") {
-			val := extractPactlPropertyValue(line)
-			if val == cardStr {
-				currentCard = val
-			}
-		}
-		if strings.Contains(line, "alsa.device") && strings.Contains(line, "=") {
-			val := extractPactlPropertyValue(line)
-			if val == deviceStr {
-				currentDevice = val
+		// We split on " = " and compare the trimmed key exactly to avoid matching
+		// related properties such as alsa.card_name when looking for alsa.card.
+		if parts := strings.SplitN(line, " = ", 2); len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			switch key {
+			case "alsa.card":
+				val := extractPactlPropertyValue(line)
+				if val == cardStr {
+					currentCard = val
+				}
+			case "alsa.device":
+				val := extractPactlPropertyValue(line)
+				if val == deviceStr {
+					currentDevice = val
+				}
 			}
 		}
 	}
@@ -412,15 +441,14 @@ func (s *AudioService) SetDefaultAudioDevice(ctx context.Context, req *agentpb.S
 
 	// Try PipeWire first: resolve the ALSA card/device to all matching PipeWire
 	// node IDs (a device may appear as both a sink and a source in PipeWire).
-	nodeIDs := resolvePipeWireNodeIDs(ctx, alsaCard, alsaDevice)
+	nodeIDs := resolvePipeWireNodeIDsFn(ctx, alsaCard, alsaDevice)
 	var wpctlErr error
 	if len(nodeIDs) > 0 {
 		var failedIDs []string
 		var lastWpctlErr error
 		var lastWpctlOutput string
 		for _, nodeID := range nodeIDs {
-			cmd := exec.CommandContext(ctx, "wpctl", "set-default", nodeID)
-			if output, err := cmd.CombinedOutput(); err != nil {
+			if output, err := wpctlSetDefault(ctx, nodeID); err != nil {
 				s.logger.Warn("wpctl set-default failed for node",
 					zap.String("node_id", nodeID), zap.Error(err),
 					zap.String("output", strings.TrimSpace(string(output))))
@@ -559,7 +587,7 @@ func (s *AudioService) parsePulseAudioDevices(ctx context.Context, category stri
 // device appears in both categories (which is possible when input and output
 // share the same ALSA card/device numbers).
 func (s *AudioService) setPulseAudioDefaultByALSA(ctx context.Context, deviceID uint32, card, device uint64) (*agentpb.SetDefaultAudioDeviceResponse, error) {
-	matches := resolvePulseAudioSinkOrSource(ctx, card, device)
+	matches := resolvePulseAudioSinkOrSourceFn(ctx, card, device)
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no PulseAudio sink or source found for ALSA card %d device %d", card, device)
 	}
@@ -572,8 +600,7 @@ func (s *AudioService) setPulseAudioDefaultByALSA(ctx context.Context, deviceID 
 		} else {
 			pactlCmd = "set-default-source"
 		}
-		setCmd := exec.CommandContext(ctx, "pactl", pactlCmd, m.name)
-		if out, err := setCmd.CombinedOutput(); err != nil {
+		if out, err := pactlSetDefault(ctx, pactlCmd, m.name); err != nil {
 			setErrors = append(setErrors, fmt.Sprintf("pactl %s %s: %v: %s", pactlCmd, m.name, err, strings.TrimSpace(string(out))))
 			continue
 		}

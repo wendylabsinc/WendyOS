@@ -1,9 +1,13 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"testing"
+
+	"go.uber.org/zap"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -510,5 +514,208 @@ func TestFilterPipeWireNodeIDs_VirtualSourceFiltered(t *testing.T) {
 	sort.Strings(got)
 	if len(got) != 2 || got[0] != "71" || got[1] != "72" {
 		t.Errorf("virtual source filter: got %v; want [71 72]", got)
+	}
+}
+
+// --- SetDefaultAudioDevice flow tests ---
+//
+// These tests exercise the main control-flow branches of SetDefaultAudioDevice
+// by injecting mock implementations of the package-level command runner vars
+// (wpctlSetDefault, pactlSetDefault, resolvePipeWireNodeIDsFn,
+// resolvePulseAudioSinkOrSourceFn) so no real system commands are executed.
+
+// restoreSetDefaultVars saves and restores the package-level injectable vars
+// used by SetDefaultAudioDevice and setPulseAudioDefaultByALSA.
+func restoreSetDefaultVars(t *testing.T) {
+	t.Helper()
+	origWpctl := wpctlSetDefault
+	origPactl := pactlSetDefault
+	origPW := resolvePipeWireNodeIDsFn
+	origPA := resolvePulseAudioSinkOrSourceFn
+	t.Cleanup(func() {
+		wpctlSetDefault = origWpctl
+		pactlSetDefault = origPactl
+		resolvePipeWireNodeIDsFn = origPW
+		resolvePulseAudioSinkOrSourceFn = origPA
+	})
+}
+
+// TestSetDefaultAudioDevice_AllPipeWireSucceed verifies that when all wpctl
+// calls succeed the response is Success:true and PulseAudio is never consulted.
+func TestSetDefaultAudioDevice_AllPipeWireSucceed(t *testing.T) {
+	restoreSetDefaultVars(t)
+
+	// Two PipeWire nodes for card 0 device 0 (sink + source).
+	resolvePipeWireNodeIDsFn = func(_ context.Context, card, device uint64) []string {
+		if card == 0 && device == 0 {
+			return []string{"10", "11"}
+		}
+		return nil
+	}
+
+	var wpctlCalls []string
+	wpctlSetDefault = func(_ context.Context, id string) ([]byte, error) {
+		wpctlCalls = append(wpctlCalls, id)
+		return []byte(""), nil
+	}
+
+	pactlSetDefault = func(_ context.Context, _, _ string) ([]byte, error) {
+		t.Error("pactlSetDefault should not be called when all wpctl calls succeed")
+		return nil, errors.New("unexpected pactl call")
+	}
+	resolvePulseAudioSinkOrSourceFn = func(_ context.Context, _, _ uint64) []pulseAudioMatch {
+		t.Error("resolvePulseAudioSinkOrSourceFn should not be called when all wpctl calls succeed")
+		return nil
+	}
+
+	svc := NewAudioService(zap.NewNop())
+	// deviceID for card 0 device 0: ((0<<8)|0)+1 = 1
+	resp, err := svc.SetDefaultAudioDevice(context.Background(), &agentpb.SetDefaultAudioDeviceRequest{DeviceId: 1})
+	if err != nil {
+		t.Fatalf("SetDefaultAudioDevice returned unexpected error: %v", err)
+	}
+	if !resp.GetSuccess() {
+		msg := ""
+		if resp.ErrorMessage != nil {
+			msg = *resp.ErrorMessage
+		}
+		t.Errorf("expected Success=true, got false: %s", msg)
+	}
+	if len(wpctlCalls) != 2 {
+		t.Errorf("expected 2 wpctl calls, got %d: %v", len(wpctlCalls), wpctlCalls)
+	}
+}
+
+// TestSetDefaultAudioDevice_PartialWpctlFailurePulseAudioSucceeds verifies that
+// when one wpctl call fails (partial failure) the function falls through to
+// PulseAudio and returns Success:true if PulseAudio succeeds.
+func TestSetDefaultAudioDevice_PartialWpctlFailurePulseAudioSucceeds(t *testing.T) {
+	restoreSetDefaultVars(t)
+
+	// Two PipeWire nodes; the second one fails.
+	resolvePipeWireNodeIDsFn = func(_ context.Context, card, device uint64) []string {
+		if card == 0 && device == 0 {
+			return []string{"10", "11"}
+		}
+		return nil
+	}
+
+	wpctlSetDefault = func(_ context.Context, id string) ([]byte, error) {
+		if id == "11" {
+			return []byte("wpctl: error"), errors.New("wpctl failed")
+		}
+		return []byte(""), nil
+	}
+
+	resolvePulseAudioSinkOrSourceFn = func(_ context.Context, card, device uint64) []pulseAudioMatch {
+		if card == 0 && device == 0 {
+			return []pulseAudioMatch{
+				{name: "alsa_output.pci-0.analog-stereo", category: "sinks"},
+			}
+		}
+		return nil
+	}
+
+	var pactlCalls []string
+	pactlSetDefault = func(_ context.Context, subcmd, name string) ([]byte, error) {
+		pactlCalls = append(pactlCalls, subcmd+":"+name)
+		return []byte(""), nil
+	}
+
+	svc := NewAudioService(zap.NewNop())
+	resp, err := svc.SetDefaultAudioDevice(context.Background(), &agentpb.SetDefaultAudioDeviceRequest{DeviceId: 1})
+	if err != nil {
+		t.Fatalf("SetDefaultAudioDevice returned unexpected error: %v", err)
+	}
+	if !resp.GetSuccess() {
+		msg := ""
+		if resp.ErrorMessage != nil {
+			msg = *resp.ErrorMessage
+		}
+		t.Errorf("expected Success=true after PulseAudio fallback, got false: %s", msg)
+	}
+	if len(pactlCalls) != 1 {
+		t.Errorf("expected 1 pactl call, got %d: %v", len(pactlCalls), pactlCalls)
+	}
+}
+
+// TestSetDefaultAudioDevice_AllFail verifies that when both PipeWire and
+// PulseAudio fail the response is Success:false with a non-empty error message.
+func TestSetDefaultAudioDevice_AllFail(t *testing.T) {
+	restoreSetDefaultVars(t)
+
+	// No PipeWire nodes found.
+	resolvePipeWireNodeIDsFn = func(_ context.Context, _, _ uint64) []string {
+		return nil
+	}
+
+	// No PulseAudio matches found either.
+	resolvePulseAudioSinkOrSourceFn = func(_ context.Context, _, _ uint64) []pulseAudioMatch {
+		return nil
+	}
+
+	wpctlSetDefault = func(_ context.Context, _ string) ([]byte, error) {
+		t.Error("wpctlSetDefault should not be called when there are no PipeWire nodes")
+		return nil, nil
+	}
+	pactlSetDefault = func(_ context.Context, _, _ string) ([]byte, error) {
+		t.Error("pactlSetDefault should not be called when there are no PulseAudio matches")
+		return nil, nil
+	}
+
+	svc := NewAudioService(zap.NewNop())
+	resp, err := svc.SetDefaultAudioDevice(context.Background(), &agentpb.SetDefaultAudioDeviceRequest{DeviceId: 1})
+	if err != nil {
+		t.Fatalf("SetDefaultAudioDevice returned unexpected gRPC error: %v", err)
+	}
+	if resp.GetSuccess() {
+		t.Error("expected Success=false when both PipeWire and PulseAudio fail, got true")
+	}
+	if resp.ErrorMessage == nil || *resp.ErrorMessage == "" {
+		t.Error("expected a non-empty ErrorMessage when all attempts fail")
+	}
+}
+
+// TestSetDefaultAudioDevice_NoPipeWirePulseAudioSucceeds verifies the common
+// PulseAudio-only path: no PipeWire nodes, PulseAudio resolves and sets the default.
+func TestSetDefaultAudioDevice_NoPipeWirePulseAudioSucceeds(t *testing.T) {
+	restoreSetDefaultVars(t)
+
+	resolvePipeWireNodeIDsFn = func(_ context.Context, _, _ uint64) []string {
+		return nil
+	}
+
+	resolvePulseAudioSinkOrSourceFn = func(_ context.Context, card, device uint64) []pulseAudioMatch {
+		if card == 1 && device == 2 {
+			return []pulseAudioMatch{
+				{name: "alsa_output.pci-1.hdmi-stereo", category: "sinks"},
+				{name: "alsa_input.pci-1.hdmi-stereo", category: "sources"},
+			}
+		}
+		return nil
+	}
+
+	var pactlCalls []string
+	pactlSetDefault = func(_ context.Context, subcmd, name string) ([]byte, error) {
+		pactlCalls = append(pactlCalls, subcmd+":"+name)
+		return []byte(""), nil
+	}
+
+	svc := NewAudioService(zap.NewNop())
+	// deviceID for card 1 device 2: ((1<<8)|2)+1 = 259
+	resp, err := svc.SetDefaultAudioDevice(context.Background(), &agentpb.SetDefaultAudioDeviceRequest{DeviceId: 259})
+	if err != nil {
+		t.Fatalf("SetDefaultAudioDevice returned unexpected error: %v", err)
+	}
+	if !resp.GetSuccess() {
+		msg := ""
+		if resp.ErrorMessage != nil {
+			msg = *resp.ErrorMessage
+		}
+		t.Errorf("expected Success=true, got false: %s", msg)
+	}
+	// Both sink and source must have been set.
+	if len(pactlCalls) != 2 {
+		t.Errorf("expected 2 pactl calls (sink+source), got %d: %v", len(pactlCalls), pactlCalls)
 	}
 }
