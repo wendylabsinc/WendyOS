@@ -68,6 +68,24 @@ func setupMCPForAllTools() []mcpSetupResult {
 		}
 	}
 
+	// Cursor (~/.cursor/mcp.json)
+	if cursorPath := cursorConfigPath(); cursorPath != "" {
+		if err := addMCPToJSONConfig(cursorPath, "mcpServers", "wendy", entry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Cursor", path: cursorPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Cursor", path: cursorPath})
+		}
+	}
+
+	// Windsurf (~/.codeium/windsurf/mcp_config.json)
+	if windsurfPath := windsurfConfigPath(); windsurfPath != "" {
+		if err := addMCPToJSONConfig(windsurfPath, "mcpServers", "wendy", entry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath})
+		}
+	}
+
 	return results
 }
 
@@ -130,6 +148,38 @@ func wendyBinaryPath() string {
 		return p
 	}
 	return "wendy"
+}
+
+// cursorConfigPath returns ~/.cursor/mcp.json if Cursor is installed.
+func cursorConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".cursor")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "mcp.json")
+	}
+	if _, err := exec.LookPath("cursor"); err == nil {
+		return filepath.Join(dir, "mcp.json")
+	}
+	return ""
+}
+
+// windsurfConfigPath returns ~/.codeium/windsurf/mcp_config.json if Windsurf is installed.
+func windsurfConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".codeium", "windsurf")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "mcp_config.json")
+	}
+	if _, err := exec.LookPath("windsurf"); err == nil {
+		return filepath.Join(dir, "mcp_config.json")
+	}
+	return ""
 }
 
 // addMCPToJSONConfig reads a JSON config file, sets cfg[topKey][name] = entry,
