@@ -414,10 +414,10 @@ func newServiceLogWriters(names []string) (stdout, stderr map[string]*serviceLog
 		color := serviceLogPalette[i%len(serviceLogPalette)]
 		style := lipgloss.NewStyle().Foreground(color).Bold(true)
 		errStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
-		padded := name + strings.Repeat(" ", maxLen-len(name))
-		prefix := style.Render("["+padded+"]") + " "
+		padding := strings.Repeat(" ", maxLen-len(name)+1)
+		prefix := style.Render("["+name+"]") + padding
 		stdout[name] = &serviceLogWriter{mu: mu, dest: os.Stdout, prefix: prefix}
-		stderr[name] = &serviceLogWriter{mu: mu, dest: os.Stderr, prefix: errStyle.Render("["+padded+"]") + " "}
+		stderr[name] = &serviceLogWriter{mu: mu, dest: os.Stderr, prefix: errStyle.Render("["+name+"]") + padding}
 	}
 	return stdout, stderr
 }
