@@ -427,8 +427,8 @@ func (w *serviceLogWriter) Write(p []byte) {
 		if b == '\n' {
 			w.mu.Lock()
 			fmt.Fprintln(w.dest, w.prefix+w.buf.String())
-			w.mu.Unlock()
 			w.buf.Reset()
+			w.mu.Unlock()
 		} else {
 			w.buf.WriteByte(b)
 		}
@@ -436,10 +436,10 @@ func (w *serviceLogWriter) Write(p []byte) {
 }
 
 func (w *serviceLogWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.buf.Len() > 0 {
-		w.mu.Lock()
 		fmt.Fprintln(w.dest, w.prefix+w.buf.String())
-		w.mu.Unlock()
 		w.buf.Reset()
 	}
 }
