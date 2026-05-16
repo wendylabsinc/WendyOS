@@ -68,6 +68,93 @@ print_found_message() {
   } >&2
 }
 
+resolve_path() {
+  local path="$1"
+  local path_dir
+  local path_name
+
+  path_dir="$(cd -P "$(dirname "$path")" >/dev/null 2>&1 && pwd -P)" || return 1
+  path_name="$(basename "$path")"
+
+  printf '%s/%s' "$path_dir" "$path_name"
+}
+
+resolve_wrapper_path() {
+  local source_path="${BASH_SOURCE[0]}"
+  local path_entry
+  local candidate
+
+  if [[ "$source_path" == */* ]]; then
+    resolve_path "$source_path"
+    return
+  fi
+
+  local old_ifs="$IFS"
+  IFS=':'
+  for path_entry in ${PATH:-}; do
+    candidate="${path_entry:-.}/$source_path"
+    if [[ -f "$candidate" && -x "$candidate" ]]; then
+      IFS="$old_ifs"
+      resolve_path "$candidate"
+      return
+    fi
+  done
+  IFS="$old_ifs"
+
+  return 1
+}
+
+path_without_wrapper() {
+  local wrapper_path="$1"
+  local path_entry
+  local candidate
+  local filtered_path=""
+
+  local old_ifs="$IFS"
+  IFS=':'
+  for path_entry in ${PATH:-}; do
+    candidate="${path_entry:-.}/wendy"
+    if [[ -n "$wrapper_path" && -e "$candidate" && "$candidate" -ef "$wrapper_path" ]]; then
+      continue
+    fi
+
+    if [[ -z "$filtered_path" ]]; then
+      filtered_path="$path_entry"
+    else
+      filtered_path="$filtered_path:$path_entry"
+    fi
+  done
+  IFS="$old_ifs"
+
+  printf '%s' "$filtered_path"
+}
+
+find_installed_wendy() {
+  local path_entry
+  local candidate
+  local resolved_candidate
+
+  local old_ifs="$IFS"
+  IFS=':'
+  for path_entry in ${PATH:-}; do
+    candidate="${path_entry:-.}/wendy"
+    if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
+      continue
+    fi
+
+    IFS="$old_ifs"
+    resolved_candidate="$(resolve_path "$candidate")" || resolved_candidate="$candidate"
+    printf '%s' "$resolved_candidate"
+    return 0
+  done
+  IFS="$old_ifs"
+
+  return 1
+}
+
+wrapper_path="$(resolve_wrapper_path)" || wrapper_path=""
+fallback_path="$(path_without_wrapper "$wrapper_path")"
+
 dir="$(pwd -P)"
 
 while true; do
@@ -91,5 +178,10 @@ while true; do
   dir="$parent"
 done
 
-echo "wendy: could not find go/bin/wendy above $(pwd -P)" >&2
+if installed_wendy="$(PATH="$fallback_path" find_installed_wendy)"; then
+  export PATH="$fallback_path"
+  exec "$installed_wendy" "$@"
+fi
+
+echo "wendy: could not find development wendy above $(pwd -P) or installed wendy on PATH" >&2
 exit 127

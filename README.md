@@ -74,6 +74,9 @@ wendy run
 wendy discover --json
 ```
 
+Outside of a `wendy-agent` checkout, the wrapper falls back to the next
+installed `wendy` found on your `PATH`.
+
 You can still run the agent directly while developing it:
 
 ```sh
