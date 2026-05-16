@@ -14,18 +14,24 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/internal/agent/gpgverify"
+	"github.com/wendylabsinc/wendy/internal/shared/releasekeys"
 	agentpbv2 "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2"
 )
 
 type AgentUpdateService struct {
 	agentpbv2.UnimplementedWendyAgentUpdateServiceServer
-	logger     *zap.Logger
-	updateMu   sync.Mutex
-	isUpdating bool
+	logger       *zap.Logger
+	updateMu     sync.Mutex
+	isUpdating   bool
+	gpgPublicKey []byte
 }
 
 func NewAgentUpdateService(logger *zap.Logger) *AgentUpdateService {
-	return &AgentUpdateService{logger: logger}
+	return &AgentUpdateService{
+		logger:       logger,
+		gpgPublicKey: releasekeys.WendyReleasesPublicKey,
+	}
 }
 
 func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpbv2.UpdateAgentRequest, agentpbv2.UpdateAgentResponse]) error {
@@ -65,11 +71,23 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 
 		if ctrl := msg.GetControl(); ctrl != nil {
 			if ctrl.GetUpdate() != nil {
+				updateCmd := ctrl.GetUpdate()
 				computedHash := hex.EncodeToString(hasher.Sum(nil))
-				expectedHash := ctrl.GetUpdate().GetSha256()
+				expectedHash := updateCmd.GetSha256()
 				if expectedHash != "" && computedHash != expectedHash {
 					return status.Errorf(codes.DataLoss,
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
+				}
+
+				if updateCmd.GetSkipGpgVerify() {
+					s.logger.Warn("GPG verification skipped (developer mode)")
+				} else {
+					if len(updateCmd.GetGpgSignature()) == 0 {
+						return status.Error(codes.PermissionDenied, "update rejected: GPG signature is required")
+					}
+					if err := gpgverify.VerifyBinary(binaryData, updateCmd.GetGpgSignature(), s.gpgPublicKey); err != nil {
+						return status.Errorf(codes.PermissionDenied, "update rejected: %v", err)
+					}
 				}
 
 				execPath, err := os.Executable()
