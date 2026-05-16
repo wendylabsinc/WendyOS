@@ -19,6 +19,10 @@ import (
 // ML-DSA (post-quantum) signed certificates are handled via a custom VerifyPeerCertificate
 // callback because Go's crypto/x509 does not natively support ML-DSA signature verification.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
+	if chainPEM == "" {
+		return nil, fmt.Errorf("chainPEM is required for client certificate verification")
+	}
+
 	// Only include the leaf cert in the TLS certificate — not the chain.
 	// Go's TLS library calls x509.ParseCertificate on every cert sent in the
 	// handshake, and ML-DSA chain certs (from pki-core) cause parse failures
