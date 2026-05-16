@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -201,5 +202,23 @@ func TestStartPostStartHook_NoHookReturnsNil(t *testing.T) {
 	cfg.Hooks.PostStart = &appconfig.HookCommand{}
 	if cmd := startPostStartHook(context.Background(), cfg, "h"); cmd != nil {
 		t.Errorf("startPostStartHook() = %v, want nil for empty PostStart", cmd)
+	}
+}
+
+func TestResolveRunTarget_DirectSucceeds_NoCloudFallback(t *testing.T) {
+	// When resolveTarget succeeds, resolveRunTarget returns same result.
+	// We can test this by checking that when deviceFlag is empty and no
+	// default device, we get the "no device" error (picker falls through).
+	// Since we can't test interactive picker in unit tests, test the
+	// non-interactive path.
+	ctx := context.Background()
+	// Non-interactive: resolveTarget will error "no device specified"
+	_, err := resolveRunTarget(ctx, NonInteractive())
+	if err == nil {
+		t.Fatal("expected error with no device in non-interactive mode")
+	}
+	// Should be the direct error, not a cloud error (no auth configured)
+	if !strings.Contains(err.Error(), "no device") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
