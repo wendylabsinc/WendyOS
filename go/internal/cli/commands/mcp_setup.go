@@ -9,6 +9,7 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func newMCPSetupCmd() *cobra.Command {
@@ -83,6 +84,15 @@ func setupMCPForAllTools() []mcpSetupResult {
 			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath})
+		}
+	}
+
+	// Codex (~/.codex/config.yaml)
+	if codexPath := codexConfigPath(); codexPath != "" {
+		if err := addMCPToYAMLConfig(codexPath, "mcpServers", "wendy", entry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath})
 		}
 	}
 
@@ -178,6 +188,54 @@ func windsurfConfigPath() string {
 	}
 	if _, err := exec.LookPath("windsurf"); err == nil {
 		return filepath.Join(dir, "mcp_config.json")
+	}
+	return ""
+}
+
+// addMCPToYAMLConfig reads a YAML config file, sets cfg[topKey][name] = entry,
+// and writes it back. Creates the file if it does not exist.
+func addMCPToYAMLConfig(path, topKey, name string, entry any) error {
+	var cfg map[string]any
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	top, _ := cfg[topKey].(map[string]any)
+	if top == nil {
+		top = map[string]any{}
+	}
+	top[name] = entry
+	cfg[topKey] = top
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+// codexConfigPath returns ~/.codex/config.yaml if Codex is installed.
+func codexConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".codex")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "config.yaml")
+	}
+	if _, err := exec.LookPath("codex"); err == nil {
+		return filepath.Join(dir, "config.yaml")
 	}
 	return ""
 }
