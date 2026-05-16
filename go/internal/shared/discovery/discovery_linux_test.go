@@ -3,7 +3,11 @@
 package discovery
 
 import (
+	"net"
 	"testing"
+
+	"github.com/hashicorp/mdns"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
 // ── avahiUnescape ───────────────────────────────────────────────────
@@ -156,6 +160,91 @@ func TestParseAvahiResolveLine(t *testing.T) {
 				t.Fatal("IsWendyDevice = false, want true")
 			}
 		})
+	}
+}
+
+// ── lanDeviceFromMDNSEntry ──────────────────────────────────────────
+
+func TestLANDeviceFromMDNSEntrySetsMTLS(t *testing.T) {
+	entry := &mdns.ServiceEntry{
+		Name:       "wendyos-prov._wendyos._udp.local.",
+		Host:       "wendyos-prov.local.",
+		AddrV4:     net.ParseIP("192.168.1.20"),
+		Port:       50052,
+		InfoFields: []string{"wendyosdevice=prov-uuid", "tls=true"},
+	}
+
+	dev, ok := lanDeviceFromMDNSEntry(entry, nil)
+	if !ok {
+		t.Fatal("lanDeviceFromMDNSEntry returned false")
+	}
+	if !dev.IsMTLS {
+		t.Fatal("IsMTLS = false, want true for tls=true TXT record")
+	}
+	if dev.ID != "prov-uuid" {
+		t.Fatalf("ID = %q, want %q", dev.ID, "prov-uuid")
+	}
+	if dev.IPAddress != "192.168.1.20" {
+		t.Fatalf("IPAddress = %q, want %q", dev.IPAddress, "192.168.1.20")
+	}
+	if dev.Port != 50052 {
+		t.Fatalf("Port = %d, want %d", dev.Port, 50052)
+	}
+	if dev.InterfaceType != string(models.InterfaceLAN) {
+		t.Fatalf("InterfaceType = %q, want %q", dev.InterfaceType, models.InterfaceLAN)
+	}
+	if !dev.IsWendyDevice {
+		t.Fatal("IsWendyDevice = false, want true")
+	}
+}
+
+func TestLANDeviceFromMDNSEntryNoMTLSWithoutTLS(t *testing.T) {
+	entry := &mdns.ServiceEntry{
+		Name:       "wendyos-device._wendyos._udp.local.",
+		Host:       "wendyos-device.local.",
+		AddrV4:     net.ParseIP("192.168.1.10"),
+		Port:       50051,
+		InfoFields: []string{"wendyosdevice=some-uuid"},
+	}
+
+	dev, ok := lanDeviceFromMDNSEntry(entry, nil)
+	if !ok {
+		t.Fatal("lanDeviceFromMDNSEntry returned false")
+	}
+	if dev.IsMTLS {
+		t.Fatal("IsMTLS = true, want false when tls TXT record is absent")
+	}
+}
+
+func TestLANDeviceFromMDNSEntryAddsIPv6LinkLocalZone(t *testing.T) {
+	iface := &net.Interface{Name: "usb0"}
+	entry := &mdns.ServiceEntry{
+		Name:   "wendyos-device._wendyos._udp.local.",
+		Host:   "wendyos-device.local.",
+		AddrV6: net.ParseIP("fe80::1"),
+		Port:   50051,
+	}
+
+	dev, ok := lanDeviceFromMDNSEntry(entry, iface)
+	if !ok {
+		t.Fatal("lanDeviceFromMDNSEntry returned false")
+	}
+	want := "fe80::1%usb0"
+	if dev.IPAddress != want {
+		t.Fatalf("IPAddress = %q, want %q", dev.IPAddress, want)
+	}
+}
+
+func TestLANDeviceFromMDNSEntryFiltersWrongService(t *testing.T) {
+	entry := &mdns.ServiceEntry{
+		Name: "phone._remotepairing._tcp.local.",
+		Host: "phone.local.",
+		Port: 1234,
+	}
+
+	_, ok := lanDeviceFromMDNSEntry(entry, nil)
+	if ok {
+		t.Fatal("lanDeviceFromMDNSEntry returned true for wrong service type")
 	}
 }
 
