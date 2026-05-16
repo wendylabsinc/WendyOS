@@ -175,9 +175,12 @@ func unmountDisk(devPath string) error {
 
 func unmountLsblkDevice(dev lsblkDevice) error {
 	if dev.Mountpoint != "" {
-		partPath := "/dev/" + dev.Name
-		if out, err := umountCmd(partPath); err != nil {
-			return fmt.Errorf("unmounting %s: %w\n%s", partPath, err, out)
+		// Unmount by mountpoint rather than device path so that device-mapper
+		// entries (e.g. mapper/data → /dev/mapper/data) and dm-* nodes are
+		// handled correctly.  The mountpoint is always the right argument to
+		// pass to umount when it is known.
+		if out, err := umountCmd(dev.Mountpoint); err != nil {
+			return fmt.Errorf("unmounting %s: %w\n%s", dev.Mountpoint, err, out)
 		}
 	}
 	// Recurse into children for defence-in-depth: lsblk without -l returns

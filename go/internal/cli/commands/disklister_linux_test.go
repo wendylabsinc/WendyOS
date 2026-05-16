@@ -239,30 +239,32 @@ func TestUnmountLsblkDeviceRecursesIntoChildren(t *testing.T) {
 		t.Fatal("expected an error (mock umountCmd always fails), got nil — recursive unmount may not have been attempted")
 	}
 
-	// Verify that /dev/sdb1 was attempted.
-	if !strings.Contains(err.Error(), "/dev/sdb1") {
-		t.Fatalf("error %q does not mention /dev/sdb1 — recursive unmount of the first child may not be working", err.Error())
+	// Verify that the first child's mountpoint (/boot/efi) was attempted.
+	// unmountLsblkDevice now unmounts by mountpoint rather than device path.
+	if !strings.Contains(err.Error(), "/boot/efi") {
+		t.Fatalf("error %q does not mention /boot/efi — recursive unmount of the first child may not be working", err.Error())
 	}
 
-	// Verify that /dev/sdb2 was also attempted: unmountLsblkDevice must
-	// continue through ALL siblings even after the first failure.
+	// Verify that /media/user/data (sdb2's mountpoint) was also attempted:
+	// unmountLsblkDevice must continue through ALL siblings even after the
+	// first failure.
 	foundSdb2 := false
 	for _, p := range attempted {
-		if p == "/dev/sdb2" {
+		if p == "/media/user/data" {
 			foundSdb2 = true
 			break
 		}
 	}
 	if !foundSdb2 {
-		t.Fatalf("unmount was not attempted for /dev/sdb2 (attempted: %v) — recursion stopped after first failure", attempted)
+		t.Fatalf("unmount was not attempted for /media/user/data (attempted: %v) — recursion stopped after first failure", attempted)
 	}
 }
 
-// TestUnmountDiskUsesLFlag verifies that unmountDisk passes the -l flag to
-// lsblk so partitions appear as flat top-level entries.  A mock lsblkCmd
-// captures the device path argument and returns a minimal JSON payload; a mock
-// umountCmd records which partitions were unmounted.
-func TestUnmountDiskUsesLFlag(t *testing.T) {
+// TestUnmountDiskCallsLsblkCmd verifies that unmountDisk calls the injected
+// lsblkCmd with the target device path and then unmounts the partitions
+// returned in the JSON payload via umountCmd.  The -l flag coverage (flat
+// output mode) is verified separately by TestLsblkArgsIncludeFlatFlag.
+func TestUnmountDiskCallsLsblkCmd(t *testing.T) {
 	const fakeJSON = `{
 		"blockdevices": [
 			{"name": "sdb",  "mountpoint": null},
@@ -271,12 +273,10 @@ func TestUnmountDiskUsesLFlag(t *testing.T) {
 		]
 	}`
 
-	// Capture the raw command arguments so we can assert -l is present.
+	// Capture the device path forwarded to lsblkCmd.
 	var capturedArgs []string
 	origLsblk := lsblkCmd
 	lsblkCmd = func(devPath string) ([]byte, error) {
-		// Record only the devPath; the flag check is done via the real
-		// implementation's call site, so here we just verify the path forwarded.
 		capturedArgs = append(capturedArgs, devPath)
 		return []byte(fakeJSON), nil
 	}
@@ -299,8 +299,8 @@ func TestUnmountDiskUsesLFlag(t *testing.T) {
 		t.Fatalf("lsblkCmd called with %v, want [\"/dev/sdb\"]", capturedArgs)
 	}
 
-	// Both mounted partitions must have been unmounted.
-	wantUnmounted := map[string]bool{"/dev/sdb1": false, "/dev/sdb2": false}
+	// Both mounted partitions must have been unmounted by mountpoint.
+	wantUnmounted := map[string]bool{"/boot/efi": false, "/media/user/data": false}
 	for _, p := range unmounted {
 		if _, ok := wantUnmounted[p]; ok {
 			wantUnmounted[p] = true
@@ -321,8 +321,11 @@ func TestLsblkArgsIncludeFlatFlag(t *testing.T) {
 	args := buildLsblkArgs("/dev/sdb")
 
 	// The first element must be the command name.
-	if len(args) == 0 || args[0] != "lsblk" {
-		t.Fatalf("buildLsblkArgs(%q)[0] = %q, want \"lsblk\"", "/dev/sdb", args[0])
+	if len(args) == 0 {
+		t.Fatal("buildLsblkArgs returned empty slice")
+	}
+	if args[0] != "lsblk" {
+		t.Errorf("buildLsblkArgs(%q)[0] = %q, want \"lsblk\"", "/dev/sdb", args[0])
 	}
 
 	// The device path must be forwarded as the last argument.
