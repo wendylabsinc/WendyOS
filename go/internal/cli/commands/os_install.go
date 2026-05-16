@@ -1345,9 +1345,12 @@ func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceN
 	}
 
 	fmt.Printf("Downloading wendy-agent %s for device...\n", release.TagName)
-	agentBinary, err := downloadAgentBinary(*matched)
+	agentBinary, sigData, err := downloadAgentBinary(*matched)
 	if err != nil {
 		return fmt.Errorf("downloading agent binary: %w", err)
+	}
+	if err := verifyAgentBinary(agentBinary, sigData); err != nil {
+		return fmt.Errorf("GPG verification failed: %w", err)
 	}
 
 	return writeConfigPartition(d, agentBinary, creds, deviceName, provisioningJSON)

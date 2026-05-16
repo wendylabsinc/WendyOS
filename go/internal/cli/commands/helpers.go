@@ -675,16 +675,19 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	}
 
 	fmt.Fprintf(os.Stderr, "Downloading %s...\n", matchedAsset.Name)
-	binaryData, err := downloadAgentBinary(*matchedAsset)
+	binaryData, sigData, err := downloadAgentBinary(*matchedAsset)
 	if err != nil {
 		return fmt.Errorf("downloading binary: %w", err)
+	}
+	if err := verifyAgentBinary(binaryData, sigData); err != nil {
+		return fmt.Errorf("GPG verification failed: %w", err)
 	}
 
 	h := sha256.Sum256(binaryData)
 	sha256Hash := hex.EncodeToString(h[:])
 
 	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
-	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, false)
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers

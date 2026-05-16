@@ -428,16 +428,20 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("no asset for linux/%s in release %s", arch, release.TagName)}
 		}
 
-		binaryData, err := downloadAgentBinary(*releaseAsset)
+		binaryData, sigData, err := downloadAgentBinary(*releaseAsset)
 		if err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("downloading binary: %w", err)}
+		}
+		if err := verifyAgentBinary(binaryData, sigData); err != nil {
+			conn.Close()
+			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("GPG verification failed: %w", err)}
 		}
 
 		h := sha256.Sum256(binaryData)
 		sha256Hash := hex.EncodeToString(h[:])
 
-		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, false); err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}

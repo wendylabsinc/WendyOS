@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,10 +21,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/internal/agent/gpgverify"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/internal/shared/releasekeys"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"github.com/wendylabsinc/wendy/proto/gen/cloudpb"
@@ -1280,22 +1283,22 @@ func fetchAgentRelease(nightly bool) (*githubReleaseFull, error) {
 	return nil, fmt.Errorf("no nightly (prerelease) found")
 }
 
-func downloadAgentBinary(asset githubReleaseAsset) ([]byte, error) {
+func downloadAgentBinary(asset githubReleaseAsset) (binaryData []byte, sigData []byte, err error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
 
 	resp, err := client.Get(asset.BrowserDownloadURL)
 	if err != nil {
-		return nil, fmt.Errorf("downloading asset: %w", err)
+		return nil, nil, fmt.Errorf("downloading asset: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
 	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("opening gzip reader: %w", err)
+		return nil, nil, fmt.Errorf("opening gzip reader: %w", err)
 	}
 	defer gz.Close()
 
@@ -1306,24 +1309,42 @@ func downloadAgentBinary(asset githubReleaseAsset) ([]byte, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("reading tar: %w", err)
+			return nil, nil, fmt.Errorf("reading tar: %w", err)
 		}
-
-		if hdr.Typeflag == tar.TypeReg && strings.HasSuffix(hdr.Name, "wendy-agent") {
-			data, err := io.ReadAll(tr)
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		switch filepath.Base(hdr.Name) {
+		case "wendy-agent":
+			binaryData, err = io.ReadAll(tr)
 			if err != nil {
-				return nil, fmt.Errorf("reading binary from tar: %w", err)
+				return nil, nil, fmt.Errorf("reading binary from tar: %w", err)
 			}
-			return data, nil
+		case "wendy-agent.asc":
+			sigData, err = io.ReadAll(tr)
+			if err != nil {
+				return nil, nil, fmt.Errorf("reading signature from tar: %w", err)
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("wendy-agent binary not found in tarball")
+	if len(binaryData) == 0 {
+		return nil, nil, fmt.Errorf("wendy-agent binary not found in tarball")
+	}
+	return binaryData, sigData, nil
+}
+
+func verifyAgentBinary(binaryData, sigData []byte) error {
+	if len(sigData) == 0 {
+		return fmt.Errorf("no GPG signature found in release archive (wendy-agent.asc missing)")
+	}
+	return gpgverify.VerifyBinary(binaryData, sigData, releasekeys.WendyReleasesPublicKey)
 }
 
 func newDeviceUpdateCmd() *cobra.Command {
 	var binaryPath string
 	var nightly bool
+	var skipVerify bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -1332,6 +1353,10 @@ func newDeviceUpdateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
+			if skipVerify && binaryPath == "" {
+				return fmt.Errorf("--skip-verify requires --binary (only valid for local developer builds)")
+			}
+
 			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth(), SuppressUpdateCheck())
 			if err != nil {
 				return err
@@ -1339,6 +1364,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			defer conn.Close()
 
 			var binaryData []byte
+			var sigData []byte
 
 			if binaryPath != "" {
 				binaryData, err = os.ReadFile(binaryPath)
@@ -1409,9 +1435,12 @@ func newDeviceUpdateCmd() *cobra.Command {
 				if !jsonOutput {
 					fmt.Printf("Downloading %s...\n", matchedAsset.Name)
 				}
-				binaryData, err = downloadAgentBinary(*matchedAsset)
+				binaryData, sigData, err = downloadAgentBinary(*matchedAsset)
 				if err != nil {
 					return fmt.Errorf("downloading binary: %w", err)
+				}
+				if err := verifyAgentBinary(binaryData, sigData); err != nil {
+					return fmt.Errorf("GPG verification failed: %w", err)
 				}
 			}
 
@@ -1424,7 +1453,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				p := tea.NewProgram(s)
 
 				go func() {
-					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify)
 					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 				}()
 
@@ -1440,11 +1469,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else if !jsonOutput {
 				fmt.Println("Uploading agent binary...")
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify); err != nil {
 					return err
 				}
 			} else {
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify); err != nil {
 					return err
 				}
 			}
@@ -1468,6 +1497,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "Path to a local agent binary to upload (skips download)")
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use the latest nightly (prerelease) build")
+	cmd.Flags().BoolVar(&skipVerify, "skip-verify", false, "Skip GPG signature verification (requires --binary, for developer builds only)")
 
 	return cmd
 }
@@ -1527,7 +1557,7 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 	return nil
 }
 
-func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string) error {
+func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string, sigData []byte, skipVerify bool) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {
 		return fmt.Errorf("starting agent update: %w", err)
@@ -1552,13 +1582,15 @@ func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServ
 		}
 	}
 
-	// Send update control command with SHA256.
+	// Send update control command with SHA256 and GPG signature.
 	if err := stream.Send(&agentpb.UpdateAgentRequest{
 		RequestType: &agentpb.UpdateAgentRequest_Control{
 			Control: &agentpb.UpdateAgentRequest_ControlCommand{
 				Command: &agentpb.UpdateAgentRequest_ControlCommand_Update_{
 					Update: &agentpb.UpdateAgentRequest_ControlCommand_Update{
-						Sha256: sha256Hash,
+						Sha256:        sha256Hash,
+						GpgSignature:  sigData,
+						SkipGpgVerify: skipVerify,
 					},
 				},
 			},
