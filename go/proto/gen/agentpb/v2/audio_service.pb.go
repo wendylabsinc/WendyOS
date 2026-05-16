@@ -280,8 +280,6 @@ func (x *SetDefaultAudioDeviceRequest) GetDeviceId() uint32 {
 
 type SetDefaultAudioDeviceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -314,20 +312,6 @@ func (x *SetDefaultAudioDeviceResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SetDefaultAudioDeviceResponse.ProtoReflect.Descriptor instead.
 func (*SetDefaultAudioDeviceResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_audio_service_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *SetDefaultAudioDeviceResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *SetDefaultAudioDeviceResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
 }
 
 type StreamAudioLevelsRequest struct {
@@ -502,12 +486,12 @@ func (x *StreamAudioRequest) GetChannels() uint32 {
 	return 0
 }
 
+// sample_rate and channels are fixed for the lifetime of the stream;
+// they are set in StreamAudioRequest and not repeated here.
 type AudioChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PcmData       []byte                 `protobuf:"bytes,1,opt,name=pcm_data,json=pcmData,proto3" json:"pcm_data,omitempty"`
 	TimestampNs   uint64                 `protobuf:"varint,2,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
-	SampleRate    uint32                 `protobuf:"varint,3,opt,name=sample_rate,json=sampleRate,proto3" json:"sample_rate,omitempty"`
-	Channels      uint32                 `protobuf:"varint,4,opt,name=channels,proto3" json:"channels,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -556,20 +540,6 @@ func (x *AudioChunk) GetTimestampNs() uint64 {
 	return 0
 }
 
-func (x *AudioChunk) GetSampleRate() uint32 {
-	if x != nil {
-		return x.SampleRate
-	}
-	return 0
-}
-
-func (x *AudioChunk) GetChannels() uint32 {
-	if x != nil {
-		return x.Channels
-	}
-	return 0
-}
-
 var File_wendy_agent_services_v2_audio_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_audio_service_proto_rawDesc = "" +
@@ -589,11 +559,8 @@ const file_wendy_agent_services_v2_audio_service_proto_rawDesc = "" +
 	"\x18ListAudioDevicesResponse\x12>\n" +
 	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v2.AudioDeviceR\adevices\";\n" +
 	"\x1cSetDefaultAudioDeviceRequest\x12\x1b\n" +
-	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\"u\n" +
-	"\x1dSetDefaultAudioDeviceResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\"]\n" +
+	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\"\x1f\n" +
+	"\x1dSetDefaultAudioDeviceResponse\"]\n" +
 	"\x18StreamAudioLevelsRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12$\n" +
 	"\x0eupdate_rate_hz\x18\x02 \x01(\rR\fupdateRateHz\"e\n" +
@@ -605,14 +572,11 @@ const file_wendy_agent_services_v2_audio_service_proto_rawDesc = "" +
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x1f\n" +
 	"\vsample_rate\x18\x02 \x01(\rR\n" +
 	"sampleRate\x12\x1a\n" +
-	"\bchannels\x18\x03 \x01(\rR\bchannels\"\x87\x01\n" +
+	"\bchannels\x18\x03 \x01(\rR\bchannels\"J\n" +
 	"\n" +
 	"AudioChunk\x12\x19\n" +
 	"\bpcm_data\x18\x01 \x01(\fR\apcmData\x12!\n" +
-	"\ftimestamp_ns\x18\x02 \x01(\x04R\vtimestampNs\x12\x1f\n" +
-	"\vsample_rate\x18\x03 \x01(\rR\n" +
-	"sampleRate\x12\x1a\n" +
-	"\bchannels\x18\x04 \x01(\rR\bchannels*o\n" +
+	"\ftimestamp_ns\x18\x02 \x01(\x04R\vtimestampNs*o\n" +
 	"\x0fAudioDeviceType\x12!\n" +
 	"\x1dAUDIO_DEVICE_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIO_DEVICE_TYPE_INPUT\x10\x01\x12\x1c\n" +
@@ -674,7 +638,6 @@ func file_wendy_agent_services_v2_audio_service_proto_init() {
 		return
 	}
 	file_wendy_agent_services_v2_audio_service_proto_msgTypes[1].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_audio_service_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

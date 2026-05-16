@@ -28,6 +28,7 @@ message FileSyncStart {
     FileSyncManifest manifest = 2;
 }
 
+// sha256 is the hash of this chunk's data (not cumulative).
 message FileSyncChunk {
     string path            = 1;
     bytes  data            = 2;
@@ -45,8 +46,6 @@ message FileSyncCommit {
 message FileSyncChmod {
     string path   = 1;
     uint32 mode   = 2;
-    int64  size   = 3;
-    bytes  sha256 = 4;
 }
 
 message FileSyncDelete {

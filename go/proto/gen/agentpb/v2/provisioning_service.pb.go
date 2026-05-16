@@ -178,8 +178,8 @@ func (*NotProvisionedResponse) Descriptor() ([]byte, []int) {
 type ProvisionedResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CloudHost      string                 `protobuf:"bytes,1,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
-	OrganizationId int32                  `protobuf:"varint,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	AssetId        int32                  `protobuf:"varint,3,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	OrganizationId int64                  `protobuf:"varint,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	AssetId        int64                  `protobuf:"varint,3,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -221,14 +221,14 @@ func (x *ProvisionedResponse) GetCloudHost() string {
 	return ""
 }
 
-func (x *ProvisionedResponse) GetOrganizationId() int32 {
+func (x *ProvisionedResponse) GetOrganizationId() int64 {
 	if x != nil {
 		return x.OrganizationId
 	}
 	return 0
 }
 
-func (x *ProvisionedResponse) GetAssetId() int32 {
+func (x *ProvisionedResponse) GetAssetId() int64 {
 	if x != nil {
 		return x.AssetId
 	}
@@ -237,10 +237,10 @@ func (x *ProvisionedResponse) GetAssetId() int32 {
 
 type StartProvisioningRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId  int32                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	OrganizationId  int64                  `protobuf:"varint,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	EnrollmentToken string                 `protobuf:"bytes,2,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`
 	CloudHost       string                 `protobuf:"bytes,3,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
-	AssetId         int32                  `protobuf:"varint,4,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	AssetId         int64                  `protobuf:"varint,4,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -275,7 +275,7 @@ func (*StartProvisioningRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *StartProvisioningRequest) GetOrganizationId() int32 {
+func (x *StartProvisioningRequest) GetOrganizationId() int64 {
 	if x != nil {
 		return x.OrganizationId
 	}
@@ -296,7 +296,7 @@ func (x *StartProvisioningRequest) GetCloudHost() string {
 	return ""
 }
 
-func (x *StartProvisioningRequest) GetAssetId() int32 {
+func (x *StartProvisioningRequest) GetAssetId() int64 {
 	if x != nil {
 		return x.AssetId
 	}
@@ -353,14 +353,14 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\x13ProvisionedResponse\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\x05R\x0eorganizationId\x12\x19\n" +
-	"\basset_id\x18\x03 \x01(\x05R\aassetId\"\xa8\x01\n" +
+	"\x0forganization_id\x18\x02 \x01(\x03R\x0eorganizationId\x12\x19\n" +
+	"\basset_id\x18\x03 \x01(\x03R\aassetId\"\xa8\x01\n" +
 	"\x18StartProvisioningRequest\x12'\n" +
-	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12)\n" +
+	"\x0forganization_id\x18\x01 \x01(\x03R\x0eorganizationId\x12)\n" +
 	"\x10enrollment_token\x18\x02 \x01(\tR\x0fenrollmentToken\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x03 \x01(\tR\tcloudHost\x12\x19\n" +
-	"\basset_id\x18\x04 \x01(\x05R\aassetId\"\x1b\n" +
+	"\basset_id\x18\x04 \x01(\x03R\aassetId\"\x1b\n" +
 	"\x19StartProvisioningResponse2\x86\x02\n" +
 	"\x18WendyProvisioningService\x12z\n" +
 	"\x11StartProvisioning\x121.wendy.agent.services.v2.StartProvisioningRequest\x1a2.wendy.agent.services.v2.StartProvisioningResponse\x12n\n" +

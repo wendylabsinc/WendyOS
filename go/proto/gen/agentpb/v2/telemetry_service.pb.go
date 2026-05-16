@@ -22,10 +22,69 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Matches OTel SeverityNumber ranges (DEBUG=5–8, INFO=9–12, WARN=13–16, ERROR=17–20, FATAL=21–24).
+type LogSeverity int32
+
+const (
+	LogSeverity_LOG_SEVERITY_UNSPECIFIED LogSeverity = 0
+	LogSeverity_LOG_SEVERITY_DEBUG       LogSeverity = 5
+	LogSeverity_LOG_SEVERITY_INFO        LogSeverity = 9
+	LogSeverity_LOG_SEVERITY_WARN        LogSeverity = 13
+	LogSeverity_LOG_SEVERITY_ERROR       LogSeverity = 17
+	LogSeverity_LOG_SEVERITY_FATAL       LogSeverity = 21
+)
+
+// Enum value maps for LogSeverity.
+var (
+	LogSeverity_name = map[int32]string{
+		0:  "LOG_SEVERITY_UNSPECIFIED",
+		5:  "LOG_SEVERITY_DEBUG",
+		9:  "LOG_SEVERITY_INFO",
+		13: "LOG_SEVERITY_WARN",
+		17: "LOG_SEVERITY_ERROR",
+		21: "LOG_SEVERITY_FATAL",
+	}
+	LogSeverity_value = map[string]int32{
+		"LOG_SEVERITY_UNSPECIFIED": 0,
+		"LOG_SEVERITY_DEBUG":       5,
+		"LOG_SEVERITY_INFO":        9,
+		"LOG_SEVERITY_WARN":        13,
+		"LOG_SEVERITY_ERROR":       17,
+		"LOG_SEVERITY_FATAL":       21,
+	}
+)
+
+func (x LogSeverity) Enum() *LogSeverity {
+	p := new(LogSeverity)
+	*p = x
+	return p
+}
+
+func (x LogSeverity) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LogSeverity) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_agent_services_v2_telemetry_service_proto_enumTypes[0].Descriptor()
+}
+
+func (LogSeverity) Type() protoreflect.EnumType {
+	return &file_wendy_agent_services_v2_telemetry_service_proto_enumTypes[0]
+}
+
+func (x LogSeverity) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LogSeverity.Descriptor instead.
+func (LogSeverity) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_telemetry_service_proto_rawDescGZIP(), []int{0}
+}
+
 type StreamLogsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ServiceName   *string                `protobuf:"bytes,1,opt,name=service_name,json=serviceName,proto3,oneof" json:"service_name,omitempty"`
-	MinSeverity   *int32                 `protobuf:"varint,2,opt,name=min_severity,json=minSeverity,proto3,oneof" json:"min_severity,omitempty"`
+	MinSeverity   *LogSeverity           `protobuf:"varint,2,opt,name=min_severity,json=minSeverity,proto3,enum=wendy.agent.services.v2.LogSeverity,oneof" json:"min_severity,omitempty"`
 	AppName       *string                `protobuf:"bytes,3,opt,name=app_name,json=appName,proto3,oneof" json:"app_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -68,11 +127,11 @@ func (x *StreamLogsRequest) GetServiceName() string {
 	return ""
 }
 
-func (x *StreamLogsRequest) GetMinSeverity() int32 {
+func (x *StreamLogsRequest) GetMinSeverity() LogSeverity {
 	if x != nil && x.MinSeverity != nil {
 		return *x.MinSeverity
 	}
-	return 0
+	return LogSeverity_LOG_SEVERITY_UNSPECIFIED
 }
 
 func (x *StreamLogsRequest) GetAppName() string {
@@ -338,10 +397,10 @@ var File_wendy_agent_services_v2_telemetry_service_proto protoreflect.FileDescri
 
 const file_wendy_agent_services_v2_telemetry_service_proto_rawDesc = "" +
 	"\n" +
-	"/wendy/agent/services/v2/telemetry_service.proto\x12\x17wendy.agent.services.v2\x1a8opentelemetry/proto/collector/logs/v1/logs_service.proto\x1a>opentelemetry/proto/collector/metrics/v1/metrics_service.proto\x1a:opentelemetry/proto/collector/trace/v1/trace_service.proto\"\xb2\x01\n" +
+	"/wendy/agent/services/v2/telemetry_service.proto\x12\x17wendy.agent.services.v2\x1a8opentelemetry/proto/collector/logs/v1/logs_service.proto\x1a>opentelemetry/proto/collector/metrics/v1/metrics_service.proto\x1a:opentelemetry/proto/collector/trace/v1/trace_service.proto\"\xd8\x01\n" +
 	"\x11StreamLogsRequest\x12&\n" +
-	"\fservice_name\x18\x01 \x01(\tH\x00R\vserviceName\x88\x01\x01\x12&\n" +
-	"\fmin_severity\x18\x02 \x01(\x05H\x01R\vminSeverity\x88\x01\x01\x12\x1e\n" +
+	"\fservice_name\x18\x01 \x01(\tH\x00R\vserviceName\x88\x01\x01\x12L\n" +
+	"\fmin_severity\x18\x02 \x01(\x0e2$.wendy.agent.services.v2.LogSeverityH\x01R\vminSeverity\x88\x01\x01\x12\x1e\n" +
 	"\bapp_name\x18\x03 \x01(\tH\x02R\aappName\x88\x01\x01B\x0f\n" +
 	"\r_service_nameB\x0f\n" +
 	"\r_min_severityB\v\n" +
@@ -365,7 +424,14 @@ const file_wendy_agent_services_v2_telemetry_service_proto_rawDesc = "" +
 	"\t_app_nameB\x13\n" +
 	"\x11_span_name_prefix\"q\n" +
 	"\x14StreamTracesResponse\x12Y\n" +
-	"\x06traces\x18\x01 \x01(\v2A.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequestR\x06traces2\xe1\x02\n" +
+	"\x06traces\x18\x01 \x01(\v2A.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequestR\x06traces*\xa1\x01\n" +
+	"\vLogSeverity\x12\x1c\n" +
+	"\x18LOG_SEVERITY_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12LOG_SEVERITY_DEBUG\x10\x05\x12\x15\n" +
+	"\x11LOG_SEVERITY_INFO\x10\t\x12\x15\n" +
+	"\x11LOG_SEVERITY_WARN\x10\r\x12\x16\n" +
+	"\x12LOG_SEVERITY_ERROR\x10\x11\x12\x16\n" +
+	"\x12LOG_SEVERITY_FATAL\x10\x152\xe1\x02\n" +
 	"\x15WendyTelemetryService\x12g\n" +
 	"\n" +
 	"StreamLogs\x12*.wendy.agent.services.v2.StreamLogsRequest\x1a+.wendy.agent.services.v2.StreamLogsResponse0\x01\x12p\n" +
@@ -384,33 +450,36 @@ func file_wendy_agent_services_v2_telemetry_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_telemetry_service_proto_rawDescData
 }
 
+var file_wendy_agent_services_v2_telemetry_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_wendy_agent_services_v2_telemetry_service_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_wendy_agent_services_v2_telemetry_service_proto_goTypes = []any{
-	(*StreamLogsRequest)(nil),                  // 0: wendy.agent.services.v2.StreamLogsRequest
-	(*StreamLogsResponse)(nil),                 // 1: wendy.agent.services.v2.StreamLogsResponse
-	(*StreamMetricsRequest)(nil),               // 2: wendy.agent.services.v2.StreamMetricsRequest
-	(*StreamMetricsResponse)(nil),              // 3: wendy.agent.services.v2.StreamMetricsResponse
-	(*StreamTracesRequest)(nil),                // 4: wendy.agent.services.v2.StreamTracesRequest
-	(*StreamTracesResponse)(nil),               // 5: wendy.agent.services.v2.StreamTracesResponse
-	(*otelpb.ExportLogsServiceRequest)(nil),    // 6: opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
-	(*otelpb.ExportMetricsServiceRequest)(nil), // 7: opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest
-	(*otelpb.ExportTraceServiceRequest)(nil),   // 8: opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
+	(LogSeverity)(0),                           // 0: wendy.agent.services.v2.LogSeverity
+	(*StreamLogsRequest)(nil),                  // 1: wendy.agent.services.v2.StreamLogsRequest
+	(*StreamLogsResponse)(nil),                 // 2: wendy.agent.services.v2.StreamLogsResponse
+	(*StreamMetricsRequest)(nil),               // 3: wendy.agent.services.v2.StreamMetricsRequest
+	(*StreamMetricsResponse)(nil),              // 4: wendy.agent.services.v2.StreamMetricsResponse
+	(*StreamTracesRequest)(nil),                // 5: wendy.agent.services.v2.StreamTracesRequest
+	(*StreamTracesResponse)(nil),               // 6: wendy.agent.services.v2.StreamTracesResponse
+	(*otelpb.ExportLogsServiceRequest)(nil),    // 7: opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+	(*otelpb.ExportMetricsServiceRequest)(nil), // 8: opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest
+	(*otelpb.ExportTraceServiceRequest)(nil),   // 9: opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 }
 var file_wendy_agent_services_v2_telemetry_service_proto_depIdxs = []int32{
-	6, // 0: wendy.agent.services.v2.StreamLogsResponse.logs:type_name -> opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
-	7, // 1: wendy.agent.services.v2.StreamMetricsResponse.metrics:type_name -> opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest
-	8, // 2: wendy.agent.services.v2.StreamTracesResponse.traces:type_name -> opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
-	0, // 3: wendy.agent.services.v2.WendyTelemetryService.StreamLogs:input_type -> wendy.agent.services.v2.StreamLogsRequest
-	2, // 4: wendy.agent.services.v2.WendyTelemetryService.StreamMetrics:input_type -> wendy.agent.services.v2.StreamMetricsRequest
-	4, // 5: wendy.agent.services.v2.WendyTelemetryService.StreamTraces:input_type -> wendy.agent.services.v2.StreamTracesRequest
-	1, // 6: wendy.agent.services.v2.WendyTelemetryService.StreamLogs:output_type -> wendy.agent.services.v2.StreamLogsResponse
-	3, // 7: wendy.agent.services.v2.WendyTelemetryService.StreamMetrics:output_type -> wendy.agent.services.v2.StreamMetricsResponse
-	5, // 8: wendy.agent.services.v2.WendyTelemetryService.StreamTraces:output_type -> wendy.agent.services.v2.StreamTracesResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	0, // 0: wendy.agent.services.v2.StreamLogsRequest.min_severity:type_name -> wendy.agent.services.v2.LogSeverity
+	7, // 1: wendy.agent.services.v2.StreamLogsResponse.logs:type_name -> opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+	8, // 2: wendy.agent.services.v2.StreamMetricsResponse.metrics:type_name -> opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest
+	9, // 3: wendy.agent.services.v2.StreamTracesResponse.traces:type_name -> opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
+	1, // 4: wendy.agent.services.v2.WendyTelemetryService.StreamLogs:input_type -> wendy.agent.services.v2.StreamLogsRequest
+	3, // 5: wendy.agent.services.v2.WendyTelemetryService.StreamMetrics:input_type -> wendy.agent.services.v2.StreamMetricsRequest
+	5, // 6: wendy.agent.services.v2.WendyTelemetryService.StreamTraces:input_type -> wendy.agent.services.v2.StreamTracesRequest
+	2, // 7: wendy.agent.services.v2.WendyTelemetryService.StreamLogs:output_type -> wendy.agent.services.v2.StreamLogsResponse
+	4, // 8: wendy.agent.services.v2.WendyTelemetryService.StreamMetrics:output_type -> wendy.agent.services.v2.StreamMetricsResponse
+	6, // 9: wendy.agent.services.v2.WendyTelemetryService.StreamTraces:output_type -> wendy.agent.services.v2.StreamTracesResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_telemetry_service_proto_init() }
@@ -426,13 +495,14 @@ func file_wendy_agent_services_v2_telemetry_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_telemetry_service_proto_rawDesc), len(file_wendy_agent_services_v2_telemetry_service_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_wendy_agent_services_v2_telemetry_service_proto_goTypes,
 		DependencyIndexes: file_wendy_agent_services_v2_telemetry_service_proto_depIdxs,
+		EnumInfos:         file_wendy_agent_services_v2_telemetry_service_proto_enumTypes,
 		MessageInfos:      file_wendy_agent_services_v2_telemetry_service_proto_msgTypes,
 	}.Build()
 	File_wendy_agent_services_v2_telemetry_service_proto = out.File

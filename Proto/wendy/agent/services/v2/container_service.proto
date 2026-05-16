@@ -12,11 +12,12 @@ service WendyContainerService {
     rpc ListContainers(ListContainersRequest) returns (stream ListContainersResponse);
     rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
     rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
-    rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
+    rpc ListContainerStats(ListContainerStatsRequest) returns (stream ListContainerStatsResponse);
 }
 
 message StartContainerRequest {
     string app_name = 1;
+    optional RestartPolicy restart_policy = 2;
 }
 
 message AttachContainerRequest {
@@ -31,12 +32,17 @@ message ContainerStreamResponse {
         Started started = 1;
         ConsoleOutput stdout_output = 2;
         ConsoleOutput stderr_output = 3;
+        Exited exited = 4;
     }
 
     message Started {}
 
     message ConsoleOutput {
         bytes data = 1;
+    }
+
+    message Exited {
+        int32 exit_code = 1;
     }
 }
 
@@ -89,5 +95,5 @@ message ContainerStats {
 message ListContainerStatsRequest {}
 
 message ListContainerStatsResponse {
-    repeated ContainerStats stats = 1;
+    ContainerStats stats = 1;
 }

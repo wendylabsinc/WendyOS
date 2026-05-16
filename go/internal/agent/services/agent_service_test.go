@@ -54,6 +54,15 @@ func (m *mockNetworkManager) ReorderKnownWiFiNetworks(_ context.Context, _ []str
 func (m *mockNetworkManager) ForgetWiFiNetwork(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockNetworkManager) ForgetWiFiNetworkByUUID(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockNetworkManager) SetWiFiNetworkPriorityByUUID(_ context.Context, _ string, _ int32) error {
+	return nil
+}
+func (m *mockNetworkManager) ReorderKnownWiFiNetworksByUUID(_ context.Context, _ []string) error {
+	return nil
+}
 
 type mockHardwareDiscoverer struct {
 	caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability

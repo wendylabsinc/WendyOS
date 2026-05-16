@@ -36,8 +36,8 @@ func (s *ProvisioningServiceV2) IsProvisioned(ctx context.Context, _ *agentpbv2.
 		ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{
 			Provisioned: &agentpbv2.ProvisionedResponse{
 				CloudHost:      p.CloudHost,
-				OrganizationId: p.OrganizationId,
-				AssetId:        p.AssetId,
+				OrganizationId: int64(p.OrganizationId),
+				AssetId:        int64(p.AssetId),
 			},
 		},
 	}, nil
@@ -45,10 +45,10 @@ func (s *ProvisioningServiceV2) IsProvisioned(ctx context.Context, _ *agentpbv2.
 
 func (s *ProvisioningServiceV2) StartProvisioning(ctx context.Context, req *agentpbv2.StartProvisioningRequest) (*agentpbv2.StartProvisioningResponse, error) {
 	if _, err := s.v1.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
-		OrganizationId:  req.OrganizationId,
+		OrganizationId:  int32(req.OrganizationId),
 		EnrollmentToken: req.EnrollmentToken,
 		CloudHost:       req.CloudHost,
-		AssetId:         req.AssetId,
+		AssetId:         int32(req.AssetId),
 	}); err != nil {
 		return nil, err
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2"
@@ -46,14 +48,18 @@ func (s *AudioServiceV2) ListAudioDevices(ctx context.Context, req *agentpbv2.Li
 }
 
 func (s *AudioServiceV2) SetDefaultAudioDevice(ctx context.Context, req *agentpbv2.SetDefaultAudioDeviceRequest) (*agentpbv2.SetDefaultAudioDeviceResponse, error) {
-	v1resp, err := s.v1.SetDefaultAudioDevice(ctx, &agentpb.SetDefaultAudioDeviceRequest{DeviceId: req.DeviceId})
+	resp, err := s.v1.SetDefaultAudioDevice(ctx, &agentpb.SetDefaultAudioDeviceRequest{DeviceId: req.DeviceId})
 	if err != nil {
 		return nil, err
 	}
-	return &agentpbv2.SetDefaultAudioDeviceResponse{
-		Success:      v1resp.Success,
-		ErrorMessage: v1resp.ErrorMessage,
-	}, nil
+	if !resp.Success {
+		msg := "set default audio device failed"
+		if resp.ErrorMessage != nil {
+			msg = *resp.ErrorMessage
+		}
+		return nil, status.Error(codes.Internal, msg)
+	}
+	return &agentpbv2.SetDefaultAudioDeviceResponse{}, nil
 }
 
 func (s *AudioServiceV2) StreamAudioLevels(req *agentpbv2.StreamAudioLevelsRequest, stream grpc.ServerStreamingServer[agentpbv2.AudioLevelUpdate]) error {
@@ -96,8 +102,6 @@ func (a *audioChunkStreamAdapter) Send(c *agentpb.AudioChunk) error {
 	return a.v2stream.Send(&agentpbv2.AudioChunk{
 		PcmData:     c.PcmData,
 		TimestampNs: c.TimestampNs,
-		SampleRate:  c.SampleRate,
-		Channels:    c.Channels,
 	})
 }
 func (a *audioChunkStreamAdapter) SetHeader(md metadata.MD) error  { return a.v2stream.SetHeader(md) }

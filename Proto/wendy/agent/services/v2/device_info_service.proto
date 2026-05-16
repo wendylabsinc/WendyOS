@@ -21,6 +21,7 @@ message GetDeviceInfoResponse {
     optional string gpu_vendor = 9;
     optional string jetpack_version = 10;
     optional string cuda_version = 11;
+    optional string storage_medium = 12;
 }
 
 message ListHardwareCapabilitiesRequest {

@@ -16,9 +16,14 @@ type NetworkManager interface {
 	GetWiFiStatus(ctx context.Context) (connected bool, ssid string, err error)
 	DisconnectWiFi(ctx context.Context) error
 	ListKnownWiFiNetworks(ctx context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error)
+	// SSID-based mutations — used by v1 API.
 	SetWiFiNetworkPriority(ctx context.Context, ssid string, priority int32) error
 	ReorderKnownWiFiNetworks(ctx context.Context, orderedSSIDs []string) error
 	ForgetWiFiNetwork(ctx context.Context, ssid string) error
+	// UUID-based mutations — used by v2 API; bypass the SSID→UUID lookup.
+	SetWiFiNetworkPriorityByUUID(ctx context.Context, uuid string, priority int32) error
+	ReorderKnownWiFiNetworksByUUID(ctx context.Context, orderedUUIDs []string) error
+	ForgetWiFiNetworkByUUID(ctx context.Context, uuid string) error
 }
 
 // HardwareDiscoverer discovers hardware capabilities by probing sysfs, /dev, /proc, etc.

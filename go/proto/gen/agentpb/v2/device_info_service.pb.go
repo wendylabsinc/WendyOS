@@ -70,6 +70,7 @@ type GetDeviceInfoResponse struct {
 	GpuVendor       *string                `protobuf:"bytes,9,opt,name=gpu_vendor,json=gpuVendor,proto3,oneof" json:"gpu_vendor,omitempty"`
 	JetpackVersion  *string                `protobuf:"bytes,10,opt,name=jetpack_version,json=jetpackVersion,proto3,oneof" json:"jetpack_version,omitempty"`
 	CudaVersion     *string                `protobuf:"bytes,11,opt,name=cuda_version,json=cudaVersion,proto3,oneof" json:"cuda_version,omitempty"`
+	StorageMedium   *string                `protobuf:"bytes,12,opt,name=storage_medium,json=storageMedium,proto3,oneof" json:"storage_medium,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -177,6 +178,13 @@ func (x *GetDeviceInfoResponse) GetJetpackVersion() string {
 func (x *GetDeviceInfoResponse) GetCudaVersion() string {
 	if x != nil && x.CudaVersion != nil {
 		return *x.CudaVersion
+	}
+	return ""
+}
+
+func (x *GetDeviceInfoResponse) GetStorageMedium() string {
+	if x != nil && x.StorageMedium != nil {
+		return *x.StorageMedium
 	}
 	return ""
 }
@@ -342,7 +350,7 @@ var File_wendy_agent_services_v2_device_info_service_proto protoreflect.FileDesc
 const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"\n" +
 	"1wendy/agent/services/v2/device_info_service.proto\x12\x17wendy.agent.services.v2\"\x16\n" +
-	"\x14GetDeviceInfoRequest\"\x80\x04\n" +
+	"\x14GetDeviceInfoRequest\"\xbf\x04\n" +
 	"\x15GetDeviceInfoResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -361,7 +369,8 @@ const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"gpu_vendor\x18\t \x01(\tH\x04R\tgpuVendor\x88\x01\x01\x12,\n" +
 	"\x0fjetpack_version\x18\n" +
 	" \x01(\tH\x05R\x0ejetpackVersion\x88\x01\x01\x12&\n" +
-	"\fcuda_version\x18\v \x01(\tH\x06R\vcudaVersion\x88\x01\x01B\r\n" +
+	"\fcuda_version\x18\v \x01(\tH\x06R\vcudaVersion\x88\x01\x01\x12*\n" +
+	"\x0estorage_medium\x18\f \x01(\tH\aR\rstorageMedium\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -369,7 +378,8 @@ const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"\b_has_gpuB\r\n" +
 	"\v_gpu_vendorB\x12\n" +
 	"\x10_jetpack_versionB\x0f\n" +
-	"\r_cuda_version\"c\n" +
+	"\r_cuda_versionB\x11\n" +
+	"\x0f_storage_medium\"c\n" +
 	"\x1fListHardwareCapabilitiesRequest\x12,\n" +
 	"\x0fcategory_filter\x18\x01 \x01(\tH\x00R\x0ecategoryFilter\x88\x01\x01B\x12\n" +
 	"\x10_category_filter\"\xc7\x03\n" +

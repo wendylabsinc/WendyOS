@@ -25,4 +25,5 @@ message AppContainer {
     string app_version = 2;
     AppRunningState running_state = 3;
     uint32 failure_count = 4;
+    uint32 mcp_port = 5;
 }

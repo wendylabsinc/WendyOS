@@ -35,10 +35,7 @@ message SetDefaultAudioDeviceRequest {
     uint32 device_id = 1;
 }
 
-message SetDefaultAudioDeviceResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message SetDefaultAudioDeviceResponse {}
 
 message StreamAudioLevelsRequest {
     uint32 device_id = 1;
@@ -57,9 +54,9 @@ message StreamAudioRequest {
     uint32 channels = 3;
 }
 
+// sample_rate and channels are fixed for the lifetime of the stream;
+// they are set in StreamAudioRequest and not repeated here.
 message AudioChunk {
     bytes pcm_data = 1;
     uint64 timestamp_ns = 2;
-    uint32 sample_rate = 3;
-    uint32 channels = 4;
 }

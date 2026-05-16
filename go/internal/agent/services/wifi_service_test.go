@@ -74,15 +74,13 @@ func TestWiFiService_ConnectToWiFi(t *testing.T) {
 	client, cleanup := startWiFiServer(t, &mockNetworkManager{})
 	defer cleanup()
 
-	resp, err := client.ConnectToWiFi(context.Background(), &agentpbv2.ConnectToWiFiRequest{
+	password := "secret"
+	_, err := client.ConnectToWiFi(context.Background(), &agentpbv2.ConnectToWiFiRequest{
 		Ssid:     "TestNet",
-		Password: "secret",
+		Password: &password,
 	})
 	if err != nil {
 		t.Fatalf("ConnectToWiFi: %v", err)
-	}
-	if !resp.Success {
-		t.Errorf("success = false; want true")
 	}
 }
 

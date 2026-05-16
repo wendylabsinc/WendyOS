@@ -24,6 +24,7 @@ const (
 type StartContainerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AppName       string                 `protobuf:"bytes,1,opt,name=app_name,json=appName,proto3" json:"app_name,omitempty"`
+	RestartPolicy *RestartPolicy         `protobuf:"bytes,2,opt,name=restart_policy,json=restartPolicy,proto3,oneof" json:"restart_policy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -63,6 +64,13 @@ func (x *StartContainerRequest) GetAppName() string {
 		return x.AppName
 	}
 	return ""
+}
+
+func (x *StartContainerRequest) GetRestartPolicy() *RestartPolicy {
+	if x != nil {
+		return x.RestartPolicy
+	}
+	return nil
 }
 
 type AttachContainerRequest struct {
@@ -154,6 +162,7 @@ type ContainerStreamResponse struct {
 	//	*ContainerStreamResponse_Started_
 	//	*ContainerStreamResponse_StdoutOutput
 	//	*ContainerStreamResponse_StderrOutput
+	//	*ContainerStreamResponse_Exited_
 	ResponseType  isContainerStreamResponse_ResponseType `protobuf_oneof:"response_type"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -223,6 +232,15 @@ func (x *ContainerStreamResponse) GetStderrOutput() *ContainerStreamResponse_Con
 	return nil
 }
 
+func (x *ContainerStreamResponse) GetExited() *ContainerStreamResponse_Exited {
+	if x != nil {
+		if x, ok := x.ResponseType.(*ContainerStreamResponse_Exited_); ok {
+			return x.Exited
+		}
+	}
+	return nil
+}
+
 type isContainerStreamResponse_ResponseType interface {
 	isContainerStreamResponse_ResponseType()
 }
@@ -239,11 +257,17 @@ type ContainerStreamResponse_StderrOutput struct {
 	StderrOutput *ContainerStreamResponse_ConsoleOutput `protobuf:"bytes,3,opt,name=stderr_output,json=stderrOutput,proto3,oneof"`
 }
 
+type ContainerStreamResponse_Exited_ struct {
+	Exited *ContainerStreamResponse_Exited `protobuf:"bytes,4,opt,name=exited,proto3,oneof"`
+}
+
 func (*ContainerStreamResponse_Started_) isContainerStreamResponse_ResponseType() {}
 
 func (*ContainerStreamResponse_StdoutOutput) isContainerStreamResponse_ResponseType() {}
 
 func (*ContainerStreamResponse_StderrOutput) isContainerStreamResponse_ResponseType() {}
+
+func (*ContainerStreamResponse_Exited_) isContainerStreamResponse_ResponseType() {}
 
 type StopContainerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -835,7 +859,7 @@ func (*ListContainerStatsRequest) Descriptor() ([]byte, []int) {
 
 type ListContainerStatsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stats         []*ContainerStats      `protobuf:"bytes,1,rep,name=stats,proto3" json:"stats,omitempty"`
+	Stats         *ContainerStats        `protobuf:"bytes,1,opt,name=stats,proto3" json:"stats,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -870,7 +894,7 @@ func (*ListContainerStatsResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_container_service_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *ListContainerStatsResponse) GetStats() []*ContainerStats {
+func (x *ListContainerStatsResponse) GetStats() *ContainerStats {
 	if x != nil {
 		return x.Stats
 	}
@@ -957,25 +981,74 @@ func (x *ContainerStreamResponse_ConsoleOutput) GetData() []byte {
 	return nil
 }
 
+type ContainerStreamResponse_Exited struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExitCode      int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerStreamResponse_Exited) Reset() {
+	*x = ContainerStreamResponse_Exited{}
+	mi := &file_wendy_agent_services_v2_container_service_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerStreamResponse_Exited) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerStreamResponse_Exited) ProtoMessage() {}
+
+func (x *ContainerStreamResponse_Exited) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_container_service_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerStreamResponse_Exited.ProtoReflect.Descriptor instead.
+func (*ContainerStreamResponse_Exited) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_container_service_proto_rawDescGZIP(), []int{2, 2}
+}
+
+func (x *ContainerStreamResponse_Exited) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
 var File_wendy_agent_services_v2_container_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_container_service_proto_rawDesc = "" +
 	"\n" +
-	"/wendy/agent/services/v2/container_service.proto\x12\x17wendy.agent.services.v2\x1a$wendy/agent/services/v2/shared.proto\"2\n" +
+	"/wendy/agent/services/v2/container_service.proto\x12\x17wendy.agent.services.v2\x1a$wendy/agent/services/v2/shared.proto\"\x99\x01\n" +
 	"\x15StartContainerRequest\x12\x19\n" +
-	"\bapp_name\x18\x01 \x01(\tR\aappName\"f\n" +
+	"\bapp_name\x18\x01 \x01(\tR\aappName\x12R\n" +
+	"\x0erestart_policy\x18\x02 \x01(\v2&.wendy.agent.services.v2.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01B\x11\n" +
+	"\x0f_restart_policy\"f\n" +
 	"\x16AttachContainerRequest\x12\x1b\n" +
 	"\bapp_name\x18\x01 \x01(\tH\x00R\aappName\x12\x1f\n" +
 	"\n" +
 	"stdin_data\x18\x02 \x01(\fH\x00R\tstdinDataB\x0e\n" +
-	"\frequest_type\"\xfe\x02\n" +
+	"\frequest_type\"\xf8\x03\n" +
 	"\x17ContainerStreamResponse\x12T\n" +
 	"\astarted\x18\x01 \x01(\v28.wendy.agent.services.v2.ContainerStreamResponse.StartedH\x00R\astarted\x12e\n" +
 	"\rstdout_output\x18\x02 \x01(\v2>.wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutputH\x00R\fstdoutOutput\x12e\n" +
-	"\rstderr_output\x18\x03 \x01(\v2>.wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutputH\x00R\fstderrOutput\x1a\t\n" +
+	"\rstderr_output\x18\x03 \x01(\v2>.wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutputH\x00R\fstderrOutput\x12Q\n" +
+	"\x06exited\x18\x04 \x01(\v27.wendy.agent.services.v2.ContainerStreamResponse.ExitedH\x00R\x06exited\x1a\t\n" +
 	"\aStarted\x1a#\n" +
 	"\rConsoleOutput\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04dataB\x0f\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x1a%\n" +
+	"\x06Exited\x12\x1b\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCodeB\x0f\n" +
 	"\rresponse_type\"1\n" +
 	"\x14StopContainerRequest\x12\x19\n" +
 	"\bapp_name\x18\x01 \x01(\tR\aappName\"\x17\n" +
@@ -1009,7 +1082,7 @@ const file_wendy_agent_services_v2_container_service_proto_rawDesc = "" +
 	"\rstorage_bytes\x18\x03 \x01(\x03R\fstorageBytes\"\x1b\n" +
 	"\x19ListContainerStatsRequest\"[\n" +
 	"\x1aListContainerStatsResponse\x12=\n" +
-	"\x05stats\x18\x01 \x03(\v2'.wendy.agent.services.v2.ContainerStatsR\x05stats2\xb8\a\n" +
+	"\x05stats\x18\x01 \x01(\v2'.wendy.agent.services.v2.ContainerStatsR\x05stats2\xba\a\n" +
 	"\x15WendyContainerService\x12t\n" +
 	"\x0eStartContainer\x12..wendy.agent.services.v2.StartContainerRequest\x1a0.wendy.agent.services.v2.ContainerStreamResponse0\x01\x12x\n" +
 	"\x0fAttachContainer\x12/.wendy.agent.services.v2.AttachContainerRequest\x1a0.wendy.agent.services.v2.ContainerStreamResponse(\x010\x01\x12n\n" +
@@ -1017,8 +1090,8 @@ const file_wendy_agent_services_v2_container_service_proto_rawDesc = "" +
 	"\x0fDeleteContainer\x12/.wendy.agent.services.v2.DeleteContainerRequest\x1a0.wendy.agent.services.v2.DeleteContainerResponse\x12s\n" +
 	"\x0eListContainers\x12..wendy.agent.services.v2.ListContainersRequest\x1a/.wendy.agent.services.v2.ListContainersResponse0\x01\x12h\n" +
 	"\vListVolumes\x12+.wendy.agent.services.v2.ListVolumesRequest\x1a,.wendy.agent.services.v2.ListVolumesResponse\x12k\n" +
-	"\fRemoveVolume\x12,.wendy.agent.services.v2.RemoveVolumeRequest\x1a-.wendy.agent.services.v2.RemoveVolumeResponse\x12}\n" +
-	"\x12ListContainerStats\x122.wendy.agent.services.v2.ListContainerStatsRequest\x1a3.wendy.agent.services.v2.ListContainerStatsResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\fRemoveVolume\x12,.wendy.agent.services.v2.RemoveVolumeRequest\x1a-.wendy.agent.services.v2.RemoveVolumeResponse\x12\x7f\n" +
+	"\x12ListContainerStats\x122.wendy.agent.services.v2.ListContainerStatsRequest\x1a3.wendy.agent.services.v2.ListContainerStatsResponse0\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_container_service_proto_rawDescOnce sync.Once
@@ -1032,7 +1105,7 @@ func file_wendy_agent_services_v2_container_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_container_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_container_service_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_wendy_agent_services_v2_container_service_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_wendy_agent_services_v2_container_service_proto_goTypes = []any{
 	(*StartContainerRequest)(nil),                 // 0: wendy.agent.services.v2.StartContainerRequest
 	(*AttachContainerRequest)(nil),                // 1: wendy.agent.services.v2.AttachContainerRequest
@@ -1053,36 +1126,40 @@ var file_wendy_agent_services_v2_container_service_proto_goTypes = []any{
 	(*ListContainerStatsResponse)(nil),            // 16: wendy.agent.services.v2.ListContainerStatsResponse
 	(*ContainerStreamResponse_Started)(nil),       // 17: wendy.agent.services.v2.ContainerStreamResponse.Started
 	(*ContainerStreamResponse_ConsoleOutput)(nil), // 18: wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutput
-	(*AppContainer)(nil),                          // 19: wendy.agent.services.v2.AppContainer
+	(*ContainerStreamResponse_Exited)(nil),        // 19: wendy.agent.services.v2.ContainerStreamResponse.Exited
+	(*RestartPolicy)(nil),                         // 20: wendy.agent.services.v2.RestartPolicy
+	(*AppContainer)(nil),                          // 21: wendy.agent.services.v2.AppContainer
 }
 var file_wendy_agent_services_v2_container_service_proto_depIdxs = []int32{
-	17, // 0: wendy.agent.services.v2.ContainerStreamResponse.started:type_name -> wendy.agent.services.v2.ContainerStreamResponse.Started
-	18, // 1: wendy.agent.services.v2.ContainerStreamResponse.stdout_output:type_name -> wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutput
-	18, // 2: wendy.agent.services.v2.ContainerStreamResponse.stderr_output:type_name -> wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutput
-	19, // 3: wendy.agent.services.v2.ListContainersResponse.container:type_name -> wendy.agent.services.v2.AppContainer
-	10, // 4: wendy.agent.services.v2.ListVolumesResponse.volumes:type_name -> wendy.agent.services.v2.VolumeInfo
-	14, // 5: wendy.agent.services.v2.ListContainerStatsResponse.stats:type_name -> wendy.agent.services.v2.ContainerStats
-	0,  // 6: wendy.agent.services.v2.WendyContainerService.StartContainer:input_type -> wendy.agent.services.v2.StartContainerRequest
-	1,  // 7: wendy.agent.services.v2.WendyContainerService.AttachContainer:input_type -> wendy.agent.services.v2.AttachContainerRequest
-	3,  // 8: wendy.agent.services.v2.WendyContainerService.StopContainer:input_type -> wendy.agent.services.v2.StopContainerRequest
-	5,  // 9: wendy.agent.services.v2.WendyContainerService.DeleteContainer:input_type -> wendy.agent.services.v2.DeleteContainerRequest
-	7,  // 10: wendy.agent.services.v2.WendyContainerService.ListContainers:input_type -> wendy.agent.services.v2.ListContainersRequest
-	9,  // 11: wendy.agent.services.v2.WendyContainerService.ListVolumes:input_type -> wendy.agent.services.v2.ListVolumesRequest
-	12, // 12: wendy.agent.services.v2.WendyContainerService.RemoveVolume:input_type -> wendy.agent.services.v2.RemoveVolumeRequest
-	15, // 13: wendy.agent.services.v2.WendyContainerService.ListContainerStats:input_type -> wendy.agent.services.v2.ListContainerStatsRequest
-	2,  // 14: wendy.agent.services.v2.WendyContainerService.StartContainer:output_type -> wendy.agent.services.v2.ContainerStreamResponse
-	2,  // 15: wendy.agent.services.v2.WendyContainerService.AttachContainer:output_type -> wendy.agent.services.v2.ContainerStreamResponse
-	4,  // 16: wendy.agent.services.v2.WendyContainerService.StopContainer:output_type -> wendy.agent.services.v2.StopContainerResponse
-	6,  // 17: wendy.agent.services.v2.WendyContainerService.DeleteContainer:output_type -> wendy.agent.services.v2.DeleteContainerResponse
-	8,  // 18: wendy.agent.services.v2.WendyContainerService.ListContainers:output_type -> wendy.agent.services.v2.ListContainersResponse
-	11, // 19: wendy.agent.services.v2.WendyContainerService.ListVolumes:output_type -> wendy.agent.services.v2.ListVolumesResponse
-	13, // 20: wendy.agent.services.v2.WendyContainerService.RemoveVolume:output_type -> wendy.agent.services.v2.RemoveVolumeResponse
-	16, // 21: wendy.agent.services.v2.WendyContainerService.ListContainerStats:output_type -> wendy.agent.services.v2.ListContainerStatsResponse
-	14, // [14:22] is the sub-list for method output_type
-	6,  // [6:14] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	20, // 0: wendy.agent.services.v2.StartContainerRequest.restart_policy:type_name -> wendy.agent.services.v2.RestartPolicy
+	17, // 1: wendy.agent.services.v2.ContainerStreamResponse.started:type_name -> wendy.agent.services.v2.ContainerStreamResponse.Started
+	18, // 2: wendy.agent.services.v2.ContainerStreamResponse.stdout_output:type_name -> wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutput
+	18, // 3: wendy.agent.services.v2.ContainerStreamResponse.stderr_output:type_name -> wendy.agent.services.v2.ContainerStreamResponse.ConsoleOutput
+	19, // 4: wendy.agent.services.v2.ContainerStreamResponse.exited:type_name -> wendy.agent.services.v2.ContainerStreamResponse.Exited
+	21, // 5: wendy.agent.services.v2.ListContainersResponse.container:type_name -> wendy.agent.services.v2.AppContainer
+	10, // 6: wendy.agent.services.v2.ListVolumesResponse.volumes:type_name -> wendy.agent.services.v2.VolumeInfo
+	14, // 7: wendy.agent.services.v2.ListContainerStatsResponse.stats:type_name -> wendy.agent.services.v2.ContainerStats
+	0,  // 8: wendy.agent.services.v2.WendyContainerService.StartContainer:input_type -> wendy.agent.services.v2.StartContainerRequest
+	1,  // 9: wendy.agent.services.v2.WendyContainerService.AttachContainer:input_type -> wendy.agent.services.v2.AttachContainerRequest
+	3,  // 10: wendy.agent.services.v2.WendyContainerService.StopContainer:input_type -> wendy.agent.services.v2.StopContainerRequest
+	5,  // 11: wendy.agent.services.v2.WendyContainerService.DeleteContainer:input_type -> wendy.agent.services.v2.DeleteContainerRequest
+	7,  // 12: wendy.agent.services.v2.WendyContainerService.ListContainers:input_type -> wendy.agent.services.v2.ListContainersRequest
+	9,  // 13: wendy.agent.services.v2.WendyContainerService.ListVolumes:input_type -> wendy.agent.services.v2.ListVolumesRequest
+	12, // 14: wendy.agent.services.v2.WendyContainerService.RemoveVolume:input_type -> wendy.agent.services.v2.RemoveVolumeRequest
+	15, // 15: wendy.agent.services.v2.WendyContainerService.ListContainerStats:input_type -> wendy.agent.services.v2.ListContainerStatsRequest
+	2,  // 16: wendy.agent.services.v2.WendyContainerService.StartContainer:output_type -> wendy.agent.services.v2.ContainerStreamResponse
+	2,  // 17: wendy.agent.services.v2.WendyContainerService.AttachContainer:output_type -> wendy.agent.services.v2.ContainerStreamResponse
+	4,  // 18: wendy.agent.services.v2.WendyContainerService.StopContainer:output_type -> wendy.agent.services.v2.StopContainerResponse
+	6,  // 19: wendy.agent.services.v2.WendyContainerService.DeleteContainer:output_type -> wendy.agent.services.v2.DeleteContainerResponse
+	8,  // 20: wendy.agent.services.v2.WendyContainerService.ListContainers:output_type -> wendy.agent.services.v2.ListContainersResponse
+	11, // 21: wendy.agent.services.v2.WendyContainerService.ListVolumes:output_type -> wendy.agent.services.v2.ListVolumesResponse
+	13, // 22: wendy.agent.services.v2.WendyContainerService.RemoveVolume:output_type -> wendy.agent.services.v2.RemoveVolumeResponse
+	16, // 23: wendy.agent.services.v2.WendyContainerService.ListContainerStats:output_type -> wendy.agent.services.v2.ListContainerStatsResponse
+	16, // [16:24] is the sub-list for method output_type
+	8,  // [8:16] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_container_service_proto_init() }
@@ -1091,6 +1168,7 @@ func file_wendy_agent_services_v2_container_service_proto_init() {
 		return
 	}
 	file_wendy_agent_services_v2_shared_proto_init()
+	file_wendy_agent_services_v2_container_service_proto_msgTypes[0].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_container_service_proto_msgTypes[1].OneofWrappers = []any{
 		(*AttachContainerRequest_AppName)(nil),
 		(*AttachContainerRequest_StdinData)(nil),
@@ -1099,6 +1177,7 @@ func file_wendy_agent_services_v2_container_service_proto_init() {
 		(*ContainerStreamResponse_Started_)(nil),
 		(*ContainerStreamResponse_StdoutOutput)(nil),
 		(*ContainerStreamResponse_StderrOutput)(nil),
+		(*ContainerStreamResponse_Exited_)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1106,7 +1185,7 @@ func file_wendy_agent_services_v2_container_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_container_service_proto_rawDesc), len(file_wendy_agent_services_v2_container_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

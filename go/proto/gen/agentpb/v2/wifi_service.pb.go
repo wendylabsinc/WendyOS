@@ -165,7 +165,7 @@ func (x *ListWiFiNetworksResponse) GetNetworks() []*ListWiFiNetworksResponse_WiF
 type ConnectToWiFiRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ssid          string                 `protobuf:"bytes,1,opt,name=ssid,proto3" json:"ssid,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	Password      *string                `protobuf:"bytes,2,opt,name=password,proto3,oneof" json:"password,omitempty"`
 	Security      *WiFiSecurityType      `protobuf:"varint,3,opt,name=security,proto3,enum=wendy.agent.services.v2.WiFiSecurityType,oneof" json:"security,omitempty"`
 	Hidden        *bool                  `protobuf:"varint,4,opt,name=hidden,proto3,oneof" json:"hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -210,8 +210,8 @@ func (x *ConnectToWiFiRequest) GetSsid() string {
 }
 
 func (x *ConnectToWiFiRequest) GetPassword() string {
-	if x != nil {
-		return x.Password
+	if x != nil && x.Password != nil {
+		return *x.Password
 	}
 	return ""
 }
@@ -232,8 +232,6 @@ func (x *ConnectToWiFiRequest) GetHidden() bool {
 
 type ConnectToWiFiResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -266,20 +264,6 @@ func (x *ConnectToWiFiResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConnectToWiFiResponse.ProtoReflect.Descriptor instead.
 func (*ConnectToWiFiResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *ConnectToWiFiResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *ConnectToWiFiResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
 }
 
 type GetWiFiStatusRequest struct {
@@ -322,7 +306,6 @@ type GetWiFiStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Connected     bool                   `protobuf:"varint,1,opt,name=connected,proto3" json:"connected,omitempty"`
 	Ssid          *string                `protobuf:"bytes,2,opt,name=ssid,proto3,oneof" json:"ssid,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -371,13 +354,6 @@ func (x *GetWiFiStatusResponse) GetSsid() string {
 	return ""
 }
 
-func (x *GetWiFiStatusResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
-}
-
 type DisconnectWiFiRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -416,8 +392,6 @@ func (*DisconnectWiFiRequest) Descriptor() ([]byte, []int) {
 
 type DisconnectWiFiResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -450,20 +424,6 @@ func (x *DisconnectWiFiResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use DisconnectWiFiResponse.ProtoReflect.Descriptor instead.
 func (*DisconnectWiFiResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *DisconnectWiFiResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *DisconnectWiFiResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
 }
 
 type ListKnownWiFiNetworksRequest struct {
@@ -546,9 +506,10 @@ func (x *ListKnownWiFiNetworksResponse) GetNetworks() []*ListKnownWiFiNetworksRe
 	return nil
 }
 
+// Identifies a network by its NetworkManager connection UUID (from ListKnownWiFiNetworks).
 type SetWiFiNetworkPriorityRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ssid          string                 `protobuf:"bytes,1,opt,name=ssid,proto3" json:"ssid,omitempty"`
+	Uuid          string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	Priority      int32                  `protobuf:"varint,2,opt,name=priority,proto3" json:"priority,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -584,9 +545,9 @@ func (*SetWiFiNetworkPriorityRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *SetWiFiNetworkPriorityRequest) GetSsid() string {
+func (x *SetWiFiNetworkPriorityRequest) GetUuid() string {
 	if x != nil {
-		return x.Ssid
+		return x.Uuid
 	}
 	return ""
 }
@@ -600,8 +561,6 @@ func (x *SetWiFiNetworkPriorityRequest) GetPriority() int32 {
 
 type SetWiFiNetworkPriorityResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -636,23 +595,11 @@ func (*SetWiFiNetworkPriorityResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *SetWiFiNetworkPriorityResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *SetWiFiNetworkPriorityResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
-}
-
+// Reorders saved networks by UUID. Earlier UUIDs get higher priority.
+// UUIDs not listed are left untouched.
 type ReorderKnownWiFiNetworksRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	OrderSsids    []string               `protobuf:"bytes,1,rep,name=order_ssids,json=orderSsids,proto3" json:"order_ssids,omitempty"`
+	OrderUuids    []string               `protobuf:"bytes,1,rep,name=order_uuids,json=orderUuids,proto3" json:"order_uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -687,17 +634,15 @@ func (*ReorderKnownWiFiNetworksRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *ReorderKnownWiFiNetworksRequest) GetOrderSsids() []string {
+func (x *ReorderKnownWiFiNetworksRequest) GetOrderUuids() []string {
 	if x != nil {
-		return x.OrderSsids
+		return x.OrderUuids
 	}
 	return nil
 }
 
 type ReorderKnownWiFiNetworksResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -732,23 +677,10 @@ func (*ReorderKnownWiFiNetworksResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *ReorderKnownWiFiNetworksResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *ReorderKnownWiFiNetworksResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
-}
-
+// Removes a saved network profile by its NetworkManager connection UUID.
 type ForgetWiFiNetworkRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ssid          string                 `protobuf:"bytes,1,opt,name=ssid,proto3" json:"ssid,omitempty"`
+	Uuid          string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -783,17 +715,15 @@ func (*ForgetWiFiNetworkRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *ForgetWiFiNetworkRequest) GetSsid() string {
+func (x *ForgetWiFiNetworkRequest) GetUuid() string {
 	if x != nil {
-		return x.Ssid
+		return x.Uuid
 	}
 	return ""
 }
 
 type ForgetWiFiNetworkResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  *string                `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -826,20 +756,6 @@ func (x *ForgetWiFiNetworkResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ForgetWiFiNetworkResponse.ProtoReflect.Descriptor instead.
 func (*ForgetWiFiNetworkResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *ForgetWiFiNetworkResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *ForgetWiFiNetworkResponse) GetErrorMessage() string {
-	if x != nil && x.ErrorMessage != nil {
-		return *x.ErrorMessage
-	}
-	return ""
 }
 
 type ListWiFiNetworksResponse_WiFiNetwork struct {
@@ -1020,30 +936,23 @@ const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\brssi_dbm\x18\a \x01(\x05H\x02R\arssiDbm\x88\x01\x01B\x12\n" +
 	"\x10_signal_strengthB\v\n" +
 	"\t_priorityB\v\n" +
-	"\t_rssi_dbm\"\xc7\x01\n" +
+	"\t_rssi_dbm\"\xd9\x01\n" +
 	"\x14ConnectToWiFiRequest\x12\x12\n" +
-	"\x04ssid\x18\x01 \x01(\tR\x04ssid\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12J\n" +
-	"\bsecurity\x18\x03 \x01(\x0e2).wendy.agent.services.v2.WiFiSecurityTypeH\x00R\bsecurity\x88\x01\x01\x12\x1b\n" +
-	"\x06hidden\x18\x04 \x01(\bH\x01R\x06hidden\x88\x01\x01B\v\n" +
+	"\x04ssid\x18\x01 \x01(\tR\x04ssid\x12\x1f\n" +
+	"\bpassword\x18\x02 \x01(\tH\x00R\bpassword\x88\x01\x01\x12J\n" +
+	"\bsecurity\x18\x03 \x01(\x0e2).wendy.agent.services.v2.WiFiSecurityTypeH\x01R\bsecurity\x88\x01\x01\x12\x1b\n" +
+	"\x06hidden\x18\x04 \x01(\bH\x02R\x06hidden\x88\x01\x01B\v\n" +
+	"\t_passwordB\v\n" +
 	"\t_securityB\t\n" +
-	"\a_hidden\"m\n" +
-	"\x15ConnectToWiFiResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\"\x16\n" +
-	"\x14GetWiFiStatusRequest\"\x93\x01\n" +
+	"\a_hidden\"\x17\n" +
+	"\x15ConnectToWiFiResponse\"\x16\n" +
+	"\x14GetWiFiStatusRequest\"W\n" +
 	"\x15GetWiFiStatusResponse\x12\x1c\n" +
 	"\tconnected\x18\x01 \x01(\bR\tconnected\x12\x17\n" +
-	"\x04ssid\x18\x02 \x01(\tH\x00R\x04ssid\x88\x01\x01\x12(\n" +
-	"\rerror_message\x18\x03 \x01(\tH\x01R\ferrorMessage\x88\x01\x01B\a\n" +
-	"\x05_ssidB\x10\n" +
-	"\x0e_error_message\"\x17\n" +
-	"\x15DisconnectWiFiRequest\"n\n" +
-	"\x16DisconnectWiFiResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\"\x1e\n" +
+	"\x04ssid\x18\x02 \x01(\tH\x00R\x04ssid\x88\x01\x01B\a\n" +
+	"\x05_ssid\"\x17\n" +
+	"\x15DisconnectWiFiRequest\"\x18\n" +
+	"\x16DisconnectWiFiResponse\"\x1e\n" +
 	"\x1cListKnownWiFiNetworksRequest\"\xa4\x02\n" +
 	"\x1dListKnownWiFiNetworksResponse\x12c\n" +
 	"\bnetworks\x18\x01 \x03(\v2G.wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetworkR\bnetworks\x1a\x9d\x01\n" +
@@ -1053,25 +962,16 @@ const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12E\n" +
 	"\bsecurity\x18\x04 \x01(\x0e2).wendy.agent.services.v2.WiFiSecurityTypeR\bsecurity\"O\n" +
 	"\x1dSetWiFiNetworkPriorityRequest\x12\x12\n" +
-	"\x04ssid\x18\x01 \x01(\tR\x04ssid\x12\x1a\n" +
-	"\bpriority\x18\x02 \x01(\x05R\bpriority\"v\n" +
-	"\x1eSetWiFiNetworkPriorityResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\"B\n" +
+	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1a\n" +
+	"\bpriority\x18\x02 \x01(\x05R\bpriority\" \n" +
+	"\x1eSetWiFiNetworkPriorityResponse\"B\n" +
 	"\x1fReorderKnownWiFiNetworksRequest\x12\x1f\n" +
-	"\vorder_ssids\x18\x01 \x03(\tR\n" +
-	"orderSsids\"x\n" +
-	" ReorderKnownWiFiNetworksResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\".\n" +
+	"\vorder_uuids\x18\x01 \x03(\tR\n" +
+	"orderUuids\"\"\n" +
+	" ReorderKnownWiFiNetworksResponse\".\n" +
 	"\x18ForgetWiFiNetworkRequest\x12\x12\n" +
-	"\x04ssid\x18\x01 \x01(\tR\x04ssid\"q\n" +
-	"\x19ForgetWiFiNetworkResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
-	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message*\xf9\x01\n" +
+	"\x04uuid\x18\x01 \x01(\tR\x04uuid\"\x1b\n" +
+	"\x19ForgetWiFiNetworkResponse*\xf9\x01\n" +
 	"\x10WiFiSecurityType\x12\"\n" +
 	"\x1eWIFI_SECURITY_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17WIFI_SECURITY_TYPE_OPEN\x10\x01\x12\x1a\n" +
@@ -1160,12 +1060,7 @@ func file_wendy_agent_services_v2_wifi_service_proto_init() {
 		return
 	}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[2].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[3].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[5].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[7].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

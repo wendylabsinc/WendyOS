@@ -6,6 +6,16 @@ import "opentelemetry/proto/collector/logs/v1/logs_service.proto";
 import "opentelemetry/proto/collector/metrics/v1/metrics_service.proto";
 import "opentelemetry/proto/collector/trace/v1/trace_service.proto";
 
+// Matches OTel SeverityNumber ranges (DEBUG=5–8, INFO=9–12, WARN=13–16, ERROR=17–20, FATAL=21–24).
+enum LogSeverity {
+    LOG_SEVERITY_UNSPECIFIED = 0;
+    LOG_SEVERITY_DEBUG = 5;
+    LOG_SEVERITY_INFO = 9;
+    LOG_SEVERITY_WARN = 13;
+    LOG_SEVERITY_ERROR = 17;
+    LOG_SEVERITY_FATAL = 21;
+}
+
 service WendyTelemetryService {
     rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
     rpc StreamMetrics(StreamMetricsRequest) returns (stream StreamMetricsResponse);
@@ -14,7 +24,7 @@ service WendyTelemetryService {
 
 message StreamLogsRequest {
     optional string service_name = 1;
-    optional int32 min_severity = 2;
+    optional LogSeverity min_severity = 2;
     optional string app_name = 3;
 }
 
