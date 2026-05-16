@@ -21,6 +21,7 @@ Tests:
   python-hello          Basic Python deployment (no entitlements)
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
+  python-onnx-gpu       Python with GPU entitlement (ONNX Runtime CUDA inference)
   python-bluetooth      Python with bluetooth entitlement
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
@@ -186,6 +187,7 @@ ALL_TESTS=(
     python-hello
     python-network
     python-gpu
+    python-onnx-gpu
     python-bluetooth
     python-no-network
     python-no-bluetooth
