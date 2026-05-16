@@ -179,6 +179,32 @@ Source #1
 		alsa.card_name = "HDA Intel PCH"
 `
 
+// samplePactlSourcesWithMonitorOutput contains a mix of a real capture source
+// and a monitor source (auto-created by PulseAudio for the corresponding sink).
+// Both share the same alsa.card and alsa.device, so without filtering the
+// monitor would be erroneously treated as a valid capture device.
+const samplePactlSourcesWithMonitorOutput = `
+Source #0
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+	Description: Monitor of Built-in Audio Analog Stereo
+	Driver: module-alsa-card.c
+	Properties:
+		alsa.card = "0"
+		alsa.device = "0"
+		alsa.card_name = "HDA Intel PCH"
+
+Source #1
+	State: RUNNING
+	Name: alsa_input.pci-0000_00_1f.3.analog-stereo
+	Description: Built-in Audio Analog Stereo (microphone)
+	Driver: module-alsa-card.c
+	Properties:
+		alsa.card = "0"
+		alsa.device = "0"
+		alsa.card_name = "HDA Intel PCH"
+`
+
 // TestParsePulseAudioOutput verifies that parsePulseAudioOutput correctly
 // extracts matching sink/source names from representative pactl list output.
 func TestParsePulseAudioOutput(t *testing.T) {
@@ -245,6 +271,17 @@ func TestParsePulseAudioOutput(t *testing.T) {
 			device:   0,
 			category: "sinks",
 			want:     nil,
+		},
+		{
+			// Monitor sources (name ending in ".monitor") share alsa.card/alsa.device
+			// with the corresponding sink and must be excluded to avoid setting the
+			// default input to a loopback monitor instead of a real capture device.
+			name:     "monitor source excluded, real source included",
+			output:   samplePactlSourcesWithMonitorOutput,
+			card:     0,
+			device:   0,
+			category: "sources",
+			want:     []string{"alsa_input.pci-0000_00_1f.3.analog-stereo"},
 		},
 	}
 
@@ -441,5 +478,37 @@ func TestFilterPipeWireNodeIDs_NonAudioMediaClassFiltered(t *testing.T) {
 	got := filterPipeWireNodeIDs(nodes, 0, 0)
 	if len(got) != 1 || got[0] != "62" {
 		t.Errorf("non-audio filter: got %v; want [62]", got)
+	}
+}
+
+// TestFilterPipeWireNodeIDs_VirtualSourceFiltered verifies that virtual/monitor
+// nodes (media.class == "Audio/Source/Virtual") are excluded even when their
+// ALSA card/device properties match. Only exact "Audio/Sink" and "Audio/Source"
+// classes should be accepted.
+func TestFilterPipeWireNodeIDs_VirtualSourceFiltered(t *testing.T) {
+	nodes := []pwDumpNode{
+		// Virtual/monitor source — must be excluded.
+		makePWNode(70, "PipeWire:Interface:Node",
+			"media.class", "Audio/Source/Virtual",
+			"alsa.card", "0",
+			"alsa.device", "0",
+		),
+		// Real sink — must be included.
+		makePWNode(71, "PipeWire:Interface:Node",
+			"media.class", "Audio/Sink",
+			"alsa.card", "0",
+			"alsa.device", "0",
+		),
+		// Real source — must be included.
+		makePWNode(72, "PipeWire:Interface:Node",
+			"media.class", "Audio/Source",
+			"alsa.card", "0",
+			"alsa.device", "0",
+		),
+	}
+	got := filterPipeWireNodeIDs(nodes, 0, 0)
+	sort.Strings(got)
+	if len(got) != 2 || got[0] != "71" || got[1] != "72" {
+		t.Errorf("virtual source filter: got %v; want [71 72]", got)
 	}
 }

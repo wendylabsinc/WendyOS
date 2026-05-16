@@ -240,12 +240,15 @@ func filterPipeWireNodeIDs(nodes []pwDumpNode, card, device uint64) []string {
 			continue
 		}
 
-		// Only include audio nodes (Audio/Sink or Audio/Source); skip video, MIDI, etc.
+		// Only include real audio sink/source nodes. PipeWire uses exactly
+		// "Audio/Sink" for playback and "Audio/Source" for capture. Virtual or
+		// monitor nodes appear as "Audio/Source/Virtual" and must be excluded to
+		// avoid accidentally changing the default input to a monitor source.
 		var mediaClass string
 		if raw, ok := props["media.class"]; ok {
 			_ = json.Unmarshal(raw, &mediaClass)
 		}
-		if !strings.Contains(mediaClass, "Audio") {
+		if mediaClass != "Audio/Sink" && mediaClass != "Audio/Source" {
 			continue
 		}
 
@@ -312,6 +315,13 @@ func parsePulseAudioOutput(output string, card, device uint64, category string) 
 
 	flush := func() {
 		if currentName != "" && currentCard == cardStr && currentDevice == deviceStr {
+			// Exclude monitor sources: PulseAudio exposes a monitor source for every
+			// sink (e.g. "alsa_output.*.monitor"). These share the same alsa.card /
+			// alsa.device as the sink, so without this filter we would erroneously
+			// set the default input to the monitor when the user selected an output.
+			if strings.HasSuffix(currentName, ".monitor") {
+				return
+			}
 			matches = append(matches, pulseAudioMatch{name: currentName, category: category})
 		}
 	}
