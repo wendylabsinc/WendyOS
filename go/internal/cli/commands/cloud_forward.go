@@ -125,4 +125,5 @@ func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.Cli
 	go relay(tunnelConn, tcpConn)
 	go relay(tcpConn, tunnelConn)
 	<-done
+	<-done // wait for both directions before closing connections
 }
