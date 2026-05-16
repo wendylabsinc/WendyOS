@@ -117,13 +117,20 @@ func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.Cli
 	}
 	defer tunnelConn.Close()
 
+	relayBothDirs(tcpConn, tunnelConn)
+}
+
+// relayBothDirs copies data between two connections in both directions,
+// returning only after both relay goroutines have finished. This ensures that
+// deferred Close calls on the connections do not race with in-flight data.
+func relayBothDirs(a, b io.ReadWriteCloser) {
 	done := make(chan struct{}, 2)
 	relay := func(dst io.Writer, src io.Reader) {
 		defer func() { done <- struct{}{} }()
 		_, _ = io.Copy(dst, src)
 	}
-	go relay(tunnelConn, tcpConn)
-	go relay(tcpConn, tunnelConn)
+	go relay(b, a)
+	go relay(a, b)
 	<-done
 	<-done // wait for both directions before closing connections
 }

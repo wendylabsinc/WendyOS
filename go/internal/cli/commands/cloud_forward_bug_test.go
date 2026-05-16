@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"io"
 	"net"
 	"sync"
@@ -106,11 +105,11 @@ func TestServeTunnelConn_HalfCloseDataLoss(t *testing.T) {
 		_ = backendPipe.Close()
 	}()
 
-	// Run the relay.
+	// Run the relay using the same relayBothDirs helper called by serveTunnelConn.
 	relayDone := make(chan struct{})
 	go func() {
 		defer close(relayDone)
-		testRelayBothDirs(tcpConn, tunnelConn)
+		relayBothDirs(tcpConn, tunnelConn)
 	}()
 
 	// Wait for the client to receive its response.
@@ -129,29 +128,3 @@ func TestServeTunnelConn_HalfCloseDataLoss(t *testing.T) {
 		t.Fatal("relay did not finish within timeout")
 	}
 }
-
-// testRelayBothDirs is the relay logic from serveTunnelConn in
-// cloud_forward.go, reproduced here for in-process testing.
-// Keep in sync with serveTunnelConn.
-func testRelayBothDirs(tcpConn, tunnelConn io.ReadWriteCloser) {
-	defer tcpConn.Close()
-	defer tunnelConn.Close()
-
-	done := make(chan struct{}, 2)
-	relay := func(dst io.Writer, src io.Reader) {
-		defer func() { done <- struct{}{} }()
-		_, _ = io.Copy(dst, src)
-	}
-	go relay(tunnelConn, tcpConn)
-	go relay(tcpConn, tunnelConn)
-	<-done
-	<-done // fix: wait for BOTH relay directions before closing connections
-}
-
-// Ensure the standard library's bytes.Buffer implements io.ReadWriteCloser
-// (used as a compile-time check only, not in tests).
-var _ io.ReadWriteCloser = (*nopCloser)(nil)
-
-type nopCloser struct{ *bytes.Buffer }
-
-func (nopCloser) Close() error { return nil }
