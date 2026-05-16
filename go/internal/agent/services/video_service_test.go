@@ -151,8 +151,14 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	if !strings.Contains(joined, "profile=high") {
 		t.Errorf("x264enc pipeline must constrain profile=high for iOS compatibility: %v", args)
 	}
-	if strings.Contains(joined, "h264parse") {
-		t.Errorf("server-side pipeline should not include h264parse: %v", args)
+	// The H.264 stream must be normalized to Annex B byte-stream with in-band
+	// SPS/PPS; otherwise x264enc emits stream-format=avc and the client's
+	// typefind cannot classify the raw piped stream.
+	if !strings.Contains(joined, "h264parse config-interval=-1") {
+		t.Errorf("server-side pipeline must repeat SPS/PPS via h264parse config-interval=-1: %v", args)
+	}
+	if !strings.Contains(joined, "video/x-h264,stream-format=byte-stream,alignment=au") {
+		t.Errorf("server-side pipeline must force Annex B byte-stream output: %v", args)
 	}
 }
 

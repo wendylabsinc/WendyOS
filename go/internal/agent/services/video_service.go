@@ -426,8 +426,8 @@ func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
 
 	hasElem := func(name string) bool { return available[name] }
 
-	// H.264 encoders: no server-side h264parse required — x264enc/omxh264enc/etc.
-	// output annexb H.264 that the client's h264parse can parse directly.
+	// H.264 encoders, in preference order. encoderSegment normalizes every one
+	// of these to Annex B byte-stream (see there) so the client can sync.
 	for _, enc := range []string{
 		"nvv4l2h264enc", // NVIDIA V4L2 hardware (Jetson L4T, gstreamer1.0-plugins-nvvideo4linux2)
 		"v4l2h264enc",   // V4L2 M2M hardware (gst-plugins-good)
@@ -512,30 +512,47 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 	return append([]string{gstPath, "-q"}, strings.Fields(pipeline)...)
 }
 
+// h264ByteStream normalizes any encoder's H.264 output to Annex B byte-stream
+// with in-band, per-keyframe SPS/PPS (config-interval=-1).
+//
+// Without it, encoders such as x264enc default to stream-format=avc when piped
+// to fdsink (its src caps list "avc" before "byte-stream", and fdsink imposes no
+// constraint). AVC carries SPS/PPS out-of-band in the caps codec_data, which is
+// discarded when the elementary stream is piped raw over gRPC. The client's
+// `fdsrc ! typefind ! h264parse` pipeline then sees length-prefixed NALs with no
+// start codes and fails with "Could not determine type of stream". Annex B with
+// repeated SPS/PPS also lets the client sync mid-stream.
+const h264ByteStream = " ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au"
+
 // encoderSegment returns the GStreamer pipeline segment for the given encoder element.
 // Most H.264 encoders force I420 (4:2:0) input to avoid 4:4:4 output paths that
 // can make encoders such as x264enc select profile 244 (High 4:4:4 Predictive),
 // which VideoToolbox and most hardware decoders reject. This input cap does not by
 // itself enforce a specific H.264 output profile; explicit profile caps are added
-// only where needed.
+// only where needed. Every H.264 segment is suffixed with h264ByteStream so the
+// raw piped stream is decodable by the client; see h264ByteStream.
 func encoderSegment(encoder string) string {
+	if encoder == "vp8enc" {
+		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
+		return "videoconvert ! vp8enc deadline=1 ! webmmux streamable=true"
+	}
+
+	var enc string
 	switch encoder {
 	case "nvv4l2h264enc":
 		// Jetson L4T hardware encoder; NV12 is its preferred input format.
-		return "videoconvert ! video/x-raw,format=NV12 ! nvv4l2h264enc"
+		enc = "videoconvert ! video/x-raw,format=NV12 ! nvv4l2h264enc"
 	case "v4l2h264enc":
-		return "videoconvert ! video/x-raw,format=I420 ! v4l2h264enc ! video/x-h264,profile=baseline"
+		enc = "videoconvert ! video/x-raw,format=I420 ! v4l2h264enc ! video/x-h264,profile=baseline"
 	case "x264enc":
-		return "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency ! video/x-h264,profile=high"
+		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency ! video/x-h264,profile=high"
 	case "openh264enc":
-		return "videoconvert ! video/x-raw,format=I420 ! openh264enc"
+		enc = "videoconvert ! video/x-raw,format=I420 ! openh264enc"
 	case "avenc_h264":
-		return "videoconvert ! video/x-raw,format=I420 ! avenc_h264"
-	case "vp8enc":
-		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
-		return "videoconvert ! vp8enc deadline=1 ! webmmux streamable=true"
+		enc = "videoconvert ! video/x-raw,format=I420 ! avenc_h264"
 	default:
 		// For other H.264-family encoders, force I420 to avoid 4:4:4 profile selection.
-		return "videoconvert ! video/x-raw,format=I420 ! " + encoder
+		enc = "videoconvert ! video/x-raw,format=I420 ! " + encoder
 	}
+	return enc + h264ByteStream
 }
