@@ -246,6 +246,7 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 	// gRPC -> TCP
 	go func() {
 		defer func() { done <- struct{}{} }()
+		defer tcpConn.Close()
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
@@ -260,10 +261,9 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 				if tc, ok := tcpConn.(*net.TCPConn); ok {
 					_ = tc.CloseWrite()
 				}
-				return
+				break
 			}
 		}
-		tcpConn.Close()
 	}()
 
 	// TCP -> gRPC
