@@ -23,6 +23,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/internal/agent/gpgverify"
+	"github.com/wendylabsinc/wendy/internal/shared/releasekeys"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -37,6 +39,7 @@ type AgentService struct {
 	updateMu           sync.Mutex
 	isUpdating         bool
 	isWendyOSHost      func() bool
+	gpgPublicKey       []byte
 }
 
 // NewAgentService creates a new AgentService.
@@ -52,6 +55,7 @@ func NewAgentService(
 		hardwareDiscoverer: hd,
 		bluetoothManager:   bm,
 		isWendyOSHost:      defaultIsWendyOSHost,
+		gpgPublicKey:       releasekeys.WendyReleasesPublicKey,
 	}
 }
 
@@ -332,11 +336,24 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		if ctrl := msg.GetControl(); ctrl != nil {
 			if ctrl.GetUpdate() != nil {
 				// Verify SHA256.
+				updateCmd := ctrl.GetUpdate()
 				computedHash := hex.EncodeToString(hasher.Sum(nil))
-				expectedHash := ctrl.GetUpdate().GetSha256()
+				expectedHash := updateCmd.GetSha256()
 				if expectedHash != "" && computedHash != expectedHash {
 					return status.Errorf(codes.DataLoss,
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
+				}
+
+				// Verify GPG signature.
+				if updateCmd.GetSkipGpgVerify() {
+					s.logger.Warn("GPG verification skipped (developer mode)")
+				} else {
+					if len(updateCmd.GetGpgSignature()) == 0 {
+						return status.Error(codes.PermissionDenied, "update rejected: GPG signature is required")
+					}
+					if err := gpgverify.VerifyBinary(binaryData, updateCmd.GetGpgSignature(), s.gpgPublicKey); err != nil {
+						return status.Errorf(codes.PermissionDenied, "update rejected: %v", err)
+					}
 				}
 
 				// Resolve the current binary path (follow symlinks).
