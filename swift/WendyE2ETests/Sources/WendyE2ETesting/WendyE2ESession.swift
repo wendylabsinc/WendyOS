@@ -159,8 +159,8 @@ public struct WendyE2ESession: Sendable {
         self.recorder?.record(
             session: self,
             command: command,
-            processIdentifier: String(describing: record.processIdentifier),
-            terminationStatus: String(describing: record.terminationStatus),
+            processID: String(describing: record.processIdentifier),
+            status: String(describing: record.terminationStatus),
             duration: duration,
             standardOutput: record.standardOutput ?? "",
             standardError: record.standardError ?? "",
@@ -172,8 +172,8 @@ public struct WendyE2ESession: Sendable {
             machine: self.machine,
             dialect: dialect,
             command: command,
-            processIdentifier: String(describing: record.processIdentifier),
-            terminationStatus: record.terminationStatus,
+            processID: String(describing: record.processIdentifier),
+            status: record.terminationStatus,
             duration: duration,
             standardOutput: record.standardOutput ?? "",
             standardError: record.standardError ?? ""
@@ -224,8 +224,8 @@ public struct WendyE2ESession: Sendable {
         self.recorder?.record(
             session: self,
             command: command,
-            processIdentifier: String(describing: record.processIdentifier),
-            terminationStatus: String(describing: record.terminationStatus),
+            processID: String(describing: record.processIdentifier),
+            status: String(describing: record.terminationStatus),
             duration: duration,
             standardOutput: Self.outputDescription(record.standardOutput),
             standardError: Self.outputDescription(record.standardError),
@@ -324,8 +324,8 @@ public struct WendyE2ESession: Sendable {
         self.recorder?.record(
             session: self,
             command: command,
-            processIdentifier: String(describing: record.processIdentifier),
-            terminationStatus: String(describing: record.terminationStatus),
+            processID: String(describing: record.processIdentifier),
+            status: String(describing: record.terminationStatus),
             duration: duration,
             standardOutput: Self.outputDescription(record.standardOutput),
             standardError: Self.outputDescription(record.standardError),

@@ -26,8 +26,8 @@ public struct WendyE2ERecorder: Sendable {
     public func record(
         session: WendyE2ESession,
         command: String,
-        processIdentifier: String?,
-        terminationStatus: String,
+        processID: String?,
+        status: String,
         duration: Duration,
         standardOutput: String,
         standardError: String,
@@ -53,8 +53,8 @@ public struct WendyE2ERecorder: Sendable {
                         command: command,
                         filePath: self.source.filePath,
                         line: self.source.line,
-                        processIdentifier: processIdentifier,
-                        terminationStatus: terminationStatus,
+                        processID: processID,
+                        status: status,
                         duration: duration,
                         standardOutput: standardOutput,
                         standardError: standardError
@@ -408,8 +408,8 @@ public struct WendyE2ERecorder: Sendable {
         command: String,
         filePath: String,
         line: Int,
-        processIdentifier: String?,
-        terminationStatus: String,
+        processID: String?,
+        status: String,
         duration: Duration,
         standardOutput: String,
         standardError: String
@@ -432,8 +432,8 @@ public struct WendyE2ERecorder: Sendable {
             - Address: `\(machine.address)`
             - Working directory: `\(session.workingDirectory ?? "<none>")`
             - Command: `\(command)`
-            - Process ID: `\(processIdentifier ?? "<unavailable>")`
-            - Termination status: `\(terminationStatus)`
+            - Process ID: `\(processID ?? "<unavailable>")`
+            - Termination status: `\(status)`
             - Duration: `\(duration)`
 
             ### environment

@@ -90,7 +90,8 @@ struct `session` {
         let result = try await session.sh(.posix, "printf 'wendy-machine-smoke'")
 
         #expect(result.dialect == .posix)
-        #expect(result.succeeded)
+        #expect(result.isSuccess)
+        #expect(!result.isFailure)
         #expect(result.stdout == "wendy-machine-smoke")
         #expect(result.stderr == "")
         #expect(result.normalizedStdout == "wendy-machine-smoke")

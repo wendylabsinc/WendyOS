@@ -10,8 +10,8 @@ public struct WendyE2EShellResult: Sendable {
     public let machine: WendyE2EMachine
     public let dialect: WendyE2EShellDialect
     public let command: String
-    public let processIdentifier: String?
-    public let terminationStatus: TerminationStatus
+    public let processID: String?
+    public let status: TerminationStatus
     public let duration: Duration
     public let standardOutput: String
     public let standardError: String
@@ -24,8 +24,12 @@ public struct WendyE2EShellResult: Sendable {
         self.standardError
     }
 
-    public var succeeded: Bool {
-        self.terminationStatus.isSuccess
+    public var isSuccess: Bool {
+        self.status.isSuccess
+    }
+
+    public var isFailure: Bool {
+        !self.isSuccess
     }
 
     public var normalizedStandardOutput: String {
@@ -45,11 +49,11 @@ public struct WendyE2EShellResult: Sendable {
     }
 
     public func requireSuccess() throws {
-        guard self.terminationStatus.isSuccess else {
+        guard self.status.isSuccess else {
             throw WendyE2EMachineError.commandFailed(
                 machine: self.machine.description,
                 command: self.command,
-                terminationStatus: self.terminationStatus
+                terminationStatus: self.status
             )
         }
     }
