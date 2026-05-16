@@ -347,7 +347,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 	}
 	s.logger.Info("GStreamer encoder selected", zap.String("encoder", enc.element), zap.String("codec", enc.codec.String()))
 
-	args := buildGStreamerArgs(gstPath, path, req, enc.element)
+	args := buildGStreamerArgs(gstPath, path, req, enc.element, enc.hasH264Parse)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
@@ -410,8 +410,9 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 
 // gstEncoderResult describes a found GStreamer encoder and the codec it produces.
 type gstEncoderResult struct {
-	element string
-	codec   agentpb.VideoCodec
+	element      string
+	codec        agentpb.VideoCodec
+	hasH264Parse bool // whether h264parse is available on this device
 }
 
 // findGStreamerEncoder probes available encoders by listing all elements once via
@@ -425,10 +426,9 @@ func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
 	}
 
 	hasElem := func(name string) bool { return available[name] }
+	h264Parse := hasElem("h264parse")
 
-	// H.264 encoders, in preference order. encoderSegment normalizes every one
-	// of these to Annex B byte-stream (see there) so the client can sync.
-	for _, enc := range []string{
+	h264Encoders := []string{
 		"nvv4l2h264enc", // NVIDIA V4L2 hardware (Jetson L4T, gstreamer1.0-plugins-nvvideo4linux2)
 		"v4l2h264enc",   // V4L2 M2M hardware (gst-plugins-good)
 		"omxh264enc",    // OpenMAX hardware (Broadcom, Qualcomm)
@@ -438,12 +438,40 @@ func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
 		"vaapih264enc",  // Intel VA-API
 		"nvh264enc",     // NVIDIA NVENC (desktop)
 		"msdkh264enc",   // Intel Media SDK
-	} {
-		if hasElem(enc) {
-			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
+	}
+
+	// H.264 is preferred when h264parse is available to normalize output to Annex B
+	// byte-stream. Without h264parse, encoders like x264enc emit stream-format=avc
+	// which discards SPS/PPS when piped raw over gRPC, making the stream undecodable.
+	if h264Parse {
+		for _, enc := range h264Encoders {
+			if hasElem(enc) {
+				return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: true}, nil
+			}
+		}
+		for name := range available {
+			lower := strings.ToLower(name)
+			if strings.Contains(lower, "h264") && strings.Contains(lower, "enc") {
+				return gstEncoderResult{element: name, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: true}, nil
+			}
 		}
 	}
-	// Dynamic discovery: any element with "h264" and "enc" in the name.
+
+	// VP8 preferred over raw H.264 when h264parse is absent: vp8enc+webmmux (both
+	// in gst-plugins-good) produce a self-describing WebM container that requires no
+	// stream-format negotiation and is always decodable by the client.
+	if hasElem("vp8enc") && hasElem("webmmux") {
+		return gstEncoderResult{element: "vp8enc", codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, nil
+	}
+
+	// Last resort: attempt H.264 without normalization. Hardware encoders such as
+	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively; x264enc may
+	// produce AVC which the client's h264parse may or may not be able to decode.
+	for _, enc := range h264Encoders {
+		if hasElem(enc) {
+			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: false}, nil
+		}
+	}
 	for name := range available {
 		lower := strings.ToLower(name)
 		if strings.Contains(lower, "h264") && strings.Contains(lower, "enc") {
@@ -451,14 +479,8 @@ func findGStreamerEncoder(inspectPath string) (gstEncoderResult, error) {
 		}
 	}
 
-	// VP8 fallback: vp8enc + webmmux are both in gst-plugins-good.
-	// webmmux with streamable=true produces a WebM stream parseable by matroskademux.
-	if hasElem("vp8enc") && hasElem("webmmux") {
-		return gstEncoderResult{element: "vp8enc", codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, nil
-	}
-
 	return gstEncoderResult{}, fmt.Errorf(
-		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-good (vp8enc+webmmux) or gst-plugins-ugly (x264enc)",
+		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-good (vp8enc+webmmux) or gst-plugins-bad (h264parse)+gst-plugins-ugly (x264enc)",
 		len(available),
 	)
 }
@@ -486,7 +508,7 @@ func listGSTElements(inspectPath string) (map[string]bool, error) {
 }
 
 // buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 encode.
-func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string) []string {
+func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string, hasH264Parse bool) []string {
 	src := fmt.Sprintf("v4l2src device=%s", devicePath)
 
 	var capsParts []string
@@ -503,9 +525,9 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 	var pipeline string
 	if len(capsParts) > 0 {
 		caps := "video/x-raw," + strings.Join(capsParts, ",")
-		pipeline = fmt.Sprintf("%s ! %s ! %s ! fdsink fd=1", src, caps, encoderSegment(encoder))
+		pipeline = fmt.Sprintf("%s ! %s ! %s ! fdsink fd=1", src, caps, encoderSegment(encoder, hasH264Parse))
 	} else {
-		pipeline = fmt.Sprintf("%s ! %s ! fdsink fd=1", src, encoderSegment(encoder))
+		pipeline = fmt.Sprintf("%s ! %s ! fdsink fd=1", src, encoderSegment(encoder, hasH264Parse))
 	}
 	// -q suppresses gst-launch's status messages (e.g. "Setting pipeline to PLAYING")
 	// from being written to stdout and corrupting the binary H264 stream.
@@ -529,9 +551,11 @@ const h264ByteStream = " ! h264parse config-interval=-1 ! video/x-h264,stream-fo
 // can make encoders such as x264enc select profile 244 (High 4:4:4 Predictive),
 // which VideoToolbox and most hardware decoders reject. This input cap does not by
 // itself enforce a specific H.264 output profile; explicit profile caps are added
-// only where needed. Every H.264 segment is suffixed with h264ByteStream so the
-// raw piped stream is decodable by the client; see h264ByteStream.
-func encoderSegment(encoder string) string {
+// only where needed. When h264parse is available, every H.264 segment is suffixed
+// with h264ByteStream to normalize to Annex B byte-stream. When h264parse is absent
+// (gst-plugins-bad not installed), hardware encoders such as nvv4l2h264enc and
+// v4l2h264enc output byte-stream natively; x264enc may output AVC in that case.
+func encoderSegment(encoder string, hasH264Parse bool) string {
 	if encoder == "vp8enc" {
 		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
 		return "videoconvert ! vp8enc deadline=1 ! webmmux streamable=true"
@@ -554,5 +578,8 @@ func encoderSegment(encoder string) string {
 		// For other H.264-family encoders, force I420 to avoid 4:4:4 profile selection.
 		enc = "videoconvert ! video/x-raw,format=I420 ! " + encoder
 	}
-	return enc + h264ByteStream
+	if hasH264Parse {
+		return enc + h264ByteStream
+	}
+	return enc
 }

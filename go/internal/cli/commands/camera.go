@@ -165,11 +165,11 @@ func playVideoWithGStreamer(ctx context.Context, stream interface {
 		}
 	default: // H264
 		// fdsrc outputs ANY caps; h264parse requires video/x-h264 typed input.
-		// typefind detects H.264 start codes from the raw byte stream and sets caps
-		// before handing data to h264parse, bridging the negotiation gap.
+		// Declaring video/x-h264 inline bridges the caps gap, and h264parse
+		// auto-detects whether the stream is Annex B byte-stream or length-prefixed AVC.
 		gstArgs = []string{
 			"fdsrc", "fd=0",
-			"!", "typefind",
+			"!", "video/x-h264",
 			"!", "h264parse",
 			"!", "avdec_h264",
 			"!", "videoconvert",
