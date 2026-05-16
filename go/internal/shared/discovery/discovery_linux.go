@@ -164,6 +164,18 @@ func avahiUnescape(s string) string {
 	return b.String()
 }
 
+// parseMDNSInfoFields parses hashicorp/mdns InfoFields (raw TXT records) into
+// a key→value map. This is used by the avahi-browse fallback path.
+func parseMDNSInfoFields(fields []string) map[string]string {
+	records := make(map[string]string)
+	for _, txt := range fields {
+		if k, v, ok := strings.Cut(txt, "="); ok {
+			records[k] = v
+		}
+	}
+	return records
+}
+
 // parseAvahiTXT parses avahi's TXT record field.
 // Format: "key1=val1" "key2=val2" ...
 func parseAvahiTXT(field string) map[string]string {
@@ -238,7 +250,14 @@ func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Dura
 			}
 			seen[key] = true
 
+			// Parse all TXT records into a map so we can read any key,
+			// including "tls" which determines whether mTLS is required.
+			txtRecords := parseMDNSInfoFields(entry.InfoFields)
+
 			displayName := strings.TrimSuffix(hostname, ".local")
+			if dn, ok := txtRecords["displayname"]; ok {
+				displayName = dn
+			}
 
 			ipAddr := ""
 			if entry.AddrV4 != nil {
@@ -252,10 +271,10 @@ func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Dura
 			}
 
 			id := ""
-			for _, txt := range entry.InfoFields {
-				if k, v, ok := strings.Cut(txt, "="); ok && k == "id" {
-					id = v
-				}
+			if v, ok := txtRecords["wendyosdevice"]; ok {
+				id = v
+			} else if v, ok := txtRecords["id"]; ok {
+				id = v
 			}
 			if id == "" {
 				id = displayName
@@ -267,6 +286,7 @@ func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Dura
 				Hostname:      hostname,
 				IPAddress:     ipAddr,
 				Port:          entry.Port,
+				IsMTLS:        txtRecords["tls"] == "true",
 				InterfaceType: string(models.InterfaceLAN),
 				IsWendyDevice: true,
 			})
