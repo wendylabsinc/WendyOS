@@ -195,10 +195,14 @@ type pwDumpNode struct {
 }
 
 // resolvePipeWireNodeIDs uses pw-dump to find all PipeWire node IDs whose
-// alsa.card and alsa.device properties match the given card/device numbers.
-// A single ALSA card/device pair may appear as multiple PipeWire nodes (e.g.
-// one Audio/Sink and one Audio/Source), so we return all matches. Returns nil
-// if no matching nodes are found or pw-dump is unavailable.
+// ALSA card/device properties match the given card/device numbers. It checks
+// both the legacy property names (alsa.card / alsa.device) and the newer
+// api.alsa.* names (api.alsa.card / api.alsa.pcm.device) that are common on
+// native PipeWire installations, so that a node matches if either variant of
+// each property is present and equals the expected value. A single ALSA
+// card/device pair may appear as multiple PipeWire nodes (e.g. one Audio/Sink
+// and one Audio/Source), so we return all matches. Returns nil if no matching
+// nodes are found or pw-dump is unavailable.
 func resolvePipeWireNodeIDs(ctx context.Context, card, device uint64) []string {
 	cmd := exec.CommandContext(ctx, "pw-dump")
 	out, err := cmd.Output()
@@ -221,10 +225,17 @@ func resolvePipeWireNodeIDs(ctx context.Context, card, device uint64) []string {
 			continue
 		}
 
-		if !jsonPropMatches(props, "alsa.card", cardStr) {
+		// Match card: accept either "alsa.card" (legacy) or "api.alsa.card" (native PipeWire).
+		cardMatch := jsonPropMatches(props, "alsa.card", cardStr) ||
+			jsonPropMatches(props, "api.alsa.card", cardStr)
+		if !cardMatch {
 			continue
 		}
-		if !jsonPropMatches(props, "alsa.device", deviceStr) {
+
+		// Match device: accept either "alsa.device" (legacy) or "api.alsa.pcm.device" (native PipeWire).
+		deviceMatch := jsonPropMatches(props, "alsa.device", deviceStr) ||
+			jsonPropMatches(props, "api.alsa.pcm.device", deviceStr)
+		if !deviceMatch {
 			continue
 		}
 
@@ -254,13 +265,25 @@ func jsonPropMatches(props map[string]json.RawMessage, key, wantStr string) bool
 	return false
 }
 
-// resolvePulseAudioSinkOrSource finds the PulseAudio sink or source name whose
-// ALSA card/device matches the given values. It inspects pactl list sinks/sources
-// output for alsa.card and alsa.device properties.
-// Returns ("", "") if no match is found.
-func resolvePulseAudioSinkOrSource(ctx context.Context, card, device uint64) (name, category string) {
+// pulseAudioMatch holds a resolved PulseAudio sink or source name and the
+// category it was found in ("sinks" or "sources").
+type pulseAudioMatch struct {
+	name     string
+	category string
+}
+
+// resolvePulseAudioSinkOrSource finds all PulseAudio sinks and sources whose
+// ALSA card/device properties match the given values. It inspects
+// "pactl list sinks" and "pactl list sources" for alsa.card and alsa.device
+// properties. Returning all matches (instead of the first) prevents the
+// ambiguity where an input and output on the same ALSA card/device share the
+// same encoded ID: callers can then set the correct default for each category.
+// Returns nil if no match is found.
+func resolvePulseAudioSinkOrSource(ctx context.Context, card, device uint64) []pulseAudioMatch {
 	cardStr := fmt.Sprintf("%d", card)
 	deviceStr := fmt.Sprintf("%d", device)
+
+	var matches []pulseAudioMatch
 
 	for _, cat := range []string{"sinks", "sources"} {
 		cmd := exec.CommandContext(ctx, "pactl", "list", cat)
@@ -277,11 +300,10 @@ func resolvePulseAudioSinkOrSource(ctx context.Context, card, device uint64) (na
 		var currentName string
 		var currentCard, currentDevice string
 
-		flush := func() (string, string) {
+		flush := func() {
 			if currentName != "" && currentCard == cardStr && currentDevice == deviceStr {
-				return currentName, cat
+				matches = append(matches, pulseAudioMatch{name: currentName, category: cat})
 			}
-			return "", ""
 		}
 
 		scanner := bufio.NewScanner(strings.NewReader(string(out)))
@@ -290,9 +312,7 @@ func resolvePulseAudioSinkOrSource(ctx context.Context, card, device uint64) (na
 
 			if strings.HasPrefix(line, "Name:") {
 				// Flush previous entry.
-				if n, c := flush(); n != "" {
-					return n, c
-				}
+				flush()
 				currentName = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
 				currentCard = ""
 				currentDevice = ""
@@ -316,11 +336,9 @@ func resolvePulseAudioSinkOrSource(ctx context.Context, card, device uint64) (na
 			}
 		}
 		// Flush last entry.
-		if n, c := flush(); n != "" {
-			return n, c
-		}
+		flush()
 	}
-	return "", ""
+	return matches
 }
 
 // extractPactlPropertyValue extracts the value from a pactl property line like:
@@ -490,29 +508,44 @@ func (s *AudioService) parsePulseAudioDevices(ctx context.Context, category stri
 	return devices, nil
 }
 
-// setPulseAudioDefaultByALSA resolves the given ALSA card/device to a PulseAudio
-// sink or source by matching ALSA properties, then sets it as the system default.
+// setPulseAudioDefaultByALSA resolves the given ALSA card/device to all
+// matching PulseAudio sinks and sources by matching ALSA properties, then sets
+// each as the system default. Both sink and source defaults are updated when a
+// device appears in both categories (which is possible when input and output
+// share the same ALSA card/device numbers).
 func (s *AudioService) setPulseAudioDefaultByALSA(ctx context.Context, deviceID uint32, card, device uint64) (*agentpb.SetDefaultAudioDeviceResponse, error) {
-	name, category := resolvePulseAudioSinkOrSource(ctx, card, device)
-	if name == "" {
+	matches := resolvePulseAudioSinkOrSource(ctx, card, device)
+	if len(matches) == 0 {
 		return nil, fmt.Errorf("no PulseAudio sink or source found for ALSA card %d device %d", card, device)
 	}
 
-	var setCmd *exec.Cmd
-	if category == "sinks" {
-		setCmd = exec.CommandContext(ctx, "pactl", "set-default-sink", name)
-	} else {
-		setCmd = exec.CommandContext(ctx, "pactl", "set-default-source", name)
+	var setErrors []string
+	successCount := 0
+	for _, m := range matches {
+		var pactlCmd string
+		if m.category == "sinks" {
+			pactlCmd = "set-default-sink"
+		} else {
+			pactlCmd = "set-default-source"
+		}
+		setCmd := exec.CommandContext(ctx, "pactl", pactlCmd, m.name)
+		if out, err := setCmd.CombinedOutput(); err != nil {
+			setErrors = append(setErrors, fmt.Sprintf("pactl %s %s: %s", pactlCmd, m.name, strings.TrimSpace(string(out))))
+			continue
+		}
+		successCount++
+		s.logger.Info("Default audio device set via PulseAudio",
+			zap.Uint32("device_id", deviceID),
+			zap.Uint64("alsa_card", card),
+			zap.Uint64("alsa_device", device),
+			zap.String("pa_name", m.name),
+			zap.String("category", m.category))
 	}
-	if out, err := setCmd.CombinedOutput(); err != nil {
-		errMsg := fmt.Sprintf("pactl set-default failed: %s", string(out))
+
+	if successCount == 0 {
+		errMsg := fmt.Sprintf("pactl set-default failed: %s", strings.Join(setErrors, "; "))
 		return &agentpb.SetDefaultAudioDeviceResponse{Success: false, ErrorMessage: &errMsg}, nil
 	}
-	s.logger.Info("Default audio device set via PulseAudio",
-		zap.Uint32("device_id", deviceID),
-		zap.Uint64("alsa_card", card),
-		zap.Uint64("alsa_device", device),
-		zap.String("pa_name", name))
 	return &agentpb.SetDefaultAudioDeviceResponse{Success: true}, nil
 }
 
