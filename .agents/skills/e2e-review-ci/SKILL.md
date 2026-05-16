@@ -1,6 +1,6 @@
 ---
 name: e2e-review-ci
-description: Fetch the latest completed Swift E2E CI artifacts for the current branch or PR, review // AI: comments and failed tests, and write per-test ai-review.md files next to recording.md.
+description: "Fetch the latest completed Swift E2E CI artifacts for the current branch or PR, review // AI: comments and failed tests, and write per-test ai-review.md files next to recording.md."
 ---
 
 # Review Swift E2E CI Artifacts
