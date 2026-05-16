@@ -230,7 +230,10 @@ struct `session` {
             ]
         )
 
-        try await session.sh("printf '%s' \"$PWD\"") { standardOutput, _ in
+        try await session.sh("printf '%s' \"$PWD\"") { result in
+            try result.requireSuccess()
+            let standardOutput = result.stdout
+
             #expect(standardOutput == workingDirectory.path)
         }
 
@@ -283,7 +286,7 @@ struct `session` {
     }
 
     @Test
-    func `collected output API matches swift-subprocess style`() async throws {
+    func `collected output API returns shell result`() async throws {
         try await Self.withTemporarySession { session, _ in
             let result = try await session.posixShell("printf 'hello'")
 
@@ -296,9 +299,11 @@ struct `session` {
     @Test
     func `collected output callback receives command output`() async throws {
         try await Self.withTemporarySession { session, _ in
-            try await session.sh("printf 'hello'; printf 'oops' >&2") {
-                standardOutput,
-                standardError in
+            try await session.sh("printf 'hello'; printf 'oops' >&2") { result in
+                try result.requireSuccess()
+                let standardOutput = result.stdout
+                let standardError = result.stderr
+
                 #expect(standardOutput == "hello")
                 #expect(standardError == "oops")
                 #expect(standardOutput.contains(/he.*o/))
@@ -339,9 +344,11 @@ struct `session` {
             for: WendyE2EMachine(id: "local", name: "Local")
         )
 
-        try await session.command("printf 'hello'; printf 'oops' >&2").run {
-            standardOutput,
-            standardError in
+        try await session.command("printf 'hello'; printf 'oops' >&2").run { result in
+            try result.requireSuccess()
+            let standardOutput = result.stdout
+            let standardError = result.stderr
+
             #expect(standardOutput == "hello")
             #expect(standardError == "oops")
         }

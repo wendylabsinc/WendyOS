@@ -17,10 +17,10 @@ struct `'wendy cloud tunnel'` {
         // command. Flag confusing port-mapping wording, missing safety cues,
         // duplicated global flags, or formatting that would make setup hard.
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy cloud tunnel --help") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy cloud tunnel --help") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(
@@ -71,10 +71,10 @@ struct `'wendy cloud tunnel'` {
     @Test
     func `rejects invalid port mappings before listening`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy cloud tunnel notaport") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy cloud tunnel notaport") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -96,10 +96,10 @@ struct `'wendy cloud tunnel'` {
         // tunnel to start. The output should make the auth problem obvious and
         // should not imply that a listener or forwarding session remains active.
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy cloud tunnel 65535:80") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy cloud tunnel 65535:80") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")

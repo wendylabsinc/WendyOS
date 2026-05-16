@@ -41,10 +41,10 @@ struct `'wendy device info'` {
                 printf '%s\n' '{"defaultDevice":"default-device-that-should-not-be-used.invalid"}' > "$HOME/.wendy/config.json"
                 """
             )
-            try await cli.sh("wendy --device \(agentAddress) device info --json") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy --device \(agentAddress) device info --json") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("\"version\""))
@@ -74,10 +74,10 @@ struct `'wendy device info'` {
                 """
             )
 
-            try await cli.sh("wendy device info --json") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy device info --json") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("\"version\""))
@@ -89,10 +89,10 @@ struct `'wendy device info'` {
                 #expect(!standardError.contains("Select a device"))
             }
 
-            try await cli.sh("cat \"$HOME/.wendy/config.json\"") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("cat \"$HOME/.wendy/config.json\"") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput == "{\"defaultDevice\":\"\(agentAddress)\"}\n")
@@ -147,10 +147,10 @@ struct `'wendy device info'` {
                 fatalError("Interactive device info is not supported on \(cli.machine.os) yet.")
             }
 
-            try await cli.sh(command) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh(command) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("Agent Version:"))
@@ -172,10 +172,10 @@ struct `'wendy device info'` {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
-            try await cli.sh("wendy --json --device \(agentAddress) device info") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy --json --device \(agentAddress) device info") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -215,10 +215,10 @@ struct `'wendy device info'` {
                 """
             )
 
-            try await cli.sh("wendy device info") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy device info") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -257,10 +257,10 @@ struct `'wendy device info'` {
                 """
             )
 
-            try await cli.sh("wendy device info --json") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy device info --json") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -280,10 +280,10 @@ struct `'wendy device info'` {
     @Test
     func `'--json' reports a missing device without prompting`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy device info --json") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy device info --json") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -305,10 +305,10 @@ struct `'wendy device info'` {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
                 "wendy --device definitely-not-a-wendy-device.invalid device info --json"
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -351,10 +351,10 @@ struct `'wendy device info'` {
                 fatalError("Interactive update checks are not supported on \(cli.machine.os) yet.")
             }
 
-            try await cli.sh(command) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh(command) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("Agent Version:"))
@@ -378,10 +378,10 @@ struct `'wendy device info'` {
 
             try await cli.sh(
                 "wendy --json --device \(agentAddress) device info --check-updates"
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -410,10 +410,10 @@ struct `'wendy device info'` {
 
             try await cli.sh(
                 "wendy --json --device \(agentAddress) device info --check-updates --prerelease"
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -442,10 +442,10 @@ struct `'wendy device info'` {
 
             try await cli.sh(
                 "NO_PROXY=\(agentAddress) HTTPS_PROXY=http://127.0.0.1:1 wendy --json --device \(agentAddress) device info --check-updates"
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -476,10 +476,10 @@ struct `'wendy device version'` {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
-            try await cli.sh("wendy --device \(agentAddress) device version") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy --device \(agentAddress) device version") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError.localizedCaseInsensitiveContains("deprecated"))
@@ -509,10 +509,10 @@ struct `'wendy device version'` {
     @Test
     func `'--json' aliases device info without contaminating JSON output`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy device version --json") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy device version --json") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")

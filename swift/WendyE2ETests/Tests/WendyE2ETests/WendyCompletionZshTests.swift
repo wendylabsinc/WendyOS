@@ -15,10 +15,10 @@ struct `'wendy completion zsh'` {
     @Test
     func `prints command help`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy completion zsh --help") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy completion zsh --help") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("Print zsh completion script"))
@@ -47,10 +47,10 @@ struct `'wendy completion zsh'` {
                 wendy completion zsh
                 test ! -e "$HOME/.zshrc"
                 """
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("#compdef wendy"))
@@ -69,10 +69,10 @@ struct `'wendy completion zsh'` {
     @Test
     func `includes commands, flags, and aliases`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy completion zsh") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy completion zsh") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("requestComp"))
@@ -80,20 +80,18 @@ struct `'wendy completion zsh'` {
                 #expect(standardError == "")
             }
 
-            try await cli.sh("wendy __complete device ''") {
-                terminationStatus,
-                standardOutput,
-                _ in
+            try await cli.sh("wendy __complete device ''") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("wifi"))
                 #expect(standardOutput.contains("bluetooth"))
             }
 
-            try await cli.sh("wendy __complete device version --") {
-                terminationStatus,
-                standardOutput,
-                _ in
+            try await cli.sh("wendy __complete device version --") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("--device"))
@@ -110,20 +108,20 @@ struct `'wendy completion zsh'` {
     @Test
     func `is deterministic across repeated runs`() async throws {
         try await self.scenario.run { cli, _ in
-            let first = try await cli.sh("wendy completion zsh") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            let first = try await cli.sh("wendy completion zsh") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
                 return standardOutput
             }
 
-            let second = try await cli.sh("wendy completion zsh") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            let second = try await cli.sh("wendy completion zsh") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -142,10 +140,10 @@ struct `'wendy completion zsh'` {
     @Test
     func `rejects extra arguments without printing a script`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy completion zsh extra") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy completion zsh extra") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")

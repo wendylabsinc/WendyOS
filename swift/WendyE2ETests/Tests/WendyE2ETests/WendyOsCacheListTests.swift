@@ -16,10 +16,10 @@ struct `'wendy os cache list'` {
     @Test
     func `prints command help`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy os cache list --help") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy os cache list --help") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput.contains("List cached OS images"))
@@ -41,10 +41,10 @@ struct `'wendy os cache list'` {
     @Test
     func `lists cached items in a readable table`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy os cache list") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy os cache list") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput == "No cached OS images.\n")
@@ -68,10 +68,10 @@ struct `'wendy os cache list'` {
                 printf 'project artifact\n' > unrelated-project-file.txt
                 wendy os cache list
                 """
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardOutput == "No cached OS images.\n")
@@ -100,10 +100,10 @@ struct `'wendy os cache list'` {
                 trap 'chmod 700 "$cache_root/unreadable" 2>/dev/null || true' EXIT
                 wendy os cache list
                 """
-            ) {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            ) { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")
@@ -121,10 +121,10 @@ struct `'wendy os cache list'` {
     @Test
     func `prints JSON cache entries for automation`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy --json os cache list") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy --json os cache list") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(terminationStatus.isSuccess)
                 #expect(standardError == "")
@@ -148,10 +148,10 @@ struct `'wendy os cache list'` {
     @Test
     func `rejects undocumented arguments and flags`() async throws {
         try await self.scenario.run { cli, _ in
-            try await cli.sh("wendy os cache list extra") {
-                terminationStatus,
-                standardOutput,
-                standardError in
+            try await cli.sh("wendy os cache list extra") { result in
+                let terminationStatus = result.status
+                let standardOutput = result.stdout
+                let standardError = result.stderr
 
                 #expect(!terminationStatus.isSuccess)
                 #expect(standardOutput == "")

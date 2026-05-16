@@ -170,64 +170,6 @@ public struct WendyE2ESession: Sendable {
         try await body(try await self.posixShell(command))
     }
 
-    public func sh<Result>(
-        _ command: String,
-        body: @Sendable (_ standardOutput: String, _ standardError: String) async throws -> Result
-    ) async throws -> Result {
-        let result = try await self.posixShell(command)
-        try result.requireSuccess()
-        return try await body(result.standardOutput, result.standardError)
-    }
-
-    public func sh<Result>(
-        _ command: String,
-        body:
-            @Sendable (
-                _ status: WendyE2EShellStatus,
-                _ standardOutput: String,
-                _ standardError: String
-            ) async throws -> Result
-    ) async throws -> Result {
-        let result = try await self.posixShell(command)
-        return try await body(result.status, result.standardOutput, result.standardError)
-    }
-
-    // MARK: - Running PowerShell Commands
-
-    public func ps(_ command: String) async throws {
-        let result = try await self.powerShell(command)
-        try result.requireSuccess()
-    }
-
-    public func ps<Result>(
-        _ command: String,
-        body: @Sendable (_ result: WendyE2EShellResult) async throws -> Result
-    ) async throws -> Result {
-        try await body(try await self.powerShell(command))
-    }
-
-    public func ps<Result>(
-        _ command: String,
-        body: @Sendable (_ standardOutput: String, _ standardError: String) async throws -> Result
-    ) async throws -> Result {
-        let result = try await self.powerShell(command)
-        try result.requireSuccess()
-        return try await body(result.standardOutput, result.standardError)
-    }
-
-    public func ps<Result>(
-        _ command: String,
-        body:
-            @Sendable (
-                _ status: WendyE2EShellStatus,
-                _ standardOutput: String,
-                _ standardError: String
-            ) async throws -> Result
-    ) async throws -> Result {
-        let result = try await self.powerShell(command)
-        return try await body(result.status, result.standardOutput, result.standardError)
-    }
-
     // MARK: - Internal
 
     private init(
