@@ -226,6 +226,110 @@ public struct WendyE2ESession: Sendable {
         )
     }
 
+    // MARK: - Running PowerShell Commands
+
+    public func ps(_ command: String) async throws {
+        let record = try await self.ps(
+            command,
+            output: .string(limit: .max),
+            error: .string(limit: .max)
+        )
+
+        guard record.terminationStatus.isSuccess else {
+            throw WendyE2EMachineError.commandFailed(
+                machine: self.description,
+                command: command,
+                terminationStatus: record.terminationStatus
+            )
+        }
+    }
+
+    public func ps<Output: OutputProtocol, Error: ErrorOutputProtocol>(
+        _ command: String,
+        output: Output,
+        error: Error = .discarded
+    ) async throws -> ExecutionRecord<Output, Error> {
+        if self.verbose {
+            Self.printCommand(machine: self.machine.name, command: command)
+        }
+
+        let resetDirectories = await self.commandSetupState.resetDirectoriesForNextCommand()
+        let harnessPrefix = self.powerShellHarnessPrefix(resetDirectories: resetDirectories)
+        let invocation = try self.powerShellInvocation(for: command, harnessPrefix: harnessPrefix)
+
+        let start = ContinuousClock.now
+        let record = try await Self.invoke(
+            invocation,
+            output: output,
+            error: error
+        )
+        let duration = start.duration(to: .now)
+
+        self.recorder?.record(
+            session: self,
+            command: command,
+            processIdentifier: String(describing: record.processIdentifier),
+            terminationStatus: String(describing: record.terminationStatus),
+            duration: duration,
+            standardOutput: Self.outputDescription(record.standardOutput),
+            standardError: Self.outputDescription(record.standardError),
+            harnessPrefix: harnessPrefix,
+            scriptShellName: Self.localPowerShellName
+        )
+
+        return record
+    }
+
+    public func ps<Result>(
+        _ command: String,
+        output: StringOutput<UTF8> = .string(limit: .max),
+        error: StringOutput<UTF8> = .string(limit: .max),
+        body: @Sendable (_ standardOutput: String, _ standardError: String) async throws -> Result
+    ) async throws -> Result {
+        let record = try await self.ps(
+            command,
+            output: output,
+            error: error
+        )
+
+        guard record.terminationStatus.isSuccess else {
+            throw WendyE2EMachineError.commandFailed(
+                machine: self.description,
+                command: command,
+                terminationStatus: record.terminationStatus
+            )
+        }
+
+        return try await body(
+            record.standardOutput ?? "",
+            record.standardError ?? ""
+        )
+    }
+
+    public func ps<Result>(
+        _ command: String,
+        output: StringOutput<UTF8> = .string(limit: .max),
+        error: StringOutput<UTF8> = .string(limit: .max),
+        body:
+            @Sendable (
+                _ terminationStatus: TerminationStatus,
+                _ standardOutput: String,
+                _ standardError: String
+            ) async throws -> Result
+    ) async throws -> Result {
+        let record = try await self.ps(
+            command,
+            output: output,
+            error: error
+        )
+
+        return try await body(
+            record.terminationStatus,
+            record.standardOutput ?? "",
+            record.standardError ?? ""
+        )
+    }
+
     // MARK: - Internal
 
     private init(
@@ -308,6 +412,29 @@ public struct WendyE2ESession: Sendable {
         )
     }
 
+    private func powerShellInvocation(
+        for command: String,
+        harnessPrefix: [String]
+    ) throws
+        -> Invocation
+    {
+        guard self.machine.isLocal else {
+            throw WendyE2EMachineError.powerShellUnavailable(machine: self.description)
+        }
+
+        return Invocation(
+            executable: try Self.localPowerShellPath(machine: self.description),
+            arguments: [
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                self.powerShellWrapped(command, harnessPrefix: harnessPrefix),
+            ],
+            environment: .inherit,
+            workingDirectory: nil
+        )
+    }
+
     private static var localShellPath: String {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/sh"
         let normalizedShell = shell.isEmpty ? "/bin/sh" : shell
@@ -318,6 +445,23 @@ public struct WendyE2ESession: Sendable {
     private static var localShellName: String {
         let name = URL(fileURLWithPath: Self.localShellPath, isDirectory: false).lastPathComponent
         return name.isEmpty ? "sh" : name
+    }
+
+    private static var localPowerShellName: String {
+        let name = (try? Self.localPowerShellPath()).map {
+            URL(fileURLWithPath: $0, isDirectory: false).lastPathComponent
+        }
+        return name.flatMap(Self.nonEmpty) ?? "pwsh"
+    }
+
+    private static func localPowerShellPath(
+        machine: String = WendyE2EMachine.current.description
+    ) throws -> String {
+        let candidates = ["pwsh", "pwsh.exe", "powershell", "powershell.exe"]
+        guard let path = Self.findExecutable(named: candidates) else {
+            throw WendyE2EMachineError.powerShellUnavailable(machine: machine)
+        }
+        return path
     }
 
     private static func preconditionPOSIXCompatibleShell(_ shell: String) {
@@ -367,6 +511,35 @@ public struct WendyE2ESession: Sendable {
         return parts
     }
 
+    private func powerShellHarnessPrefix(resetDirectories: Bool) -> [String] {
+        var parts = self.env.keys.sorted().map { key in
+            "$env:\(key) = \(Self.powerShellEnvironmentValue(self.env[key] ?? ""))"
+        }
+
+        let setupDirectories = self.setupDirectories()
+        if resetDirectories {
+            parts.append(
+                contentsOf: setupDirectories.map { directory in
+                    "Remove-Item -LiteralPath \(Self.powerShellEnvironmentValue(directory)) -Recurse -Force -ErrorAction SilentlyContinue"
+                }
+            )
+        }
+
+        parts.append(
+            contentsOf: setupDirectories.map { directory in
+                "New-Item -ItemType Directory -Force -Path \(Self.powerShellEnvironmentValue(directory)) | Out-Null"
+            }
+        )
+
+        if let workingDirectory = self.workingDirectory {
+            parts.append(
+                "Set-Location -LiteralPath \(Self.powerShellEnvironmentValue(workingDirectory))"
+            )
+        }
+
+        return parts
+    }
+
     private func setupDirectories() -> [String] {
         var directories: [String] = []
         var seen: Set<String> = []
@@ -387,6 +560,10 @@ public struct WendyE2ESession: Sendable {
 
     private func wrapped(_ command: String, harnessPrefix: [String]) -> String {
         (harnessPrefix + [command]).joined(separator: " && ")
+    }
+
+    private func powerShellWrapped(_ command: String, harnessPrefix: [String]) -> String {
+        (["$ErrorActionPreference = 'Stop'"] + harnessPrefix + [command]).joined(separator: "\n")
     }
 
     private func sshTarget(address: String) -> String {
@@ -483,6 +660,114 @@ public struct WendyE2ESession: Sendable {
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func powerShellEnvironmentValue(_ value: String) -> String {
+        var parts: [String] = []
+        var literal = ""
+        var index = value.startIndex
+
+        func flushLiteral() {
+            guard !literal.isEmpty else {
+                return
+            }
+            parts.append(Self.powerShellQuote(literal))
+            literal = ""
+        }
+
+        while index < value.endIndex {
+            guard value[index] == "$" else {
+                literal.append(value[index])
+                index = value.index(after: index)
+                continue
+            }
+
+            let next = value.index(after: index)
+            guard next < value.endIndex else {
+                literal.append(value[index])
+                index = next
+                continue
+            }
+
+            if value[next] == "{" {
+                guard let close = value[next...].firstIndex(of: "}") else {
+                    literal.append(value[index])
+                    index = next
+                    continue
+                }
+
+                let nameStart = value.index(after: next)
+                let name = String(value[nameStart..<close])
+                guard Self.isValidEnvironmentName(name) else {
+                    literal.append(value[index])
+                    index = next
+                    continue
+                }
+
+                flushLiteral()
+                parts.append("$env:\(name)")
+                index = value.index(after: close)
+                continue
+            }
+
+            guard Self.isEnvironmentNameStart(value[next]) else {
+                literal.append(value[index])
+                index = next
+                continue
+            }
+
+            var end = value.index(after: next)
+            while end < value.endIndex, Self.isEnvironmentNameBody(value[end]) {
+                end = value.index(after: end)
+            }
+
+            flushLiteral()
+            parts.append("$env:\(String(value[next..<end]))")
+            index = end
+        }
+
+        flushLiteral()
+        return parts.isEmpty ? "''" : parts.joined(separator: " + ")
+    }
+
+    private static func powerShellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
+    }
+
+    private static func findExecutable(named candidates: [String]) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        let pathValue = environment["PATH"] ?? environment["Path"] ?? environment["path"] ?? ""
+        let pathSeparator: Character
+        #if os(Windows)
+            pathSeparator = ";"
+        #else
+            pathSeparator = ":"
+        #endif
+
+        for directory in pathValue.split(separator: pathSeparator, omittingEmptySubsequences: false)
+        {
+            let directoryPath = directory.isEmpty ? "." : String(directory)
+            for candidate in candidates {
+                let path = Self.executablePath(directory: directoryPath, candidate: candidate)
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func executablePath(directory: String, candidate: String) -> String {
+        if directory.hasSuffix("/") || directory.hasSuffix("\\") {
+            return "\(directory)\(candidate)"
+        }
+
+        #if os(Windows)
+            return "\(directory)\\\(candidate)"
+        #else
+            return "\(directory)/\(candidate)"
+        #endif
     }
 
     private static func isValidEnvironmentKey(_ key: String) -> Bool {

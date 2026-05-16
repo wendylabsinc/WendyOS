@@ -83,6 +83,29 @@ struct `session` {
     }
 
     @Test
+    func `runs a simple PowerShell command when PowerShell is available`() async throws {
+        guard Self.hasPowerShell else {
+            return
+        }
+
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local")
+        )
+        let record = try await session.ps(
+            "Write-Output 'wendy-machine-smoke'",
+            output: .string(limit: .max),
+            error: .string(limit: .max)
+        )
+
+        #expect(record.terminationStatus.isSuccess)
+        #expect(
+            record.standardOutput?.replacingOccurrences(of: "\r\n", with: "\n")
+                == "wendy-machine-smoke\n"
+        )
+        #expect(record.standardError == "")
+    }
+
+    @Test
     func `runs local commands in working directory`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("machine-local-" + UUID().uuidString, isDirectory: true)
@@ -444,6 +467,43 @@ struct `session` {
             #expect(first.machine.name == "Local")
             #expect(second.machine.name == "Local")
         }
+    }
+
+    private static var hasPowerShell: Bool {
+        let candidates = ["pwsh", "pwsh.exe", "powershell", "powershell.exe"]
+        let environment = ProcessInfo.processInfo.environment
+        let pathValue = environment["PATH"] ?? environment["Path"] ?? environment["path"] ?? ""
+        let pathSeparator: Character
+        #if os(Windows)
+            pathSeparator = ";"
+        #else
+            pathSeparator = ":"
+        #endif
+
+        for directory in pathValue.split(separator: pathSeparator, omittingEmptySubsequences: false)
+        {
+            let directoryPath = directory.isEmpty ? "." : String(directory)
+            for candidate in candidates {
+                let path = Self.executablePath(directory: directoryPath, candidate: candidate)
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private static func executablePath(directory: String, candidate: String) -> String {
+        if directory.hasSuffix("/") || directory.hasSuffix("\\") {
+            return "\(directory)\(candidate)"
+        }
+
+        #if os(Windows)
+            return "\(directory)\\\(candidate)"
+        #else
+            return "\(directory)/\(candidate)"
+        #endif
     }
 
     private static func withTemporarySession<Result>(

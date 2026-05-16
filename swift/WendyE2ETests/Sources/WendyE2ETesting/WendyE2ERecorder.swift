@@ -463,15 +463,16 @@ public struct WendyE2ERecorder: Sendable {
         harnessPrefix: [String],
         scriptShellName: String
     ) throws {
+        let isPowerShell = Self.isPowerShellName(scriptShellName)
         let scriptURL = URL(
             fileURLWithPath: URL(fileURLWithPath: self.recordPath, isDirectory: false)
-                .deletingPathExtension().path + ".sh.txt",
+                .deletingPathExtension().path + (isPowerShell ? ".ps1.txt" : ".sh.txt"),
             isDirectory: false
         )
         let scriptExists = FileManager.default.fileExists(atPath: scriptURL.path)
 
         if !scriptExists {
-            try Self.shellScriptHeader(shellName: scriptShellName)
+            try Self.shellScriptHeader(shellName: scriptShellName, isPowerShell: isPowerShell)
                 .write(to: scriptURL, atomically: true, encoding: .utf8)
         }
 
@@ -483,32 +484,45 @@ public struct WendyE2ERecorder: Sendable {
                 Self.shellScriptCommand(
                     machine: session.machine,
                     command: command,
-                    harnessPrefix: harnessPrefix
+                    harnessPrefix: harnessPrefix,
+                    isPowerShell: isPowerShell
                 ).utf8
             )
         )
     }
 
-    private static func shellScriptHeader(shellName: String) -> String {
-        """
-        #!/usr/bin/env \(shellName)
+    private static func shellScriptHeader(shellName: String, isPowerShell: Bool) -> String {
+        if isPowerShell {
+            return """
+                #!/usr/bin/env \(shellName)
 
-        set -eu
-        (set -o pipefail) 2>/dev/null && set -o pipefail
-        set -x
+                $ErrorActionPreference = 'Stop'
+                Set-PSDebug -Trace 1
 
-        """
+                """
+        }
+
+        return """
+            #!/usr/bin/env \(shellName)
+
+            set -eu
+            (set -o pipefail) 2>/dev/null && set -o pipefail
+            set -x
+
+            """
     }
 
     private static func shellScriptCommand(
         machine: WendyE2EMachine,
         command: String,
-        harnessPrefix: [String]
+        harnessPrefix: [String],
+        isPowerShell: Bool
     ) -> String {
         let commandSource = Self.commandSource(
             machine: machine,
             command: command,
-            harnessPrefix: harnessPrefix
+            harnessPrefix: harnessPrefix,
+            isPowerShell: isPowerShell
         )
 
         return """
@@ -526,8 +540,16 @@ public struct WendyE2ERecorder: Sendable {
     private static func commandSource(
         machine: WendyE2EMachine,
         command: String,
-        harnessPrefix: [String]
+        harnessPrefix: [String],
+        isPowerShell: Bool
     ) -> String {
+        if isPowerShell {
+            return Self.localPowerShellCommandSource(
+                command: command,
+                harnessPrefix: harnessPrefix
+            )
+        }
+
         if machine.isLocal {
             return Self.localCommandSource(command: command, harnessPrefix: harnessPrefix)
         }
@@ -546,6 +568,21 @@ public struct WendyE2ERecorder: Sendable {
 
         \(Self.indent(command))
         )
+        """
+    }
+
+    private static func localPowerShellCommandSource(
+        command: String,
+        harnessPrefix: [String]
+    )
+        -> String
+    {
+        """
+        & {
+        \(Self.indent(harnessPrefix.joined(separator: "\n")))
+
+        \(Self.indent(command))
+        }
         """
     }
 
@@ -601,6 +638,15 @@ public struct WendyE2ERecorder: Sendable {
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func isPowerShellName(_ name: String) -> Bool {
+        switch name.lowercased() {
+        case "pwsh", "pwsh.exe", "powershell", "powershell.exe":
+            return true
+        default:
+            return false
+        }
     }
 
     private static func environmentDescription(_ environment: [String: String]) -> String {
