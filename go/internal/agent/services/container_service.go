@@ -286,7 +286,7 @@ func monitorPolicyInt(rp *agentpb.RestartPolicy) (policy int, maxRetries int, ok
 		}
 		return RestartPolicyOnFailure, retries, true
 	default:
-		return RestartPolicyUnlessStopped, 0, true // default to unless-stopped
+		return 0, 0, false // unknown mode — treat as no policy
 	}
 }
 
@@ -559,14 +559,19 @@ func (s *ContainerService) StopContainer(ctx context.Context, req *agentpb.StopC
 
 // DeleteContainer deletes a container and optionally its image and volumes.
 func (s *ContainerService) DeleteContainer(ctx context.Context, req *agentpb.DeleteContainerRequest) (*agentpb.DeleteContainerResponse, error) {
-	if err := s.containerd.DeleteContainer(ctx, req.GetAppName(), req.GetDeleteImage()); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete container: %v", err)
+	// Unregister from the monitor BEFORE deletion to close the window where the
+	// monitor could attempt a restart while the container is being removed.
+	// MarkExplicitStop prevents a spurious restart attempt if the monitor fires
+	// between the two calls. Safe to call even if the app was never registered.
+	// If DeleteContainer subsequently fails, the container is left unregistered —
+	// that is acceptable: the caller will retry deletion.
+	if s.monitor != nil {
+		s.monitor.MarkExplicitStop(req.GetAppName())
+		s.monitor.Unregister(req.GetAppName())
 	}
 
-	// Unregister from the monitor to remove any stale restart entries.
-	// Safe to call even if the app was never registered.
-	if s.monitor != nil {
-		s.monitor.Unregister(req.GetAppName())
+	if err := s.containerd.DeleteContainer(ctx, req.GetAppName(), req.GetDeleteImage()); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete container: %v", err)
 	}
 
 	if req.GetDeleteVolumes() {
