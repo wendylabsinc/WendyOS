@@ -127,6 +127,21 @@ jobs:
           mkdir -p ../${{ matrix.artifact-name }}
           go build -ldflags "${LDFLAGS}" -o ../${{ matrix.artifact-name }}/${{ matrix.product }} ./cmd/${{ matrix.cmd }}
 
+      - name: Sign wendy-agent binary
+        if: matrix.product == 'wendy-agent'
+        working-directory: .
+        env:
+          WENDY_GPG_PRIVATE_KEY: ${{ secrets.WENDY_GPG_PRIVATE_KEY }}
+          WENDY_GPG_KEY_ID: ${{ secrets.WENDY_GPG_KEY_ID }}
+          ARTIFACT_NAME: ${{ matrix.artifact-name }}
+        run: |
+          echo "$WENDY_GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback \
+            --detach-sign --armor \
+            -u "$WENDY_GPG_KEY_ID" \
+            --output "${ARTIFACT_NAME}/wendy-agent.asc" \
+            "${ARTIFACT_NAME}/wendy-agent"
+
       - name: Create archive
         working-directory: .
         run: |
@@ -437,6 +452,22 @@ jobs:
 
           ls -la *.rpm
 
+      - name: Sign .rpm packages
+        env:
+          WENDY_GPG_PRIVATE_KEY: ${{ secrets.WENDY_GPG_PRIVATE_KEY }}
+          WENDY_GPG_KEY_ID: ${{ secrets.WENDY_GPG_KEY_ID }}
+        run: |
+          echo "$WENDY_GPG_PRIVATE_KEY" | gpg --batch --import
+          # Export the public key so rpm can verify it
+          gpg --export "$WENDY_GPG_KEY_ID" | sudo tee /etc/pki/rpm-gpg/wendy-releases.gpg > /dev/null || true
+          rpm --import <(gpg --export "$WENDY_GPG_KEY_ID") 2>/dev/null || true
+          # Configure rpm macros for signing
+          printf "%%_signature gpg\n%%_gpg_path %s\n%%_gpg_name %s\n%%__gpg /usr/bin/gpg\n%%_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback\n" \
+            "$HOME/.gnupg" "$WENDY_GPG_KEY_ID" > ~/.rpmmacros
+          for rpm_file in wendy-agent-*.rpm; do
+            rpmsign --addsign "$rpm_file"
+          done
+
       - name: Validate package metadata
         run: |
           set -euo pipefail
@@ -675,13 +706,20 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           merge-multiple: true
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: packaging/keys
+
       - name: List files
         run: |
           ls -la
+          # Include the GPG public key as a release asset alongside binaries
+          cp packaging/keys/wendy-releases.gpg.pub . 2>/dev/null || true
           # Create a newline-delimited list of release files
           {
             echo 'FILES<<EOF'
             find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" | sort
+            echo "wendy-releases.gpg.pub"
             echo 'EOF'
           } >> $GITHUB_ENV
       - name: Create Release
