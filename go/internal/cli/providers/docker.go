@@ -245,28 +245,15 @@ func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, ou
 		return fmt.Errorf("docker provider: invalid build context")
 	}
 
-	// Remove any existing Wendy-managed container with the same name to avoid conflicts.
-	inspectCmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Config.Labels.wendy.managed}}", bc.ContainerName)
-	inspectOut, err := inspectCmd.Output()
-	if err != nil {
-		// If the container does not exist, docker inspect typically reports "No such object".
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := string(exitErr.Stderr)
-			if !strings.Contains(stderr, "No such object") {
-				return fmt.Errorf("docker inspect: %w: %s", err, strings.TrimSpace(stderr))
-			}
-		} else {
-			return fmt.Errorf("docker inspect: %w", err)
+	// Remove any existing container with the same name to avoid conflicts.
+	inspectOut, inspectErr := exec.CommandContext(ctx, "docker", "inspect", bc.ContainerName).CombinedOutput()
+	if inspectErr == nil {
+		// Container exists — remove it so docker run can reuse the name.
+		if rmOut, rmErr := exec.CommandContext(ctx, "docker", "rm", "-f", bc.ContainerName).CombinedOutput(); rmErr != nil {
+			return fmt.Errorf("docker rm: %w: %s", rmErr, strings.TrimSpace(string(rmOut)))
 		}
-	} else if strings.TrimSpace(string(inspectOut)) == "true" {
-		rmCmd := exec.CommandContext(ctx, "docker", "rm", "-f", bc.ContainerName)
-		rmOut, rmErr := rmCmd.CombinedOutput()
-		if rmErr != nil {
-			rmMsg := string(rmOut)
-			if !strings.Contains(rmMsg, "No such container") {
-				return fmt.Errorf("docker rm: %w: %s", rmErr, strings.TrimSpace(rmMsg))
-			}
-		}
+	} else if !strings.Contains(strings.ToLower(string(inspectOut)), "no such object") {
+		return fmt.Errorf("docker inspect: %w: %s", inspectErr, strings.TrimSpace(string(inspectOut)))
 	}
 
 	args := []string{"run", "--name", bc.ContainerName, "--label", "wendy.managed=true"}

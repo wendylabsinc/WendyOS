@@ -1683,8 +1683,7 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 // This is used by the Docker Desktop provider for Swift projects that do not
 // have a Dockerfile, as an alternative to swift-container-plugin (which only
 // supports pushing to registries).
-func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
-	arch := runtime.GOARCH
+func buildSwiftDockerImage(ctx context.Context, dir, product, arch string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
 	sdk, err := swifttoolchain.FindSwiftSDK(ctx, arch, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return "", fmt.Errorf("finding Swift SDK: %w", err)
