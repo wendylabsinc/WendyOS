@@ -701,3 +701,83 @@ func (n *NMCLINetworkManager) ForgetWiFiNetwork(ctx context.Context, ssid string
 	n.logger.Info("Forgot WiFi network", zap.String("ssid", ssid))
 	return nil
 }
+
+// assertKnownWiFiUUID resolves a caller-supplied UUID through listKnownProfiles
+// (which only returns saved 802-11-wireless connections) and rejects unknown or
+// non-WiFi UUIDs. This prevents UUID-based mutations from targeting non-WiFi
+// NetworkManager connections such as ethernet or VPN profiles.
+func (n *NMCLINetworkManager) assertKnownWiFiUUID(ctx context.Context, uuid string) error {
+	profiles, err := n.listKnownProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range profiles {
+		if p.UUID == uuid {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown WiFi network UUID %q", uuid)
+}
+
+// ForgetWiFiNetworkByUUID deletes a saved profile directly by its NetworkManager UUID.
+func (n *NMCLINetworkManager) ForgetWiFiNetworkByUUID(ctx context.Context, uuid string) error {
+	if err := n.assertKnownWiFiUUID(ctx, uuid); err != nil {
+		return err
+	}
+	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "delete", uuid)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("nmcli delete: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	n.logger.Info("Forgot WiFi network", zap.String("uuid", uuid))
+	return nil
+}
+
+// SetWiFiNetworkPriorityByUUID sets the autoconnect priority for a profile identified by UUID.
+func (n *NMCLINetworkManager) SetWiFiNetworkPriorityByUUID(ctx context.Context, uuid string, priority int32) error {
+	if err := n.assertKnownWiFiUUID(ctx, uuid); err != nil {
+		return err
+	}
+	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "modify", uuid,
+		"connection.autoconnect-priority", strconv.Itoa(int(priority)))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("nmcli modify: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	n.logger.Info("Set WiFi priority", zap.String("uuid", uuid), zap.Int32("priority", priority))
+	return nil
+}
+
+// ReorderKnownWiFiNetworksByUUID assigns descending priorities to profiles identified by UUID.
+// The first UUID in the slice gets the highest priority.
+func (n *NMCLINetworkManager) ReorderKnownWiFiNetworksByUUID(ctx context.Context, orderedUUIDs []string) error {
+	if len(orderedUUIDs) == 0 {
+		return nil
+	}
+	profiles, err := n.listKnownProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	byUUID := make(map[string]knownProfile, len(profiles))
+	for _, p := range profiles {
+		byUUID[p.UUID] = p
+	}
+	top := int32(len(orderedUUIDs))
+	for i, uuid := range orderedUUIDs {
+		newPrio := top - int32(i)
+		kp, ok := byUUID[uuid]
+		if !ok {
+			// Unknown or non-WiFi UUID: refuse to reprioritize it rather than
+			// passing an arbitrary connection to nmcli.
+			return fmt.Errorf("unknown WiFi network UUID %q", uuid)
+		}
+		if kp.Priority == newPrio {
+			continue
+		}
+		cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "modify", uuid,
+			"connection.autoconnect-priority", strconv.Itoa(int(newPrio)))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("nmcli modify %s: %s: %w", uuid, strings.TrimSpace(string(out)), err)
+		}
+	}
+	n.logger.Info("Reordered WiFi networks", zap.Strings("order", orderedUUIDs))
+	return nil
+}

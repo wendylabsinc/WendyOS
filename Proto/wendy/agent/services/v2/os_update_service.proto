@@ -6,6 +6,14 @@ service WendyOSUpdateService {
     rpc UpdateOS(UpdateOSRequest) returns (stream UpdateOSResponse);
 }
 
+enum UpdatePhase {
+    UPDATE_PHASE_UNSPECIFIED = 0;
+    UPDATE_PHASE_DOWNLOADING = 1;
+    UPDATE_PHASE_VERIFYING = 2;
+    UPDATE_PHASE_INSTALLING = 3;
+    UPDATE_PHASE_FINALIZING = 4;
+}
+
 message UpdateOSRequest {
     string artifact_url = 1;
 }
@@ -18,7 +26,7 @@ message UpdateOSResponse {
     }
 
     message Progress {
-        string phase = 1;
+        UpdatePhase phase = 1;
         int32 percent = 2;
     }
 

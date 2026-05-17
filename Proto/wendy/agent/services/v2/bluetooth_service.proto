@@ -3,7 +3,7 @@ package wendy.agent.services.v2;
 option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
 
 service WendyBluetoothService {
-    rpc ScanBluetoothPeripherals(stream ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
+    rpc ScanBluetoothPeripherals(ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
     rpc ConnectBluetoothPeripheral(ConnectBluetoothPeripheralRequest) returns (ConnectBluetoothPeripheralResponse);
     rpc DisconnectBluetoothPeripheral(DisconnectBluetoothPeripheralRequest) returns (DisconnectBluetoothPeripheralResponse);
     rpc ForgetBluetoothPeripheral(ForgetBluetoothPeripheralRequest) returns (ForgetBluetoothPeripheralResponse);

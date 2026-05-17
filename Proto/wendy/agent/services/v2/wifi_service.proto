@@ -41,30 +41,23 @@ message ListWiFiNetworksResponse {
 
 message ConnectToWiFiRequest {
     string ssid = 1;
-    string password = 2;
+    optional string password = 2;
     optional WiFiSecurityType security = 3;
     optional bool hidden = 4;
 }
 
-message ConnectToWiFiResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message ConnectToWiFiResponse {}
 
 message GetWiFiStatusRequest {}
 
 message GetWiFiStatusResponse {
     bool connected = 1;
     optional string ssid = 2;
-    optional string error_message = 3;
 }
 
 message DisconnectWiFiRequest {}
 
-message DisconnectWiFiResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message DisconnectWiFiResponse {}
 
 message ListKnownWiFiNetworksRequest {}
 
@@ -79,30 +72,25 @@ message ListKnownWiFiNetworksResponse {
     }
 }
 
+// Identifies a network by its NetworkManager connection UUID (from ListKnownWiFiNetworks).
 message SetWiFiNetworkPriorityRequest {
-    string ssid = 1;
+    string uuid = 1;
     int32 priority = 2;
 }
 
-message SetWiFiNetworkPriorityResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message SetWiFiNetworkPriorityResponse {}
 
+// Reorders saved networks by UUID. Earlier UUIDs get higher priority.
+// UUIDs not listed are left untouched.
 message ReorderKnownWiFiNetworksRequest {
-    repeated string order_ssids = 1;
+    repeated string order_uuids = 1;
 }
 
-message ReorderKnownWiFiNetworksResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message ReorderKnownWiFiNetworksResponse {}
 
+// Removes a saved network profile by its NetworkManager connection UUID.
 message ForgetWiFiNetworkRequest {
-    string ssid = 1;
+    string uuid = 1;
 }
 
-message ForgetWiFiNetworkResponse {
-    bool success = 1;
-    optional string error_message = 2;
-}
+message ForgetWiFiNetworkResponse {}

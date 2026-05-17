@@ -55,6 +55,15 @@ func (m *integrationNetworkManager) ReorderKnownWiFiNetworks(_ context.Context, 
 func (m *integrationNetworkManager) ForgetWiFiNetwork(_ context.Context, _ string) error {
 	return nil
 }
+func (m *integrationNetworkManager) ForgetWiFiNetworkByUUID(_ context.Context, _ string) error {
+	return nil
+}
+func (m *integrationNetworkManager) SetWiFiNetworkPriorityByUUID(_ context.Context, _ string, _ int32) error {
+	return nil
+}
+func (m *integrationNetworkManager) ReorderKnownWiFiNetworksByUUID(_ context.Context, _ []string) error {
+	return nil
+}
 
 type integrationHardwareDiscoverer struct{}
 

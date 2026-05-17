@@ -38,8 +38,13 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	}
 
 	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		v := strings.TrimSpace(string(data))
-		resp.DeviceType = &v
+		deviceType, storageMedium := parseDeviceType(string(data))
+		if deviceType != "" {
+			resp.DeviceType = &deviceType
+		}
+		if storageMedium != "" {
+			resp.StorageMedium = &storageMedium
+		}
 	}
 
 	gpuInfo := detectGPUInfo()

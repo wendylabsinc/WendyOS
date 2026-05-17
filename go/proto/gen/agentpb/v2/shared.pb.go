@@ -180,6 +180,7 @@ type AppContainer struct {
 	AppVersion    string                 `protobuf:"bytes,2,opt,name=app_version,json=appVersion,proto3" json:"app_version,omitempty"`
 	RunningState  AppRunningState        `protobuf:"varint,3,opt,name=running_state,json=runningState,proto3,enum=wendy.agent.services.v2.AppRunningState" json:"running_state,omitempty"`
 	FailureCount  uint32                 `protobuf:"varint,4,opt,name=failure_count,json=failureCount,proto3" json:"failure_count,omitempty"`
+	McpPort       uint32                 `protobuf:"varint,5,opt,name=mcp_port,json=mcpPort,proto3" json:"mcp_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -242,6 +243,13 @@ func (x *AppContainer) GetFailureCount() uint32 {
 	return 0
 }
 
+func (x *AppContainer) GetMcpPort() uint32 {
+	if x != nil {
+		return x.McpPort
+	}
+	return 0
+}
+
 var File_wendy_agent_services_v2_shared_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_shared_proto_rawDesc = "" +
@@ -249,13 +257,14 @@ const file_wendy_agent_services_v2_shared_proto_rawDesc = "" +
 	"$wendy/agent/services/v2/shared.proto\x12\x17wendy.agent.services.v2\"\x84\x01\n" +
 	"\rRestartPolicy\x12>\n" +
 	"\x04mode\x18\x01 \x01(\x0e2*.wendy.agent.services.v2.RestartPolicyModeR\x04mode\x123\n" +
-	"\x16on_failure_max_retries\x18\x02 \x01(\x05R\x13onFailureMaxRetries\"\xbe\x01\n" +
+	"\x16on_failure_max_retries\x18\x02 \x01(\x05R\x13onFailureMaxRetries\"\xd9\x01\n" +
 	"\fAppContainer\x12\x19\n" +
 	"\bapp_name\x18\x01 \x01(\tR\aappName\x12\x1f\n" +
 	"\vapp_version\x18\x02 \x01(\tR\n" +
 	"appVersion\x12M\n" +
 	"\rrunning_state\x18\x03 \x01(\x0e2(.wendy.agent.services.v2.AppRunningStateR\frunningState\x12#\n" +
-	"\rfailure_count\x18\x04 \x01(\rR\ffailureCount*\xa0\x01\n" +
+	"\rfailure_count\x18\x04 \x01(\rR\ffailureCount\x12\x19\n" +
+	"\bmcp_port\x18\x05 \x01(\rR\amcpPort*\xa0\x01\n" +
 	"\x11RestartPolicyMode\x12#\n" +
 	"\x1fRESTART_POLICY_MODE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"RESTART_POLICY_MODE_UNLESS_STOPPED\x10\x01\x12\x1a\n" +

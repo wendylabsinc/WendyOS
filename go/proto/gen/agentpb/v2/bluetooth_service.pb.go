@@ -476,9 +476,9 @@ const file_wendy_agent_services_v2_bluetooth_service_proto_rawDesc = "" +
 	"%DisconnectBluetoothPeripheralResponse\"<\n" +
 	" ForgetBluetoothPeripheralRequest\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"#\n" +
-	"!ForgetBluetoothPeripheralResponse2\xfb\x04\n" +
-	"\x15WendyBluetoothService\x12\x93\x01\n" +
-	"\x18ScanBluetoothPeripherals\x128.wendy.agent.services.v2.ScanBluetoothPeripheralsRequest\x1a9.wendy.agent.services.v2.ScanBluetoothPeripheralsResponse(\x010\x01\x12\x95\x01\n" +
+	"!ForgetBluetoothPeripheralResponse2\xf9\x04\n" +
+	"\x15WendyBluetoothService\x12\x91\x01\n" +
+	"\x18ScanBluetoothPeripherals\x128.wendy.agent.services.v2.ScanBluetoothPeripheralsRequest\x1a9.wendy.agent.services.v2.ScanBluetoothPeripheralsResponse0\x01\x12\x95\x01\n" +
 	"\x1aConnectBluetoothPeripheral\x12:.wendy.agent.services.v2.ConnectBluetoothPeripheralRequest\x1a;.wendy.agent.services.v2.ConnectBluetoothPeripheralResponse\x12\x9e\x01\n" +
 	"\x1dDisconnectBluetoothPeripheral\x12=.wendy.agent.services.v2.DisconnectBluetoothPeripheralRequest\x1a>.wendy.agent.services.v2.DisconnectBluetoothPeripheralResponse\x12\x92\x01\n" +
 	"\x19ForgetBluetoothPeripheral\x129.wendy.agent.services.v2.ForgetBluetoothPeripheralRequest\x1a:.wendy.agent.services.v2.ForgetBluetoothPeripheralResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"

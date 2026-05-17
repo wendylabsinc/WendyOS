@@ -21,6 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type UpdatePhase int32
+
+const (
+	UpdatePhase_UPDATE_PHASE_UNSPECIFIED UpdatePhase = 0
+	UpdatePhase_UPDATE_PHASE_DOWNLOADING UpdatePhase = 1
+	UpdatePhase_UPDATE_PHASE_VERIFYING   UpdatePhase = 2
+	UpdatePhase_UPDATE_PHASE_INSTALLING  UpdatePhase = 3
+	UpdatePhase_UPDATE_PHASE_FINALIZING  UpdatePhase = 4
+)
+
+// Enum value maps for UpdatePhase.
+var (
+	UpdatePhase_name = map[int32]string{
+		0: "UPDATE_PHASE_UNSPECIFIED",
+		1: "UPDATE_PHASE_DOWNLOADING",
+		2: "UPDATE_PHASE_VERIFYING",
+		3: "UPDATE_PHASE_INSTALLING",
+		4: "UPDATE_PHASE_FINALIZING",
+	}
+	UpdatePhase_value = map[string]int32{
+		"UPDATE_PHASE_UNSPECIFIED": 0,
+		"UPDATE_PHASE_DOWNLOADING": 1,
+		"UPDATE_PHASE_VERIFYING":   2,
+		"UPDATE_PHASE_INSTALLING":  3,
+		"UPDATE_PHASE_FINALIZING":  4,
+	}
+)
+
+func (x UpdatePhase) Enum() *UpdatePhase {
+	p := new(UpdatePhase)
+	*p = x
+	return p
+}
+
+func (x UpdatePhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (UpdatePhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_agent_services_v2_os_update_service_proto_enumTypes[0].Descriptor()
+}
+
+func (UpdatePhase) Type() protoreflect.EnumType {
+	return &file_wendy_agent_services_v2_os_update_service_proto_enumTypes[0]
+}
+
+func (x UpdatePhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use UpdatePhase.Descriptor instead.
+func (UpdatePhase) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_os_update_service_proto_rawDescGZIP(), []int{0}
+}
+
 type UpdateOSRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ArtifactUrl   string                 `protobuf:"bytes,1,opt,name=artifact_url,json=artifactUrl,proto3" json:"artifact_url,omitempty"`
@@ -165,7 +220,7 @@ func (*UpdateOSResponse_Failed_) isUpdateOSResponse_ResponseType() {}
 
 type UpdateOSResponse_Progress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"`
+	Phase         UpdatePhase            `protobuf:"varint,1,opt,name=phase,proto3,enum=wendy.agent.services.v2.UpdatePhase" json:"phase,omitempty"`
 	Percent       int32                  `protobuf:"varint,2,opt,name=percent,proto3" json:"percent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -201,11 +256,11 @@ func (*UpdateOSResponse_Progress) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_os_update_service_proto_rawDescGZIP(), []int{1, 0}
 }
 
-func (x *UpdateOSResponse_Progress) GetPhase() string {
+func (x *UpdateOSResponse_Progress) GetPhase() UpdatePhase {
 	if x != nil {
 		return x.Phase
 	}
-	return ""
+	return UpdatePhase_UPDATE_PHASE_UNSPECIFIED
 }
 
 func (x *UpdateOSResponse_Progress) GetPercent() int32 {
@@ -309,19 +364,25 @@ const file_wendy_agent_services_v2_os_update_service_proto_rawDesc = "" +
 	"\n" +
 	"/wendy/agent/services/v2/os_update_service.proto\x12\x17wendy.agent.services.v2\"4\n" +
 	"\x0fUpdateOSRequest\x12!\n" +
-	"\fartifact_url\x18\x01 \x01(\tR\vartifactUrl\"\xb7\x03\n" +
+	"\fartifact_url\x18\x01 \x01(\tR\vartifactUrl\"\xdd\x03\n" +
 	"\x10UpdateOSResponse\x12P\n" +
 	"\bprogress\x18\x01 \x01(\v22.wendy.agent.services.v2.UpdateOSResponse.ProgressH\x00R\bprogress\x12S\n" +
 	"\tcompleted\x18\x02 \x01(\v23.wendy.agent.services.v2.UpdateOSResponse.CompletedH\x00R\tcompleted\x12J\n" +
-	"\x06failed\x18\x03 \x01(\v20.wendy.agent.services.v2.UpdateOSResponse.FailedH\x00R\x06failed\x1a:\n" +
-	"\bProgress\x12\x14\n" +
-	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x18\n" +
+	"\x06failed\x18\x03 \x01(\v20.wendy.agent.services.v2.UpdateOSResponse.FailedH\x00R\x06failed\x1a`\n" +
+	"\bProgress\x12:\n" +
+	"\x05phase\x18\x01 \x01(\x0e2$.wendy.agent.services.v2.UpdatePhaseR\x05phase\x12\x18\n" +
 	"\apercent\x18\x02 \x01(\x05R\apercent\x1a4\n" +
 	"\tCompleted\x12'\n" +
 	"\x0freboot_required\x18\x01 \x01(\bR\x0erebootRequired\x1a-\n" +
 	"\x06Failed\x12#\n" +
 	"\rerror_message\x18\x01 \x01(\tR\ferrorMessageB\x0f\n" +
-	"\rresponse_type2y\n" +
+	"\rresponse_type*\x9f\x01\n" +
+	"\vUpdatePhase\x12\x1c\n" +
+	"\x18UPDATE_PHASE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18UPDATE_PHASE_DOWNLOADING\x10\x01\x12\x1a\n" +
+	"\x16UPDATE_PHASE_VERIFYING\x10\x02\x12\x1b\n" +
+	"\x17UPDATE_PHASE_INSTALLING\x10\x03\x12\x1b\n" +
+	"\x17UPDATE_PHASE_FINALIZING\x10\x042y\n" +
 	"\x14WendyOSUpdateService\x12a\n" +
 	"\bUpdateOS\x12(.wendy.agent.services.v2.UpdateOSRequest\x1a).wendy.agent.services.v2.UpdateOSResponse0\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
@@ -337,25 +398,28 @@ func file_wendy_agent_services_v2_os_update_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_os_update_service_proto_rawDescData
 }
 
+var file_wendy_agent_services_v2_os_update_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_wendy_agent_services_v2_os_update_service_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_wendy_agent_services_v2_os_update_service_proto_goTypes = []any{
-	(*UpdateOSRequest)(nil),            // 0: wendy.agent.services.v2.UpdateOSRequest
-	(*UpdateOSResponse)(nil),           // 1: wendy.agent.services.v2.UpdateOSResponse
-	(*UpdateOSResponse_Progress)(nil),  // 2: wendy.agent.services.v2.UpdateOSResponse.Progress
-	(*UpdateOSResponse_Completed)(nil), // 3: wendy.agent.services.v2.UpdateOSResponse.Completed
-	(*UpdateOSResponse_Failed)(nil),    // 4: wendy.agent.services.v2.UpdateOSResponse.Failed
+	(UpdatePhase)(0),                   // 0: wendy.agent.services.v2.UpdatePhase
+	(*UpdateOSRequest)(nil),            // 1: wendy.agent.services.v2.UpdateOSRequest
+	(*UpdateOSResponse)(nil),           // 2: wendy.agent.services.v2.UpdateOSResponse
+	(*UpdateOSResponse_Progress)(nil),  // 3: wendy.agent.services.v2.UpdateOSResponse.Progress
+	(*UpdateOSResponse_Completed)(nil), // 4: wendy.agent.services.v2.UpdateOSResponse.Completed
+	(*UpdateOSResponse_Failed)(nil),    // 5: wendy.agent.services.v2.UpdateOSResponse.Failed
 }
 var file_wendy_agent_services_v2_os_update_service_proto_depIdxs = []int32{
-	2, // 0: wendy.agent.services.v2.UpdateOSResponse.progress:type_name -> wendy.agent.services.v2.UpdateOSResponse.Progress
-	3, // 1: wendy.agent.services.v2.UpdateOSResponse.completed:type_name -> wendy.agent.services.v2.UpdateOSResponse.Completed
-	4, // 2: wendy.agent.services.v2.UpdateOSResponse.failed:type_name -> wendy.agent.services.v2.UpdateOSResponse.Failed
-	0, // 3: wendy.agent.services.v2.WendyOSUpdateService.UpdateOS:input_type -> wendy.agent.services.v2.UpdateOSRequest
-	1, // 4: wendy.agent.services.v2.WendyOSUpdateService.UpdateOS:output_type -> wendy.agent.services.v2.UpdateOSResponse
-	4, // [4:5] is the sub-list for method output_type
-	3, // [3:4] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: wendy.agent.services.v2.UpdateOSResponse.progress:type_name -> wendy.agent.services.v2.UpdateOSResponse.Progress
+	4, // 1: wendy.agent.services.v2.UpdateOSResponse.completed:type_name -> wendy.agent.services.v2.UpdateOSResponse.Completed
+	5, // 2: wendy.agent.services.v2.UpdateOSResponse.failed:type_name -> wendy.agent.services.v2.UpdateOSResponse.Failed
+	0, // 3: wendy.agent.services.v2.UpdateOSResponse.Progress.phase:type_name -> wendy.agent.services.v2.UpdatePhase
+	1, // 4: wendy.agent.services.v2.WendyOSUpdateService.UpdateOS:input_type -> wendy.agent.services.v2.UpdateOSRequest
+	2, // 5: wendy.agent.services.v2.WendyOSUpdateService.UpdateOS:output_type -> wendy.agent.services.v2.UpdateOSResponse
+	5, // [5:6] is the sub-list for method output_type
+	4, // [4:5] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_os_update_service_proto_init() }
@@ -373,13 +437,14 @@ func file_wendy_agent_services_v2_os_update_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_os_update_service_proto_rawDesc), len(file_wendy_agent_services_v2_os_update_service_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_wendy_agent_services_v2_os_update_service_proto_goTypes,
 		DependencyIndexes: file_wendy_agent_services_v2_os_update_service_proto_depIdxs,
+		EnumInfos:         file_wendy_agent_services_v2_os_update_service_proto_enumTypes,
 		MessageInfos:      file_wendy_agent_services_v2_os_update_service_proto_msgTypes,
 	}.Build()
 	File_wendy_agent_services_v2_os_update_service_proto = out.File

@@ -38,14 +38,10 @@ func TestBluetoothService_ScanReturnsEmpty(t *testing.T) {
 	client, cleanup := startBluetoothServer(t, &mockBluetoothManager{})
 	defer cleanup()
 
-	stream, err := client.ScanBluetoothPeripherals(context.Background())
+	stream, err := client.ScanBluetoothPeripherals(context.Background(), &agentpbv2.ScanBluetoothPeripheralsRequest{})
 	if err != nil {
 		t.Fatalf("ScanBluetoothPeripherals: %v", err)
 	}
-	// The mock closes the scan channel immediately, so the server may finish
-	// before the client's Send arrives. Both outcomes are valid.
-	_ = stream.Send(&agentpbv2.ScanBluetoothPeripheralsRequest{})
-	stream.CloseSend()
 
 	_, err = stream.Recv()
 	// mockBluetoothManager closes the channel immediately, server returns nil → EOF

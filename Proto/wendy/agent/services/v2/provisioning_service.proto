@@ -20,15 +20,15 @@ message NotProvisionedResponse {}
 
 message ProvisionedResponse {
     string cloud_host = 1;
-    int32 organization_id = 2;
-    int32 asset_id = 3;
+    int64 organization_id = 2;
+    int64 asset_id = 3;
 }
 
 message StartProvisioningRequest {
-    int32 organization_id = 1;
+    int64 organization_id = 1;
     string enrollment_token = 2;
     string cloud_host = 3;
-    int32 asset_id = 4;
+    int64 asset_id = 4;
 }
 
 message StartProvisioningResponse {}

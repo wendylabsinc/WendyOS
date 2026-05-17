@@ -271,6 +271,7 @@ func (x *FileSyncStart) GetManifest() *FileSyncManifest {
 	return nil
 }
 
+// sha256 is the hash of this chunk's data (not cumulative).
 type FileSyncChunk struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Path           string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -411,8 +412,6 @@ type FileSyncChmod struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	Mode          uint32                 `protobuf:"varint,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
-	Sha256        []byte                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -459,20 +458,6 @@ func (x *FileSyncChmod) GetMode() uint32 {
 		return x.Mode
 	}
 	return 0
-}
-
-func (x *FileSyncChmod) GetSize() int64 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-func (x *FileSyncChmod) GetSha256() []byte {
-	if x != nil {
-		return x.Sha256
-	}
-	return nil
 }
 
 type FileSyncDelete struct {
@@ -770,12 +755,10 @@ const file_wendy_agent_services_v2_file_sync_service_proto_rawDesc = "" +
 	"\x0eFileSyncCommit\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\fR\x06sha256\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\"c\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\"7\n" +
 	"\rFileSyncChmod\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04mode\x18\x02 \x01(\rR\x04mode\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\fR\x06sha256\"&\n" +
+	"\x04mode\x18\x02 \x01(\rR\x04mode\"&\n" +
 	"\x0eFileSyncDelete\x12\x14\n" +
 	"\x05paths\x18\x01 \x03(\tR\x05paths\"\xef\x01\n" +
 	"\x10FileSyncResponse\x12G\n" +

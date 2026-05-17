@@ -40,7 +40,10 @@ func (s *WiFiService) ConnectToWiFi(ctx context.Context, req *agentpbv2.ConnectT
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	v1req := &agentpb.ConnectToWiFiRequest{Ssid: req.Ssid, Password: req.Password}
+	v1req := &agentpb.ConnectToWiFiRequest{Ssid: req.Ssid}
+	if req.Password != nil {
+		v1req.Password = *req.Password
+	}
 	if req.Security != nil {
 		sec := agentpb.WiFiSecurityType(*req.Security)
 		v1req.Security = &sec
@@ -49,10 +52,9 @@ func (s *WiFiService) ConnectToWiFi(ctx context.Context, req *agentpbv2.ConnectT
 		v1req.Hidden = req.Hidden
 	}
 	if err := s.networkManager.ConnectToWiFi(ctx, v1req); err != nil {
-		msg := err.Error()
-		return &agentpbv2.ConnectToWiFiResponse{Success: false, ErrorMessage: &msg}, nil
+		return nil, status.Errorf(codes.Internal, "failed to connect to WiFi: %v", err)
 	}
-	return &agentpbv2.ConnectToWiFiResponse{Success: true}, nil
+	return &agentpbv2.ConnectToWiFiResponse{}, nil
 }
 
 func (s *WiFiService) GetWiFiStatus(ctx context.Context, _ *agentpbv2.GetWiFiStatusRequest) (*agentpbv2.GetWiFiStatusResponse, error) {
@@ -61,8 +63,7 @@ func (s *WiFiService) GetWiFiStatus(ctx context.Context, _ *agentpbv2.GetWiFiSta
 	}
 	connected, ssid, err := s.networkManager.GetWiFiStatus(ctx)
 	if err != nil {
-		msg := err.Error()
-		return &agentpbv2.GetWiFiStatusResponse{ErrorMessage: &msg}, nil
+		return nil, status.Errorf(codes.Internal, "failed to get WiFi status: %v", err)
 	}
 	resp := &agentpbv2.GetWiFiStatusResponse{Connected: connected}
 	if connected && ssid != "" {
@@ -76,10 +77,9 @@ func (s *WiFiService) DisconnectWiFi(ctx context.Context, _ *agentpbv2.Disconnec
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
 	if err := s.networkManager.DisconnectWiFi(ctx); err != nil {
-		msg := err.Error()
-		return &agentpbv2.DisconnectWiFiResponse{Success: false, ErrorMessage: &msg}, nil
+		return nil, status.Errorf(codes.Internal, "failed to disconnect WiFi: %v", err)
 	}
-	return &agentpbv2.DisconnectWiFiResponse{Success: true}, nil
+	return &agentpbv2.DisconnectWiFiResponse{}, nil
 }
 
 func (s *WiFiService) ListKnownWiFiNetworks(ctx context.Context, _ *agentpbv2.ListKnownWiFiNetworksRequest) (*agentpbv2.ListKnownWiFiNetworksResponse, error) {
@@ -106,33 +106,30 @@ func (s *WiFiService) SetWiFiNetworkPriority(ctx context.Context, req *agentpbv2
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.SetWiFiNetworkPriority(ctx, req.GetSsid(), req.GetPriority()); err != nil {
-		msg := err.Error()
-		return &agentpbv2.SetWiFiNetworkPriorityResponse{Success: false, ErrorMessage: &msg}, nil
+	if err := s.networkManager.SetWiFiNetworkPriorityByUUID(ctx, req.GetUuid(), req.GetPriority()); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to set WiFi network priority: %v", err)
 	}
-	return &agentpbv2.SetWiFiNetworkPriorityResponse{Success: true}, nil
+	return &agentpbv2.SetWiFiNetworkPriorityResponse{}, nil
 }
 
 func (s *WiFiService) ReorderKnownWiFiNetworks(ctx context.Context, req *agentpbv2.ReorderKnownWiFiNetworksRequest) (*agentpbv2.ReorderKnownWiFiNetworksResponse, error) {
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.ReorderKnownWiFiNetworks(ctx, req.GetOrderSsids()); err != nil {
-		msg := err.Error()
-		return &agentpbv2.ReorderKnownWiFiNetworksResponse{Success: false, ErrorMessage: &msg}, nil
+	if err := s.networkManager.ReorderKnownWiFiNetworksByUUID(ctx, req.GetOrderUuids()); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reorder WiFi networks: %v", err)
 	}
-	return &agentpbv2.ReorderKnownWiFiNetworksResponse{Success: true}, nil
+	return &agentpbv2.ReorderKnownWiFiNetworksResponse{}, nil
 }
 
 func (s *WiFiService) ForgetWiFiNetwork(ctx context.Context, req *agentpbv2.ForgetWiFiNetworkRequest) (*agentpbv2.ForgetWiFiNetworkResponse, error) {
 	if s.networkManager == nil {
 		return nil, status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
 	}
-	if err := s.networkManager.ForgetWiFiNetwork(ctx, req.GetSsid()); err != nil {
-		msg := err.Error()
-		return &agentpbv2.ForgetWiFiNetworkResponse{Success: false, ErrorMessage: &msg}, nil
+	if err := s.networkManager.ForgetWiFiNetworkByUUID(ctx, req.GetUuid()); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to forget WiFi network: %v", err)
 	}
-	return &agentpbv2.ForgetWiFiNetworkResponse{Success: true}, nil
+	return &agentpbv2.ForgetWiFiNetworkResponse{}, nil
 }
 
 func mapWiFiNetworkToV2(n *agentpb.ListWiFiNetworksResponse_WiFiNetwork) *agentpbv2.ListWiFiNetworksResponse_WiFiNetwork {

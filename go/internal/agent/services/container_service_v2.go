@@ -31,7 +31,22 @@ func NewContainerServiceV2(v1 *ContainerService) *ContainerServiceV2 {
 
 // StartContainer starts an existing container and streams its output to the client.
 func (s *ContainerServiceV2) StartContainer(req *agentpbv2.StartContainerRequest, stream grpc.ServerStreamingServer[agentpbv2.ContainerStreamResponse]) error {
-	return s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), nil, &containerStreamV1Adapter{v2stream: stream})
+	var restartPolicy *agentpb.RestartPolicy
+	if rp := req.GetRestartPolicy(); rp != nil {
+		restartPolicy = &agentpb.RestartPolicy{
+			Mode:                agentpb.RestartPolicyMode(rp.GetMode()),
+			OnFailureMaxRetries: rp.GetOnFailureMaxRetries(),
+		}
+	}
+	exitCode, err := s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), restartPolicy, &containerStreamV1Adapter{v2stream: stream})
+	if err != nil {
+		return err
+	}
+	return stream.Send(&agentpbv2.ContainerStreamResponse{
+		ResponseType: &agentpbv2.ContainerStreamResponse_Exited_{
+			Exited: &agentpbv2.ContainerStreamResponse_Exited{ExitCode: exitCode},
+		},
+	})
 }
 
 // AttachContainer starts a container with stdin support, forwarding I/O bidirectionally.
@@ -90,7 +105,6 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 			for output := range outputCh {
 				s.v1.logManager.Publish(appName, output)
 			}
-			s.v1.logManager.Publish(appName, ContainerOutput{Done: true})
 		}()
 	} else {
 		readCh = outputCh
@@ -102,7 +116,14 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 			return ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
-				return nil
+				if output.Err != nil {
+					return status.Errorf(codes.Internal, "container exited without a valid result: %v", output.Err)
+				}
+				return stream.Send(&agentpbv2.ContainerStreamResponse{
+					ResponseType: &agentpbv2.ContainerStreamResponse_Exited_{
+						Exited: &agentpbv2.ContainerStreamResponse_Exited{ExitCode: output.ExitCode},
+					},
+				})
 			}
 			if len(output.Stdout) > 0 {
 				if err := stream.Send(&agentpbv2.ContainerStreamResponse{
@@ -198,24 +219,27 @@ func (s *ContainerServiceV2) RemoveVolume(ctx context.Context, req *agentpbv2.Re
 	return &agentpbv2.RemoveVolumeResponse{}, nil
 }
 
-// ListContainerStats returns memory and storage stats for all managed containers.
-func (s *ContainerServiceV2) ListContainerStats(ctx context.Context, _ *agentpbv2.ListContainerStatsRequest) (*agentpbv2.ListContainerStatsResponse, error) {
+// ListContainerStats streams memory and storage stats for all managed containers.
+func (s *ContainerServiceV2) ListContainerStats(_ *agentpbv2.ListContainerStatsRequest, stream grpc.ServerStreamingServer[agentpbv2.ListContainerStatsResponse]) error {
 	if s.v1.containerd == nil {
-		return &agentpbv2.ListContainerStatsResponse{}, nil
+		return nil
 	}
-	stats, err := s.v1.containerd.GetContainerStats(ctx)
+	stats, err := s.v1.containerd.GetContainerStats(stream.Context())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get container stats: %v", err)
+		return status.Errorf(codes.Internal, "failed to get container stats: %v", err)
 	}
-	v2stats := make([]*agentpbv2.ContainerStats, len(stats))
-	for i, st := range stats {
-		v2stats[i] = &agentpbv2.ContainerStats{
-			AppName:      st.AppName,
-			MemoryBytes:  st.MemoryBytes,
-			StorageBytes: st.StorageBytes,
+	for _, st := range stats {
+		if err := stream.Send(&agentpbv2.ListContainerStatsResponse{
+			Stats: &agentpbv2.ContainerStats{
+				AppName:      st.AppName,
+				MemoryBytes:  st.MemoryBytes,
+				StorageBytes: st.StorageBytes,
+			},
+		}); err != nil {
+			return err
 		}
 	}
-	return &agentpbv2.ListContainerStatsResponse{Stats: v2stats}, nil
+	return nil
 }
 
 // deleteVolumesByAppName removes all volume directories belonging to the given app.
@@ -260,6 +284,7 @@ func mapAppContainerToV2(c *agentpb.AppContainer) *agentpbv2.AppContainer {
 		AppVersion:   c.AppVersion,
 		RunningState: state,
 		FailureCount: c.FailureCount,
+		McpPort:      c.McpPort,
 	}
 }
 

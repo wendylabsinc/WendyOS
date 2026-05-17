@@ -35,7 +35,7 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 		})
 	}
 
-	sendProgress := func(phase string, percent int32) {
+	sendProgress := func(phase agentpbv2.UpdatePhase, percent int32) {
 		_ = stream.Send(&agentpbv2.UpdateOSResponse{
 			ResponseType: &agentpbv2.UpdateOSResponse_Progress_{
 				Progress: &agentpbv2.UpdateOSResponse_Progress{Phase: phase, Percent: percent},
@@ -53,7 +53,7 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 		})
 	}
 
-	sendProgress("downloading", 0)
+	sendProgress(agentpbv2.UpdatePhase_UPDATE_PHASE_DOWNLOADING, 0)
 	cmdName, found := resolveMenderBinary()
 	if !found {
 		return stream.Send(&agentpbv2.UpdateOSResponse{
@@ -92,7 +92,7 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 		line := scanner.Text()
 		if m := menderProgressRe.FindStringSubmatch(line); len(m) > 1 {
 			if pct := parseInt32(m[1]); pct >= 0 {
-				sendProgress("installing", pct)
+				sendProgress(agentpbv2.UpdatePhase_UPDATE_PHASE_INSTALLING, pct)
 			}
 		}
 	}

@@ -22,7 +22,7 @@ func NewBluetoothService(logger *zap.Logger, bm BluetoothManager) *BluetoothServ
 	return &BluetoothService{logger: logger, bluetoothManager: bm}
 }
 
-func (s *BluetoothService) ScanBluetoothPeripherals(stream grpc.BidiStreamingServer[agentpbv2.ScanBluetoothPeripheralsRequest, agentpbv2.ScanBluetoothPeripheralsResponse]) error {
+func (s *BluetoothService) ScanBluetoothPeripherals(_ *agentpbv2.ScanBluetoothPeripheralsRequest, stream grpc.ServerStreamingServer[agentpbv2.ScanBluetoothPeripheralsResponse]) error {
 	ctx := stream.Context()
 	ch, err := s.bluetoothManager.Scan(ctx)
 	if err != nil {
