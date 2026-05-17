@@ -63,6 +63,7 @@ func startUpdateV1Server(t *testing.T, pubKeyArmor []byte) (agentpb.WendyAgentSe
 	srv := grpc.NewServer()
 	svc := NewAgentService(zap.NewNop(), &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})
 	svc.gpgPublicKey = pubKeyArmor
+	svc.exitFunc = func(int) {} // no-op: tests must not call os.Exit
 	agentpb.RegisterWendyAgentServiceServer(srv, svc)
 	go srv.Serve(buf) //nolint:errcheck
 	conn, err := grpc.NewClient("passthrough://bufnet",

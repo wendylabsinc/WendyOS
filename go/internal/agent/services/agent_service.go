@@ -40,6 +40,7 @@ type AgentService struct {
 	isUpdating         bool
 	isWendyOSHost      func() bool
 	gpgPublicKey       []byte
+	exitFunc           func(code int)
 }
 
 // NewAgentService creates a new AgentService.
@@ -56,6 +57,7 @@ func NewAgentService(
 		bluetoothManager:   bm,
 		isWendyOSHost:      defaultIsWendyOSHost,
 		gpgPublicKey:       releasekeys.WendyReleasesPublicKey,
+		exitFunc:           os.Exit,
 	}
 }
 
@@ -413,9 +415,10 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 				}
 
 				// Trigger process exit for systemd to restart the agent.
+				exitFunc := s.exitFunc
 				go func() {
 					time.Sleep(500 * time.Millisecond)
-					os.Exit(0)
+					exitFunc(0)
 				}()
 
 				return nil
