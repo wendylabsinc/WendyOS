@@ -60,6 +60,9 @@ func (b *TelemetryBroadcaster) SubscribeLogs() (string, <-chan *otelpb.ExportLog
 			cached[i] = b.recentLogs[(start+i)%defaultMaxCachedLogs]
 		}
 		go func() {
+			// recover guards against a send on closed channel if the subscriber
+			// calls UnsubscribeLogs before this goroutine finishes pre-filling.
+			defer func() { recover() }() //nolint:errcheck
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
@@ -111,12 +114,19 @@ func (b *TelemetryBroadcaster) SubscribeMetrics() (string, <-chan *otelpb.Export
 	b.metricSubs[id] = ch
 
 	// Pre-fill cached metrics into the channel in a goroutine.
+	// Deduplicate by pointer: one request object may be stored under multiple
+	// service keys when a single batch covers multiple services.
 	if len(b.latestMetrics) > 0 {
+		seen := make(map[*otelpb.ExportMetricsServiceRequest]bool, len(b.latestMetrics))
 		cached := make([]*otelpb.ExportMetricsServiceRequest, 0, len(b.latestMetrics))
 		for _, v := range b.latestMetrics {
-			cached = append(cached, v)
+			if !seen[v] {
+				seen[v] = true
+				cached = append(cached, v)
+			}
 		}
 		go func() {
+			defer func() { recover() }() //nolint:errcheck
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
