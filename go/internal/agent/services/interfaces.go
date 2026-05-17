@@ -66,6 +66,10 @@ type ContainerOutput struct {
 	Stderr   []byte
 	Done     bool
 	ExitCode int32
+	// Err is set on the final (Done) message when the runtime exit result
+	// could not be read. In that case ExitCode is not meaningful and consumers
+	// must not report a clean exit.
+	Err error
 }
 
 // ContainerMetrics holds a point-in-time CPU and memory snapshot for a container.

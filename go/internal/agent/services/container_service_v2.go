@@ -116,6 +116,9 @@ func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[age
 			return ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
+				if output.Err != nil {
+					return status.Errorf(codes.Internal, "container exited without a valid result: %v", output.Err)
+				}
 				return stream.Send(&agentpbv2.ContainerStreamResponse{
 					ResponseType: &agentpbv2.ContainerStreamResponse_Exited_{
 						Exited: &agentpbv2.ContainerStreamResponse_Exited{ExitCode: output.ExitCode},

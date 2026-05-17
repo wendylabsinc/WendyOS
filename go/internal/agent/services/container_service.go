@@ -269,6 +269,9 @@ func (s *ContainerService) streamContainerOutput(
 			return 0, ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
+				if output.Err != nil {
+					return output.ExitCode, status.Errorf(codes.Internal, "container exited without a valid result: %v", output.Err)
+				}
 				return output.ExitCode, nil
 			}
 			if len(output.Stdout) > 0 {
@@ -374,6 +377,9 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 			return ctx.Err()
 		case output, ok := <-readCh:
 			if !ok || output.Done {
+				if output.Err != nil {
+					return status.Errorf(codes.Internal, "container exited without a valid result: %v", output.Err)
+				}
 				return nil
 			}
 			if len(output.Stdout) > 0 {

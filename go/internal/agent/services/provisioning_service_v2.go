@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"math"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ProvisioningServiceV2 implements agentpbv2.WendyProvisioningServiceServer by
@@ -44,6 +47,15 @@ func (s *ProvisioningServiceV2) IsProvisioned(ctx context.Context, _ *agentpbv2.
 }
 
 func (s *ProvisioningServiceV2) StartProvisioning(ctx context.Context, req *agentpbv2.StartProvisioningRequest) (*agentpbv2.StartProvisioningResponse, error) {
+	// The v1 provisioning path stores these IDs as int32. Reject values outside
+	// that range instead of letting the int32() cast below silently truncate
+	// them, which would provision the device under a different org/asset.
+	if req.OrganizationId < math.MinInt32 || req.OrganizationId > math.MaxInt32 {
+		return nil, status.Errorf(codes.InvalidArgument, "organization_id %d is outside the range supported by the agent", req.OrganizationId)
+	}
+	if req.AssetId < math.MinInt32 || req.AssetId > math.MaxInt32 {
+		return nil, status.Errorf(codes.InvalidArgument, "asset_id %d is outside the range supported by the agent", req.AssetId)
+	}
 	if _, err := s.v1.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
 		OrganizationId:  int32(req.OrganizationId),
 		EnrollmentToken: req.EnrollmentToken,
