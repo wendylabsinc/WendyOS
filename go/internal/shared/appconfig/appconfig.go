@@ -98,19 +98,19 @@ type ServiceConfig struct {
 
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
-	AppID        string                     `json:"appId"`
-	Version      string                     `json:"version,omitempty"`
-	Platform     string                     `json:"platform,omitempty"`
-	Language     string                     `json:"language,omitempty"`
-	Xcode        *XcodeConfig               `json:"xcode,omitempty"`
-	Run          *RunConfig                 `json:"run,omitempty"`
-	Entitlements []Entitlement              `json:"entitlements,omitempty"`
-	Readiness    *ReadinessConfig           `json:"readiness,omitempty"`
-	Hooks        *HooksConfig               `json:"hooks,omitempty"`
-	Python       *PythonConfig              `json:"python,omitempty"`
-	Debug        bool                       `json:"debug,omitempty"`
-	Files        []FileSyncEntry            `json:"files,omitempty"`
-	Services     map[string]*ServiceConfig  `json:"services,omitempty"`
+	AppID        string                    `json:"appId"`
+	Version      string                    `json:"version,omitempty"`
+	Platform     string                    `json:"platform,omitempty"`
+	Language     string                    `json:"language,omitempty"`
+	Xcode        *XcodeConfig              `json:"xcode,omitempty"`
+	Run          *RunConfig                `json:"run,omitempty"`
+	Entitlements []Entitlement             `json:"entitlements,omitempty"`
+	Readiness    *ReadinessConfig          `json:"readiness,omitempty"`
+	Hooks        *HooksConfig              `json:"hooks,omitempty"`
+	Python       *PythonConfig             `json:"python,omitempty"`
+	Debug        bool                      `json:"debug,omitempty"`
+	Files        []FileSyncEntry           `json:"files,omitempty"`
+	Services     map[string]*ServiceConfig `json:"services,omitempty"`
 }
 
 // XcodeConfig holds Xcode-specific build settings.

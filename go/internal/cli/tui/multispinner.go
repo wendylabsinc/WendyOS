@@ -137,12 +137,12 @@ func (m MultiSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	msCheckStyle  = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	msCrossStyle  = lipgloss.NewStyle().Foreground(ColorError).Bold(true)
-	msNameStyle   = lipgloss.NewStyle().Width(12)
-	msDimStyle    = lipgloss.NewStyle().Foreground(ColorDim)
-	msErrorStyle  = lipgloss.NewStyle().Foreground(ColorError)
-	msTitleStyle  = lipgloss.NewStyle().Foreground(ColorPrimary)
+	msCheckStyle = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	msCrossStyle = lipgloss.NewStyle().Foreground(ColorError).Bold(true)
+	msNameStyle  = lipgloss.NewStyle().Width(12)
+	msDimStyle   = lipgloss.NewStyle().Foreground(ColorDim)
+	msErrorStyle = lipgloss.NewStyle().Foreground(ColorError)
+	msTitleStyle = lipgloss.NewStyle().Foreground(ColorPrimary)
 )
 
 // View implements tea.Model.
