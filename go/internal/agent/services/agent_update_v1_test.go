@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/wendylabsinc/wendy/internal/agent/gpgverify"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -76,7 +77,7 @@ func startUpdateV1Server(t *testing.T, pubKeyArmor []byte) (agentpb.WendyAgentSe
 	return agentpb.NewWendyAgentServiceClient(conn), func() { conn.Close(); srv.Stop() }
 }
 
-func sendUpdateStream(t *testing.T, client agentpb.WendyAgentServiceClient, binary, sig []byte, skipVerify bool) error {
+func sendUpdateStream(t *testing.T, client agentpb.WendyAgentServiceClient, binary, sig []byte) error {
 	t.Helper()
 	stream, err := client.UpdateAgent(context.Background())
 	if err != nil {
@@ -95,9 +96,8 @@ func sendUpdateStream(t *testing.T, client agentpb.WendyAgentServiceClient, bina
 			Control: &agentpb.UpdateAgentRequest_ControlCommand{
 				Command: &agentpb.UpdateAgentRequest_ControlCommand_Update_{
 					Update: &agentpb.UpdateAgentRequest_ControlCommand_Update{
-						Sha256:        hex.EncodeToString(h[:]),
-						GpgSignature:  sig,
-						SkipGpgVerify: skipVerify,
+						Sha256:       hex.EncodeToString(h[:]),
+						GpgSignature: sig,
 					},
 				},
 			},
@@ -117,7 +117,7 @@ func TestUpdateAgentV1_MissingSignature_Rejected(t *testing.T) {
 	client, cleanup := startUpdateV1Server(t, key.pubKeyArmor)
 	defer cleanup()
 
-	err := sendUpdateStream(t, client, []byte("binary"), nil, false)
+	err := sendUpdateStream(t, client, []byte("binary"), nil)
 	if err == nil {
 		t.Fatal("expected error when signature is missing, got nil")
 	}
@@ -136,7 +136,7 @@ func TestUpdateAgentV1_InvalidSignature_Rejected(t *testing.T) {
 	binary := []byte("binary data")
 	wrongSig := otherKey.sign(t, binary)
 
-	err := sendUpdateStream(t, client, binary, wrongSig, false)
+	err := sendUpdateStream(t, client, binary, wrongSig)
 	if err == nil {
 		t.Fatal("expected error for wrong-key signature, got nil")
 	}
@@ -146,17 +146,26 @@ func TestUpdateAgentV1_InvalidSignature_Rejected(t *testing.T) {
 	}
 }
 
-func TestUpdateAgentV1_SkipVerify_AcceptsUnsigned(t *testing.T) {
+// TestUpdateAgentV1_NoClientControlledSkip guards the security fix for the
+// removed skip_gpg_verify request field: a default (production) agent build
+// must reject an unsigned binary and there is no request field a client can
+// set to bypass verification. Skipping is only possible via the
+// wendy_dev_skip_gpg build tag, which is not set in normal test/CI builds.
+func TestUpdateAgentV1_NoClientControlledSkip(t *testing.T) {
+	if gpgverify.SkipVerificationAllowed {
+		t.Skip("agent built with wendy_dev_skip_gpg; skip-bypass guard not applicable")
+	}
+
 	key := newTestGPGKey(t)
 	client, cleanup := startUpdateV1Server(t, key.pubKeyArmor)
 	defer cleanup()
 
-	err := sendUpdateStream(t, client, []byte("dev binary"), nil, true)
-	if err != nil {
-		if s, ok := status.FromError(err); ok {
-			if s.Code() == codes.PermissionDenied {
-				t.Fatalf("skip_gpg_verify=true should not produce PermissionDenied: %v", err)
-			}
-		}
+	err := sendUpdateStream(t, client, []byte("dev binary"), nil)
+	if err == nil {
+		t.Fatal("expected unsigned update to be rejected, got nil")
+	}
+	s, ok := status.FromError(err)
+	if !ok || s.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for unsigned update, got: %v", err)
 	}
 }

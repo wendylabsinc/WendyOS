@@ -22,9 +22,14 @@ message UpdateAgentRequest {
         }
 
         message Update {
+            // Field 3 (skip_gpg_verify) was removed: skipping signature
+            // verification must be an agent build-time decision, never a
+            // client-supplied request field.
+            reserved 3;
+            reserved "skip_gpg_verify";
+
             string sha256 = 1;
             bytes gpg_signature = 2;
-            bool skip_gpg_verify = 3;
         }
     }
 }

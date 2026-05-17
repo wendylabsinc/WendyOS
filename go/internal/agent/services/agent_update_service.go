@@ -79,8 +79,11 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				if updateCmd.GetSkipGpgVerify() {
-					s.logger.Warn("GPG verification skipped (developer mode)")
+				// Skipping is only possible when the agent itself was compiled
+				// with the wendy_dev_skip_gpg build tag — it is never
+				// controllable by the update request.
+				if gpgverify.SkipVerificationAllowed {
+					s.logger.Warn("GPG verification skipped (developer build: wendy_dev_skip_gpg)")
 				} else {
 					if len(updateCmd.GetGpgSignature()) == 0 {
 						return status.Error(codes.PermissionDenied, "update rejected: GPG signature is required")

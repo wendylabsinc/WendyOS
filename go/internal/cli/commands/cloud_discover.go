@@ -441,7 +441,7 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 		h := sha256.Sum256(binaryData)
 		sha256Hash := hex.EncodeToString(h[:])
 
-		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, false); err != nil {
+		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData); err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}

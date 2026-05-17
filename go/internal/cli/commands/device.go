@@ -1344,7 +1344,6 @@ func verifyAgentBinary(binaryData, sigData []byte) error {
 func newDeviceUpdateCmd() *cobra.Command {
 	var binaryPath string
 	var nightly bool
-	var skipVerify bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -1352,10 +1351,6 @@ func newDeviceUpdateCmd() *cobra.Command {
 		Long:  "Downloads the latest agent binary from GitHub and uploads it to the device. Use --binary to provide a local binary instead.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-
-			if skipVerify && binaryPath == "" {
-				return fmt.Errorf("--skip-verify requires --binary (only valid for local developer builds)")
-			}
 
 			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), ExcludeBluetooth(), SuppressUpdateCheck())
 			if err != nil {
@@ -1453,7 +1448,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				p := tea.NewProgram(s)
 
 				go func() {
-					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify)
+					uploadErr := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData)
 					p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 				}()
 
@@ -1469,11 +1464,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 				}
 			} else if !jsonOutput {
 				fmt.Println("Uploading agent binary...")
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData); err != nil {
 					return err
 				}
 			} else {
-				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, skipVerify); err != nil {
+				if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData); err != nil {
 					return err
 				}
 			}
@@ -1497,7 +1492,6 @@ func newDeviceUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "Path to a local agent binary to upload (skips download)")
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use the latest nightly (prerelease) build")
-	cmd.Flags().BoolVar(&skipVerify, "skip-verify", false, "Skip GPG signature verification (requires --binary, for developer builds only)")
 
 	return cmd
 }
@@ -1557,7 +1551,7 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 	return nil
 }
 
-func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string, sigData []byte, skipVerify bool) error {
+func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string, sigData []byte) error {
 	stream, err := agentService.UpdateAgent(ctx)
 	if err != nil {
 		return fmt.Errorf("starting agent update: %w", err)
@@ -1588,9 +1582,8 @@ func deviceUpdateUpload(ctx context.Context, agentService agentpb.WendyAgentServ
 			Control: &agentpb.UpdateAgentRequest_ControlCommand{
 				Command: &agentpb.UpdateAgentRequest_ControlCommand_Update_{
 					Update: &agentpb.UpdateAgentRequest_ControlCommand_Update{
-						Sha256:        sha256Hash,
-						GpgSignature:  sigData,
-						SkipGpgVerify: skipVerify,
+						Sha256:       sha256Hash,
+						GpgSignature: sigData,
 					},
 				},
 			},

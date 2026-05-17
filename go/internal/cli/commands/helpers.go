@@ -687,7 +687,7 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	sha256Hash := hex.EncodeToString(h[:])
 
 	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
-	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData, false)
+	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash, sigData)
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers

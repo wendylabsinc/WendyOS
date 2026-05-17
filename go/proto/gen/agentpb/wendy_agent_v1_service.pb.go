@@ -2598,7 +2598,6 @@ type UpdateAgentRequest_ControlCommand_Update struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sha256        string                 `protobuf:"bytes,1,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	GpgSignature  []byte                 `protobuf:"bytes,2,opt,name=gpg_signature,json=gpgSignature,proto3" json:"gpg_signature,omitempty"`
-	SkipGpgVerify bool                   `protobuf:"varint,3,opt,name=skip_gpg_verify,json=skipGpgVerify,proto3" json:"skip_gpg_verify,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2645,13 +2644,6 @@ func (x *UpdateAgentRequest_ControlCommand_Update) GetGpgSignature() []byte {
 		return x.GpgSignature
 	}
 	return nil
-}
-
-func (x *UpdateAgentRequest_ControlCommand_Update) GetSkipGpgVerify() bool {
-	if x != nil {
-		return x.SkipGpgVerify
-	}
-	return false
 }
 
 type UpdateAgentResponse_Updated struct {
@@ -3119,18 +3111,17 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aStopped\x1a#\n" +
 	"\rConsoleOutput\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04dataB\x0f\n" +
-	"\rresponse_type\"\xce\x03\n" +
+	"\rresponse_type\"\xbd\x03\n" +
 	"\x12UpdateAgentRequest\x12I\n" +
 	"\x05chunk\x18\x01 \x01(\v21.wendy.agent.services.v1.UpdateAgentRequest.ChunkH\x00R\x05chunk\x12V\n" +
 	"\acontrol\x18\x02 \x01(\v2:.wendy.agent.services.v1.UpdateAgentRequest.ControlCommandH\x00R\acontrol\x1a\x1b\n" +
 	"\x05Chunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\x1a\xe7\x01\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x1a\xd6\x01\n" +
 	"\x0eControlCommand\x12[\n" +
-	"\x06update\x18\x01 \x01(\v2A.wendy.agent.services.v1.UpdateAgentRequest.ControlCommand.UpdateH\x00R\x06update\x1am\n" +
+	"\x06update\x18\x01 \x01(\v2A.wendy.agent.services.v1.UpdateAgentRequest.ControlCommand.UpdateH\x00R\x06update\x1a\\\n" +
 	"\x06Update\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12#\n" +
-	"\rgpg_signature\x18\x02 \x01(\fR\fgpgSignature\x12&\n" +
-	"\x0fskip_gpg_verify\x18\x03 \x01(\bR\rskipGpgVerifyB\t\n" +
+	"\rgpg_signature\x18\x02 \x01(\fR\fgpgSignatureJ\x04\b\x03\x10\x04R\x0fskip_gpg_verifyB\t\n" +
 	"\acommandB\x0e\n" +
 	"\frequest_type\"\x83\x01\n" +
 	"\x13UpdateAgentResponse\x12P\n" +

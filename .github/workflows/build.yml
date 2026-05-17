@@ -702,19 +702,24 @@ jobs:
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
       (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
     steps:
+      # Check out into a separate path BEFORE downloading artifacts.
+      # actions/checkout cleans its working tree (git clean -ffdx); running it
+      # after the artifact download would delete the release files from the
+      # workspace before they are published.
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: packaging/keys
+          path: _release_src
       - name: Download artifact
         uses: actions/download-artifact@v8
         with:
           merge-multiple: true
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: packaging/keys
 
       - name: List files
         run: |
           ls -la
           # Include the GPG public key as a release asset alongside binaries
-          cp packaging/keys/wendy-releases.gpg.pub . 2>/dev/null || true
+          cp _release_src/packaging/keys/wendy-releases.gpg.pub . 2>/dev/null || true
           # Create a newline-delimited list of release files
           {
             echo 'FILES<<EOF'
