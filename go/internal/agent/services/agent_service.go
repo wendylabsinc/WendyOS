@@ -310,9 +310,35 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 
 	s.logger.Info("UpdateAgent stream started")
 
-	// Receive binary chunks.
+	// Resolve paths before receiving chunks so we can stream directly to disk.
+	execPath, err := os.Executable()
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
+	}
+	info, err := os.Stat(execPath)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to stat executable: %v", err)
+	}
+	originalPerm := info.Mode()
+
+	tmpPath := execPath + ".update"
+	tmpFile, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, originalPerm)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to create update temp file: %v", err)
+	}
+	cleanupTmp := true
+	defer func() {
+		tmpFile.Close()
+		if cleanupTmp {
+			os.Remove(tmpPath)
+		}
+	}()
+
 	hasher := sha256.New()
-	var binaryData []byte
 
 	for {
 		msg, err := stream.Recv()
@@ -324,14 +350,16 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		}
 
 		if chunk := msg.GetChunk(); chunk != nil {
-			binaryData = append(binaryData, chunk.GetData()...)
-			hasher.Write(chunk.GetData())
+			data := chunk.GetData()
+			if _, err := tmpFile.Write(data); err != nil {
+				return status.Errorf(codes.Internal, "failed to write update chunk: %v", err)
+			}
+			hasher.Write(data)
 			continue
 		}
 
 		if ctrl := msg.GetControl(); ctrl != nil {
 			if ctrl.GetUpdate() != nil {
-				// Verify SHA256.
 				computedHash := hex.EncodeToString(hasher.Sum(nil))
 				expectedHash := ctrl.GetUpdate().GetSha256()
 				if expectedHash != "" && computedHash != expectedHash {
@@ -339,52 +367,32 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				// Resolve the current binary path (follow symlinks).
-				execPath, err := os.Executable()
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
+				// Sync to disk before rename to prevent partial-write corruption on power loss.
+				if err := tmpFile.Sync(); err != nil {
+					return status.Errorf(codes.Internal, "failed to sync update file: %v", err)
 				}
-				execPath, err = filepath.EvalSymlinks(execPath)
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
+				if err := tmpFile.Close(); err != nil {
+					return status.Errorf(codes.Internal, "failed to close update file: %v", err)
 				}
 
-				// Capture original file permissions.
-				info, err := os.Stat(execPath)
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to stat executable: %v", err)
-				}
-				originalPerm := info.Mode()
-
-				// Write the new binary to a temp file.
-				tmpPath := execPath + ".update"
-				if err := os.WriteFile(tmpPath, binaryData, originalPerm); err != nil {
-					return status.Errorf(codes.Internal, "failed to write update file: %v", err)
-				}
-
-				// Create a backup of the current binary.
 				backupPath := execPath + ".backup"
 				if err := os.Rename(execPath, backupPath); err != nil {
-					os.Remove(tmpPath)
 					return status.Errorf(codes.Internal, "failed to create backup: %v", err)
 				}
 
-				// Atomic rename of new binary to current path.
 				if err := os.Rename(tmpPath, execPath); err != nil {
-					// Rollback: restore from backup.
 					if rbErr := os.Rename(backupPath, execPath); rbErr != nil {
 						s.logger.Error("Failed to rollback from backup",
 							zap.Error(rbErr),
 							zap.String("backup_path", backupPath),
 						)
 					}
-					os.Remove(tmpPath)
-					return status.Errorf(codes.Internal, "failed to replace binary: %v", err)
+					return status.Errorf(codes.Internal, "failed to install update: %v", err)
 				}
+				cleanupTmp = false // renamed successfully, don't remove
 
 				s.logger.Info("Agent binary updated successfully",
 					zap.String("sha256", computedHash),
-					zap.Int("size", len(binaryData)),
 				)
 
 				if err := stream.Send(&agentpb.UpdateAgentResponse{
