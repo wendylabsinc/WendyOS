@@ -123,10 +123,23 @@ func (r *OTELHTTPReceiver) writeBodyError(w http.ResponseWriter, err error) {
 	}
 }
 
+// isGzipEncoded reports whether the request uses gzip content encoding.
+// Content-Encoding is case-insensitive and may list multiple codings; we only
+// support a single "gzip" token (the common OTLP SDK case). Multi-coding values
+// are not decompressed and will fail protobuf unmarshalling, not silently corrupt.
+func isGzipEncoded(req *http.Request) bool {
+	enc := strings.TrimSpace(req.Header.Get("Content-Encoding"))
+	if enc == "" {
+		return false
+	}
+	// Handle comma-separated codings: only treat as gzip if the sole token is "gzip".
+	parts := strings.SplitN(enc, ",", 2)
+	return len(parts) == 1 && strings.EqualFold(strings.TrimSpace(parts[0]), "gzip")
+}
+
 func (r *OTELHTTPReceiver) readBody(req *http.Request) ([]byte, error) {
 	reader := io.Reader(req.Body)
-	// Content-Encoding is case-insensitive per RFC 7231.
-	if strings.EqualFold(req.Header.Get("Content-Encoding"), "gzip") {
+	if isGzipEncoded(req) {
 		// Limit the compressed input before feeding it to the gzip reader to
 		// prevent decompression-bomb attacks (a tiny gzip that expands to GBs).
 		compressedLimit := io.LimitReader(req.Body, maxOTELHTTPBodySize+1)

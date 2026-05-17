@@ -400,26 +400,22 @@ func TestBroadcaster_PublishMetrics_PerServiceKey(t *testing.T) {
 	b.PublishMetrics(req1)
 	b.PublishMetrics(req2)
 
-	// latestMetrics is keyed by "service:metric"; req1 produces 2 entries (metric.one,
-	// metric.two) and req2 produces 1 entry (metric.three), so 3 total.
+	// latestMetrics is keyed by service name; exactly one entry per service regardless
+	// of how many metrics the request contains.
 	b.mu.RLock()
 	mapLen := len(b.latestMetrics)
-	gotA1 := b.latestMetrics["svc-a:metric.one"]
-	gotA2 := b.latestMetrics["svc-a:metric.two"]
-	gotB := b.latestMetrics["svc-b:metric.three"]
+	gotA := b.latestMetrics["svc-a"]
+	gotB := b.latestMetrics["svc-b"]
 	b.mu.RUnlock()
 
-	if mapLen != 3 {
-		t.Errorf("latestMetrics has %d entries; want 3", mapLen)
+	if mapLen != 2 {
+		t.Errorf("latestMetrics has %d entries; want 2", mapLen)
 	}
-	if gotA1 != req1 {
-		t.Errorf("latestMetrics[\"svc-a:metric.one\"] = %p; want req1 (%p)", gotA1, req1)
-	}
-	if gotA2 != req1 {
-		t.Errorf("latestMetrics[\"svc-a:metric.two\"] = %p; want req1 (%p)", gotA2, req1)
+	if gotA != req1 {
+		t.Errorf("latestMetrics[\"svc-a\"] = %p; want req1 (%p)", gotA, req1)
 	}
 	if gotB != req2 {
-		t.Errorf("latestMetrics[\"svc-b:metric.three\"] = %p; want req2 (%p)", gotB, req2)
+		t.Errorf("latestMetrics[\"svc-b\"] = %p; want req2 (%p)", gotB, req2)
 	}
 }
 

@@ -25,7 +25,7 @@ type TelemetryBroadcaster struct {
 	recentLogs    [defaultMaxCachedLogs]*otelpb.ExportLogsServiceRequest
 	logHead       int                                            // next write index (0..defaultMaxCachedLogs-1)
 	logCount      int                                            // number of valid entries (0..defaultMaxCachedLogs)
-	latestMetrics map[string]*otelpb.ExportMetricsServiceRequest // keyed by "service:metric"
+	latestMetrics map[string]*otelpb.ExportMetricsServiceRequest // keyed by "service"
 }
 
 // NewTelemetryBroadcaster creates a new TelemetryBroadcaster.
@@ -111,16 +111,10 @@ func (b *TelemetryBroadcaster) SubscribeMetrics() (string, <-chan *otelpb.Export
 	b.metricSubs[id] = ch
 
 	// Pre-fill cached metrics into the channel in a goroutine.
-	// Deduplicate by pointer: multiple "service:metric" keys may point to the
-	// same request when a single export batch covers multiple metrics.
 	if len(b.latestMetrics) > 0 {
-		seen := make(map[*otelpb.ExportMetricsServiceRequest]struct{}, len(b.latestMetrics))
-		var cached []*otelpb.ExportMetricsServiceRequest
+		cached := make([]*otelpb.ExportMetricsServiceRequest, 0, len(b.latestMetrics))
 		for _, v := range b.latestMetrics {
-			if _, ok := seen[v]; !ok {
-				seen[v] = struct{}{}
-				cached = append(cached, v)
-			}
+			cached = append(cached, v)
 		}
 		go func() {
 			for _, entry := range cached {
@@ -151,11 +145,7 @@ func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRe
 	b.mu.Lock()
 	for _, rm := range req.GetResourceMetrics() {
 		serviceName := resourceServiceName(rm.GetResource())
-		for _, sm := range rm.GetScopeMetrics() {
-			for _, m := range sm.GetMetrics() {
-				b.latestMetrics[serviceName+":"+m.GetName()] = req
-			}
-		}
+		b.latestMetrics[serviceName] = req
 	}
 	for _, ch := range b.metricSubs {
 		select {

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -45,41 +44,19 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 
 	s.logger.Info("UpdateAgent stream started")
 
-	// Resolve paths before receiving chunks so we can stream directly to disk.
-	execPath, err := os.Executable()
+	execPath, originalPerm, err := resolveExecPath()
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
+		return err
 	}
-	execPath, err = filepath.EvalSymlinks(execPath)
-	if err != nil {
-		return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
-	}
-	info, err := os.Stat(execPath)
-	if err != nil {
-		return status.Errorf(codes.Internal, "failed to stat executable: %v", err)
-	}
-	originalPerm := info.Mode()
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(execPath), ".agent-update-*")
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath, originalPerm)
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to create update temp file: %v", err)
+		return err
 	}
-	tmpPath := tmpFile.Name()
-	if err := tmpFile.Chmod(originalPerm); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return status.Errorf(codes.Internal, "failed to set update file permissions: %v", err)
-	}
-	cleanupTmp := true
-	fileClosed := false
+	committed := false
 	defer func() {
-		if !fileClosed {
-			if err := tmpFile.Close(); err != nil {
-				s.logger.Warn("Failed to close update temp file during cleanup", zap.Error(err))
-			}
-		}
-		if cleanupTmp {
-			os.Remove(tmpPath)
+		if !committed {
+			cleanupTmp()
 		}
 	}()
 
@@ -112,49 +89,10 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				// Sync to disk before rename to prevent partial-write corruption on power loss.
-				if err := tmpFile.Sync(); err != nil {
-					return status.Errorf(codes.Internal, "failed to sync update file: %v", err)
+				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, s.logger); err != nil {
+					return err
 				}
-				if err := tmpFile.Close(); err != nil {
-					return status.Errorf(codes.Internal, "failed to close update file: %v", err)
-				}
-				fileClosed = true
-
-				backupPath := execPath + ".backup"
-				if err := os.Rename(execPath, backupPath); err != nil {
-					return status.Errorf(codes.Internal, "failed to create backup: %v", err)
-				}
-
-				if err := os.Rename(tmpPath, execPath); err != nil {
-					if rbErr := os.Rename(backupPath, execPath); rbErr != nil {
-						s.logger.Error("Failed to rollback from backup",
-							zap.Error(rbErr),
-							zap.String("backup_path", backupPath),
-						)
-					}
-					return status.Errorf(codes.Internal, "failed to install update: %v", err)
-				}
-				cleanupTmp = false // renamed successfully, don't remove
-
-				// fsync the directory so the rename is durable on power loss.
-				if dir, err := os.Open(filepath.Dir(execPath)); err == nil {
-					if syncErr := dir.Sync(); syncErr != nil {
-						s.logger.Warn("Failed to fsync update directory; rename may not survive power loss",
-							zap.Error(syncErr))
-					}
-					dir.Close()
-				}
-
-				info, _ := os.Stat(execPath)
-				var size int64
-				if info != nil {
-					size = info.Size()
-				}
-				s.logger.Info("Agent binary updated successfully",
-					zap.String("sha256", computedHash),
-					zap.Int64("size", size),
-				)
+				committed = true
 
 				if err := stream.Send(&agentpbv2.UpdateAgentResponse{
 					ResponseType: &agentpbv2.UpdateAgentResponse_Updated_{
