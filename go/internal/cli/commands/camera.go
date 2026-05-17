@@ -152,26 +152,7 @@ func playVideoWithGStreamer(ctx context.Context, stream interface {
 		return fmt.Errorf("receiving video: %w", err)
 	}
 
-	var gstArgs []string
-	switch first.GetCodec() {
-	case agentpb.VideoCodec_VIDEO_CODEC_VP8:
-		// Server sends VP8 in a WebM container (webmmux streamable=true).
-		gstArgs = []string{
-			"fdsrc", "fd=0",
-			"!", "matroskademux",
-			"!", "vp8dec",
-			"!", "queue", "max-size-buffers=1", "leaky=downstream",
-			"!", "autovideosink", "sync=false",
-		}
-	default: // H264
-		gstArgs = []string{
-			"fdsrc", "fd=0",
-			"!", "h264parse",
-			"!", "avdec_h264",
-			"!", "queue", "max-size-buffers=1", "leaky=downstream",
-			"!", "autovideosink", "sync=false",
-		}
-	}
+	gstArgs := playbackPipelineArgs(first.GetCodec())
 
 	gst := exec.CommandContext(ctx, gstPath, gstArgs...)
 	gst.Stderr = os.Stderr
@@ -221,5 +202,39 @@ func playVideoWithGStreamer(ctx context.Context, stream interface {
 		return err
 	case <-ctx.Done():
 		return nil
+	}
+}
+
+// playbackPipelineArgs returns the gst-launch-1.0 element arguments for decoding
+// and displaying the incoming stream of the given codec, read from stdin (fd 0).
+func playbackPipelineArgs(codec agentpb.VideoCodec) []string {
+	switch codec {
+	case agentpb.VideoCodec_VIDEO_CODEC_VP8:
+		// Server sends VP8 in a WebM container (webmmux streamable=true).
+		return []string{
+			"fdsrc", "fd=0",
+			"!", "matroskademux",
+			"!", "vp8dec",
+			"!", "queue", "max-size-buffers=1", "leaky=downstream",
+			"!", "autovideosink", "sync=false",
+		}
+	default: // H264
+		// fdsrc emits untyped buffers (no caps); h264parse needs video/x-h264.
+		// A bare "video/x-h264" capsfilter here cannot bridge that gap: the
+		// capsfilter must fixate caps onto the untyped buffers, but video/x-h264
+		// alone is unfixed (width/height/framerate are template ranges), so it
+		// fails with "Output caps are unfixed" and the pipeline won't preroll.
+		// typefind inspects the actual bytes, detects the H.264 start codes, and
+		// sets fixed content-derived caps; h264parse then auto-detects whether
+		// the stream is Annex B byte-stream or length-prefixed AVC.
+		return []string{
+			"fdsrc", "fd=0",
+			"!", "typefind",
+			"!", "h264parse",
+			"!", "avdec_h264",
+			"!", "videoconvert",
+			"!", "queue", "max-size-buffers=1", "leaky=downstream",
+			"!", "autovideosink", "sync=false",
+		}
 	}
 }

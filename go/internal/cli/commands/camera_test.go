@@ -52,6 +52,29 @@ func TestPipeVideoToStdout_EmptyStream(t *testing.T) {
 	}
 }
 
+func TestPlaybackPipelineArgs_H264UsesTypefindNotBareCaps(t *testing.T) {
+	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_H264)
+	joined := strings.Join(args, " ")
+
+	// Regression: a bare "video/x-h264" capsfilter directly after fdsrc cannot
+	// fixate caps onto fdsrc's untyped buffers and fails to preroll with
+	// "Output caps are unfixed". typefind must classify the stream instead.
+	if !strings.Contains(joined, "fdsrc fd=0 ! typefind ! h264parse") {
+		t.Errorf("H264 pipeline must route fdsrc through typefind into h264parse, got: %v", args)
+	}
+	if strings.Contains(joined, "! video/x-h264 !") {
+		t.Errorf("H264 pipeline must not use a bare video/x-h264 capsfilter after fdsrc, got: %v", args)
+	}
+}
+
+func TestPlaybackPipelineArgs_VP8UsesMatroskademux(t *testing.T) {
+	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_VP8)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "fdsrc fd=0 ! matroskademux ! vp8dec") {
+		t.Errorf("VP8 pipeline must demux WebM via matroskademux into vp8dec, got: %v", args)
+	}
+}
+
 func TestPlayVideoWithGStreamer_MissingGStreamer(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // empty dir — no executables
 

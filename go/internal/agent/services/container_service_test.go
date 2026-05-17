@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -305,29 +306,17 @@ func TestWriteLayer(t *testing.T) {
 	data := []byte("layer-data-part1")
 	data2 := []byte("layer-data-part2")
 
-	// Send first chunk with digest.
-	if err := stream.Send(&agentpb.WriteLayerRequest{
-		Digest: digest,
-		Data:   data,
-	}); err != nil {
+	if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: data}); err != nil {
 		t.Fatalf("send chunk1: %v", err)
 	}
-
-	// Send second chunk.
-	if err := stream.Send(&agentpb.WriteLayerRequest{
-		Digest: digest,
-		Data:   data2,
-	}); err != nil {
+	if err := stream.Send(&agentpb.WriteLayerRequest{Data: data2}); err != nil {
 		t.Fatalf("send chunk2: %v", err)
 	}
-
-	// Close send and receive response.
 	if err := stream.CloseSend(); err != nil {
 		t.Fatalf("CloseSend: %v", err)
 	}
 
-	_, err = stream.Recv()
-	if err != nil {
+	if _, err = stream.Recv(); err != nil {
 		t.Fatalf("recv response: %v", err)
 	}
 
@@ -338,6 +327,52 @@ func TestWriteLayer(t *testing.T) {
 	if string(mock.writtenData) != string(expectedData) {
 		t.Errorf("writtenData = %q; want %q", mock.writtenData, expectedData)
 	}
+}
+
+// TestWriteLayerAlreadyExists verifies that WriteLayer succeeds and drains the
+// gRPC stream even when the content store returns without consuming the reader
+// (e.g. the blob already exists).
+func TestWriteLayerAlreadyExists(t *testing.T) {
+	// drainlessMock returns nil without reading from the reader, simulating
+	// the AlreadyExists fast-path in the containerd content store.
+	mock := &drainlessMockContainerdClient{mockContainerdClient: mockContainerdClient{}}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.WriteLayer(ctx)
+	if err != nil {
+		t.Fatalf("WriteLayer: %v", err)
+	}
+
+	digest := "sha256:alreadyexists"
+	if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: []byte("chunk1")}); err != nil {
+		t.Fatalf("send chunk1: %v", err)
+	}
+	if err := stream.Send(&agentpb.WriteLayerRequest{Data: []byte("chunk2")}); err != nil {
+		t.Fatalf("send chunk2: %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	// RPC must succeed without deadlock even though the reader was not consumed.
+	if _, err = stream.Recv(); err != nil {
+		t.Fatalf("recv response: %v", err)
+	}
+}
+
+// drainlessMockContainerdClient overrides WriteLayer to return without reading
+// the reader, simulating the content-store AlreadyExists path.
+type drainlessMockContainerdClient struct {
+	mockContainerdClient
+}
+
+func (m *drainlessMockContainerdClient) WriteLayer(_ context.Context, digest string, _ io.Reader, _ int64) error {
+	m.writtenDigest = digest
+	return nil
 }
 
 func TestCreateContainerWithProgress(t *testing.T) {

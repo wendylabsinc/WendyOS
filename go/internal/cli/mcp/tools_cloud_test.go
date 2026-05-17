@@ -126,3 +126,14 @@ func TestCloudRun_RequiresProjectPath(t *testing.T) {
 		t.Fatal("expected error result")
 	}
 }
+
+func TestRun_MissingProjectPath(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	result, err := srv.callTool(context.Background(), "run", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true when project_path is missing")
+	}
+}

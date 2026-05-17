@@ -137,7 +137,7 @@ func TestVideoService_ListVideoDevices_GlobError(t *testing.T) {
 
 func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc", true)
 	if len(args) == 0 || args[0] != "/usr/bin/gst-launch-1.0" {
 		t.Errorf("expected first arg to be gst-launch-1.0 path, got %v", args)
 	}
@@ -151,14 +151,46 @@ func TestBuildGStreamerArgs_NoDimensions(t *testing.T) {
 	if !strings.Contains(joined, "profile=high") {
 		t.Errorf("x264enc pipeline must constrain profile=high for iOS compatibility: %v", args)
 	}
+	// The H.264 stream must be normalized to Annex B byte-stream with in-band
+	// SPS/PPS; otherwise x264enc emits stream-format=avc and the client's
+	// typefind cannot classify the raw piped stream.
+	if !strings.Contains(joined, "h264parse config-interval=-1") {
+		t.Errorf("server-side pipeline must repeat SPS/PPS via h264parse config-interval=-1: %v", args)
+	}
+	if !strings.Contains(joined, "video/x-h264,stream-format=byte-stream,alignment=au") {
+		t.Errorf("server-side pipeline must force Annex B byte-stream output: %v", args)
+	}
+}
+
+func TestBuildGStreamerArgs_WithoutH264Parse(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc", false)
+	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "h264parse") {
-		t.Errorf("server-side pipeline should not include h264parse: %v", args)
+		t.Errorf("pipeline must not use h264parse when unavailable: %v", args)
+	}
+	// No extra caps suffix: hardware encoders output byte-stream natively; x264enc
+	// AVC output is an acceptable trade-off when h264parse is absent.
+	if strings.Contains(joined, "stream-format") {
+		t.Errorf("pipeline must not add stream-format caps when h264parse is unavailable: %v", args)
+	}
+}
+
+func TestBuildGStreamerArgs_X264ProfileIsCapsFilter(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc", true)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "x264enc tune=zerolatency profile=high") {
+		t.Fatalf("profile=high must be an output capsfilter, not an x264enc property: %v", args)
+	}
+	if !strings.Contains(joined, "x264enc tune=zerolatency ! video/x-h264,profile=high") {
+		t.Fatalf("expected x264enc output capsfilter for high profile: %v", args)
 	}
 }
 
 func TestBuildGStreamerArgs_WithDimensionsAndFramerate(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 30}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc")
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "x264enc", true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "width=1280") || !strings.Contains(joined, "height=720") || !strings.Contains(joined, "framerate=30/1") {
 		t.Errorf("expected dimension caps in args: %v", args)
@@ -167,16 +199,28 @@ func TestBuildGStreamerArgs_WithDimensionsAndFramerate(t *testing.T) {
 
 func TestBuildGStreamerArgs_V4L2HardwareEncoder(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc")
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc", true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "v4l2h264enc") || !strings.Contains(joined, "video/x-h264") {
 		t.Errorf("expected v4l2h264enc pipeline segment: %v", args)
 	}
 }
 
+func TestBuildGStreamerArgs_NVV4L2HardwareEncoder(t *testing.T) {
+	req := &agentpb.StreamVideoRequest{}
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "nvv4l2h264enc", true)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "nvv4l2h264enc") {
+		t.Errorf("expected nvv4l2h264enc in pipeline: %v", args)
+	}
+	if !strings.Contains(joined, "video/x-raw,format=NV12") {
+		t.Errorf("expected NV12 capsfilter for nvv4l2h264enc: %v", args)
+	}
+}
+
 func TestBuildGStreamerArgs_VP8Encoder(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
-	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "vp8enc")
+	args := buildGStreamerArgs("/usr/bin/gst-launch-1.0", "/dev/video0", req, "vp8enc", false)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "vp8enc") || !strings.Contains(joined, "webmmux") {
 		t.Errorf("expected vp8enc+webmmux pipeline segment: %v", args)
@@ -227,6 +271,74 @@ func TestFindGStreamerEncoder_PrefersX264(t *testing.T) {
 	}
 	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
 		t.Errorf("expected H264 codec, got %v", result.codec)
+	}
+}
+
+func TestFindGStreamerEncoder_H264ParseDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	script := tmpDir + "/gst-inspect-1.0"
+
+	withH264Parse := "x264:  x264enc: H264 video encoder\nbad:  h264parse: H.264 parser\n"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+withH264Parse+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := findGStreamerEncoder(script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.hasH264Parse {
+		t.Errorf("expected hasH264Parse=true when h264parse is listed, got false")
+	}
+
+	withoutH264Parse := "x264:  x264enc: H264 video encoder\n"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+withoutH264Parse+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err = findGStreamerEncoder(script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.hasH264Parse {
+		t.Errorf("expected hasH264Parse=false when h264parse is not listed, got true")
+	}
+}
+
+func TestFindGStreamerEncoder_PrefersNVV4L2OverOtherH264Encoders(t *testing.T) {
+	tmpDir := t.TempDir()
+	script := tmpDir + "/gst-inspect-1.0"
+	listing := "x264:  x264enc: H264 video encoder\nvideo4linux2:  v4l2h264enc: V4L2 H264 encoder\nnvvideo4linux2:  nvv4l2h264enc: NVIDIA V4L2 H264 encoder\n"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := findGStreamerEncoder(script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "nvv4l2h264enc" {
+		t.Errorf("expected nvv4l2h264enc, got %q", result.element)
+	}
+	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Errorf("expected H264 codec, got %v", result.codec)
+	}
+}
+
+func TestFindGStreamerEncoder_PrefersVP8WhenH264ParseAbsent(t *testing.T) {
+	tmpDir := t.TempDir()
+	script := tmpDir + "/gst-inspect-1.0"
+	// x264enc present but h264parse absent; vp8enc+webmmux also present
+	listing := "x264:  x264enc: H264 video encoder\nvpx:  vp8enc: VP8 encoder\nmatroska:  webmmux: WebM muxer\n"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := findGStreamerEncoder(script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "vp8enc" {
+		t.Errorf("expected vp8enc when h264parse absent but webmmux available, got %q", result.element)
+	}
+	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+		t.Errorf("expected VP8 codec, got %v", result.codec)
 	}
 }
 

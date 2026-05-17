@@ -2,13 +2,9 @@ package commands
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
-
-	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 )
 
 func newCloudRunCmd() *cobra.Command {
@@ -18,11 +14,16 @@ func newCloudRunCmd() *cobra.Command {
 	var brokerURL string
 
 	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Build and run application on a cloud-enrolled device",
-		Long:  "Same as 'wendy run' but connects to the device through the Wendy Cloud tunnel broker instead of a direct network path.",
+		Use:    "run",
+		Short:  "Deprecated: use 'wendy run' instead",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cloudRunCommand(cmd.Context(), opts, cloudGRPC, deviceName, brokerURL)
+			ctx := context.WithValue(cmd.Context(), cloudDeviceContextKey{}, cloudDeviceConfig{
+				CloudGRPC:  cloudGRPC,
+				DeviceName: deviceName,
+				BrokerURL:  brokerURL,
+			})
+			return runCommand(ctx, opts)
 		},
 	}
 
@@ -39,60 +40,7 @@ func newCloudRunCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (required when multiple auth sessions exist)")
 	cmd.Flags().StringVar(&deviceName, "device", "", "Device name (skips interactive picker)")
-	cmd.Flags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)")
+	cmd.Flags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port")
 
 	return cmd
-}
-
-func cloudRunCommand(ctx context.Context, opts runOptions, cloudGRPC, deviceName, brokerURL string) error {
-	cwd, err := resolveRunWorkingDir(opts)
-	if err != nil {
-		return fmt.Errorf("resolving working directory: %w", err)
-	}
-
-	projectType, err := resolveRunProjectType(cwd, opts.buildType)
-	if err != nil {
-		return err
-	}
-	if projectType == "compose" {
-		return fmt.Errorf("compose projects are not supported by 'wendy cloud run'")
-	}
-
-	cfgPath := filepath.Join(cwd, "wendy.json")
-	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
-	if err != nil {
-		return fmt.Errorf("loading wendy.json: %w", err)
-	}
-	if err := appCfg.Validate(); err != nil {
-		return fmt.Errorf("invalid wendy.json: %w", err)
-	}
-	if err := warnAppConfigFile(cfgPath); err != nil {
-		return fmt.Errorf("reading wendy.json warnings: %w", err)
-	}
-
-	if opts.debug {
-		appCfg.Debug = true
-		foundNetwork := false
-		for i, e := range appCfg.Entitlements {
-			if e.Type == appconfig.EntitlementNetwork {
-				appCfg.Entitlements[i].Mode = "host"
-				foundNetwork = true
-				break
-			}
-		}
-		if !foundNetwork {
-			appCfg.Entitlements = append(appCfg.Entitlements, appconfig.Entitlement{
-				Type: appconfig.EntitlementNetwork,
-				Mode: "host",
-			})
-		}
-	}
-
-	agentConn, err := connectToCloudAgent(ctx, cloudGRPC, deviceName, brokerURL)
-	if err != nil {
-		return err
-	}
-	defer agentConn.Close()
-
-	return runWithAgent(ctx, agentConn, cwd, appCfg, opts)
 }

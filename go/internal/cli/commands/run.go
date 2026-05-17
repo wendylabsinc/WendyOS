@@ -28,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/browseropen"
+	"github.com/wendylabsinc/wendy/internal/shared/config"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
@@ -424,6 +425,39 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveRunTarget resolves the target device for the run command. It first
+// tries resolveTarget (direct/picker). If that fails and cloud auth entries
+// exist, it retries via the cloud tunnel using the device name from --device
+// or the configured default.
+func resolveRunTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
+	target, err := resolveTarget(ctx, opts...)
+	if err == nil {
+		return target, nil
+	}
+	if errors.Is(err, ErrUserCancelled) {
+		return nil, err
+	}
+
+	cfg, loadErr := config.Load()
+	if loadErr != nil || len(cfg.Auth) == 0 {
+		return nil, err
+	}
+
+	deviceName := deviceFlag
+	if deviceName == "" {
+		deviceName = cfg.DefaultDevice
+	}
+	if deviceName == "" {
+		return nil, err
+	}
+
+	cloudConn, cloudErr := connectToCloudAgent(ctx, "", deviceName, "")
+	if cloudErr != nil {
+		return nil, err
+	}
+	return &SelectedDevice{Agent: cloudConn}, nil
+}
+
 func runCommand(ctx context.Context, opts runOptions) error {
 	// Step 1: Load and validate wendy.json.
 	cwd, err := resolveRunWorkingDir(opts)
@@ -481,7 +515,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	if opts.yes {
 		resolveOpts = append(resolveOpts, NonInteractive())
 	}
-	target, err := resolveTarget(ctx, resolveOpts...)
+	target, err := resolveRunTarget(ctx, resolveOpts...)
 	if err != nil {
 		return err
 	}
@@ -522,7 +556,7 @@ func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
 	if opts.yes {
 		resolveOpts = append(resolveOpts, NonInteractive())
 	}
-	target, err := resolveTarget(ctx, resolveOpts...)
+	target, err := resolveRunTarget(ctx, resolveOpts...)
 	if err != nil {
 		return err
 	}
@@ -931,7 +965,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if projectType == "swift" {
 		if ib, ok := p.(providers.ImageBuilder); ok {
 			cliLogln("Building Swift project for %s...", p.DisplayName())
-			imageName, err := buildSwiftDockerImage(ctx, projectPath, product, &dimWriter{}, os.Stderr)
+			imageName, err := buildSwiftDockerImage(ctx, projectPath, product, runtime.GOARCH, &dimWriter{}, os.Stderr)
 			if err != nil {
 				return fmt.Errorf("building Swift Docker image: %w", err)
 			}

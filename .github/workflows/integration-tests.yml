@@ -130,18 +130,36 @@ jobs:
         run: make build-cli
 
       - name: Prepare Docker
+        id: prepare-docker
         run: |
-          if ! docker info >/dev/null 2>&1; then
-            echo "Docker not available, starting Colima..."
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          DOCKER_READY=false
+          if docker info >/dev/null 2>&1; then
+            echo "Docker already available"
+            DOCKER_READY=true
+          elif [ -d "/Applications/Docker.app" ]; then
+            echo "Starting Docker Desktop..."
+            open -a Docker
+            for i in $(seq 1 30); do
+              if docker info >/dev/null 2>&1; then DOCKER_READY=true; break; fi
+              sleep 5
+            done
+          elif command -v colima >/dev/null 2>&1; then
+            echo "Starting Colima..."
             colima start
             until docker info >/dev/null 2>&1; do sleep 2; done
+            DOCKER_READY=true
           else
-            echo "Docker already available, skipping Colima restart"
+            echo "WARNING: Neither Docker Desktop nor Colima found; integration tests will be skipped"
           fi
-          docker buildx ls 2>/dev/null | awk '/^wendy/{print $1}' | xargs -r docker buildx rm --force 2>/dev/null || true
-          docker system prune -f 2>/dev/null || true
+          if [[ "$DOCKER_READY" == "true" ]]; then
+            docker buildx ls 2>/dev/null | awk '/^wendy/{print $1}' | xargs -r docker buildx rm --force 2>/dev/null || true
+            docker system prune -f 2>/dev/null || true
+          fi
+          echo "docker_ready=$DOCKER_READY" >> "$GITHUB_OUTPUT"
 
       - name: Run integration tests
+        if: steps.prepare-docker.outputs.docker_ready == 'true'
         run: |
           # All wendy CLI calls below run via SSH to localhost rather than
           # directly. The self-hosted runner runs as a macOS LaunchAgent which
@@ -168,7 +186,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -274,7 +292,7 @@ jobs:
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi

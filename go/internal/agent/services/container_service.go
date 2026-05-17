@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -68,11 +67,11 @@ func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.
 }
 
 // WriteLayer receives a streaming layer upload and writes it to the containerd
-// content store. Chunks are buffered in memory before writing.
+// content store. Chunks are streamed directly to the content store without
+// buffering the entire blob in memory.
 func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse]) error {
 	ctx := stream.Context()
 
-	// Receive the first message to get the digest.
 	first, err := stream.Recv()
 	if err == io.EOF {
 		return status.Error(codes.InvalidArgument, "empty layer upload stream")
@@ -86,37 +85,60 @@ func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.Wr
 		return status.Error(codes.InvalidArgument, "no digest provided in layer upload")
 	}
 
-	// Buffer all chunks.
-	var data []byte
-	if chunk := first.GetData(); len(chunk) > 0 {
-		data = append(data, chunk...)
-	}
+	sr := &layerStreamReader{stream: stream, pending: first.GetData()}
 
-	for {
-		msg, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			return status.Errorf(codes.Internal, "error receiving layer data: %v", recvErr)
-		}
-		if chunk := msg.GetData(); len(chunk) > 0 {
-			data = append(data, chunk...)
-		}
-	}
-
-	s.logger.Info("Received layer data",
-		zap.String("digest", digest),
-		zap.Int("bytes", len(data)),
-	)
-
-	// Write to containerd content store.
-	if err := s.containerd.WriteLayer(ctx, digest, bytes.NewReader(data), int64(len(data))); err != nil {
+	if err := s.containerd.WriteLayer(ctx, digest, sr, 0); err != nil {
 		return status.Errorf(codes.Internal, "failed to write layer: %v", err)
 	}
 
-	s.logger.Info("Layer written", zap.String("digest", digest), zap.Int("size", len(data)))
+	// Drain any messages not consumed by WriteLayer (e.g. blob already existed).
+	sr.drain()
+
+	s.logger.Info("Layer written", zap.String("digest", digest))
 	return stream.Send(&agentpb.WriteLayerResponse{})
+}
+
+// layerStreamReader adapts a WriteLayer gRPC request stream to io.Reader so
+// the blob can be piped directly to the content store without buffering.
+type layerStreamReader struct {
+	stream  grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse]
+	pending []byte
+	done    bool
+}
+
+func (r *layerStreamReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		if r.done {
+			return 0, io.EOF
+		}
+		msg, err := r.stream.Recv()
+		if err == io.EOF {
+			r.done = true
+			return 0, io.EOF
+		}
+		if err != nil {
+			return 0, err
+		}
+		r.pending = msg.GetData()
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+
+// drain consumes any remaining messages from the stream without processing them.
+// This is needed when WriteLayer returns early (e.g. blob already exists) so
+// the gRPC stream is not left in a half-read state.
+func (r *layerStreamReader) drain() {
+	if r.done {
+		return
+	}
+	for {
+		if _, err := r.stream.Recv(); err != nil {
+			r.done = true
+			return
+		}
+	}
 }
 
 // CreateContainer creates a container from an image with entitlements.

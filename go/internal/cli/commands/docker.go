@@ -1680,11 +1680,9 @@ func findIPv4NeighborLinux(ctx context.Context, ipv6LinkLocal string) string {
 
 // buildSwiftDockerImage cross-compiles a Swift package for Linux and builds a
 // Docker image containing the resulting binary. Returns the Docker image name.
-// This is used by the Docker Desktop provider for Swift projects that do not
-// have a Dockerfile, as an alternative to swift-container-plugin (which only
-// supports pushing to registries).
-func buildSwiftDockerImage(ctx context.Context, dir, product string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
-	arch := runtime.GOARCH
+// Used for Swift projects that do not have a Dockerfile (Docker Desktop provider,
+// local build path, and provider-build path).
+func buildSwiftDockerImage(ctx context.Context, dir, product, arch string, toolchainStdout, toolchainStderr io.Writer) (string, error) {
 	sdk, err := swifttoolchain.FindSwiftSDK(ctx, arch, toolchainStdout, toolchainStderr)
 	if err != nil {
 		return "", fmt.Errorf("finding Swift SDK: %w", err)

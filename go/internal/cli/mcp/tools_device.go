@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -13,7 +14,10 @@ import (
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("device_list",
-		mcpgo.WithDescription("List wendy devices from config and known addresses"),
+		mcpgo.WithDescription("List wendy devices from config and known addresses. Pass scan=true to also run a live 3-second mDNS scan for devices on the local network."),
+		mcpgo.WithBoolean("scan",
+			mcpgo.Description("If true, run a live mDNS scan (3 s) in addition to returning configured devices"),
+		),
 	), s.handleDeviceList)
 
 	srv.AddTool(mcpgo.NewTool("device_connect",
@@ -41,13 +45,16 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	), s.handleDeviceSetDefault)
 }
 
-func (s *mcpServer) handleDeviceList(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	scan := req.GetBool("scan", false)
+
 	var devices []map[string]any
 	for _, auth := range s.cfg.Auth {
 		if auth.CloudGRPC != "" {
 			devices = append(devices, map[string]any{
 				"address": auth.CloudGRPC,
 				"type":    "cloud",
+				"source":  "config",
 			})
 		}
 	}
@@ -55,8 +62,37 @@ func (s *mcpServer) handleDeviceList(_ context.Context, _ mcpgo.CallToolRequest)
 		devices = append(devices, map[string]any{
 			"address": s.cfg.DefaultDevice,
 			"type":    "default",
+			"source":  "config",
 		})
 	}
+
+	if scan {
+		found, err := s.discoverLANFn(ctx, 3*time.Second)
+		if err == nil {
+			for _, d := range found {
+				addr := d.Hostname
+				if d.IPAddress != "" {
+					addr = d.IPAddress
+				}
+				if d.Port > 0 {
+					addr = fmt.Sprintf("%s:%d", addr, d.Port)
+				}
+				entry := map[string]any{
+					"address": addr,
+					"type":    "lan",
+					"source":  "scan",
+				}
+				if d.DisplayName != "" {
+					entry["name"] = d.DisplayName
+				}
+				if d.AgentVersion != "" {
+					entry["agent_version"] = d.AgentVersion
+				}
+				devices = append(devices, entry)
+			}
+		}
+	}
+
 	if len(devices) == 0 {
 		devices = []map[string]any{}
 	}
@@ -72,6 +108,7 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("connecting to %s: %s", address, err.Error())), nil
 	}
+	s.SetConnType("direct")
 	return mcpgo.NewToolResultText(fmt.Sprintf("connected to %s", address)), nil
 }
 
