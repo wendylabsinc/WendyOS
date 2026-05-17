@@ -382,12 +382,12 @@ func serviceOrder(cfg *composeConfig) ([]string, error) {
 
 // serviceLogPalette is the fixed color rotation for service name prefixes.
 var serviceLogPalette = []lipgloss.Color{
-	tui.Sky500,                     // cyan-ish
-	tui.Amber500,                   // yellow
-	tui.Emerald400,                 // green
-	lipgloss.Color("#c084fc"),      // magenta
-	lipgloss.Color("#60a5fa"),      // blue
-	tui.Red500,                     // red
+	tui.Sky500,                // cyan-ish
+	tui.Amber500,              // yellow
+	tui.Emerald400,            // green
+	lipgloss.Color("#c084fc"), // magenta
+	lipgloss.Color("#60a5fa"), // blue
+	tui.Red500,                // red
 }
 
 // serviceLogWriter buffers output for a single service and writes complete

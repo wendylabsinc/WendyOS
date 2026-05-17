@@ -34,7 +34,7 @@ func (s *ContainerServiceV2) StartContainer(req *agentpbv2.StartContainerRequest
 	var restartPolicy *agentpb.RestartPolicy
 	if rp := req.GetRestartPolicy(); rp != nil {
 		restartPolicy = &agentpb.RestartPolicy{
-			Mode:               agentpb.RestartPolicyMode(rp.GetMode()),
+			Mode:                agentpb.RestartPolicyMode(rp.GetMode()),
 			OnFailureMaxRetries: rp.GetOnFailureMaxRetries(),
 		}
 	}
