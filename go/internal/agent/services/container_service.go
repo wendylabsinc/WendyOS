@@ -88,7 +88,6 @@ func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.Wr
 	sr := &layerStreamReader{stream: stream, pending: first.GetData()}
 
 	if err := s.containerd.WriteLayer(ctx, digest, sr, 0); err != nil {
-		sr.drain()
 		return status.Errorf(codes.Internal, "failed to write layer: %v", err)
 	}
 
