@@ -133,6 +133,10 @@ jobs:
         run: |
           if ! docker info >/dev/null 2>&1; then
             echo "Docker not available, starting Colima..."
+            if ! command -v colima >/dev/null 2>&1; then
+              echo "Colima not found, installing via Homebrew..."
+              brew install colima
+            fi
             colima start
             until docker info >/dev/null 2>&1; do sleep 2; done
           else
