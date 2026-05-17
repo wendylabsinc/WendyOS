@@ -222,6 +222,10 @@ func (m *ContainerMonitor) shouldRestart(state *containerState) bool {
 	case RestartUnlessStopped:
 		return !state.ExplicitStop
 	case RestartOnFailure:
+		// The monitor detects only whether a container has stopped; it has no
+		// exit-code signal from containerd. Until exit-code detection is added,
+		// ON_FAILURE behaves like UNLESS_STOPPED: it restarts on any exit, not
+		// only non-zero ones. MaxRetries is still enforced.
 		if state.ExplicitStop {
 			return false
 		}

@@ -298,12 +298,13 @@ func (s *ContainerService) registerContainerWithMonitor(ctx context.Context, app
 	}
 	if policy, maxRetries, ok := monitorPolicyInt(restartPolicy); ok {
 		s.monitor.Register(appName, policy, maxRetries)
-	} else if restartPolicy != nil {
-		// restartPolicy is non-nil but monitorPolicyInt returned false,
-		// meaning the mode is explicitly NO — remove any existing entry.
+	} else if restartPolicy != nil && restartPolicy.GetMode() == agentpb.RestartPolicyMode_NO {
+		// Explicit NO — remove any existing registration.
 		s.monitor.Unregister(appName)
 	} else {
-		// restartPolicy is nil: look up the persisted label from containerd.
+		// nil restartPolicy or unrecognized/forward-compatible mode: fall back
+		// to the persisted label so we don't accidentally clear an existing
+		// registration when a newer client sends a mode this agent doesn't know.
 		if label, labelErr := s.containerd.GetContainerRestartPolicyLabel(ctx, appName); labelErr == nil {
 			if label == "" || label == "no" {
 				// No restart policy persisted — clear any stale registration.
