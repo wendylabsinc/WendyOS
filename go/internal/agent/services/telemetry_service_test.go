@@ -356,11 +356,9 @@ func TestBroadcaster_SubscribeLogs_ChronologicalOrder(t *testing.T) {
 	}
 }
 
-func TestBroadcaster_PublishMetrics_PerServiceKey(t *testing.T) {
+func TestBroadcaster_PublishMetrics_PerServiceMergeRetainsMetrics(t *testing.T) {
 	b := NewTelemetryBroadcaster()
 
-	// Build two requests for different services to verify they are cached under
-	// separate keys.
 	makeAttr := func(key, val string) *otelpb.KeyValue {
 		return &otelpb.KeyValue{
 			Key:   key,
@@ -370,38 +368,27 @@ func TestBroadcaster_PublishMetrics_PerServiceKey(t *testing.T) {
 	makeResource := func(svc string) *otelpb.Resource {
 		return &otelpb.Resource{Attributes: []*otelpb.KeyValue{makeAttr("service.name", svc)}}
 	}
-
-	req1 := &otelpb.ExportMetricsServiceRequest{
-		ResourceMetrics: []*otelpb.ResourceMetrics{
-			{
-				Resource: makeResource("svc-a"),
-				ScopeMetrics: []*otelpb.ScopeMetrics{
-					{
-						Metrics: []*otelpb.Metric{
-							{Name: "metric.one"},
-							{Name: "metric.two"},
-						},
-					},
+	makeReq := func(svc string, metrics ...string) *otelpb.ExportMetricsServiceRequest {
+		ms := make([]*otelpb.Metric, len(metrics))
+		for i, n := range metrics {
+			ms[i] = &otelpb.Metric{Name: n}
+		}
+		return &otelpb.ExportMetricsServiceRequest{
+			ResourceMetrics: []*otelpb.ResourceMetrics{
+				{
+					Resource:     makeResource(svc),
+					ScopeMetrics: []*otelpb.ScopeMetrics{{Metrics: ms}},
 				},
 			},
-		},
-	}
-	req2 := &otelpb.ExportMetricsServiceRequest{
-		ResourceMetrics: []*otelpb.ResourceMetrics{
-			{
-				Resource: makeResource("svc-b"),
-				ScopeMetrics: []*otelpb.ScopeMetrics{
-					{Metrics: []*otelpb.Metric{{Name: "metric.three"}}},
-				},
-			},
-		},
+		}
 	}
 
-	b.PublishMetrics(req1)
-	b.PublishMetrics(req2)
+	// svc-a first reports {one, two}, then a partial batch with only {one}.
+	b.PublishMetrics(makeReq("svc-a", "metric.one", "metric.two"))
+	b.PublishMetrics(makeReq("svc-a", "metric.one"))
+	// svc-b is independent.
+	b.PublishMetrics(makeReq("svc-b", "metric.three"))
 
-	// latestMetrics is keyed by service name; exactly one entry per service regardless
-	// of how many metrics the request contains.
 	b.mu.RLock()
 	mapLen := len(b.latestMetrics)
 	gotA := b.latestMetrics["svc-a"]
@@ -411,11 +398,26 @@ func TestBroadcaster_PublishMetrics_PerServiceKey(t *testing.T) {
 	if mapLen != 2 {
 		t.Errorf("latestMetrics has %d entries; want 2", mapLen)
 	}
-	if gotA != req1 {
-		t.Errorf("latestMetrics[\"svc-a\"] = %p; want req1 (%p)", gotA, req1)
+
+	names := func(req *otelpb.ExportMetricsServiceRequest) map[string]bool {
+		out := map[string]bool{}
+		for _, rm := range req.GetResourceMetrics() {
+			for _, sm := range rm.GetScopeMetrics() {
+				for _, m := range sm.GetMetrics() {
+					out[m.GetName()] = true
+				}
+			}
+		}
+		return out
 	}
-	if gotB != req2 {
-		t.Errorf("latestMetrics[\"svc-b\"] = %p; want req2 (%p)", gotB, req2)
+
+	gotNames := names(gotA)
+	// The partial batch must NOT drop metric.two reported earlier.
+	if !gotNames["metric.one"] || !gotNames["metric.two"] {
+		t.Errorf("svc-a cached metrics = %v; want metric.one and metric.two retained", gotNames)
+	}
+	if !names(gotB)["metric.three"] {
+		t.Errorf("svc-b cached metrics = %v; want metric.three", names(gotB))
 	}
 }
 

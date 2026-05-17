@@ -319,6 +319,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 	}()
 
 	hasher := sha256.New()
+	var written int64
 
 	for {
 		msg, err := stream.Recv()
@@ -331,6 +332,11 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 
 		if chunk := msg.GetChunk(); chunk != nil {
 			data := chunk.GetData()
+			written += int64(len(data))
+			if written > maxAgentBinarySize {
+				return status.Errorf(codes.InvalidArgument,
+					"update stream exceeds maximum agent binary size of %d bytes", maxAgentBinarySize)
+			}
 			if _, err := tmpFile.Write(data); err != nil {
 				return status.Errorf(codes.Internal, "failed to write update chunk: %v", err)
 			}

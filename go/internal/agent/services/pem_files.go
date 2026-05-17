@@ -47,13 +47,20 @@ func syncWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 	removeOnFail = false
 
-	// fsync the directory so the rename is durable on power loss.
-	if d, err := os.Open(dir); err == nil {
-		syncErr := d.Sync()
-		d.Close()
-		if syncErr != nil {
-			return fmt.Errorf("fsync dir after rename: %w", syncErr)
-		}
+	// fsync the directory so the rename is durable on power loss. Open/close
+	// failures are reported too: skipping the fsync silently would drop the
+	// durability guarantee this helper exists to provide.
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir for fsync after rename: %w", err)
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	if syncErr != nil {
+		return fmt.Errorf("fsync dir after rename: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close dir after fsync: %w", closeErr)
 	}
 	return nil
 }

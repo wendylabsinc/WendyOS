@@ -113,9 +113,9 @@ func (b *TelemetryBroadcaster) SubscribeMetrics() (string, <-chan *otelpb.Export
 	ch := make(chan *otelpb.ExportMetricsServiceRequest, 64)
 	b.metricSubs[id] = ch
 
-	// Pre-fill cached metrics into the channel in a goroutine.
-	// Deduplicate by pointer: one request object may be stored under multiple
-	// service keys when a single batch covers multiple services.
+	// Pre-fill cached metrics into the channel in a goroutine: one merged
+	// request per service. Dedup by pointer is a cheap safety net in case the
+	// same cached object is ever shared across keys.
 	if len(b.latestMetrics) > 0 {
 		seen := make(map[*otelpb.ExportMetricsServiceRequest]bool, len(b.latestMetrics))
 		cached := make([]*otelpb.ExportMetricsServiceRequest, 0, len(b.latestMetrics))
@@ -151,14 +151,16 @@ func (b *TelemetryBroadcaster) UnsubscribeMetrics(id string) {
 }
 
 // PublishMetrics sends a metrics export request to all metrics subscribers and updates the cache.
-// latestMetrics is keyed by service name, not by metric name, so only the most recent
-// ExportMetricsServiceRequest per service is retained. Subscribers that join late receive
-// one pre-fill message per service reflecting its latest known state.
+// latestMetrics holds one merged ExportMetricsServiceRequest per service. New batches are
+// merged into the cached state by scope name + metric name rather than replacing it wholesale,
+// so a later partial batch (e.g. metric a only) does not drop a previously reported metric
+// (e.g. metric b) for subscribers that join late. The live broadcast still forwards the
+// original request unchanged.
 func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRequest) {
 	b.mu.Lock()
 	for _, rm := range req.GetResourceMetrics() {
 		serviceName := resourceServiceName(rm.GetResource())
-		b.latestMetrics[serviceName] = req
+		b.latestMetrics[serviceName] = mergeServiceMetrics(b.latestMetrics[serviceName], rm)
 	}
 	for _, ch := range b.metricSubs {
 		select {
@@ -167,6 +169,50 @@ func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRe
 		}
 	}
 	b.mu.Unlock()
+}
+
+// mergeServiceMetrics upserts the metrics in rm into the cached per-service
+// request, keyed by scope name and metric name. Metrics absent from the new
+// batch are retained so partial batches do not drop previously reported
+// metrics. The cached entry is mutated in place and returned; it is a distinct
+// object from any live-broadcast request, so subscribers are unaffected.
+func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.ResourceMetrics) *otelpb.ExportMetricsServiceRequest {
+	if cached == nil || len(cached.GetResourceMetrics()) == 0 {
+		return &otelpb.ExportMetricsServiceRequest{
+			ResourceMetrics: []*otelpb.ResourceMetrics{rm},
+		}
+	}
+
+	dst := cached.GetResourceMetrics()[0]
+	dst.Resource = rm.GetResource() // refresh to the most recent resource
+	dst.SchemaUrl = rm.GetSchemaUrl()
+
+	scopeIdx := make(map[string]*otelpb.ScopeMetrics, len(dst.GetScopeMetrics()))
+	for _, sm := range dst.GetScopeMetrics() {
+		scopeIdx[sm.GetScope().GetName()] = sm
+	}
+
+	for _, sm := range rm.GetScopeMetrics() {
+		existing, ok := scopeIdx[sm.GetScope().GetName()]
+		if !ok {
+			dst.ScopeMetrics = append(dst.ScopeMetrics, sm)
+			scopeIdx[sm.GetScope().GetName()] = sm
+			continue
+		}
+		metricIdx := make(map[string]int, len(existing.GetMetrics()))
+		for i, m := range existing.GetMetrics() {
+			metricIdx[m.GetName()] = i
+		}
+		for _, m := range sm.GetMetrics() {
+			if i, ok := metricIdx[m.GetName()]; ok {
+				existing.Metrics[i] = m
+			} else {
+				existing.Metrics = append(existing.Metrics, m)
+				metricIdx[m.GetName()] = len(existing.Metrics) - 1
+			}
+		}
+	}
+	return cached
 }
 
 // SubscribeTraces adds a traces subscriber.

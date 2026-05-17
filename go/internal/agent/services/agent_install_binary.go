@@ -16,6 +16,14 @@ import (
 // of the directory entry is at risk. Callers should log a warning and continue.
 var ErrDirFsync = errors.New("dir fsync after rename failed")
 
+// maxAgentBinarySize bounds how many bytes an update stream may write before
+// the agent aborts it. Update chunks are written straight to a temp file in
+// the executable directory before any size is known, so without this cap a
+// stuck, buggy, or malicious client could stream unbounded data and fill the
+// partition holding the live binary and runtime state. The agent binary is
+// far smaller than this; the cap only needs headroom for legitimate growth.
+const maxAgentBinarySize = 256 * 1024 * 1024 // 256 MiB
+
 // resolveExecPath returns the canonicalised path of the running binary.
 func resolveExecPath() (string, os.FileMode, error) {
 	execPath, err := os.Executable()
@@ -103,14 +111,21 @@ func commitBinaryUpdate(tmpFile *os.File, tmpPath, execPath, sha256Hash string, 
 	)
 
 	// fsync the directory so the rename is durable on power loss.
-	// Return ErrDirFsync if this fails; the binary IS installed — callers
+	// Return ErrDirFsync if any step fails; the binary IS installed — callers
 	// should log a warning and proceed rather than treating this as fatal.
-	if dir, err := os.Open(filepath.Dir(execPath)); err == nil {
-		syncErr := dir.Sync()
-		dir.Close()
-		if syncErr != nil {
-			return size, fmt.Errorf("%w: %v", ErrDirFsync, syncErr)
-		}
+	// Open/close failures are surfaced too, otherwise the durability guarantee
+	// would be lost silently.
+	dir, err := os.Open(filepath.Dir(execPath))
+	if err != nil {
+		return size, fmt.Errorf("%w: open dir: %v", ErrDirFsync, err)
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		return size, fmt.Errorf("%w: %v", ErrDirFsync, syncErr)
+	}
+	if closeErr != nil {
+		return size, fmt.Errorf("%w: close dir: %v", ErrDirFsync, closeErr)
 	}
 
 	return size, nil
