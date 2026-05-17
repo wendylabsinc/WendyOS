@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -123,6 +124,71 @@ func TestOTELHTTPReceiver_HandleTraces(t *testing.T) {
 		// OK
 	case <-time.After(time.Second):
 		t.Error("did not receive published traces")
+	}
+}
+
+func TestOTELHTTPReceiver_HandleLogsGzip(t *testing.T) {
+	broadcaster := NewTelemetryBroadcaster()
+	receiver := NewOTELHTTPReceiver(zap.NewNop(), broadcaster)
+
+	id, ch := broadcaster.SubscribeLogs()
+	defer broadcaster.UnsubscribeLogs(id)
+
+	req := &otelpb.ExportLogsServiceRequest{
+		ResourceLogs: []*otelpb.ResourceLogs{
+			{
+				ScopeLogs: []*otelpb.ScopeLogs{
+					{
+						LogRecords: []*otelpb.LogRecord{
+							{
+								SeverityNumber: otelpb.SeverityNumber_SEVERITY_NUMBER_INFO,
+								Body: &otelpb.AnyValue{
+									Value: &otelpb.AnyValue_StringValue{StringValue: "gzip log"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		t.Fatalf("gzip.Write: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip.Close: %v", err)
+	}
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/logs", &buf)
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+
+	receiver.server.Handler.ServeHTTP(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case got := <-ch:
+		if len(got.ResourceLogs) != 1 {
+			t.Errorf("expected 1 ResourceLogs, got %d", len(got.ResourceLogs))
+		}
+		logs := got.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+		if v := logs.Body.GetStringValue(); v != "gzip log" {
+			t.Errorf("expected body %q, got %q", "gzip log", v)
+		}
+	case <-time.After(time.Second):
+		t.Error("did not receive published log")
 	}
 }
 

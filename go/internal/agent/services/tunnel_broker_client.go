@@ -269,7 +269,7 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 	// TCP -> gRPC
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 256*1024)
 		for {
 			n, readErr := tcpConn.Read(buf)
 			if n > 0 {

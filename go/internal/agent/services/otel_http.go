@@ -1,6 +1,7 @@
 package services
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -122,7 +123,16 @@ func (r *OTELHTTPReceiver) writeBodyError(w http.ResponseWriter, err error) {
 }
 
 func (r *OTELHTTPReceiver) readBody(req *http.Request) ([]byte, error) {
-	limited := io.LimitReader(req.Body, maxOTELHTTPBodySize+1)
+	reader := req.Body
+	if req.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	limited := io.LimitReader(reader, maxOTELHTTPBodySize+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, err

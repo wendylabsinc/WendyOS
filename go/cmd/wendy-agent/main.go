@@ -417,13 +417,16 @@ func main() {
 		agentServer = grpc.NewServer(
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
-			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-				MinTime:             5 * time.Second,
-				PermitWithoutStream: true,
-			}),
+			grpc.InitialWindowSize(8*1024*1024),
+			grpc.InitialConnWindowSize(16*1024*1024),
 			grpc.KeepaliveParams(keepalive.ServerParameters{
-				Time:    30 * time.Second,
-				Timeout: 10 * time.Second,
+				MaxConnectionIdle: 5 * time.Minute,
+				Time:              30 * time.Second,
+				Timeout:           10 * time.Second,
+			}),
+			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+				MinTime:             10 * time.Second,
+				PermitWithoutStream: true,
 			}),
 		)
 		registerAllServices(agentServer)
@@ -468,6 +471,17 @@ func main() {
 	otelServer := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 		grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+		grpc.InitialWindowSize(8*1024*1024),
+		grpc.InitialConnWindowSize(16*1024*1024),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 5 * time.Minute,
+			Time:              30 * time.Second,
+			Timeout:           10 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	)
 	otelpb.RegisterLogsServiceServer(otelServer, otelLogReceiver)
 	otelpb.RegisterMetricsServiceServer(otelServer, otelMetricReceiver)
