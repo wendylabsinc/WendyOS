@@ -376,7 +376,7 @@ function Configure-SshKeys {
   $publicKey = Join-Path $sshDir 'id_ed25519.pub'
 
   if (-not (Test-Path $privateKey)) {
-    Invoke-External 'ssh-keygen.exe' @('-t', 'ed25519', '-a', '100', '-N', '', '-C', "$CurrentUserName@$env:COMPUTERNAME-$(Get-Date -Format yyyyMMdd)", '-f', $privateKey)
+    Invoke-External 'ssh-keygen.exe' @('-t', 'ed25519', '-a', '100', '-N', '""', '-C', "$CurrentUserName@$env:COMPUTERNAME-$(Get-Date -Format yyyyMMdd)", '-f', $privateKey)
   } elseif (-not (Test-Path $publicKey)) {
     Invoke-External 'ssh-keygen.exe' @('-y', '-f', $privateKey) | Out-File -FilePath $publicKey -Encoding ascii
   }
