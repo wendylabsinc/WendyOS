@@ -461,65 +461,77 @@ function Get-GnuMakeVersion {
   return $null
 }
 
+function Find-MakeCommand {
+  $commands = @(Get-Command 'make.exe', 'make.cmd', 'make.bat' -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandType -eq 'Application' })
+
+  if ($commands.Count -gt 0) { return $commands[0].Source }
+  return $null
+}
+
+function Find-Msys2Bash {
+  $bash = Get-Command 'bash.exe' -ErrorAction SilentlyContinue
+  if ($bash -and $bash.Source -like '*\msys64\usr\bin\bash.exe') {
+    return $bash.Source
+  }
+
+  $candidates = @(
+    (Join-Path $env:SystemDrive 'msys64\usr\bin\bash.exe'),
+    (Join-Path $env:ProgramFiles 'msys64\usr\bin\bash.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} 'msys64\usr\bin\bash.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\MSYS2\usr\bin\bash.exe')
+  )
+
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path $candidate)) { return $candidate }
+  }
+
+  return $null
+}
+
 function Install-GnuMake {
-  $requiredVersion = [version]'4.4.1'
-  $existingMake = Get-Command 'make.exe' -ErrorAction SilentlyContinue
+  $requiredVersion = [version]'4.4.0'
+  $existingMake = Find-MakeCommand
   if ($existingMake) {
-    $existingVersion = Get-GnuMakeVersion -MakePath $existingMake.Source
+    $existingVersion = Get-GnuMakeVersion -MakePath $existingMake
     if ($existingVersion -and $existingVersion -ge $requiredVersion) {
       Write-Ok "GNU Make $existingVersion is already installed"
       return
     }
 
-    Write-Warn "Existing make was found at $($existingMake.Source), but it is not GNU Make $requiredVersion or newer. Installing a modern GNU Make."
+    Write-Warn "Existing make was found at $existingMake, but it is not GNU Make $requiredVersion or newer. Installing a modern GNU Make."
   }
 
-  Write-Info "Installing GNU Make $requiredVersion"
+  Write-Info 'Installing GNU Make using MSYS2'
+  Install-WingetPackage -Id 'MSYS2.MSYS2' -Name 'MSYS2'
 
-  $url = "https://downloads.sourceforge.net/project/ezwinports/make-$requiredVersion-without-guile-w32-bin.zip"
-  $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\GNUmake'
-  $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnu-make-$([System.Guid]::NewGuid())")
-  $zipPath = Join-Path $tempDir 'make.zip'
-  $extractDir = Join-Path $tempDir 'extract'
+  $bashPath = Find-Msys2Bash
+  if (-not $bashPath) { Fail 'MSYS2 was installed, but bash.exe was not found.' }
 
-  New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Invoke-External $bashPath @('-lc', 'pacman -Sy --needed --noconfirm make')
 
-  try {
-    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -MaximumRedirection 10 -Headers @{ 'User-Agent' = 'Mozilla/5.0' }
+  $msysBin = Split-Path $bashPath -Parent
+  $msysMake = Join-Path $msysBin 'make.exe'
+  if (-not (Test-Path $msysMake)) { Fail 'MSYS2 make.exe was not found after installing the make package.' }
 
-    $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
-    if ($zipBytes.Length -lt 2 -or $zipBytes[0] -ne 0x50 -or $zipBytes[1] -ne 0x4B) {
-      Fail 'Downloaded GNU Make archive was not a zip file.'
-    }
-
-    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-
-    $makeExe = Get-ChildItem -Path $extractDir -Filter 'make.exe' -Recurse |
-      Sort-Object @{ Expression = { if ($_.Directory.Name -eq 'bin') { 0 } else { 1 } } } |
-      Select-Object -First 1
-
-    if (-not $makeExe) { Fail 'Downloaded GNU Make archive did not contain make.exe.' }
-
-    $sourceBin = $makeExe.Directory.FullName
-    $sourceRoot = if ((Split-Path $sourceBin -Leaf) -eq 'bin') { Split-Path $sourceBin -Parent } else { $sourceBin }
-    $pathEntry = if ((Split-Path $sourceBin -Leaf) -eq 'bin') { Join-Path $installRoot 'bin' } else { $installRoot }
-
-    if (Test-Path $installRoot) { Remove-Item -Path $installRoot -Recurse -Force }
-    New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-    Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installRoot -Recurse -Force
-  } finally {
-    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-  }
-
-  Add-UserPathEntry -PathEntry $pathEntry -Prepend
-  $env:Path = "$pathEntry;$env:Path"
-
-  $installedMake = Join-Path $pathEntry 'make.exe'
-  $installedVersion = Get-GnuMakeVersion -MakePath $installedMake
+  $installedVersion = Get-GnuMakeVersion -MakePath $msysMake
   if (-not $installedVersion -or $installedVersion -lt $requiredVersion) {
-    Fail 'GNU Make installation did not produce a usable modern make.exe.'
+    Fail 'MSYS2 did not provide a usable modern GNU Make.'
   }
+
+  $shimDir = Join-Path $env:LOCALAPPDATA 'Programs\GNUmake'
+  New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+
+  $makeCmd = Join-Path $shimDir 'make.cmd'
+  $escapedMake = $msysMake.Replace('%', '%%')
+  Set-Content -Path $makeCmd -Encoding ascii -Value @(
+    '@echo off',
+    "`"$escapedMake`" %*",
+    'exit /b %ERRORLEVEL%'
+  )
+
+  Add-UserPathEntry -PathEntry $shimDir -Prepend
+  $env:Path = "$shimDir;$env:Path"
 
   Write-Ok "GNU Make $installedVersion installed"
 }
