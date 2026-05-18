@@ -295,7 +295,7 @@ public actor WendyE2ESession {
         let loginShellCommand = "exec \"${SHELL:-/bin/sh}\" -lc \(Self.shellQuote(wrappedCommand))"
 
         return Invocation(
-            executable: "/usr/bin/ssh",
+            executable: Self.localSSHPath,
             arguments: [
                 "-o",
                 "BatchMode=yes",
@@ -364,6 +364,10 @@ public actor WendyE2ESession {
             throw WendyE2EMachineError.powerShellUnavailable(machine: machine)
         }
         return path
+    }
+
+    private static var localSSHPath: String {
+        Self.findExecutable(named: ["ssh", "ssh.exe"]) ?? "/usr/bin/ssh"
     }
 
     private static func preconditionPOSIXCompatibleShell(_ shell: String) {

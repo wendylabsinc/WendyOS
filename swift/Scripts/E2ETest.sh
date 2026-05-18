@@ -101,10 +101,12 @@ Options:
   --cli-repo-dir DIR    wendy-agent repo root on the CLI machine.
   --cli-user USER       Optional SSH user for the CLI machine.
   --cli-address HOST    Optional address for the CLI machine.
+  --cli-os OS           Optional OS override for the CLI machine.
   --agent-root-dir DIR  Root directory for agent machine runs.
   --agent-repo-dir DIR  wendy-agent repo root on the agent machine.
   --agent-user USER     Optional SSH user for the agent machine.
   --agent-address HOST  Optional address for the agent machine; defaults to hostname.
+  --agent-os OS         Optional OS override for the agent machine.
   --isolation MODE      Sandbox isolation: none, per-run, or per-test; defaults to per-test.
   --parallel            Allow SwiftPM to run tests in parallel. Only valid when
                         both CLI and agent machines use local transport.
@@ -169,6 +171,10 @@ while [[ $# -gt 0 ]]; do
       CLI_ADDRESS="$2"
       shift 2
       ;;
+    --cli-os)
+      CLI_OS="$2"
+      shift 2
+      ;;
     --agent-root-dir)
       AGENT_ROOT_DIR="$2"
       shift 2
@@ -183,6 +189,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --agent-address)
       AGENT_ADDRESS="$2"
+      shift 2
+      ;;
+    --agent-os)
+      AGENT_OS="$2"
       shift 2
       ;;
     --isolation)

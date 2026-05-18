@@ -61,6 +61,8 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             let resetDirectoriesOnFirstCommand =
                 isolation == .perRun
                 && !WendyE2EEnvironment.parallel
+            let cliOS = WendyE2EEnvironment.cliOS ?? .current
+            let agentOS = WendyE2EEnvironment.agentOS ?? .current
             let cliSandbox = Self.roleSandbox(
                 role: "cli",
                 runDirectory: WendyE2EEnvironment.cliRunDirectory,
@@ -74,7 +76,8 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             )
             let cliEnvironment = Self.roleEnvironment(
                 sandbox: cliSandbox,
-                binDirectory: cliBinDirectory
+                binDirectory: cliBinDirectory,
+                machineOS: cliOS
             )
             let agentSandbox = Self.roleSandbox(
                 role: "agent",
@@ -89,12 +92,13 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             )
             let agentEnv = Self.roleEnvironment(
                 sandbox: agentSandbox,
-                binDirectory: agentBinDirectory
+                binDirectory: agentBinDirectory,
+                machineOS: agentOS
             )
             let cliMachine = WendyE2EMachine(
                 id: "cli",
                 name: "CLI",
-                os: WendyE2EEnvironment.cliOS ?? .current,
+                os: cliOS,
                 tags: [.cli],
                 user: WendyE2EEnvironment.cliUser,
                 address: WendyE2EEnvironment.cliAddress
@@ -103,7 +107,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             let agentMachine = WendyE2EMachine(
                 id: "agent",
                 name: "Agent",
-                os: WendyE2EEnvironment.agentOS ?? .current,
+                os: agentOS,
                 tags: [.agent],
                 user: WendyE2EEnvironment.agentUser,
                 address: WendyE2EEnvironment.agentAddress
@@ -243,19 +247,30 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
 
     private static func roleEnvironment(
         sandbox: RoleSandbox,
-        binDirectory: String?
+        binDirectory: String?,
+        machineOS: WendyE2EMachineOS
     ) -> [String: String] {
         var environment = [
             "WENDY_ANALYTICS": "false"
         ]
         if let homeDirectory = sandbox.homeDirectory {
             environment["HOME"] = homeDirectory
+            if machineOS == .windows {
+                environment["USERPROFILE"] = homeDirectory
+                environment["APPDATA"] = Self.path(homeDirectory, "AppData", "Roaming")
+                environment["LOCALAPPDATA"] = Self.path(homeDirectory, "AppData", "Local")
+            }
         }
         if let temporaryDirectory = sandbox.temporaryDirectory {
             environment["TMPDIR"] = temporaryDirectory
+            if machineOS == .windows {
+                environment["TMP"] = temporaryDirectory
+                environment["TEMP"] = temporaryDirectory
+            }
         }
         if let binDirectory {
-            environment["PATH"] = "\(binDirectory):$PATH"
+            let separator = machineOS == .windows ? ";" : ":"
+            environment["PATH"] = "\(binDirectory)\(separator)$PATH"
         }
         return environment
     }

@@ -1,8 +1,19 @@
-SHELL := /bin/bash
-
 .DEFAULT_GOAL := help
 
 SWIFT_FORMAT_TARGETS := WendyAgentCore/Sources WendyAgentCore/Tests WendyAgentMac/Sources WendyE2ETests/Sources WendyE2ETests/Tests
+
+ifeq ($(OS),Windows_NT)
+SHELL := cmd.exe
+.SHELLFLAGS := /C
+POWERSHELL ?= powershell
+LOCAL_E2E_RUN_ID = windows-to-raspberry-pi-5
+LOCAL_E2E_ARGS = --output-dir Build/e2e --agent-os wendyOS --agent-address "$(DEVICE)"
+RUN_E2E_TEST = @$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File ./Scripts/E2ETest.ps1 --default-run-id "$(1)" $(3)
+RUN_E2E_RUN = @$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File ./Scripts/E2ERun.ps1 --default-run-id "$(1)" $(3)
+else
+SHELL := /bin/bash
+LOCAL_E2E_RUN_ID = local
+LOCAL_E2E_ARGS = --output-dir Build/e2e --cli-root-dir Build/e2e --agent-root-dir Build/e2e --parallel
 
 OPEN_E2E_REPORT = report_path="$(1)"; if [ -f "$$report_path" ]; then if [ "$$(uname -s)" = "Darwin" ]; then open "$$report_path" || echo "HTML report: $$report_path"; else echo "HTML report: $$report_path"; fi; else echo "HTML report not found: $$report_path"; fi
 
@@ -16,6 +27,7 @@ RUN_E2E_RUN = @run_id="$${WENDY_E2E_RUN_ID:-$(1)}"; \
 	bash ./Scripts/E2EReport.sh --run-dir "Build/e2e/$$run_id" || { step_status=$$?; [ $$status -eq 0 ] && status=$$step_status; }; \
 	$(call OPEN_E2E_REPORT,Build/e2e/$$run_id/report.html); \
 	exit $$status
+endif
 
 .PHONY: help format lint test e2e-test e2e-run e2e-test-jetson-orin-nano e2e-run-jetson-orin-nano e2e-test-raspberry-pi-5 e2e-run-raspberry-pi-5 e2e-test-mac-mini e2e-run-mac-mini reference proto agent-release build-cli agent-build agent-start agent-reset-settings agent-reset-permissions agent-reset agent-stop clean
 
@@ -35,32 +47,33 @@ lint: ## Lint Swift code using swift-format
 test: ## Run Swift package tests
 	bash ./Scripts/Test.sh
 
+e2e-test e2e-run: DEVICE ?= wendyos-raspberry-pi-5.local
 e2e-test: ## Run Swift E2E tests locally and write raw artifacts
-	$(call RUN_E2E_TEST,local,,--output-dir Build/e2e --cli-root-dir Build/e2e --agent-root-dir Build/e2e --parallel)
+	$(call RUN_E2E_TEST,$(LOCAL_E2E_RUN_ID),,$(LOCAL_E2E_ARGS))
 
 e2e-run: ## Run Swift E2E tests locally, review results, render the report, and open it
-	$(call RUN_E2E_RUN,local,,--output-dir Build/e2e --cli-root-dir Build/e2e --agent-root-dir Build/e2e --parallel)
+	$(call RUN_E2E_RUN,$(LOCAL_E2E_RUN_ID),,$(LOCAL_E2E_ARGS))
 
 e2e-test-jetson-orin-nano e2e-run-jetson-orin-nano: DEVICE ?= wendyos-jetson-orin-nano.local
 e2e-test-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano and write raw artifacts
-	$(call RUN_E2E_TEST,jetson-orin-nano,WENDY_E2E_AGENT_OS=wendyOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_TEST,jetson-orin-nano,,--output-dir Build/e2e --agent-os wendyOS --agent-address "$(DEVICE)")
 
 e2e-run-jetson-orin-nano: ## Run Swift E2E tests against Jetson Orin Nano, review results, render the report, and open it
-	$(call RUN_E2E_RUN,jetson-orin-nano,WENDY_E2E_AGENT_OS=wendyOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_RUN,jetson-orin-nano,,--output-dir Build/e2e --agent-os wendyOS --agent-address "$(DEVICE)")
 
 e2e-test-raspberry-pi-5 e2e-run-raspberry-pi-5: DEVICE ?= wendyos-raspberry-pi-5.local
 e2e-test-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5 and write raw artifacts
-	$(call RUN_E2E_TEST,raspberry-pi-5,WENDY_E2E_AGENT_OS=wendyOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_TEST,raspberry-pi-5,,--output-dir Build/e2e --agent-os wendyOS --agent-address "$(DEVICE)")
 
 e2e-run-raspberry-pi-5: ## Run Swift E2E tests against Raspberry Pi 5, review results, render the report, and open it
-	$(call RUN_E2E_RUN,raspberry-pi-5,WENDY_E2E_AGENT_OS=wendyOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_RUN,raspberry-pi-5,,--output-dir Build/e2e --agent-os wendyOS --agent-address "$(DEVICE)")
 
 e2e-test-mac-mini e2e-run-mac-mini: DEVICE ?= mac-mini.local
 e2e-test-mac-mini: ## Run Swift E2E tests against Mac mini and write raw artifacts
-	$(call RUN_E2E_TEST,mac-mini,WENDY_E2E_AGENT_OS=macOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_TEST,mac-mini,,--output-dir Build/e2e --agent-os macOS --agent-address "$(DEVICE)")
 
 e2e-run-mac-mini: ## Run Swift E2E tests against Mac mini, review results, render the report, and open it
-	$(call RUN_E2E_RUN,mac-mini,WENDY_E2E_AGENT_OS=macOS,--output-dir Build/e2e --agent-address "$(DEVICE)")
+	$(call RUN_E2E_RUN,mac-mini,,--output-dir Build/e2e --agent-os macOS --agent-address "$(DEVICE)")
 
 reference: ## Generate Swift E2E HTML reference documentation and open it
 	rm -rf Build/Reference
