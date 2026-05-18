@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -174,10 +175,11 @@ func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRe
 }
 
 // mergeServiceMetrics upserts the metrics in rm into the cached per-service
-// request, keyed by scope name and metric name. Metrics absent from the new
-// batch are retained so partial batches do not drop previously reported
-// metrics. The cached entry is mutated in place and returned; it is a distinct
-// object from any live-broadcast request, so subscribers are unaffected.
+// request, keyed by resource identity, scope identity, and metric name.
+// Metrics absent from the new batch are retained so partial batches do not
+// drop previously reported metrics for late subscribers. Multiple resource
+// instances sharing the same service.name (e.g. different pods) are kept as
+// separate ResourceMetrics entries distinguished by their resource attributes.
 func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.ResourceMetrics) *otelpb.ExportMetricsServiceRequest {
 	// Clone rm so the cache never holds references to live-broadcast request objects.
 	// Without this, a subscriber that has queued a broadcast req could observe mutations
@@ -189,20 +191,39 @@ func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.
 		}
 	}
 
-	dst := cached.GetResourceMetrics()[0]
-	dst.Resource = rm.GetResource() // refresh to the most recent resource
+	// Find the cached ResourceMetrics with matching resource identity. Different
+	// instances of the same service (e.g. pods) share service.name but differ in
+	// other attributes (e.g. service.instance.id); keying by full resource identity
+	// preserves each instance's metrics as a separate entry.
+	rmKey := resourceKey(rm.GetResource())
+	var dst *otelpb.ResourceMetrics
+	for _, existing := range cached.GetResourceMetrics() {
+		if resourceKey(existing.GetResource()) == rmKey {
+			dst = existing
+			break
+		}
+	}
+	if dst == nil {
+		cached.ResourceMetrics = append(cached.ResourceMetrics, rm)
+		return cached
+	}
+
+	dst.Resource = rm.GetResource()
 	dst.SchemaUrl = rm.GetSchemaUrl()
 
+	// Index by full scope identity (name + version + schema_url) to avoid
+	// conflating scopes that share a name but differ in version or schema.
 	scopeIdx := make(map[string]*otelpb.ScopeMetrics, len(dst.GetScopeMetrics()))
 	for _, sm := range dst.GetScopeMetrics() {
-		scopeIdx[sm.GetScope().GetName()] = sm
+		scopeIdx[scopeKey(sm)] = sm
 	}
 
 	for _, sm := range rm.GetScopeMetrics() {
-		existing, ok := scopeIdx[sm.GetScope().GetName()]
+		key := scopeKey(sm)
+		existing, ok := scopeIdx[key]
 		if !ok {
 			dst.ScopeMetrics = append(dst.ScopeMetrics, sm)
-			scopeIdx[sm.GetScope().GetName()] = sm
+			scopeIdx[key] = sm
 			continue
 		}
 		metricIdx := make(map[string]int, len(existing.GetMetrics()))
@@ -219,6 +240,29 @@ func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.
 		}
 	}
 	return cached
+}
+
+// resourceKey returns a deterministic key for a Resource based on its sorted
+// attribute set, distinguishing resource instances that share service.name but
+// differ in other attributes (e.g. service.instance.id for different pods).
+func resourceKey(r *otelpb.Resource) string {
+	attrs := r.GetAttributes()
+	if len(attrs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(attrs))
+	for i, kv := range attrs {
+		parts[i] = kv.GetKey() + "=" + kv.GetValue().String()
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
+}
+
+// scopeKey returns a deterministic key for a ScopeMetrics entry using scope
+// name, version, and schema_url — all three fields together identify a unique
+// instrumentation scope per the OTLP specification.
+func scopeKey(sm *otelpb.ScopeMetrics) string {
+	return sm.GetScope().GetName() + "\x00" + sm.GetScope().GetVersion() + "\x00" + sm.GetSchemaUrl()
 }
 
 // SubscribeTraces adds a traces subscriber.

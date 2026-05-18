@@ -227,17 +227,30 @@ func TestOTELHTTPReceiver_CompressedBodyTooLarge(t *testing.T) {
 	broadcaster := NewTelemetryBroadcaster()
 	receiver := NewOTELHTTPReceiver(zap.NewNop(), broadcaster)
 
-	// Send raw (non-gzip) bytes larger than the compressed cap with a gzip
-	// Content-Encoding header. readBody buffers the compressed stream before
-	// decompressing, so the size check fires on the raw bytes — independently
-	// of the decompressed limit — and returns 413 before any gzip parsing
-	// is attempted.
-	body := make([]byte, maxOTELHTTPCompressedBodySize+1)
-	if _, err := rand.Read(body); err != nil {
-		t.Fatalf("rand.Read: %v", err)
+	// Build a valid gzip stream whose compressed size exceeds the cap while its
+	// decompressed content is exactly maxOTELHTTPBodySize (not over). With
+	// gzip.NoCompression the output equals the input plus gzip envelope overhead
+	// (~1 KiB for 10 MiB), so compressed > maxOTELHTTPCompressedBodySize but
+	// decompressed == maxOTELHTTPBodySize. Without the compressed-size guard the
+	// gzip.Reader would succeed and the decompressed limit would not fire (the
+	// check is strictly greater-than), proving the two guards are independent.
+	decompressed := make([]byte, maxOTELHTTPBodySize)
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.NoCompression)
+	if err != nil {
+		t.Fatalf("gzip.NewWriterLevel: %v", err)
+	}
+	if _, err := gz.Write(decompressed); err != nil {
+		t.Fatalf("gz.Write: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gz.Close: %v", err)
+	}
+	if buf.Len() <= maxOTELHTTPCompressedBodySize {
+		t.Fatalf("precondition: gzip output (%d) must exceed compressed cap (%d)", buf.Len(), maxOTELHTTPCompressedBodySize)
 	}
 
-	httpReq := httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader(body))
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/metrics", &buf)
 	httpReq.Header.Set("Content-Encoding", "gzip")
 	w := httptest.NewRecorder()
 
