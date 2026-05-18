@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -21,20 +20,9 @@ import (
 // body. For gzip requests, the decompressed limit alone is the effective guard
 // against compression bombs: io.LimitReader stops the decompressor after 10 MB
 // of output regardless of how much compressed data is present.
-const (
-	maxOTELHTTPBodySize           = 10 * 1024 * 1024 // 10 MB decompressed
-	maxOTELHTTPCompressedBodySize = 1024 * 1024      // 1 MB compressed
-)
+const maxOTELHTTPBodySize = 10 * 1024 * 1024 // 10 MB decompressed
 
 var errBodyTooLarge = fmt.Errorf("request body exceeds %d bytes", maxOTELHTTPBodySize)
-
-// errCompressedBodyTooLarge is returned when a gzip-encoded request exceeds the
-// compressed-size cap. This is a deliberate limit independent of the
-// decompressed cap: a gzip bomb large enough to hit the decompressed limit
-// cannot also reach the compressed limit. It maps to 413, the same as
-// errBodyTooLarge, so clients get a clear "too large" signal rather than an
-// opaque decode error.
-var errCompressedBodyTooLarge = fmt.Errorf("compressed request body exceeds %d bytes", maxOTELHTTPCompressedBodySize)
 
 // OTELHTTPReceiver serves OTLP data over HTTP/protobuf on port 4318.
 // Many OTEL SDKs (including the Python SDK) default to HTTP/protobuf export
@@ -132,7 +120,7 @@ func (r *OTELHTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request
 }
 
 func (r *OTELHTTPReceiver) writeBodyError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errBodyTooLarge) || errors.Is(err, errCompressedBodyTooLarge) {
+	if errors.Is(err, errBodyTooLarge) {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	} else {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -156,20 +144,7 @@ func isGzipEncoded(req *http.Request) bool {
 func (r *OTELHTTPReceiver) readBody(req *http.Request) ([]byte, error) {
 	reader := io.Reader(req.Body)
 	if isGzipEncoded(req) {
-		// Cap compressed input well below the decompressed limit so that the
-		// two limits provide independent protection: a gzip bomb large enough
-		// to hit the decompressed limit cannot also reach the compressed limit.
-		// Buffer the compressed bytes first so an over-limit request is
-		// reported as a clear "too large" (413) instead of a truncated-stream
-		// decode error.
-		compressed, err := io.ReadAll(io.LimitReader(req.Body, maxOTELHTTPCompressedBodySize+1))
-		if err != nil {
-			return nil, err
-		}
-		if int64(len(compressed)) > maxOTELHTTPCompressedBodySize {
-			return nil, errCompressedBodyTooLarge
-		}
-		gz, err := gzip.NewReader(bytes.NewReader(compressed))
+		gz, err := gzip.NewReader(req.Body)
 		if err != nil {
 			return nil, fmt.Errorf("gzip reader: %w", err)
 		}
