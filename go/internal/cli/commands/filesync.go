@@ -257,15 +257,14 @@ func syncFiles(
 			}
 			fileSent += int64(len(data))
 			sentBytes += int64(len(data))
-			checkpoint := append([]byte(nil), h.Sum(nil)...)
 			return stream.Send(&agentpb.FileSyncRequest{
 				RequestType: &agentpb.FileSyncRequest_Chunk{
 					Chunk: &agentpb.FileSyncChunk{
 						Path:           agentPath,
-						Data:           append([]byte(nil), data...),
+						Data:           data,
 						Sequence:       sequence,
 						CumulativeSize: fileSent,
-						Sha256:         checkpoint,
+						Sha256:         h.Sum(nil),
 					},
 				},
 			})
@@ -312,7 +311,7 @@ func syncFiles(
 			RequestType: &agentpb.FileSyncRequest_Commit{
 				Commit: &agentpb.FileSyncCommit{
 					Path:   agentPath,
-					Sha256: append([]byte(nil), entry.Sha256...),
+					Sha256: entry.Sha256,
 					Size:   entry.Size,
 				},
 			},
@@ -346,7 +345,7 @@ func syncFiles(
 					Path:   change.path,
 					Mode:   change.entry.Mode,
 					Size:   change.entry.Size,
-					Sha256: append([]byte(nil), change.entry.Sha256...),
+					Sha256: change.entry.Sha256,
 				},
 			},
 		}); err != nil {

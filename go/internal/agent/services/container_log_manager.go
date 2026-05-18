@@ -50,7 +50,7 @@ func (s *logSubscriber) close() {
 type ContainerLogManager struct {
 	logger      *zap.Logger
 	broadcaster *TelemetryBroadcaster
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	subscribers map[string]map[string]*logSubscriber // appName -> subID -> subscriber
 	nextID      uint64
 	resources   map[string]*otelpb.Resource // appName -> pre-built OTel resource (protected by mu)
@@ -137,18 +137,12 @@ func (m *ContainerLogManager) Publish(appName string, output ContainerOutput) {
 	m.publishToTelemetry(appName, output)
 
 	// Fan out to all subscribers.
-	m.mu.Lock()
+	m.mu.RLock()
 	appSubs := m.subscribers[appName]
-	// Copy subscriber pointers under lock to avoid holding it while sending.
-	subs := make([]*logSubscriber, 0, len(appSubs))
 	for _, sub := range appSubs {
-		subs = append(subs, sub)
-	}
-	m.mu.Unlock()
-
-	for _, sub := range subs {
 		sub.send(output)
 	}
+	m.mu.RUnlock()
 }
 
 // publishToTelemetry converts container output into OTEL log records and
@@ -209,9 +203,9 @@ func (m *ContainerLogManager) publishToTelemetry(appName string, output Containe
 		return
 	}
 
-	m.mu.Lock()
+	m.mu.RLock()
 	resource := m.resources[appName]
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	if resource == nil {
 		resource = containerResource(appName, "")
 	}

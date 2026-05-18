@@ -169,7 +169,6 @@ func (m *ContainerMonitor) checkContainers(ctx context.Context) {
 		return
 	}
 
-	// Build a set of running container names.
 	running := make(map[string]bool)
 	for _, c := range containers {
 		if c.GetRunningState() == agentpb.AppRunningState_RUNNING {
@@ -178,39 +177,36 @@ func (m *ContainerMonitor) checkContainers(ctx context.Context) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var toRestart []string
 	for appName, state := range m.states {
 		if running[appName] {
 			continue
 		}
-
-		// Container is not running - evaluate restart policy.
 		if !m.shouldRestart(state) {
 			continue
 		}
-
-		// Enforce backoff: don't restart more often than once per 10 seconds.
 		if time.Since(state.LastRestart) < 10*time.Second {
 			continue
 		}
-
 		m.logger.Info("Restarting container",
 			zap.String("app_name", appName),
 			zap.Int("failure_count", state.FailureCount),
 		)
-
 		state.FailureCount++
 		state.LastRestart = time.Now()
+		toRestart = append(toRestart, appName)
+	}
+	m.mu.Unlock()
 
-		go func(name string) {
-			if _, err := m.containerd.StartContainer(ctx, name, "", nil); err != nil {
+	for _, name := range toRestart {
+		go func(n string) {
+			if _, err := m.containerd.StartContainer(ctx, n, "", nil); err != nil {
 				m.logger.Error("Failed to restart container",
-					zap.String("app_name", name),
+					zap.String("app_name", n),
 					zap.Error(err),
 				)
 			}
-		}(appName)
+		}(name)
 	}
 }
 

@@ -267,7 +267,7 @@ func TestFullAgentLifecycle(t *testing.T) {
 	bm := &integrationBluetoothManager{}
 	cc := newStatefulContainerdClient()
 
-	agentSvc := services.NewAgentService(logger, nm, hd, bm)
+	agentSvc := services.NewAgentService(logger, nm, hd, bm, &services.AgentInstaller{})
 	containerSvc := services.NewContainerService(logger, cc)
 	broadcaster := services.NewTelemetryBroadcaster()
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster)

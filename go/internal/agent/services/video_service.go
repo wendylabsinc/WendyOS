@@ -284,11 +284,11 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, stream grpc.ServerS
 			}
 			continue
 		}
-		data := make([]byte, n)
-		copy(data, mapped[idx].data[:n])
+		frameData := make([]byte, n)
+		copy(frameData, mapped[idx].data[:n])
 
 		if err := stream.Send(&agentpb.VideoFrame{
-			Data:        data,
+			Data:        frameData,
 			TimestampNs: uint64(time.Now().UnixNano()),
 		}); err != nil {
 			return err
@@ -374,7 +374,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 		}
 	}()
 
-	const chunkSize = 16 * 1024
+	const chunkSize = 256 * 1024
 	buf := make([]byte, chunkSize)
 
 	for {
@@ -386,10 +386,10 @@ func (s *VideoService) streamGStreamer(ctx context.Context, stream grpc.ServerSt
 
 		n, readErr := stdout.Read(buf)
 		if n > 0 {
-			data := make([]byte, n)
-			copy(data, buf[:n])
+			frameData := make([]byte, n)
+			copy(frameData, buf[:n])
 			if sendErr := stream.Send(&agentpb.VideoFrame{
-				Data:        data,
+				Data:        frameData,
 				TimestampNs: uint64(time.Now().UnixNano()),
 				Codec:       enc.codec,
 			}); sendErr != nil {

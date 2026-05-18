@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -119,6 +120,15 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 		"passthrough:///cloud-tunnel",
 		dialOpt,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithInitialWindowSize(8*1024*1024),
+		grpc.WithInitialConnWindowSize(16*1024*1024),
+		grpc.WithReadBufferSize(256*1024),
+		grpc.WithWriteBufferSize(256*1024),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	)
 	if err != nil {
 		closeTunnel()
@@ -228,7 +238,18 @@ func dialCloudBroker(auth *config.AuthConfig, brokerURL string) (*grpc.ClientCon
 		}
 	}
 
-	conn, err := grpc.NewClient(brokerURL, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	conn, err := grpc.NewClient(brokerURL,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithInitialWindowSize(8*1024*1024),
+		grpc.WithInitialConnWindowSize(16*1024*1024),
+		grpc.WithReadBufferSize(256*1024),
+		grpc.WithWriteBufferSize(256*1024),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to broker at %s: %w", brokerURL, err)
 	}
@@ -280,7 +301,7 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 	}()
 
 	go func() {
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 256*1024)
 		for {
 			n, readErr := remote.Read(buf)
 			if n > 0 {
@@ -431,7 +452,18 @@ func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	} else {
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	conn, err := grpc.NewClient(auth.CloudGRPC, transport)
+	conn, err := grpc.NewClient(auth.CloudGRPC,
+		transport,
+		grpc.WithInitialWindowSize(8*1024*1024),
+		grpc.WithInitialConnWindowSize(16*1024*1024),
+		grpc.WithReadBufferSize(256*1024),
+		grpc.WithWriteBufferSize(256*1024),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}

@@ -1,6 +1,7 @@
 package containerd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -246,7 +247,7 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 		Digest:    configDigest,
 		Size:      int64(len(configData)),
 	}
-	if err := content.WriteBlob(ctx, cs, configDigest.String(), strings.NewReader(string(configData)), configDesc); err != nil {
+	if err := content.WriteBlob(ctx, cs, configDigest.String(), bytes.NewReader(configData), configDesc); err != nil {
 		if !errdefs.IsAlreadyExists(err) {
 			return fmt.Errorf("writing config blob: %w", err)
 		}
@@ -271,7 +272,7 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 		Digest:    manifestDigest,
 		Size:      int64(len(manifestData)),
 	}
-	if err := content.WriteBlob(ctx, cs, manifestDigest.String(), strings.NewReader(string(manifestData)), manifestDesc); err != nil {
+	if err := content.WriteBlob(ctx, cs, manifestDigest.String(), bytes.NewReader(manifestData), manifestDesc); err != nil {
 		if !errdefs.IsAlreadyExists(err) {
 			return fmt.Errorf("writing manifest blob: %w", err)
 		}
@@ -1313,7 +1314,7 @@ func extractMemoryBytes(metric *types.Metric) int64 {
 // streamReader is a helper that continuously reads from a reader and sends
 // chunks to the output channel with the specified builder function.
 func streamReader(r io.Reader, ch chan<- services.ContainerOutput, buildOutput func([]byte) services.ContainerOutput) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {

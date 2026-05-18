@@ -194,6 +194,10 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, er
 			Timeout:             brokerKeepaliveTimeout,
 			PermitWithoutStream: true,
 		}),
+		grpc.WithInitialWindowSize(8 * 1024 * 1024),
+		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
+		grpc.WithReadBufferSize(256 * 1024),
+		grpc.WithWriteBufferSize(256 * 1024),
 	}, md, nil
 }
 
@@ -269,7 +273,7 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 	// TCP -> gRPC
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 256*1024)
 		for {
 			n, readErr := tcpConn.Read(buf)
 			if n > 0 {

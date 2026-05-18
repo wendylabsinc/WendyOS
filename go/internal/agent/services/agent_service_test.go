@@ -84,7 +84,7 @@ func startAgentServer(t *testing.T, nm NetworkManager, hd HardwareDiscoverer, bm
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
 	logger := zap.NewNop()
-	svc := NewAgentService(logger, nm, hd, bm)
+	svc := NewAgentService(logger, nm, hd, bm, &AgentInstaller{})
 	for _, opt := range opts {
 		opt(svc)
 	}
@@ -282,28 +282,25 @@ func TestListHardwareCapabilities(t *testing.T) {
 }
 
 func TestUpdateAgent_LockExclusion(t *testing.T) {
-	logger := zap.NewNop()
-	svc := NewAgentService(logger, &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})
+	installer := &AgentInstaller{}
 
-	// Simulate the lock being held.
-	svc.updateMu.Lock()
-	svc.isUpdating = true
-	svc.updateMu.Unlock()
-
-	// Verify the state is set.
-	svc.updateMu.Lock()
-	if !svc.isUpdating {
-		t.Error("expected isUpdating = true after manual set")
+	// TryLock should succeed the first time.
+	if !installer.TryLock() {
+		t.Fatal("expected TryLock to succeed when not updating")
 	}
-	svc.isUpdating = false
-	svc.updateMu.Unlock()
 
-	// Verify we can acquire the lock again when not updating.
-	svc.updateMu.Lock()
-	if svc.isUpdating {
-		t.Error("expected isUpdating = false after reset")
+	// TryLock should fail while the lock is held.
+	if installer.TryLock() {
+		t.Error("expected TryLock to fail while update is in progress")
+		installer.Unlock()
 	}
-	svc.updateMu.Unlock()
+
+	// After Unlock, TryLock should succeed again.
+	installer.Unlock()
+	if !installer.TryLock() {
+		t.Error("expected TryLock to succeed after unlock")
+	}
+	installer.Unlock()
 }
 
 func TestUpdateOS_NonWendyOSFailsBeforeMender(t *testing.T) {
@@ -336,34 +333,29 @@ func TestUpdateOS_NonWendyOSFailsBeforeMender(t *testing.T) {
 }
 
 func TestUpdateAgent_ConcurrentLock(t *testing.T) {
-	logger := zap.NewNop()
-	svc := NewAgentService(logger, &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{})
+	installer := &AgentInstaller{}
 
-	// First "update" acquires the lock.
-	svc.updateMu.Lock()
-	svc.isUpdating = true
-	svc.updateMu.Unlock()
+	// First caller acquires the lock.
+	if !installer.TryLock() {
+		t.Fatal("first TryLock should succeed")
+	}
 
-	// Second attempt must see that isUpdating is true.
+	// Concurrent attempt must be rejected.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	var blocked bool
 	go func() {
 		defer wg.Done()
-		svc.updateMu.Lock()
-		blocked = svc.isUpdating
-		svc.updateMu.Unlock()
+		blocked = !installer.TryLock()
 	}()
 	wg.Wait()
 
 	if !blocked {
-		t.Error("expected second caller to see isUpdating = true")
+		t.Error("expected concurrent TryLock to be rejected while update is in progress")
+		installer.Unlock() // clean up if somehow succeeded
 	}
 
-	// Cleanup
-	svc.updateMu.Lock()
-	svc.isUpdating = false
-	svc.updateMu.Unlock()
+	installer.Unlock()
 }
 
 func TestRunContainer_Deprecated(t *testing.T) {

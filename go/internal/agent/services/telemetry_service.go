@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
@@ -22,9 +24,10 @@ type TelemetryBroadcaster struct {
 	metricSubs    map[string]chan *otelpb.ExportMetricsServiceRequest
 	traceSubs     map[string]chan *otelpb.ExportTraceServiceRequest
 	nextID        uint64
-	recentLogs    []*otelpb.ExportLogsServiceRequest
-	maxCachedLogs int
-	latestMetrics map[string]*otelpb.ExportMetricsServiceRequest // keyed by "service:metric"
+	recentLogs    [defaultMaxCachedLogs]*otelpb.ExportLogsServiceRequest
+	logHead       int                                            // next write index (0..defaultMaxCachedLogs-1)
+	logCount      int                                            // number of valid entries (0..defaultMaxCachedLogs)
+	latestMetrics map[string]*otelpb.ExportMetricsServiceRequest // keyed by "service"
 }
 
 // NewTelemetryBroadcaster creates a new TelemetryBroadcaster.
@@ -33,7 +36,6 @@ func NewTelemetryBroadcaster() *TelemetryBroadcaster {
 		logSubs:       make(map[string]chan *otelpb.ExportLogsServiceRequest),
 		metricSubs:    make(map[string]chan *otelpb.ExportMetricsServiceRequest),
 		traceSubs:     make(map[string]chan *otelpb.ExportTraceServiceRequest),
-		maxCachedLogs: defaultMaxCachedLogs,
 		latestMetrics: make(map[string]*otelpb.ExportMetricsServiceRequest),
 	}
 }
@@ -53,10 +55,16 @@ func (b *TelemetryBroadcaster) SubscribeLogs() (string, <-chan *otelpb.ExportLog
 	b.logSubs[id] = ch
 
 	// Pre-fill cached logs into the channel in a goroutine.
-	if len(b.recentLogs) > 0 {
-		cached := make([]*otelpb.ExportLogsServiceRequest, len(b.recentLogs))
-		copy(cached, b.recentLogs)
+	if b.logCount > 0 {
+		cached := make([]*otelpb.ExportLogsServiceRequest, b.logCount)
+		start := (b.logHead - b.logCount + defaultMaxCachedLogs) % defaultMaxCachedLogs
+		for i := 0; i < b.logCount; i++ {
+			cached[i] = b.recentLogs[(start+i)%defaultMaxCachedLogs]
+		}
 		go func() {
+			// recover guards against a send on closed channel if the subscriber
+			// calls UnsubscribeLogs before this goroutine finishes pre-filling.
+			defer func() { recover() }() //nolint:errcheck
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
@@ -83,15 +91,11 @@ func (b *TelemetryBroadcaster) UnsubscribeLogs(id string) {
 // PublishLogs sends a log export request to all log subscribers and caches the log.
 func (b *TelemetryBroadcaster) PublishLogs(req *otelpb.ExportLogsServiceRequest) {
 	b.mu.Lock()
-	// Append to recent logs ring buffer.
-	b.recentLogs = append(b.recentLogs, req)
-	if len(b.recentLogs) > b.maxCachedLogs {
-		b.recentLogs = b.recentLogs[len(b.recentLogs)-b.maxCachedLogs:]
+	b.recentLogs[b.logHead] = req
+	b.logHead = (b.logHead + 1) % defaultMaxCachedLogs
+	if b.logCount < defaultMaxCachedLogs {
+		b.logCount++
 	}
-	b.mu.Unlock()
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
 	for _, ch := range b.logSubs {
 		select {
 		case ch <- req:
@@ -99,6 +103,7 @@ func (b *TelemetryBroadcaster) PublishLogs(req *otelpb.ExportLogsServiceRequest)
 			// Drop if subscriber is slow.
 		}
 	}
+	b.mu.Unlock()
 }
 
 // SubscribeMetrics adds a metrics subscriber.
@@ -110,13 +115,21 @@ func (b *TelemetryBroadcaster) SubscribeMetrics() (string, <-chan *otelpb.Export
 	ch := make(chan *otelpb.ExportMetricsServiceRequest, 64)
 	b.metricSubs[id] = ch
 
-	// Pre-fill cached metrics into the channel in a goroutine.
+	// Pre-fill cached metrics into the channel in a goroutine. Clone each
+	// snapshot while the lock is still held so the goroutine sends immutable
+	// copies; without cloning, a concurrent PublishMetrics could mutate the
+	// cached object in place while the subscriber reads it.
 	if len(b.latestMetrics) > 0 {
+		seen := make(map[*otelpb.ExportMetricsServiceRequest]bool, len(b.latestMetrics))
 		cached := make([]*otelpb.ExportMetricsServiceRequest, 0, len(b.latestMetrics))
 		for _, v := range b.latestMetrics {
-			cached = append(cached, v)
+			if !seen[v] {
+				seen[v] = true
+				cached = append(cached, proto.Clone(v).(*otelpb.ExportMetricsServiceRequest))
+			}
 		}
 		go func() {
+			defer func() { recover() }() //nolint:errcheck
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
@@ -141,28 +154,115 @@ func (b *TelemetryBroadcaster) UnsubscribeMetrics(id string) {
 }
 
 // PublishMetrics sends a metrics export request to all metrics subscribers and updates the cache.
+// latestMetrics holds one merged ExportMetricsServiceRequest per service. New batches are
+// merged into the cached state by scope name + metric name rather than replacing it wholesale,
+// so a later partial batch (e.g. metric a only) does not drop a previously reported metric
+// (e.g. metric b) for subscribers that join late. The live broadcast still forwards the
+// original request unchanged.
 func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRequest) {
 	b.mu.Lock()
-	// Update latestMetrics cache keyed by "serviceName:metricName".
 	for _, rm := range req.GetResourceMetrics() {
 		serviceName := resourceServiceName(rm.GetResource())
-		for _, sm := range rm.GetScopeMetrics() {
-			for _, m := range sm.GetMetrics() {
-				key := serviceName + ":" + m.GetName()
-				b.latestMetrics[key] = req
-			}
-		}
+		b.latestMetrics[serviceName] = mergeServiceMetrics(b.latestMetrics[serviceName], rm)
 	}
-	b.mu.Unlock()
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
 	for _, ch := range b.metricSubs {
 		select {
 		case ch <- req:
 		default:
 		}
 	}
+	b.mu.Unlock()
+}
+
+// mergeServiceMetrics upserts the metrics in rm into the cached per-service
+// request, keyed by resource identity, scope identity, and metric name.
+// Metrics absent from the new batch are retained so partial batches do not
+// drop previously reported metrics for late subscribers. Multiple resource
+// instances sharing the same service.name (e.g. different pods) are kept as
+// separate ResourceMetrics entries distinguished by their resource attributes.
+func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.ResourceMetrics) *otelpb.ExportMetricsServiceRequest {
+	// Clone rm so the cache never holds references to live-broadcast request objects.
+	// Without this, a subscriber that has queued a broadcast req could observe mutations
+	// to its ResourceMetrics objects the next time the same service publishes a batch.
+	rm = proto.Clone(rm).(*otelpb.ResourceMetrics)
+	if cached == nil || len(cached.GetResourceMetrics()) == 0 {
+		return &otelpb.ExportMetricsServiceRequest{
+			ResourceMetrics: []*otelpb.ResourceMetrics{rm},
+		}
+	}
+
+	// Find the cached ResourceMetrics with matching resource identity. Different
+	// instances of the same service (e.g. pods) share service.name but differ in
+	// other attributes (e.g. service.instance.id); keying by full resource identity
+	// preserves each instance's metrics as a separate entry.
+	rmKey := resourceKey(rm.GetResource())
+	var dst *otelpb.ResourceMetrics
+	for _, existing := range cached.GetResourceMetrics() {
+		if resourceKey(existing.GetResource()) == rmKey {
+			dst = existing
+			break
+		}
+	}
+	if dst == nil {
+		cached.ResourceMetrics = append(cached.ResourceMetrics, rm)
+		return cached
+	}
+
+	dst.Resource = rm.GetResource()
+	dst.SchemaUrl = rm.GetSchemaUrl()
+
+	// Index by full scope identity (name + version + schema_url) to avoid
+	// conflating scopes that share a name but differ in version or schema.
+	scopeIdx := make(map[string]*otelpb.ScopeMetrics, len(dst.GetScopeMetrics()))
+	for _, sm := range dst.GetScopeMetrics() {
+		scopeIdx[scopeKey(sm)] = sm
+	}
+
+	for _, sm := range rm.GetScopeMetrics() {
+		key := scopeKey(sm)
+		existing, ok := scopeIdx[key]
+		if !ok {
+			dst.ScopeMetrics = append(dst.ScopeMetrics, sm)
+			scopeIdx[key] = sm
+			continue
+		}
+		metricIdx := make(map[string]int, len(existing.GetMetrics()))
+		for i, m := range existing.GetMetrics() {
+			metricIdx[m.GetName()] = i
+		}
+		for _, m := range sm.GetMetrics() {
+			if i, ok := metricIdx[m.GetName()]; ok {
+				existing.Metrics[i] = m
+			} else {
+				existing.Metrics = append(existing.Metrics, m)
+				metricIdx[m.GetName()] = len(existing.Metrics) - 1
+			}
+		}
+	}
+	return cached
+}
+
+// resourceKey returns a deterministic key for a Resource based on its sorted
+// attribute set, distinguishing resource instances that share service.name but
+// differ in other attributes (e.g. service.instance.id for different pods).
+func resourceKey(r *otelpb.Resource) string {
+	attrs := r.GetAttributes()
+	if len(attrs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(attrs))
+	for i, kv := range attrs {
+		parts[i] = kv.GetKey() + "=" + kv.GetValue().String()
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
+}
+
+// scopeKey returns a deterministic key for a ScopeMetrics entry using scope
+// name, version, and schema_url — all three fields together identify a unique
+// instrumentation scope per the OTLP specification.
+func scopeKey(sm *otelpb.ScopeMetrics) string {
+	return sm.GetScope().GetName() + "\x00" + sm.GetScope().GetVersion() + "\x00" + sm.GetSchemaUrl()
 }
 
 // SubscribeTraces adds a traces subscriber.

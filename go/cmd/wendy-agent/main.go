@@ -153,13 +153,15 @@ func main() {
 
 	logManager := services.NewContainerLogManager(logger, broadcaster)
 
+	installer := &services.AgentInstaller{}
+	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager, installer)
+
 	// Start container monitor only when containerd is available.
 	var monitor *container.ContainerMonitor
 	if containerdClient != nil {
 		monitor = container.NewContainerMonitor(logger, containerdClient, 15*time.Second)
 	}
 
-	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager)
 	containerSvcOpts := []services.ContainerServiceOption{
 		services.WithLogManager(logManager),
 	}
@@ -179,7 +181,7 @@ func main() {
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
 	wifiSvc := services.NewWiFiService(logger, networkMgr)
 	bluetoothSvc := services.NewBluetoothService(logger, btManager)
-	agentUpdateSvc := services.NewAgentUpdateService(logger)
+	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
 	osUpdateSvc := services.NewOSUpdateService(logger)
 	containerSvcV2 := services.NewContainerServiceV2(containerSvc)
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
@@ -417,13 +419,16 @@ func main() {
 		agentServer = grpc.NewServer(
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
-			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-				MinTime:             5 * time.Second,
-				PermitWithoutStream: true,
-			}),
+			grpc.InitialWindowSize(8*1024*1024),
+			grpc.InitialConnWindowSize(16*1024*1024),
 			grpc.KeepaliveParams(keepalive.ServerParameters{
-				Time:    30 * time.Second,
-				Timeout: 10 * time.Second,
+				MaxConnectionIdle: 5 * time.Minute,
+				Time:              30 * time.Second,
+				Timeout:           10 * time.Second,
+			}),
+			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+				MinTime:             10 * time.Second,
+				PermitWithoutStream: true,
 			}),
 		)
 		registerAllServices(agentServer)
@@ -468,6 +473,17 @@ func main() {
 	otelServer := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 		grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+		grpc.InitialWindowSize(8*1024*1024),
+		grpc.InitialConnWindowSize(16*1024*1024),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 5 * time.Minute,
+			Time:              30 * time.Second,
+			Timeout:           10 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	)
 	otelpb.RegisterLogsServiceServer(otelServer, otelLogReceiver)
 	otelpb.RegisterMetricsServiceServer(otelServer, otelMetricReceiver)

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,15 +47,19 @@ type dimWriter struct {
 }
 
 func (w *dimWriter) Write(p []byte) (int, error) {
-	for _, b := range p {
-		if b == '\n' {
-			fmt.Println(cliStyle.Render(w.buf.String()))
-			w.buf.Reset()
-		} else {
-			w.buf.WriteByte(b)
+	total := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			w.buf.Write(p)
+			break
 		}
+		w.buf.Write(p[:i])
+		fmt.Println(cliStyle.Render(w.buf.String()))
+		w.buf.Reset()
+		p = p[i+1:]
 	}
-	return len(p), nil
+	return total, nil
 }
 
 func (w *dimWriter) Flush() {

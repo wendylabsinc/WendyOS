@@ -1,12 +1,15 @@
 package services
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -14,9 +17,17 @@ import (
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
-const maxOTELHTTPBodySize = 10 * 1024 * 1024 // 10 MB
+const (
+	maxOTELHTTPBodySize           = 10 * 1024 * 1024 // 10 MB decompressed
+	maxOTELHTTPCompressedBodySize = 12 * 1024 * 1024 // 12 MB compressed — gzip NoCompression adds ~0.015% framing overhead,
+	// so the compressed cap must exceed the decompressed cap by at least that margin to avoid
+	// rejecting valid 10 MB payloads with poor compression ratios.
+)
 
-var errBodyTooLarge = fmt.Errorf("request body exceeds %d bytes", maxOTELHTTPBodySize)
+var (
+	errBodyTooLarge           = fmt.Errorf("request body exceeds %d bytes", maxOTELHTTPBodySize)
+	errCompressedBodyTooLarge = fmt.Errorf("compressed request body exceeds %d bytes", maxOTELHTTPCompressedBodySize)
+)
 
 // OTELHTTPReceiver serves OTLP data over HTTP/protobuf on port 4318.
 // Many OTEL SDKs (including the Python SDK) default to HTTP/protobuf export
@@ -114,15 +125,49 @@ func (r *OTELHTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request
 }
 
 func (r *OTELHTTPReceiver) writeBodyError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errBodyTooLarge) {
+	if errors.Is(err, errBodyTooLarge) || errors.Is(err, errCompressedBodyTooLarge) {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	} else {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 	}
 }
 
+// isGzipEncoded reports whether the request uses gzip content encoding.
+// Content-Encoding is case-insensitive and may list multiple codings; we only
+// support a single "gzip" token (the common OTLP SDK case). Multi-coding values
+// are not decompressed and will fail protobuf unmarshalling, not silently corrupt.
+func isGzipEncoded(req *http.Request) bool {
+	enc := strings.TrimSpace(req.Header.Get("Content-Encoding"))
+	if enc == "" {
+		return false
+	}
+	// Handle comma-separated codings: only treat as gzip if the sole token is "gzip".
+	parts := strings.SplitN(enc, ",", 2)
+	return len(parts) == 1 && strings.EqualFold(strings.TrimSpace(parts[0]), "gzip")
+}
+
 func (r *OTELHTTPReceiver) readBody(req *http.Request) ([]byte, error) {
-	limited := io.LimitReader(req.Body, maxOTELHTTPBodySize+1)
+	reader := io.Reader(req.Body)
+	if isGzipEncoded(req) {
+		// Buffer the compressed bytes so an over-limit request returns a clear
+		// 413 rather than an opaque gzip decode error. The compressed cap
+		// matches the decompressed cap so valid payloads with poor compression
+		// ratios are not incorrectly rejected.
+		compressed, err := io.ReadAll(io.LimitReader(req.Body, maxOTELHTTPCompressedBodySize+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(compressed)) > maxOTELHTTPCompressedBodySize {
+			return nil, errCompressedBodyTooLarge
+		}
+		gz, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	limited := io.LimitReader(reader, maxOTELHTTPBodySize+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, err

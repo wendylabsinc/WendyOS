@@ -34,8 +34,7 @@ type AgentService struct {
 	networkManager     NetworkManager
 	hardwareDiscoverer HardwareDiscoverer
 	bluetoothManager   BluetoothManager
-	updateMu           sync.Mutex
-	isUpdating         bool
+	installer          *AgentInstaller
 	isWendyOSHost      func() bool
 }
 
@@ -45,12 +44,14 @@ func NewAgentService(
 	nm NetworkManager,
 	hd HardwareDiscoverer,
 	bm BluetoothManager,
+	installer *AgentInstaller,
 ) *AgentService {
 	return &AgentService{
 		logger:             logger,
 		networkManager:     nm,
 		hardwareDiscoverer: hd,
 		bluetoothManager:   bm,
+		installer:          installer,
 		isWendyOSHost:      defaultIsWendyOSHost,
 	}
 }
@@ -294,25 +295,39 @@ func (s *AgentService) RunContainer(stream grpc.BidiStreamingServer[agentpb.RunC
 
 // UpdateAgent handles streaming binary updates with SHA256 verification and atomic replacement.
 func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.UpdateAgentRequest, agentpb.UpdateAgentResponse]) error {
-	s.updateMu.Lock()
-	if s.isUpdating {
-		s.updateMu.Unlock()
+	if !s.installer.TryLock() {
 		return status.Error(codes.FailedPrecondition, "an update is already in progress")
 	}
-	s.isUpdating = true
-	s.updateMu.Unlock()
-
+	// committed is declared before the defer so the closure captures it.
+	// On success the lock is intentionally NOT released: the process exits
+	// within 500 ms and holding the lock prevents a concurrent update from
+	// racing on the just-installed binary during that shutdown window.
+	committed := false
 	defer func() {
-		s.updateMu.Lock()
-		s.isUpdating = false
-		s.updateMu.Unlock()
+		if !committed {
+			s.installer.Unlock()
+		}
 	}()
 
 	s.logger.Info("UpdateAgent stream started")
 
-	// Receive binary chunks.
+	execPath, originalPerm, err := resolveExecPath()
+	if err != nil {
+		return err
+	}
+
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !committed {
+			cleanupTmp()
+		}
+	}()
+
 	hasher := sha256.New()
-	var binaryData []byte
+	var written int64
 
 	for {
 		msg, err := stream.Recv()
@@ -324,14 +339,21 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		}
 
 		if chunk := msg.GetChunk(); chunk != nil {
-			binaryData = append(binaryData, chunk.GetData()...)
-			hasher.Write(chunk.GetData())
+			data := chunk.GetData()
+			written += int64(len(data))
+			if written > maxAgentBinarySize {
+				return status.Errorf(codes.ResourceExhausted,
+					"update stream exceeds maximum agent binary size (%d MiB)", maxAgentBinarySize>>20)
+			}
+			if _, err := tmpFile.Write(data); err != nil {
+				return status.Errorf(codes.Internal, "failed to write update chunk: %v", err)
+			}
+			hasher.Write(data)
 			continue
 		}
 
 		if ctrl := msg.GetControl(); ctrl != nil {
 			if ctrl.GetUpdate() != nil {
-				// Verify SHA256.
 				computedHash := hex.EncodeToString(hasher.Sum(nil))
 				expectedHash := ctrl.GetUpdate().GetSha256()
 				if expectedHash != "" && computedHash != expectedHash {
@@ -339,53 +361,15 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				// Resolve the current binary path (follow symlinks).
-				execPath, err := os.Executable()
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to get executable path: %v", err)
-				}
-				execPath, err = filepath.EvalSymlinks(execPath)
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to resolve executable symlinks: %v", err)
-				}
-
-				// Capture original file permissions.
-				info, err := os.Stat(execPath)
-				if err != nil {
-					return status.Errorf(codes.Internal, "failed to stat executable: %v", err)
-				}
-				originalPerm := info.Mode()
-
-				// Write the new binary to a temp file.
-				tmpPath := execPath + ".update"
-				if err := os.WriteFile(tmpPath, binaryData, originalPerm); err != nil {
-					return status.Errorf(codes.Internal, "failed to write update file: %v", err)
-				}
-
-				// Create a backup of the current binary.
-				backupPath := execPath + ".backup"
-				if err := os.Rename(execPath, backupPath); err != nil {
-					os.Remove(tmpPath)
-					return status.Errorf(codes.Internal, "failed to create backup: %v", err)
-				}
-
-				// Atomic rename of new binary to current path.
-				if err := os.Rename(tmpPath, execPath); err != nil {
-					// Rollback: restore from backup.
-					if rbErr := os.Rename(backupPath, execPath); rbErr != nil {
-						s.logger.Error("Failed to rollback from backup",
-							zap.Error(rbErr),
-							zap.String("backup_path", backupPath),
-						)
+				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
+					if errors.Is(err, ErrDirFsync) {
+						// Binary is installed; only directory-entry durability is at risk.
+						s.logger.Warn("Update dir fsync failed; binary installed but rename may not survive power loss", zap.Error(err))
+					} else {
+						return err
 					}
-					os.Remove(tmpPath)
-					return status.Errorf(codes.Internal, "failed to replace binary: %v", err)
 				}
-
-				s.logger.Info("Agent binary updated successfully",
-					zap.String("sha256", computedHash),
-					zap.Int("size", len(binaryData)),
-				)
+				committed = true
 
 				if err := stream.Send(&agentpb.UpdateAgentResponse{
 					ResponseType: &agentpb.UpdateAgentResponse_Updated_{

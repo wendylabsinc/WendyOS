@@ -285,6 +285,142 @@ func TestOTELTraceReceiver(t *testing.T) {
 	}
 }
 
+func TestBroadcaster_RingBufferWrapAround(t *testing.T) {
+	b := NewTelemetryBroadcaster()
+
+	// Publish more than defaultMaxCachedLogs entries so the ring buffer wraps.
+	total := defaultMaxCachedLogs + 5 // 25 entries
+	reqs := make([]*otelpb.ExportLogsServiceRequest, total)
+	for i := 0; i < total; i++ {
+		reqs[i] = &otelpb.ExportLogsServiceRequest{}
+		b.PublishLogs(reqs[i])
+	}
+
+	// The ring buffer should hold exactly defaultMaxCachedLogs entries.
+	if b.logCount != defaultMaxCachedLogs {
+		t.Errorf("logCount = %d; want %d", b.logCount, defaultMaxCachedLogs)
+	}
+
+	// Subscribe now; the pre-fill goroutine should deliver the last
+	// defaultMaxCachedLogs entries in chronological order.
+	_, ch := b.SubscribeLogs()
+
+	// Collect pre-filled entries (allow a brief window for the goroutine).
+	var got []*otelpb.ExportLogsServiceRequest
+	timeout := time.After(time.Second)
+	for len(got) < defaultMaxCachedLogs {
+		select {
+		case entry := <-ch:
+			got = append(got, entry)
+		case <-timeout:
+			t.Fatalf("timed out waiting for pre-filled logs; got %d, want %d", len(got), defaultMaxCachedLogs)
+		}
+	}
+
+	// Verify order: should be reqs[5..24] in order.
+	expected := reqs[total-defaultMaxCachedLogs:]
+	for i, want := range expected {
+		if got[i] != want {
+			t.Errorf("pre-filled entry %d: got %p, want %p", i, got[i], want)
+		}
+	}
+}
+
+func TestBroadcaster_SubscribeLogs_ChronologicalOrder(t *testing.T) {
+	b := NewTelemetryBroadcaster()
+
+	// Publish exactly defaultMaxCachedLogs entries (no wrap yet).
+	reqs := make([]*otelpb.ExportLogsServiceRequest, defaultMaxCachedLogs)
+	for i := 0; i < defaultMaxCachedLogs; i++ {
+		reqs[i] = &otelpb.ExportLogsServiceRequest{}
+		b.PublishLogs(reqs[i])
+	}
+
+	_, ch := b.SubscribeLogs()
+
+	var got []*otelpb.ExportLogsServiceRequest
+	timeout := time.After(time.Second)
+	for len(got) < defaultMaxCachedLogs {
+		select {
+		case entry := <-ch:
+			got = append(got, entry)
+		case <-timeout:
+			t.Fatalf("timed out; got %d entries, want %d", len(got), defaultMaxCachedLogs)
+		}
+	}
+
+	for i, want := range reqs {
+		if got[i] != want {
+			t.Errorf("entry %d: got %p, want %p", i, got[i], want)
+		}
+	}
+}
+
+func TestBroadcaster_PublishMetrics_PerServiceMergeRetainsMetrics(t *testing.T) {
+	b := NewTelemetryBroadcaster()
+
+	makeAttr := func(key, val string) *otelpb.KeyValue {
+		return &otelpb.KeyValue{
+			Key:   key,
+			Value: &otelpb.AnyValue{Value: &otelpb.AnyValue_StringValue{StringValue: val}},
+		}
+	}
+	makeResource := func(svc string) *otelpb.Resource {
+		return &otelpb.Resource{Attributes: []*otelpb.KeyValue{makeAttr("service.name", svc)}}
+	}
+	makeReq := func(svc string, metrics ...string) *otelpb.ExportMetricsServiceRequest {
+		ms := make([]*otelpb.Metric, len(metrics))
+		for i, n := range metrics {
+			ms[i] = &otelpb.Metric{Name: n}
+		}
+		return &otelpb.ExportMetricsServiceRequest{
+			ResourceMetrics: []*otelpb.ResourceMetrics{
+				{
+					Resource:     makeResource(svc),
+					ScopeMetrics: []*otelpb.ScopeMetrics{{Metrics: ms}},
+				},
+			},
+		}
+	}
+
+	// svc-a first reports {one, two}, then a partial batch with only {one}.
+	b.PublishMetrics(makeReq("svc-a", "metric.one", "metric.two"))
+	b.PublishMetrics(makeReq("svc-a", "metric.one"))
+	// svc-b is independent.
+	b.PublishMetrics(makeReq("svc-b", "metric.three"))
+
+	b.mu.RLock()
+	mapLen := len(b.latestMetrics)
+	gotA := b.latestMetrics["svc-a"]
+	gotB := b.latestMetrics["svc-b"]
+	b.mu.RUnlock()
+
+	if mapLen != 2 {
+		t.Errorf("latestMetrics has %d entries; want 2", mapLen)
+	}
+
+	names := func(req *otelpb.ExportMetricsServiceRequest) map[string]bool {
+		out := map[string]bool{}
+		for _, rm := range req.GetResourceMetrics() {
+			for _, sm := range rm.GetScopeMetrics() {
+				for _, m := range sm.GetMetrics() {
+					out[m.GetName()] = true
+				}
+			}
+		}
+		return out
+	}
+
+	gotNames := names(gotA)
+	// The partial batch must NOT drop metric.two reported earlier.
+	if !gotNames["metric.one"] || !gotNames["metric.two"] {
+		t.Errorf("svc-a cached metrics = %v; want metric.one and metric.two retained", gotNames)
+	}
+	if !names(gotB)["metric.three"] {
+		t.Errorf("svc-b cached metrics = %v; want metric.three", names(gotB))
+	}
+}
+
 func TestBroadcaster_ConcurrentPublish(t *testing.T) {
 	b := NewTelemetryBroadcaster()
 
