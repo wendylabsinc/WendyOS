@@ -114,6 +114,18 @@ func TestBuildContainerBaseEnvRespectsWendyOtelPort(t *testing.T) {
 	t.Errorf("env missing %q; got %v", want, env)
 }
 
+func TestBuildContainerBaseEnvSetsOTLPProtocolGRPC(t *testing.T) {
+	env := buildContainerBaseEnv()
+
+	const want = "OTEL_EXPORTER_OTLP_PROTOCOL=grpc"
+	for _, kv := range env {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("env missing %q; got %v", want, env)
+}
+
 func TestExpandAgentHook(t *testing.T) {
 	t.Setenv("EXTRA_VALUE", "ok")
 

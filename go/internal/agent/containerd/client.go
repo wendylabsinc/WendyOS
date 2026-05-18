@@ -786,6 +786,7 @@ func buildContainerBaseEnv() []string {
 		otelPort = "4317"
 	}
 	env = append(env, "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:"+otelPort)
+	env = append(env, "OTEL_EXPORTER_OTLP_PROTOCOL=grpc")
 	return env
 }
 

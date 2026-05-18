@@ -1194,4 +1194,3 @@ func TestOTELEndpointEnvVarReachable(t *testing.T) {
 		t.Fatalf("OTLP endpoint %q unreachable: %v", endpoint, err)
 	}
 }
-
