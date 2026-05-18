@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -418,6 +419,44 @@ func TestBroadcaster_PublishMetrics_PerServiceMergeRetainsMetrics(t *testing.T) 
 	}
 	if !names(gotB)["metric.three"] {
 		t.Errorf("svc-b cached metrics = %v; want metric.three", names(gotB))
+	}
+}
+
+func TestBroadcaster_PublishMetrics_ResourceCap(t *testing.T) {
+	b := NewTelemetryBroadcaster()
+
+	makeAttr := func(key, val string) *otelpb.KeyValue {
+		return &otelpb.KeyValue{
+			Key:   key,
+			Value: &otelpb.AnyValue{Value: &otelpb.AnyValue_StringValue{StringValue: val}},
+		}
+	}
+
+	// Publish maxCachedResourcesPerService+10 distinct resource instances for the same service.
+	for i := 0; i < maxCachedResourcesPerService+10; i++ {
+		req := &otelpb.ExportMetricsServiceRequest{
+			ResourceMetrics: []*otelpb.ResourceMetrics{
+				{
+					Resource: &otelpb.Resource{Attributes: []*otelpb.KeyValue{
+						makeAttr("service.name", "svc"),
+						makeAttr("instance.id", fmt.Sprintf("pod-%d", i)),
+					}},
+					ScopeMetrics: []*otelpb.ScopeMetrics{{Metrics: []*otelpb.Metric{{Name: "m"}}}},
+				},
+			},
+		}
+		b.PublishMetrics(req)
+	}
+
+	b.mu.RLock()
+	cached := b.latestMetrics["svc"]
+	b.mu.RUnlock()
+
+	if cached == nil {
+		t.Fatal("expected cache entry for svc")
+	}
+	if n := len(cached.GetResourceMetrics()); n > maxCachedResourcesPerService {
+		t.Errorf("cache has %d ResourceMetrics entries; want at most %d", n, maxCachedResourcesPerService)
 	}
 }
 

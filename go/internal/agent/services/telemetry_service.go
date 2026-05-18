@@ -15,7 +15,15 @@ import (
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
-const defaultMaxCachedLogs = 20
+const (
+	defaultMaxCachedLogs = 20
+	// maxCachedResourcesPerService caps how many distinct ResourceMetrics entries
+	// (e.g. individual pods / containers) are retained in the per-service metrics
+	// cache. Without this cap, high-churn resource attributes (like container IDs
+	// that change on every restart) would grow the cache without bound.
+	// Oldest entries are evicted first (FIFO) when the cap is reached.
+	maxCachedResourcesPerService = 100
+)
 
 // TelemetryBroadcaster fans out received OTEL telemetry to multiple connected clients.
 type TelemetryBroadcaster struct {
@@ -64,7 +72,7 @@ func (b *TelemetryBroadcaster) SubscribeLogs() (string, <-chan *otelpb.ExportLog
 		go func() {
 			// recover guards against a send on closed channel if the subscriber
 			// calls UnsubscribeLogs before this goroutine finishes pre-filling.
-			defer func() { recover() }() //nolint:errcheck
+			defer func() { _ = recover() }()
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
@@ -129,7 +137,7 @@ func (b *TelemetryBroadcaster) SubscribeMetrics() (string, <-chan *otelpb.Export
 			}
 		}
 		go func() {
-			defer func() { recover() }() //nolint:errcheck
+			defer func() { _ = recover() }()
 			for _, entry := range cached {
 				select {
 				case ch <- entry:
@@ -205,6 +213,12 @@ func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.
 	}
 	if dst == nil {
 		cached.ResourceMetrics = append(cached.ResourceMetrics, rm)
+		// Evict oldest entries once the per-service cap is reached so that
+		// high-churn resource attributes (e.g. unique container IDs per restart)
+		// cannot grow the cache without bound.
+		if len(cached.ResourceMetrics) > maxCachedResourcesPerService {
+			cached.ResourceMetrics = cached.ResourceMetrics[len(cached.ResourceMetrics)-maxCachedResourcesPerService:]
+		}
 		return cached
 	}
 
