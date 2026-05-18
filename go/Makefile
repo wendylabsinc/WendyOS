@@ -9,13 +9,25 @@
 
 VERSION ?= dev
 MSI_VERSION ?= 0.0.1
+HOST_GOOS ?= $(shell go env GOHOSTOS)
+TARGET_GOOS ?= $(shell go env GOOS)
+EXEEXT := $(if $(filter windows,$(TARGET_GOOS)),.exe,)
+CLI_BIN := bin/wendy$(EXEEXT)
+AGENT_BIN := bin/wendy-agent$(EXEEXT)
 LDFLAGS := -s -w -X github.com/wendylabsinc/wendy/internal/shared/version.Version=$(VERSION)
-ifeq ($(shell uname -s),Darwin)
+ifeq ($(HOST_GOOS),darwin)
 # Go/cgo adds -lobjc for each Objective-C package. The native CLI links
 # multiple CoreBluetooth-backed packages, and recent Apple linkers warn about
 # the duplicate even though it is harmless.
 CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
 export CGO_LDFLAGS
+endif
+ifeq ($(HOST_GOOS),windows)
+REMOVE_STALE_CLI := powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath 'bin/wendy' -Force -ErrorAction SilentlyContinue"
+REMOVE_STALE_AGENT := powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath 'bin/wendy-agent' -Force -ErrorAction SilentlyContinue"
+else
+REMOVE_STALE_CLI := :
+REMOVE_STALE_AGENT := :
 endif
 
 # Build both CLI and agent (native)
@@ -23,11 +35,13 @@ build: build-cli build-agent
 
 # Build the wendy CLI
 build-cli:
-	go build -o bin/wendy ./cmd/wendy
+	@$(REMOVE_STALE_CLI)
+	go build -o $(CLI_BIN) ./cmd/wendy
 
 # Build the wendy-agent
 build-agent:
-	go build -o bin/wendy-agent ./cmd/wendy-agent
+	@$(REMOVE_STALE_AGENT)
+	go build -o $(AGENT_BIN) ./cmd/wendy-agent
 
 # Cross-compile all targets
 build-all: build-agent-linux-amd64 build-agent-linux-arm64 \

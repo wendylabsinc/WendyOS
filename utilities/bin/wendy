@@ -131,21 +131,24 @@ path_without_wrapper() {
 
 find_installed_wendy() {
   local path_entry
+  local executable_name
   local candidate
   local resolved_candidate
 
   local old_ifs="$IFS"
   IFS=':'
   for path_entry in ${PATH:-}; do
-    candidate="${path_entry:-.}/wendy"
-    if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
-      continue
-    fi
+    for executable_name in "wendy${exe_ext}" wendy; do
+      candidate="${path_entry:-.}/$executable_name"
+      if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
+        continue
+      fi
 
-    IFS="$old_ifs"
-    resolved_candidate="$(resolve_path "$candidate")" || resolved_candidate="$candidate"
-    printf '%s' "$resolved_candidate"
-    return 0
+      IFS="$old_ifs"
+      resolved_candidate="$(resolve_path "$candidate")" || resolved_candidate="$candidate"
+      printf '%s' "$resolved_candidate"
+      return 0
+    done
   done
   IFS="$old_ifs"
 
@@ -155,10 +158,16 @@ find_installed_wendy() {
 wrapper_path="$(resolve_wrapper_path)" || wrapper_path=""
 fallback_path="$(path_without_wrapper "$wrapper_path")"
 
+target_goos="$(go env GOOS 2>/dev/null || printf '')"
+exe_ext=""
+if [[ "$target_goos" == "windows" ]]; then
+  exe_ext=".exe"
+fi
+
 dir="$(pwd -P)"
 
 while true; do
-  candidate="$dir/go/bin/wendy"
+  candidate="$dir/go/bin/wendy${exe_ext}"
 
   if [[ -d "$dir/go/cmd/wendy" ]]; then
     pretty_candidate="$(display_repo_path "$candidate" "$dir")"
@@ -166,7 +175,7 @@ while true; do
     if [[ "$(uname -s)" == "Darwin" ]]; then
       export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-no_warn_duplicate_libraries"
     fi
-    (cd "$dir/go" && go build -o bin/wendy ./cmd/wendy)
+    (cd "$dir/go" && go build -o "bin/wendy${exe_ext}" ./cmd/wendy)
     exec "$candidate" "$@"
   fi
 

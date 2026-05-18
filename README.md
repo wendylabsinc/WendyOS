@@ -34,7 +34,16 @@ The CLI is written in Go. To build from source:
 
 ```sh
 cd go
-go build -o wendy ./cmd/wendy
+make build-cli
+./bin/wendy --version
+```
+
+On Windows, the binary must have the `.exe` suffix:
+
+```powershell
+cd go
+go build -o bin\wendy.exe .\cmd\wendy
+.\bin\wendy.exe --version
 ```
 
 On macOS, CGO is required (for CoreBluetooth). It is enabled by default when
@@ -42,7 +51,7 @@ using the standard Go toolchain, but if you have explicitly disabled it:
 
 ```sh
 cd go
-CGO_ENABLED=1 go build -o wendy ./cmd/wendy
+CGO_ENABLED=1 make build-cli
 ```
 
 ### Agent (Go)
