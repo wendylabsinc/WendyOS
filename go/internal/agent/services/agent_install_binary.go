@@ -61,12 +61,13 @@ func createUpdateTempFile(execPath string) (*os.File, string, func(), error) {
 
 	cleanStaleTempFiles(dir)
 
-	// Refuse to write an update binary into a world-writable directory;
-	// that would allow a local attacker to swap the file before the rename.
+	// Refuse to write an update binary into a world- or group-writable directory.
+	// Either condition allows a local attacker in the same group to unlink or replace
+	// the temp file between creation and the final rename.
 	if info, err := os.Stat(dir); err != nil {
 		return nil, "", nil, status.Errorf(codes.Internal, "failed to stat binary directory: %v", err)
-	} else if info.Mode()&0o002 != 0 {
-		return nil, "", nil, status.Error(codes.FailedPrecondition, "agent binary directory is world-writable; refusing update")
+	} else if info.Mode()&0o022 != 0 {
+		return nil, "", nil, status.Error(codes.FailedPrecondition, "agent binary directory is world- or group-writable; refusing update")
 	}
 
 	// os.CreateTemp creates with mode 0600 — not executable until commitBinaryUpdate.
