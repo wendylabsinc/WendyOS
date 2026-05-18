@@ -27,6 +27,7 @@ Tests:
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
   python-no-ptrace      Verify ptrace is blocked by default seccomp profile (WDY-1099)
   python-no-unshare     Verify unshare is blocked by default seccomp profile (WDY-1099)
+  python-restart        Verify --restart-unless-stopped restarts containers; stop suppresses restart
   compose-hello         docker-compose multi-service deployment with build: Dockerfiles
   compose-images        docker-compose multi-service deployment using public images
   otel-localhost-only   Verify OTEL receivers (4317/4318) are not reachable from the network
@@ -193,6 +194,7 @@ ALL_TESTS=(
     python-no-bluetooth
     python-no-ptrace
     python-no-unshare
+    python-restart
     compose-hello
     compose-images
     otel-localhost-only
@@ -243,87 +245,79 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
-    # Verify directory exists
-    if [[ ! -d "$test_dir" ]]; then
-        skip_test "$test_name" "no directory"
+    # ── Restart policy: deploy with --restart-unless-stopped, verify restart,
+    #    then stop and verify no restart occurs. ──────────────────────────
+    if [[ "$test_name" == "python-restart" ]]; then
+        APP_ID="sh.wendy.ci.python-restart"
+
+        # Sub-test 1: container is restarted by the monitor after it exits.
+        restart_is_restarted() {
+            # Deploy the app with --restart-unless-stopped.
+            # The container exits immediately; the monitor should restart it
+            # within ~15 s (the monitor's default tick interval).
+            "$WENDY" deploy \
+                --device "$HOSTNAME" \
+                --restart-unless-stopped \
+                "$test_dir" >/dev/null 2>&1 || return 1
+
+            # Wait up to 30 s for the monitor to restart the container.
+            local deadline=$(( $(date +%s) + 30 ))
+            while [[ $(date +%s) -lt $deadline ]]; do
+                sleep 3
+                STATUS=$("$WENDY" container list --json --device "$HOSTNAME" 2>/dev/null \
+                    | jq -r --arg id "$APP_ID" \
+                        '.[] | select(.appId == $id) | .status' 2>/dev/null || true)
+                if [[ "$STATUS" == "running" ]]; then
+                    return 0
+                fi
+            done
+            echo "Container did not restart within 30 s (last status: ${STATUS:-unknown})" >&2
+            return 1
+        }
+        run_test "python-restart (restarted by monitor after exit)" restart_is_restarted
+
+        # Sub-test 2: after an explicit stop the container must NOT restart.
+        restart_stop_no_restart() {
+            # Stop the container (sets ExplicitStop in the monitor).
+            "$WENDY" container stop --device "$HOSTNAME" "$APP_ID" >/dev/null 2>&1 || return 1
+
+            # Wait the full monitor tick interval plus a safety margin (20 s)
+            # and confirm the container has not been restarted.
+            sleep 20
+            STATUS=$("$WENDY" container list --json --device "$HOSTNAME" 2>/dev/null \
+                | jq -r --arg id "$APP_ID" \
+                    '.[] | select(.appId == $id) | .status' 2>/dev/null || true)
+            if [[ "$STATUS" == "running" ]]; then
+                echo "Container restarted after explicit stop (status: running)" >&2
+                return 1
+            fi
+            return 0
+        }
+        run_test "python-restart (not restarted after explicit stop)" restart_stop_no_restart
+
+        # Cleanup: delete the deployed app regardless of test outcome.
+        "$WENDY" container delete --device "$HOSTNAME" "$APP_ID" >/dev/null 2>&1 || true
         continue
     fi
 
-    # ── Compose tests (docker-compose.{yml,yaml}, compose.{yml,yaml}, no wendy.json) ──
-    compose_file=""
-    for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-        if [[ -f "$test_dir/$cand" ]]; then
-            compose_file="$test_dir/$cand"
-            break
-        fi
-    done
-    if [[ -n "$compose_file" ]]; then
-        # Derive project name from directory name (mirrors CLI logic).
-        project_name="$(basename "$test_dir")"
-
-        # Use docker compose itself to enumerate services so we don't depend
-        # on PyYAML (not in stdlib and not installed on most CI hosts).
-        service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
-
-        # Pre-cleanup: remove leftover service containers.
-        for svc in $service_names; do
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-
-        # Deploy and run.
-        pushd "$test_dir" > /dev/null
-        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-        popd > /dev/null
-
-        # Post-cleanup.
-        for svc in $service_names; do
-            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
-        continue
+    # ── Standard deploy-and-run tests ───────────────────────────────────
+    if [[ -f "$test_dir/docker-compose.yml" ]] && [[ ! -f "$test_dir/wendy.json" ]]; then
+        run_test "$test_name" \
+            "$WENDY" compose up \
+                --device "$HOSTNAME" \
+                --detach=false \
+                "$test_dir/docker-compose.yml"
+    else
+        run_test "$test_name" \
+            "$WENDY" run \
+                --device "$HOSTNAME" \
+                "$test_dir"
     fi
-
-    # ── Standard single-container tests (wendy.json) ───────────────────
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
 done
 
 echo ""
-
-# ── Summary ──────────────────────────────────────────────────────────
-
-TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
-echo -e "${BOLD}========================================${RESET}"
-echo -e "${BOLD}Results:${RESET} $TOTAL tests"
-echo -e "  ${GREEN}Passed:  $PASS_COUNT${RESET}"
-echo -e "  ${RED}Failed:  $FAIL_COUNT${RESET}"
-if [[ $SKIP_COUNT -gt 0 ]]; then
-    echo -e "  ${YELLOW}Skipped: $SKIP_COUNT${RESET}"
-fi
-echo -e "${BOLD}========================================${RESET}"
+echo -e "${BOLD}==> Results: ${GREEN}${PASS_COUNT} passed${RESET}, ${RED}${FAIL_COUNT} failed${RESET}, ${YELLOW}${SKIP_COUNT} skipped${RESET}"
+echo ""
 
 if [[ $FAIL_COUNT -gt 0 ]]; then
     exit 1
