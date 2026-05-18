@@ -196,6 +196,13 @@ function Update-ProcessPath {
   $env:Path = @($machinePath, $userPath) -join ';'
 }
 
+function Get-PrimaryIPv4Address {
+  return (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } |
+    Sort-Object InterfaceMetric |
+    Select-Object -First 1 -ExpandProperty IPAddress)
+}
+
 function Add-UserPathEntry {
   param(
     [Parameter(Mandatory)][string]$PathEntry,
@@ -303,13 +310,29 @@ function Install-OpenSshPackages {
   Set-Service -Name sshd -StartupType Automatic
   Start-Service -Name sshd -ErrorAction SilentlyContinue
 
-  if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Profile Any -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
-  } else {
-    Set-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -Enabled True -Profile Any -Direction Inbound -Action Allow | Out-Null
-  }
+  Enable-OpenSshFirewallRule
 
   Write-Ok 'OpenSSH packages installed'
+}
+
+function Enable-OpenSshFirewallRule {
+  $existingRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+  if ($existingRule) {
+    $existingRule | Remove-NetFirewallRule
+  }
+
+  New-NetFirewallRule `
+    -Name 'OpenSSH-Server-In-TCP' `
+    -DisplayName 'OpenSSH Server (sshd)' `
+    -Enabled True `
+    -Profile Any `
+    -Direction Inbound `
+    -Protocol TCP `
+    -Action Allow `
+    -LocalPort 22 `
+    -RemoteAddress Any | Out-Null
+
+  Write-Ok 'OpenSSH firewall rule allows inbound TCP 22 on all network profiles'
 }
 
 function Test-LocalSshEndpoint {
@@ -335,6 +358,18 @@ function Test-LocalSshEndpoint {
   } else {
     Write-Warn 'sshd is running, but localhost:22 did not answer. Check Windows Event Viewer under OpenSSH/Operational.'
   }
+
+  $ipAddress = Get-PrimaryIPv4Address
+  if (-not [string]::IsNullOrWhiteSpace($ipAddress)) {
+    if (Test-NetConnection -ComputerName $ipAddress -Port 22 -InformationLevel Quiet) {
+      Write-Ok "sshd is reachable from this machine at ${ipAddress}:22"
+    } else {
+      Write-Warn "sshd did not answer on ${ipAddress}:22 from this machine."
+    }
+  }
+
+  Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue |
+    Format-List Name,Enabled,Profile,Direction,Action
 }
 
 function Set-SshdConfigValue {
@@ -755,9 +790,7 @@ function Configure-Git {
 }
 
 function Write-Summary {
-  $ipAddress = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } |
-    Select-Object -First 1 -ExpandProperty IPAddress)
+  $ipAddress = Get-PrimaryIPv4Address
 
   $publicKeyPath = Join-Path (Join-Path $UserProfile '.ssh') 'id_ed25519.pub'
   $publicKey = if (Test-Path $publicKeyPath) { Get-Content -Path $publicKeyPath -Raw } else { 'not available' }
