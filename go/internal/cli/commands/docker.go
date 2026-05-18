@@ -166,7 +166,7 @@ func detectBuildOptions(dir string) []BuildOption {
 }
 
 // injectDebugpy builds a wrapper image on top of the given image that installs debugpy.
-func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput *os.File, useMTLS bool) error {
+func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
 	tmpDir, err := os.MkdirTemp("", "wendy-debugpy-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
@@ -886,7 +886,7 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 // it directly to the given registry using docker buildx. The registry transport
 // is conditional: plain HTTP for plaintext devices, and TLS/mTLS for provisioned
 // devices when useMTLS is enabled. buildArgs is passed as --build-arg KEY=VALUE flags.
-func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput *os.File, useMTLS bool) error {
+func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
 	builder, effectiveAddr, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
 	if err != nil {
 		return err

@@ -973,3 +973,90 @@ func TestMCPEntitlementPortOutOfRange(t *testing.T) {
 		t.Fatal("expected error for out-of-range port")
 	}
 }
+
+func TestServiceConfigValidation(t *testing.T) {
+	t.Run("valid services", func(t *testing.T) {
+		cfg := &AppConfig{
+			AppID: "com.example.app",
+			Services: map[string]*ServiceConfig{
+				"api":      {Context: "api", DependsOn: []string{"db"}},
+				"db":       {Context: "db"},
+				"frontend": {Context: "frontend", DependsOn: []string{"api"}},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing context", func(t *testing.T) {
+		cfg := &AppConfig{
+			AppID: "com.example.app",
+			Services: map[string]*ServiceConfig{
+				"api": {Context: ""},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for missing context")
+		}
+		if !strings.Contains(err.Error(), "context is required") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("unknown dependsOn", func(t *testing.T) {
+		cfg := &AppConfig{
+			AppID: "com.example.app",
+			Services: map[string]*ServiceConfig{
+				"api": {Context: "api", DependsOn: []string{"ghost"}},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for unknown dependsOn")
+		}
+		if !strings.Contains(err.Error(), "ghost") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("dotdot in context rejected", func(t *testing.T) {
+		cfg := &AppConfig{
+			AppID: "com.example.app",
+			Services: map[string]*ServiceConfig{
+				"svc": {Context: "../escape"},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for dotdot context")
+		}
+	})
+
+	t.Run("services parsed from JSON", func(t *testing.T) {
+		data := `{
+			"appId": "com.example.app",
+			"services": {
+				"api":  {"context": "api",  "dependsOn": ["db"]},
+				"db":   {"context": "db"}
+			}
+		}`
+		cfg, err := LoadFromBytes([]byte(data))
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if len(cfg.Services) != 2 {
+			t.Fatalf("want 2 services, got %d", len(cfg.Services))
+		}
+		if cfg.Services["api"].Context != "api" {
+			t.Errorf("api context = %q, want %q", cfg.Services["api"].Context, "api")
+		}
+		if len(cfg.Services["api"].DependsOn) != 1 || cfg.Services["api"].DependsOn[0] != "db" {
+			t.Errorf("api dependsOn = %v, want [db]", cfg.Services["api"].DependsOn)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("validate error: %v", err)
+		}
+	})
+}

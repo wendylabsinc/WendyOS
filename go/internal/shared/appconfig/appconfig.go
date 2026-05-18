@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -86,20 +87,30 @@ type RunConfig struct {
 	Args []string `json:"args,omitempty"`
 }
 
+// ServiceConfig holds the per-service build and runtime configuration for a
+// multi-service wendy.json (the services map).
+type ServiceConfig struct {
+	// Context is the build context directory, relative to wendy.json.
+	Context      string        `json:"context"`
+	Entitlements []Entitlement `json:"entitlements,omitempty"`
+	DependsOn    []string      `json:"dependsOn,omitempty"`
+}
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
-	AppID        string           `json:"appId"`
-	Version      string           `json:"version,omitempty"`
-	Platform     string           `json:"platform,omitempty"`
-	Language     string           `json:"language,omitempty"`
-	Xcode        *XcodeConfig     `json:"xcode,omitempty"`
-	Run          *RunConfig       `json:"run,omitempty"`
-	Entitlements []Entitlement    `json:"entitlements,omitempty"`
-	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
-	Hooks        *HooksConfig     `json:"hooks,omitempty"`
-	Python       *PythonConfig    `json:"python,omitempty"`
-	Debug        bool             `json:"debug,omitempty"`
-	Files        []FileSyncEntry  `json:"files,omitempty"`
+	AppID        string                    `json:"appId"`
+	Version      string                    `json:"version,omitempty"`
+	Platform     string                    `json:"platform,omitempty"`
+	Language     string                    `json:"language,omitempty"`
+	Xcode        *XcodeConfig              `json:"xcode,omitempty"`
+	Run          *RunConfig                `json:"run,omitempty"`
+	Entitlements []Entitlement             `json:"entitlements,omitempty"`
+	Readiness    *ReadinessConfig          `json:"readiness,omitempty"`
+	Hooks        *HooksConfig              `json:"hooks,omitempty"`
+	Python       *PythonConfig             `json:"python,omitempty"`
+	Debug        bool                      `json:"debug,omitempty"`
+	Files        []FileSyncEntry           `json:"files,omitempty"`
+	Services     map[string]*ServiceConfig `json:"services,omitempty"`
 }
 
 // XcodeConfig holds Xcode-specific build settings.
@@ -285,6 +296,26 @@ func (c *AppConfig) Validate() error {
 		}
 		if c.Readiness.TimeoutSeconds < 0 {
 			return fmt.Errorf("readiness.timeoutSeconds must not be negative, got %d", c.Readiness.TimeoutSeconds)
+		}
+	}
+
+	for name, svc := range c.Services {
+		if svc == nil {
+			return fmt.Errorf("services[%q]: must not be null", name)
+		}
+		if svc.Context == "" {
+			return fmt.Errorf("services[%q]: context is required", name)
+		}
+		if filepath.IsAbs(svc.Context) {
+			return fmt.Errorf("services[%q]: context must be a relative path", name)
+		}
+		if cleaned := filepath.Clean(svc.Context); strings.HasPrefix(cleaned, "..") {
+			return fmt.Errorf("services[%q]: context must not contain '..' components", name)
+		}
+		for _, dep := range svc.DependsOn {
+			if _, ok := c.Services[dep]; !ok {
+				return fmt.Errorf("services[%q]: dependsOn references unknown service %q", name, dep)
+			}
 		}
 	}
 
