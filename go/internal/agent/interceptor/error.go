@@ -11,6 +11,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func isCanceled(err error) bool {
+	if err == context.Canceled {
+		return true
+	}
+	s, ok := status.FromError(err)
+	return ok && s.Code() == codes.Canceled
+}
+
 // UnaryErrorInterceptor returns a gRPC unary server interceptor that recovers
 // from panics and logs handler errors.
 func UnaryErrorInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
@@ -74,7 +82,7 @@ func StreamErrorInterceptor(logger *zap.Logger) grpc.StreamServerInterceptor {
 		}
 
 		err = handler(srv, wrapped)
-		if err != nil {
+		if err != nil && !isCanceled(err) {
 			logger.Error("gRPC stream handler error",
 				zap.String("method", info.FullMethod),
 				zap.Error(err),

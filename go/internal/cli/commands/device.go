@@ -649,11 +649,6 @@ func newDeviceLogsCmd() *cobra.Command {
 		Short: "Stream logs from containers on the device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
 
 			// --level takes precedence over --min-severity when both are set.
 			if level != "" {
@@ -674,40 +669,65 @@ func newDeviceLogsCmd() *cobra.Command {
 			if minSeverity > 0 {
 				req.MinSeverity = &minSeverity
 			}
-			stream, err := conn.TelemetryService.StreamLogs(ctx, req)
-			if err != nil {
-				return fmt.Errorf("starting log stream: %w", err)
-			}
 
 			for {
-				resp, err := stream.Recv()
-				if err == io.EOF {
-					break
+				if ctx.Err() != nil {
+					return nil
 				}
+
+				conn, err := connectToAgent(ctx)
 				if err != nil {
-					return fmt.Errorf("receiving logs: %w", err)
+					return err
 				}
 
-				logs := resp.GetLogs()
-				if logs == nil {
-					continue
+				stream, err := conn.TelemetryService.StreamLogs(ctx, req)
+				if err != nil {
+					conn.Close()
+					return fmt.Errorf("starting log stream: %w", err)
 				}
 
-				for _, rl := range logs.GetResourceLogs() {
-					svcName := resourceServiceName(rl.GetResource())
-					for _, sl := range rl.GetScopeLogs() {
-						for _, lr := range sl.GetLogRecords() {
-							if jsonOutput {
-								printLogRecordJSON(svcName, lr)
-							} else {
-								printLogRecord(svcName, lr)
+				streamErr := func() error {
+					defer conn.Close()
+					for {
+						resp, err := stream.Recv()
+						if err == io.EOF {
+							return nil
+						}
+						if err != nil {
+							return err
+						}
+
+						logs := resp.GetLogs()
+						if logs == nil {
+							continue
+						}
+
+						for _, rl := range logs.GetResourceLogs() {
+							svcName := resourceServiceName(rl.GetResource())
+							for _, sl := range rl.GetScopeLogs() {
+								for _, lr := range sl.GetLogRecords() {
+									if jsonOutput {
+										printLogRecordJSON(svcName, lr)
+									} else {
+										printLogRecord(svcName, lr)
+									}
+								}
 							}
 						}
 					}
+				}()
+
+				if streamErr == nil || ctx.Err() != nil {
+					return nil
+				}
+
+				fmt.Fprintf(os.Stderr, "Connection lost (%v), reconnecting...\n", streamErr)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(2 * time.Second):
 				}
 			}
-
-			return nil
 		},
 	}
 
