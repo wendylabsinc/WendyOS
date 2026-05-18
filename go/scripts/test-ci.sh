@@ -276,7 +276,7 @@ for test_name in "${TESTS[@]}"; do
     # ── compose tests ────────────────────────────────────────────────────
     if [[ "$test_name" == compose-* ]]; then
         run_test "$test_name" \
-            "$WENDY" compose up --device "$HOSTNAME" --prefix "$test_dir" --detach
+            "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --detach
         continue
     fi
 
