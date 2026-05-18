@@ -7,12 +7,12 @@ import Subprocess
     import SystemPackage
 #endif
 
-public struct WendyE2ESession: Sendable {
-    public let machine: WendyE2EMachine
-    public let workingDirectory: String?
-    public let env: [String: String]
+public actor WendyE2ESession {
+    public nonisolated let machine: WendyE2EMachine
+    public nonisolated let workingDirectory: String?
+    public nonisolated let env: [String: String]
 
-    public var wendyCacheDirectory: String {
+    public nonisolated var wendyCacheDirectory: String {
         let homeDirectory =
             self.env["HOME"].flatMap(Self.nonEmpty)
             ?? Self.defaultHomeDirectory(
@@ -129,7 +129,7 @@ public struct WendyE2ESession: Sendable {
             Self.printCommand(machine: self.machine.name, command: command)
         }
 
-        let resetDirectories = await self.commandSetupState.resetDirectoriesForNextCommand()
+        let resetDirectories = self.resetDirectoriesForNextCommand()
         let harnessPrefix = self.harnessPrefix(resetDirectories: resetDirectories)
         let invocation = self.invocation(for: command, harnessPrefix: harnessPrefix)
 
@@ -146,7 +146,7 @@ public struct WendyE2ESession: Sendable {
             Self.printCommand(machine: self.machine.name, command: command)
         }
 
-        let resetDirectories = await self.commandSetupState.resetDirectoriesForNextCommand()
+        let resetDirectories = self.resetDirectoriesForNextCommand()
         let harnessPrefix = self.powerShellHarnessPrefix(resetDirectories: resetDirectories)
         let invocation = try self.powerShellInvocation(for: command, harnessPrefix: harnessPrefix)
 
@@ -204,16 +204,15 @@ public struct WendyE2ESession: Sendable {
         self.workingDirectory =
             workingDirectory ?? (machine.isLocal ? FileManager.default.currentDirectoryPath : nil)
         self.env = env
-        self.commandSetupState = CommandSetupState(
-            resetDirectoriesOnFirstCommand: resetDirectoriesOnFirstCommand
-        )
+        self.resetDirectoriesOnFirstCommand = resetDirectoriesOnFirstCommand
         self.recorder = recorder
         self.verbose = verbose
     }
 
     // MARK: - Private
 
-    private let commandSetupState: CommandSetupState
+    private let resetDirectoriesOnFirstCommand: Bool
+    private var didRunCommand = false
     private let recorder: WendyE2ERecorder?
     private let verbose: Bool
 
@@ -221,6 +220,11 @@ public struct WendyE2ESession: Sendable {
         for session in sessions.reversed() {
             try await session.end()
         }
+    }
+
+    private func resetDirectoriesForNextCommand() -> Bool {
+        defer { self.didRunCommand = true }
+        return self.resetDirectoriesOnFirstCommand && !self.didRunCommand
     }
 
     private func defaultShell(posix: String, power: String) async throws -> WendyE2EShellResult {
@@ -734,20 +738,6 @@ public struct WendyE2ESession: Sendable {
     }
 }
 
-private actor CommandSetupState {
-    private let resetDirectoriesOnFirstCommand: Bool
-    private var didRunCommand = false
-
-    init(resetDirectoriesOnFirstCommand: Bool) {
-        self.resetDirectoriesOnFirstCommand = resetDirectoriesOnFirstCommand
-    }
-
-    func resetDirectoriesForNextCommand() -> Bool {
-        defer { self.didRunCommand = true }
-        return self.resetDirectoriesOnFirstCommand && !self.didRunCommand
-    }
-}
-
 private struct Invocation: Sendable {
     let executable: String
     let arguments: [String]
@@ -758,7 +748,7 @@ private struct Invocation: Sendable {
 // MARK: - CustomStringConvertible
 
 extension WendyE2ESession: CustomStringConvertible {
-    public var description: String {
+    public nonisolated var description: String {
         self.machine.description
     }
 }
