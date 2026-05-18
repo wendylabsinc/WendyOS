@@ -156,7 +156,8 @@ function Confirm-Plan {
 This script will configure this machine by doing the following:
 
   - Install packages:
-      OpenSSH server/client first, then Git, Go, Neovim, PowerShell 7,
+      OpenSSH server/client first, then Git, Go, GNU Make, Neovim,
+      PowerShell 7,
       $swiftSummary
       $vsSummary
 
@@ -196,7 +197,10 @@ function Update-ProcessPath {
 }
 
 function Add-UserPathEntry {
-  param([Parameter(Mandatory)][string]$PathEntry)
+  param(
+    [Parameter(Mandatory)][string]$PathEntry,
+    [switch]$Prepend
+  )
 
   $expanded = [Environment]::ExpandEnvironmentVariables($PathEntry)
   $current = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -205,17 +209,23 @@ function Add-UserPathEntry {
     $entries = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
   }
 
+  $filteredEntries = @()
   $alreadyPresent = $false
   foreach ($entry in $entries) {
     if ([string]::Equals([Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\'), $expanded.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
       $alreadyPresent = $true
-      break
+      continue
     }
+
+    $filteredEntries += $entry
   }
 
-  if (-not $alreadyPresent) {
-    $newPath = if ($entries.Count -gt 0) { ($entries + $PathEntry) -join ';' } else { $PathEntry }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+  if ($Prepend) {
+    $newEntries = @($PathEntry) + $filteredEntries
+    [Environment]::SetEnvironmentVariable('Path', ($newEntries -join ';'), 'User')
+  } elseif (-not $alreadyPresent) {
+    $newEntries = $filteredEntries + $PathEntry
+    [Environment]::SetEnvironmentVariable('Path', ($newEntries -join ';'), 'User')
   }
 
   Update-ProcessPath
@@ -432,6 +442,82 @@ function Install-Packages {
   }
 }
 
+function Get-GnuMakeVersion {
+  param([Parameter(Mandatory)][string]$MakePath)
+
+  try {
+    $output = & $MakePath '--version' 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $output) { return $null }
+
+    $firstLine = @($output)[0]
+    if ($firstLine -match 'GNU Make\s+(\d+)\.(\d+)(?:\.(\d+))?') {
+      $patch = if ($Matches[3]) { $Matches[3] } else { '0' }
+      return [version]"$($Matches[1]).$($Matches[2]).$patch"
+    }
+  } catch {
+    return $null
+  }
+
+  return $null
+}
+
+function Install-GnuMake {
+  $requiredVersion = [version]'4.4.1'
+  $existingMake = Get-Command 'make.exe' -ErrorAction SilentlyContinue
+  if ($existingMake) {
+    $existingVersion = Get-GnuMakeVersion -MakePath $existingMake.Source
+    if ($existingVersion -and $existingVersion -ge $requiredVersion) {
+      Write-Ok "GNU Make $existingVersion is already installed"
+      return
+    }
+
+    Write-Warn "Existing make was found at $($existingMake.Source), but it is not GNU Make $requiredVersion or newer. Installing a modern GNU Make."
+  }
+
+  Write-Info "Installing GNU Make $requiredVersion"
+
+  $url = "https://sourceforge.net/projects/ezwinports/files/make-$requiredVersion-without-guile-w32-bin.zip/download"
+  $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\GNUmake'
+  $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnu-make-$([System.Guid]::NewGuid())")
+  $zipPath = Join-Path $tempDir 'make.zip'
+  $extractDir = Join-Path $tempDir 'extract'
+
+  New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+  try {
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+    $makeExe = Get-ChildItem -Path $extractDir -Filter 'make.exe' -Recurse |
+      Sort-Object @{ Expression = { if ($_.Directory.Name -eq 'bin') { 0 } else { 1 } } } |
+      Select-Object -First 1
+
+    if (-not $makeExe) { Fail 'Downloaded GNU Make archive did not contain make.exe.' }
+
+    $sourceBin = $makeExe.Directory.FullName
+    $sourceRoot = if ((Split-Path $sourceBin -Leaf) -eq 'bin') { Split-Path $sourceBin -Parent } else { $sourceBin }
+    $pathEntry = if ((Split-Path $sourceBin -Leaf) -eq 'bin') { Join-Path $installRoot 'bin' } else { $installRoot }
+
+    if (Test-Path $installRoot) { Remove-Item -Path $installRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+    Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installRoot -Recurse -Force
+  } finally {
+    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  Add-UserPathEntry -PathEntry $pathEntry -Prepend
+  $env:Path = "$pathEntry;$env:Path"
+
+  $installedMake = Join-Path $pathEntry 'make.exe'
+  $installedVersion = Get-GnuMakeVersion -MakePath $installedMake
+  if (-not $installedVersion -or $installedVersion -lt $requiredVersion) {
+    Fail 'GNU Make installation did not produce a usable modern make.exe.'
+  }
+
+  Write-Ok "GNU Make $installedVersion installed"
+}
+
 function Configure-Editor {
   Write-Info 'Setting Neovim as the default CLI editor'
   [Environment]::SetEnvironmentVariable('EDITOR', 'nvim', 'User')
@@ -637,6 +723,7 @@ function Main {
   Configure-Ssh
   Configure-SshKeys
   Install-Packages
+  Install-GnuMake
   Configure-Editor
   Configure-WendyUtilitiesPath
   Configure-DeveloperMode

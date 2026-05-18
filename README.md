@@ -98,6 +98,20 @@ It installs common development packages, configures SSH and mDNS, installs the
 Swift toolchain requested by `.swift-version`, optionally installs
 `wendy-agent`, and adds `utilities/bin` to Bash `PATH`.
 
+#### Windows setup script
+
+For Windows 11 development machines, run the interactive setup script from an
+elevated PowerShell session:
+
+```powershell
+cd .\utilities
+powershell -ExecutionPolicy Bypass -File .\set-up-windows.ps1
+```
+
+It installs common development packages including GNU Make, configures SSH and
+local discovery, installs the Swift toolchain when requested, and adds
+`utilities\bin` to the user `PATH`.
+
 ## Setting Up the Device
 
 The device needs to run the `wendy-agent`. We provide pre-built [WendyOS](https://wendy.sh) images for the Raspberry Pi and the NVIDIA Jetson Orin Nano. These are preconfigured for remote debugging and have the wendy-agent preinstalled.
