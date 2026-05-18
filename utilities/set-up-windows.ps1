@@ -265,16 +265,40 @@ function Install-WingetPackage {
   Write-Ok "$Name installed"
 }
 
+function Add-WindowsCapabilityWithProgress {
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$DisplayName
+  )
+
+  $capability = Get-WindowsCapability -Online -Name $Name
+  if ($capability.State -eq 'Installed') {
+    Write-Ok "$DisplayName is already installed"
+    return
+  }
+
+  Write-Host "Installing Windows capability $Name ($DisplayName)"
+  Write-Host 'This can take several minutes while Windows downloads/install dependencies; DISM progress follows.'
+
+  $args = @('/Online', '/Add-Capability', ('/CapabilityName:{0}' -f $Name), '/NoRestart')
+  if ($TraceCommands -ne '0') {
+    Write-Host ('+ dism.exe {0}' -f ($args -join ' ')) -ForegroundColor DarkGray
+  }
+
+  & dism.exe @args
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -eq 3010) {
+    Write-Warn "$DisplayName installed; Windows reports a reboot is required."
+  } elseif ($exitCode -ne 0) {
+    throw "dism.exe exited with code $exitCode while installing $DisplayName"
+  }
+}
+
 function Install-OpenSshPackages {
   Write-Info 'Installing OpenSSH server/client first'
 
-  foreach ($capabilityName in @('OpenSSH.Client~~~~0.0.1.0', 'OpenSSH.Server~~~~0.0.1.0')) {
-    $capability = Get-WindowsCapability -Online -Name $capabilityName
-    if ($capability.State -ne 'Installed') {
-      Write-Host "Installing Windows capability $capabilityName"
-      Add-WindowsCapability -Online -Name $capabilityName | Out-Null
-    }
-  }
+  Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Client~~~~0.0.1.0' -DisplayName 'OpenSSH Client'
+  Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Server~~~~0.0.1.0' -DisplayName 'OpenSSH Server'
 
   Set-Service -Name sshd -StartupType Automatic
   Start-Service -Name sshd -ErrorAction SilentlyContinue
