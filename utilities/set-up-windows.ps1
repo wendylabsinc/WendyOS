@@ -304,12 +304,37 @@ function Install-OpenSshPackages {
   Start-Service -Name sshd -ErrorAction SilentlyContinue
 
   if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Profile Any -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
   } else {
-    Enable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' | Out-Null
+    Set-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -Enabled True -Profile Any -Direction Inbound -Action Allow | Out-Null
   }
 
   Write-Ok 'OpenSSH packages installed'
+}
+
+function Test-LocalSshEndpoint {
+  Write-Info 'Checking local SSH listener'
+
+  $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
+  if (-not $service) {
+    Fail 'OpenSSH Server service (sshd) was not found after installation.'
+  }
+
+  if ($service.Status -ne 'Running') {
+    Start-Service -Name sshd -ErrorAction SilentlyContinue
+    $service.Refresh()
+  }
+
+  if ($service.Status -ne 'Running') {
+    Write-Warn "sshd service is $($service.Status); SSH connections will fail until it is running."
+    return
+  }
+
+  if (Test-NetConnection -ComputerName '127.0.0.1' -Port 22 -InformationLevel Quiet) {
+    Write-Ok 'sshd is listening on localhost:22'
+  } else {
+    Write-Warn 'sshd is running, but localhost:22 did not answer. Check Windows Event Viewer under OpenSSH/Operational.'
+  }
 }
 
 function Set-SshdConfigValue {
@@ -747,8 +772,13 @@ Useful connection details:
   Computer name:   $env:COMPUTERNAME
   mDNS name:       $env:COMPUTERNAME.local
   Primary IP:      $ipAddress
-  SSH:             ssh $CurrentUserName@$env:COMPUTERNAME.local
-  Remote Desktop:  RDP to $env:COMPUTERNAME.local if Remote Desktop is supported/enabled
+  SSH by IP:       ssh $CurrentUserName@$ipAddress
+  SSH by name:     ssh $CurrentUserName@$env:COMPUTERNAME.local
+  Remote Desktop:  RDP to $ipAddress if Remote Desktop is supported/enabled
+
+If the .local name does not resolve from another machine, use the Primary IP.
+For password login, use the Windows account password; Windows Hello PINs do
+not work over SSH.
 
 Generated SSH public key:
   $($publicKey.Trim())
@@ -764,6 +794,7 @@ function Main {
   Install-OpenSshPackages
   Configure-Ssh
   Configure-SshKeys
+  Test-LocalSshEndpoint
   Install-Packages
   Install-GnuMake
   Configure-Editor
