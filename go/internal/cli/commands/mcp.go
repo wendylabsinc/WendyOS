@@ -25,7 +25,7 @@ func newMCPServeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server on stdio",
-		Long:  "Start a Model Context Protocol server that exposes wendy device tools over stdio.\nConfigure Claude Desktop, Claude Code, or Codex to run: wendy mcp serve",
+		Long:  "Start a Model Context Protocol server that exposes wendy device tools over stdio.\nConfigure your AI tool to run: wendy mcp serve\nOr run 'wendy mcp setup' to configure automatically.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			cfg, err := config.Load()

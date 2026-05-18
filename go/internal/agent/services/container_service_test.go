@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -24,23 +25,25 @@ import (
 // ---------- mock containerd client ----------
 
 type mockContainerdClient struct {
-	containers     []*agentpb.AppContainer
-	listErr        error
-	stopErr        error
-	deleteErr      error
-	layers         []*agentpb.LayerHeader
-	listLayersErr  error
-	writeLayerErr  error
-	writtenDigest  string
-	writtenData    []byte
-	createErr      error
-	progressPhases []agentpb.CreateContainerProgress_Phase
-	startOutputCh  chan ContainerOutput
-	startErr       error
-	statsResult    []*agentpb.ContainerStats
-	statsErr       error
-	mcpPort        uint32
-	mcpPortErr     error
+	containers            []*agentpb.AppContainer
+	listErr               error
+	stopErr               error
+	deleteErr             error
+	layers                []*agentpb.LayerHeader
+	listLayersErr         error
+	writeLayerErr         error
+	writtenDigest         string
+	writtenData           []byte
+	createErr             error
+	progressPhases        []agentpb.CreateContainerProgress_Phase
+	startOutputCh         chan ContainerOutput
+	startErr              error
+	statsResult           []*agentpb.ContainerStats
+	statsErr              error
+	mcpPort               uint32
+	mcpPortErr            error
+	restartPolicyLabel    string
+	restartPolicyLabelErr error
 }
 
 func (m *mockContainerdClient) ListContainers(_ context.Context) ([]*agentpb.AppContainer, error) {
@@ -101,6 +104,10 @@ func (m *mockContainerdClient) GetContainerMetrics(_ context.Context, _ string) 
 
 func (m *mockContainerdClient) GetContainerMCPPort(_ context.Context, _ string) (uint32, error) {
 	return m.mcpPort, m.mcpPortErr
+}
+
+func (m *mockContainerdClient) GetContainerRestartPolicyLabel(_ context.Context, _ string) (string, error) {
+	return m.restartPolicyLabel, m.restartPolicyLabelErr
 }
 
 // attachTestMock embeds mockContainerdClient and overrides StartContainerWithStdin
@@ -305,29 +312,17 @@ func TestWriteLayer(t *testing.T) {
 	data := []byte("layer-data-part1")
 	data2 := []byte("layer-data-part2")
 
-	// Send first chunk with digest.
-	if err := stream.Send(&agentpb.WriteLayerRequest{
-		Digest: digest,
-		Data:   data,
-	}); err != nil {
+	if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: data}); err != nil {
 		t.Fatalf("send chunk1: %v", err)
 	}
-
-	// Send second chunk.
-	if err := stream.Send(&agentpb.WriteLayerRequest{
-		Digest: digest,
-		Data:   data2,
-	}); err != nil {
+	if err := stream.Send(&agentpb.WriteLayerRequest{Data: data2}); err != nil {
 		t.Fatalf("send chunk2: %v", err)
 	}
-
-	// Close send and receive response.
 	if err := stream.CloseSend(); err != nil {
 		t.Fatalf("CloseSend: %v", err)
 	}
 
-	_, err = stream.Recv()
-	if err != nil {
+	if _, err = stream.Recv(); err != nil {
 		t.Fatalf("recv response: %v", err)
 	}
 
@@ -338,6 +333,52 @@ func TestWriteLayer(t *testing.T) {
 	if string(mock.writtenData) != string(expectedData) {
 		t.Errorf("writtenData = %q; want %q", mock.writtenData, expectedData)
 	}
+}
+
+// TestWriteLayerAlreadyExists verifies that WriteLayer succeeds and drains the
+// gRPC stream even when the content store returns without consuming the reader
+// (e.g. the blob already exists).
+func TestWriteLayerAlreadyExists(t *testing.T) {
+	// drainlessMock returns nil without reading from the reader, simulating
+	// the AlreadyExists fast-path in the containerd content store.
+	mock := &drainlessMockContainerdClient{mockContainerdClient: mockContainerdClient{}}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.WriteLayer(ctx)
+	if err != nil {
+		t.Fatalf("WriteLayer: %v", err)
+	}
+
+	digest := "sha256:alreadyexists"
+	if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: []byte("chunk1")}); err != nil {
+		t.Fatalf("send chunk1: %v", err)
+	}
+	if err := stream.Send(&agentpb.WriteLayerRequest{Data: []byte("chunk2")}); err != nil {
+		t.Fatalf("send chunk2: %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	// RPC must succeed without deadlock even though the reader was not consumed.
+	if _, err = stream.Recv(); err != nil {
+		t.Fatalf("recv response: %v", err)
+	}
+}
+
+// drainlessMockContainerdClient overrides WriteLayer to return without reading
+// the reader, simulating the content-store AlreadyExists path.
+type drainlessMockContainerdClient struct {
+	mockContainerdClient
+}
+
+func (m *drainlessMockContainerdClient) WriteLayer(_ context.Context, digest string, _ io.Reader, _ int64) error {
+	m.writtenDigest = digest
+	return nil
 }
 
 func TestCreateContainerWithProgress(t *testing.T) {
@@ -470,6 +511,267 @@ func TestAttachContainer(t *testing.T) {
 	// Confirm stdin bytes reached the container's stdin reader.
 	if got := <-stdinDataCh; got != "ping" {
 		t.Errorf("stdin data = %q; want ping", got)
+	}
+}
+
+// ---------- mock monitor registrar ----------
+
+type mockMonitorRegistrar struct {
+	registerCalls     []registerCall
+	explicitStopCalls []string
+	clearStopCalls    []string
+}
+
+type registerCall struct {
+	appName    string
+	policy     int
+	maxRetries int
+}
+
+func (m *mockMonitorRegistrar) Register(appName string, policy int, maxRetries int) {
+	m.registerCalls = append(m.registerCalls, registerCall{appName, policy, maxRetries})
+}
+
+func (m *mockMonitorRegistrar) Unregister(_ string) {}
+
+func (m *mockMonitorRegistrar) MarkExplicitStop(appName string) {
+	m.explicitStopCalls = append(m.explicitStopCalls, appName)
+}
+
+func (m *mockMonitorRegistrar) ClearExplicitStop(appName string) {
+	m.clearStopCalls = append(m.clearStopCalls, appName)
+}
+
+// startContainerServerWithMonitor starts a gRPC bufconn server for ContainerService
+// configured with the given ContainerdClient and ContainerMonitorRegistrar.
+func startContainerServerWithMonitor(t *testing.T, client ContainerdClient, mon ContainerMonitorRegistrar) (agentpb.WendyContainerServiceClient, func()) {
+	t.Helper()
+	lis := bufconn.Listen(bufSize)
+	srv := grpc.NewServer()
+	logger := zap.NewNop()
+	svc := NewContainerService(logger, client, WithMonitor(mon))
+	agentpb.RegisterWendyContainerServiceServer(srv, svc)
+
+	go func() { _ = srv.Serve(lis) }()
+
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+
+	cl := agentpb.NewWendyContainerServiceClient(conn)
+	cleanup := func() {
+		conn.Close()
+		srv.Stop()
+		lis.Close()
+	}
+	return cl, cleanup
+}
+
+// TestStartContainer_RegistersMonitor_UnlessStopped verifies that starting a
+// container with an UNLESS_STOPPED restart policy calls Register on the monitor.
+func TestStartContainer_RegistersMonitor_UnlessStopped(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	outputCh <- ContainerOutput{Done: true}
+	close(outputCh)
+
+	mc := &mockContainerdClient{startOutputCh: outputCh}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	stream, err := client.StartContainer(context.Background(), &agentpb.StartContainerRequest{
+		AppName: "my-app",
+		RestartPolicy: &agentpb.RestartPolicy{
+			Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartContainer: %v", err)
+	}
+	// Drain the stream.
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected recv error: %v", err)
+		}
+	}
+
+	if len(mon.registerCalls) != 1 {
+		t.Fatalf("Register call count = %d; want 1", len(mon.registerCalls))
+	}
+	got := mon.registerCalls[0]
+	if got.appName != "my-app" {
+		t.Errorf("Register appName = %q; want my-app", got.appName)
+	}
+	if got.policy != RestartPolicyUnlessStopped {
+		t.Errorf("Register policy = %d; want %d (UnlessStopped)", got.policy, RestartPolicyUnlessStopped)
+	}
+}
+
+// TestStopContainer_CallsMarkExplicitStop verifies that StopContainer calls
+// MarkExplicitStop on the monitor before stopping the container.
+func TestStopContainer_CallsMarkExplicitStop(t *testing.T) {
+	mc := &mockContainerdClient{}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	_, err := client.StopContainer(context.Background(), &agentpb.StopContainerRequest{
+		AppName: "my-app",
+	})
+	if err != nil {
+		t.Fatalf("StopContainer: %v", err)
+	}
+
+	if len(mon.explicitStopCalls) != 1 {
+		t.Fatalf("MarkExplicitStop call count = %d; want 1", len(mon.explicitStopCalls))
+	}
+	if mon.explicitStopCalls[0] != "my-app" {
+		t.Errorf("MarkExplicitStop appName = %q; want my-app", mon.explicitStopCalls[0])
+	}
+}
+
+// TestMonitorPolicyInt_NegativeRetries verifies that a negative OnFailureMaxRetries
+// value is clamped to zero and does not result in a negative maxRetries.
+func TestMonitorPolicyInt_NegativeRetries(t *testing.T) {
+	rp := &agentpb.RestartPolicy{
+		Mode:                agentpb.RestartPolicyMode_ON_FAILURE,
+		OnFailureMaxRetries: -5,
+	}
+	policy, maxRetries, ok := monitorPolicyInt(rp)
+	if !ok {
+		t.Fatal("monitorPolicyInt ok = false; want true")
+	}
+	if policy != RestartPolicyOnFailure {
+		t.Errorf("policy = %d; want %d (OnFailure)", policy, RestartPolicyOnFailure)
+	}
+	if maxRetries != 0 {
+		t.Errorf("maxRetries = %d; want 0 (clamped from -5)", maxRetries)
+	}
+}
+
+// TestStartContainer_RegistersMonitor_FromPersistedLabel verifies that when
+// StartContainer is called without a restart policy, the service reads the
+// persisted policy label from containerd and still registers with the monitor.
+func TestStartContainer_RegistersMonitor_FromPersistedLabel(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	outputCh <- ContainerOutput{Done: true}
+	close(outputCh)
+
+	mc := &mockContainerdClient{
+		startOutputCh:      outputCh,
+		restartPolicyLabel: "unless-stopped",
+	}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	// StartContainer with no restart policy — should fall back to the label.
+	stream, err := client.StartContainer(context.Background(), &agentpb.StartContainerRequest{
+		AppName: "my-app",
+		// RestartPolicy intentionally omitted.
+	})
+	if err != nil {
+		t.Fatalf("StartContainer: %v", err)
+	}
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected recv error: %v", err)
+		}
+	}
+
+	if len(mon.registerCalls) != 1 {
+		t.Fatalf("Register call count = %d; want 1 (from persisted label)", len(mon.registerCalls))
+	}
+	got := mon.registerCalls[0]
+	if got.appName != "my-app" {
+		t.Errorf("Register appName = %q; want my-app", got.appName)
+	}
+	if got.policy != RestartPolicyUnlessStopped {
+		t.Errorf("Register policy = %d; want %d (UnlessStopped)", got.policy, RestartPolicyUnlessStopped)
+	}
+}
+
+// TestStartContainer_ClearsExplicitStop verifies that a successful StartContainer
+// call clears any prior ExplicitStop mark, re-enabling automatic restarts.
+func TestStartContainer_ClearsExplicitStop(t *testing.T) {
+	outputCh := make(chan ContainerOutput, 1)
+	outputCh <- ContainerOutput{Done: true}
+	close(outputCh)
+
+	mc := &mockContainerdClient{startOutputCh: outputCh}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	stream, err := client.StartContainer(context.Background(), &agentpb.StartContainerRequest{
+		AppName: "my-app",
+	})
+	if err != nil {
+		t.Fatalf("StartContainer: %v", err)
+	}
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected recv error: %v", err)
+		}
+	}
+
+	// ClearExplicitStop must have been called once.
+	if len(mon.clearStopCalls) != 1 {
+		t.Fatalf("ClearExplicitStop call count = %d; want 1", len(mon.clearStopCalls))
+	}
+	if mon.clearStopCalls[0] != "my-app" {
+		t.Errorf("ClearExplicitStop appName = %q; want my-app", mon.clearStopCalls[0])
+	}
+}
+
+// TestMonitorPolicyIntFromLabel covers the label-based policy parser.
+func TestMonitorPolicyIntFromLabel(t *testing.T) {
+	cases := []struct {
+		label       string
+		wantPolicy  int
+		wantOK      bool
+		wantRetries int
+	}{
+		{"", RestartPolicyNo, false, 0},
+		{"no", RestartPolicyNo, false, 0},
+		{"unless-stopped", RestartPolicyUnlessStopped, true, 0},
+		{"always", RestartPolicyAlways, true, 0},
+		{"on-failure", RestartPolicyOnFailure, true, 0},
+		{"on-failure:3", RestartPolicyOnFailure, true, 3},
+		{"on-failure:foo", 0, false, 0},
+		{"on-failure:-1", 0, false, 0},
+		{"unknown-policy", 0, false, 0},
+	}
+	for _, tc := range cases {
+		policy, maxRetries, ok := monitorPolicyIntFromLabel(tc.label)
+		if ok != tc.wantOK {
+			t.Errorf("label=%q ok=%v want %v", tc.label, ok, tc.wantOK)
+		}
+		if ok && policy != tc.wantPolicy {
+			t.Errorf("label=%q policy=%d want %d", tc.label, policy, tc.wantPolicy)
+		}
+		if ok && maxRetries != tc.wantRetries {
+			t.Errorf("label=%q maxRetries=%d want %d", tc.label, maxRetries, tc.wantRetries)
+		}
 	}
 }
 

@@ -2,12 +2,7 @@ package services
 
 import (
 	"context"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -34,120 +29,45 @@ func (s *ContainerServiceV2) StartContainer(req *agentpbv2.StartContainerRequest
 	return s.v1.streamContainerOutput(stream.Context(), req.GetAppName(), postStartAgentHookFromContext(stream.Context()), nil, &containerStreamV1Adapter{v2stream: stream})
 }
 
-// AttachContainer starts a container with stdin support, forwarding I/O bidirectionally.
+// AttachContainer starts a container with stdin support, forwarding I/O
+// bidirectionally. It delegates to the v1 service via an adapter so that the
+// monitor bookkeeping (ClearExplicitStop / restart-policy registration) and
+// log-manager fan-out in the v1 path apply equally to v2 attach clients.
 func (s *ContainerServiceV2) AttachContainer(stream grpc.BidiStreamingServer[agentpbv2.AttachContainerRequest, agentpbv2.ContainerStreamResponse]) error {
-	first, err := stream.Recv()
-	if err == io.EOF {
-		return status.Error(codes.InvalidArgument, "missing first attach message")
-	}
-	if err != nil {
-		return err
-	}
-	appName := first.GetAppName()
-	if appName == "" {
-		return status.Error(codes.InvalidArgument, "app_name required as first message")
-	}
-
-	ctx := stream.Context()
-	stdinR, stdinW := io.Pipe()
-	defer stdinR.Close()
-
-	go func() {
-		defer stdinW.Close()
-		for {
-			msg, recvErr := stream.Recv()
-			if recvErr != nil {
-				return
-			}
-			if data := msg.GetStdinData(); len(data) > 0 {
-				if _, writeErr := stdinW.Write(data); writeErr != nil {
-					return
-				}
-			}
-		}
-	}()
-
-	outputCh, err := s.v1.containerd.StartContainerWithStdin(ctx, appName, stdinR, postStartAgentHookFromContext(ctx), nil)
-	if err != nil {
-		stdinR.Close()
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
-	}
-
-	if err := stream.Send(&agentpbv2.ContainerStreamResponse{
-		ResponseType: &agentpbv2.ContainerStreamResponse_Started_{
-			Started: &agentpbv2.ContainerStreamResponse_Started{},
-		},
-	}); err != nil {
-		return err
-	}
-
-	var readCh <-chan ContainerOutput
-	if s.v1.logManager != nil {
-		subID, subCh := s.v1.logManager.Subscribe(appName)
-		defer s.v1.logManager.Unsubscribe(appName, subID)
-		readCh = subCh
-		go func() {
-			for output := range outputCh {
-				s.v1.logManager.Publish(appName, output)
-			}
-			s.v1.logManager.Publish(appName, ContainerOutput{Done: true})
-		}()
-	} else {
-		readCh = outputCh
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case output, ok := <-readCh:
-			if !ok || output.Done {
-				return nil
-			}
-			if len(output.Stdout) > 0 {
-				if err := stream.Send(&agentpbv2.ContainerStreamResponse{
-					ResponseType: &agentpbv2.ContainerStreamResponse_StdoutOutput{
-						StdoutOutput: &agentpbv2.ContainerStreamResponse_ConsoleOutput{Data: output.Stdout},
-					},
-				}); err != nil {
-					return err
-				}
-			}
-			if len(output.Stderr) > 0 {
-				if err := stream.Send(&agentpbv2.ContainerStreamResponse{
-					ResponseType: &agentpbv2.ContainerStreamResponse_StderrOutput{
-						StderrOutput: &agentpbv2.ContainerStreamResponse_ConsoleOutput{Data: output.Stderr},
-					},
-				}); err != nil {
-					return err
-				}
-			}
-		}
-	}
+	return s.v1.AttachContainer(&attachStreamV1Adapter{
+		containerStreamV1Adapter: &containerStreamV1Adapter{v2stream: stream},
+		v2stream:                 stream,
+	})
 }
 
-// StopContainer stops a running container by name.
+// StopContainer stops a running container by name. It delegates to the v1
+// service so the monitor's explicit-stop bookkeeping is applied and an
+// unless-stopped container is not restarted out from under the caller.
 func (s *ContainerServiceV2) StopContainer(ctx context.Context, req *agentpbv2.StopContainerRequest) (*agentpbv2.StopContainerResponse, error) {
 	if s.v1.containerd == nil {
 		return nil, status.Error(codes.Internal, "containerd is not available")
 	}
-	if err := s.v1.containerd.StopContainer(ctx, req.GetAppName()); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to stop container: %v", err)
+	if _, err := s.v1.StopContainer(ctx, &agentpb.StopContainerRequest{
+		AppName: req.GetAppName(),
+	}); err != nil {
+		return nil, err
 	}
-	s.v1.logger.Info("Container stopped", zap.String("app_name", req.GetAppName()))
 	return &agentpbv2.StopContainerResponse{}, nil
 }
 
-// DeleteContainer deletes a container and optionally its image and volumes.
+// DeleteContainer deletes a container and optionally its image and volumes. It
+// delegates to the v1 service so the container is unregistered from the monitor
+// before removal, closing the delete/restart race.
 func (s *ContainerServiceV2) DeleteContainer(ctx context.Context, req *agentpbv2.DeleteContainerRequest) (*agentpbv2.DeleteContainerResponse, error) {
 	if s.v1.containerd == nil {
 		return nil, status.Error(codes.Internal, "containerd is not available")
 	}
-	if err := s.v1.containerd.DeleteContainer(ctx, req.GetAppName(), req.GetDeleteImage()); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete container: %v", err)
-	}
-	if req.GetDeleteVolumes() {
-		deleteVolumesByAppName(s.v1.logger, req.GetAppName())
+	if _, err := s.v1.DeleteContainer(ctx, &agentpb.DeleteContainerRequest{
+		AppName:       req.GetAppName(),
+		DeleteImage:   req.GetDeleteImage(),
+		DeleteVolumes: req.GetDeleteVolumes(),
+	}); err != nil {
+		return nil, err
 	}
 	return &agentpbv2.DeleteContainerResponse{}, nil
 }
@@ -218,33 +138,6 @@ func (s *ContainerServiceV2) ListContainerStats(ctx context.Context, _ *agentpbv
 	return &agentpbv2.ListContainerStatsResponse{Stats: v2stats}, nil
 }
 
-// deleteVolumesByAppName removes all volume directories belonging to the given app.
-func deleteVolumesByAppName(logger *zap.Logger, appName string) {
-	entries, err := os.ReadDir(volumesDir)
-	if err != nil {
-		logger.Warn("Failed to read volumes directory",
-			zap.String("base", volumesDir),
-			zap.String("app_name", appName),
-			zap.Error(err),
-		)
-		return
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if name == appName || strings.HasPrefix(name, appName+"-") {
-			path := filepath.Join(volumesDir, name)
-			if err := os.RemoveAll(path); err != nil {
-				logger.Warn("Failed to remove volume", zap.String("path", path), zap.Error(err))
-			} else {
-				logger.Info("Volume removed", zap.String("path", path))
-			}
-		}
-	}
-}
-
 // mapAppContainerToV2 converts a v1 AppContainer to its v2 equivalent,
 // mapping the running state enum explicitly (v1 STOPPED=0/RUNNING=1 vs v2 STOPPED=1/RUNNING=2).
 func mapAppContainerToV2(c *agentpb.AppContainer) *agentpbv2.AppContainer {
@@ -301,3 +194,32 @@ func (a *containerStreamV1Adapter) SetTrailer(md metadata.MD)       { a.v2stream
 func (a *containerStreamV1Adapter) Context() context.Context        { return a.v2stream.Context() }
 func (a *containerStreamV1Adapter) SendMsg(m any) error             { return a.v2stream.SendMsg(m) }
 func (a *containerStreamV1Adapter) RecvMsg(m any) error             { return a.v2stream.RecvMsg(m) }
+
+// attachStreamV1Adapter adapts a v2 bidirectional attach stream to the v1
+// grpc.BidiStreamingServer[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse]
+// interface. The embedded containerStreamV1Adapter supplies Send (v1->v2
+// response translation) and the grpc.ServerStream methods; this type adds the
+// Recv direction, translating v2 attach requests to their v1 equivalents.
+type attachStreamV1Adapter struct {
+	*containerStreamV1Adapter
+	v2stream grpc.BidiStreamingServer[agentpbv2.AttachContainerRequest, agentpbv2.ContainerStreamResponse]
+}
+
+func (a *attachStreamV1Adapter) Recv() (*agentpb.AttachContainerRequest, error) {
+	msg, err := a.v2stream.Recv()
+	if err != nil {
+		return nil, err
+	}
+	switch rt := msg.GetRequestType().(type) {
+	case *agentpbv2.AttachContainerRequest_AppName:
+		return &agentpb.AttachContainerRequest{
+			RequestType: &agentpb.AttachContainerRequest_AppName{AppName: rt.AppName},
+		}, nil
+	case *agentpbv2.AttachContainerRequest_StdinData:
+		return &agentpb.AttachContainerRequest{
+			RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: rt.StdinData},
+		}, nil
+	default:
+		return &agentpb.AttachContainerRequest{}, nil
+	}
+}

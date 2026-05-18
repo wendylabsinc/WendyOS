@@ -19,6 +19,10 @@ import (
 // ML-DSA (post-quantum) signed certificates are handled via a custom VerifyPeerCertificate
 // callback because Go's crypto/x509 does not natively support ML-DSA signature verification.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
+	if chainPEM == "" {
+		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
+	}
+
 	// Only include the leaf cert in the TLS certificate — not the chain.
 	// Go's TLS library calls x509.ParseCertificate on every cert sent in the
 	// handshake, and ML-DSA chain certs (from pki-core) cause parse failures
@@ -33,16 +37,13 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string) (*tls.Config, error) {
 	}
 
 	caPool := x509.NewCertPool()
-	var caCerts []*x509.Certificate
-	if chainPEM != "" {
-		caPool.AppendCertsFromPEM([]byte(chainPEM))
-		caCerts, err = parseCertsFromPEM([]byte(chainPEM))
-		if err != nil {
-			return nil, fmt.Errorf("parsing chain PEM: %w", err)
-		}
-		if len(caCerts) == 0 {
-			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
-		}
+	caPool.AppendCertsFromPEM([]byte(chainPEM))
+	caCerts, err := parseCertsFromPEM([]byte(chainPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parsing chain PEM: %w", err)
+	}
+	if len(caCerts) == 0 {
+		return nil, fmt.Errorf("parsing chain PEM: no certificates found")
 	}
 	caPool.AppendCertsFromPEM([]byte(certPEM))
 

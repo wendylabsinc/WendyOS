@@ -190,24 +190,34 @@ func verifyMLDSAClientCert(leaf *x509.Certificate, trustedCAs []*x509.Certificat
 		}
 	}
 
+	var lastErr error
+	foundSubject := false
 	for _, ca := range trustedCAs {
 		if !bytes.Equal(ca.RawSubject, leaf.RawIssuer) {
 			continue
 		}
+		foundSubject = true
 		if now.Before(ca.NotBefore) || now.After(ca.NotAfter) {
-			return fmt.Errorf("CA certificate %q not valid at current time", ca.Subject.CommonName)
+			lastErr = fmt.Errorf("CA certificate %q not valid at current time", ca.Subject.CommonName)
+			continue
 		}
 		if !ca.BasicConstraintsValid || !ca.IsCA {
-			return fmt.Errorf("certificate %q is not a CA", ca.Subject.CommonName)
+			lastErr = fmt.Errorf("certificate %q is not a CA", ca.Subject.CommonName)
+			continue
 		}
 		if ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0 {
-			return fmt.Errorf("certificate %q is not permitted to sign certificates", ca.Subject.CommonName)
+			lastErr = fmt.Errorf("certificate %q is not permitted to sign certificates", ca.Subject.CommonName)
+			continue
 		}
 		if err := verifyMLDSASignature(ca, leaf); err != nil {
-			return fmt.Errorf("invalid signature from CA %q: %w", ca.Subject.CommonName, err)
+			lastErr = fmt.Errorf("invalid signature from CA %q: %w", ca.Subject.CommonName, err)
+			continue
 		}
 		return nil
 	}
 
-	return fmt.Errorf("client certificate issuer not found in trusted CA pool")
+	if !foundSubject {
+		return fmt.Errorf("client certificate issuer not found in trusted CA pool")
+	}
+	return lastErr
 }

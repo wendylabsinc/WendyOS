@@ -164,6 +164,19 @@ func avahiUnescape(s string) string {
 	return b.String()
 }
 
+// parseMDNSInfoFields parses hashicorp/mdns InfoFields (raw TXT records) into
+// a key→value map. This is used by the hashicorp/mdns fallback path, which runs
+// when avahi-browse is unavailable.
+func parseMDNSInfoFields(fields []string) map[string]string {
+	records := make(map[string]string)
+	for _, txt := range fields {
+		if k, v, ok := strings.Cut(txt, "="); ok {
+			records[k] = v
+		}
+	}
+	return records
+}
+
 // parseAvahiTXT parses avahi's TXT record field.
 // Format: "key1=val1" "key2=val2" ...
 func parseAvahiTXT(field string) map[string]string {
@@ -213,6 +226,58 @@ func discoverLANMDNS(ctx context.Context, timeout time.Duration) ([]models.LANDe
 	return allDevices, nil
 }
 
+// lanDeviceFromMDNSEntry converts a hashicorp/mdns ServiceEntry into a
+// models.LANDevice. Returns false if the entry does not advertise the Wendy
+// service type. iface is used to scope IPv6 link-local addresses.
+func lanDeviceFromMDNSEntry(entry *mdns.ServiceEntry, iface *net.Interface) (models.LANDevice, bool) {
+	if entry == nil || !mdnsEntryMatchesServiceType(entry.Name, wendyServiceType) {
+		return models.LANDevice{}, false
+	}
+
+	hostname := strings.TrimSuffix(entry.Host, ".")
+
+	// Parse all TXT records into a map so we can read any key,
+	// including "tls" which determines whether mTLS is required.
+	txtRecords := parseMDNSInfoFields(entry.InfoFields)
+
+	displayName := strings.TrimSuffix(hostname, ".local")
+	if dn, ok := txtRecords["displayname"]; ok {
+		displayName = dn
+	}
+
+	ipAddr := ""
+	if entry.AddrV4 != nil {
+		ipAddr = entry.AddrV4.String()
+	} else if entry.AddrV6 != nil {
+		ipAddr = entry.AddrV6.String()
+		// IPv6 link-local addresses need a zone ID (%iface) to be routable.
+		if entry.AddrV6.IsLinkLocalUnicast() && iface != nil {
+			ipAddr = ipAddr + "%" + iface.Name
+		}
+	}
+
+	id := ""
+	if v, ok := txtRecords["wendyosdevice"]; ok {
+		id = v
+	} else if v, ok := txtRecords["id"]; ok {
+		id = v
+	}
+	if id == "" {
+		id = displayName
+	}
+
+	return models.LANDevice{
+		ID:            id,
+		DisplayName:   displayName,
+		Hostname:      hostname,
+		IPAddress:     ipAddr,
+		Port:          entry.Port,
+		IsMTLS:        txtRecords["tls"] == "true",
+		InterfaceType: string(models.InterfaceLAN),
+		IsWendyDevice: true,
+	}, true
+}
+
 // queryInterface runs a single mDNS query on a specific network interface.
 func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Duration) []models.LANDevice {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
@@ -223,53 +288,19 @@ func queryInterface(ctx context.Context, iface *net.Interface, timeout time.Dura
 	go func() {
 		defer close(done)
 		for entry := range entriesCh {
-			// Filter out entries that don't match the queried service type.
-			// hashicorp/mdns can return unrelated mDNS responders (e.g. iPhones
-			// advertising _remotepairing._tcp).
-			if !mdnsEntryMatchesServiceType(entry.Name, wendyServiceType) {
+			dev, ok := lanDeviceFromMDNSEntry(entry, iface)
+			if !ok {
 				continue
 			}
 
 			hostname := strings.TrimSuffix(entry.Host, ".")
-
 			key := fmt.Sprintf("%s-%s-%d", entry.Name, hostname, entry.Port)
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
 
-			displayName := strings.TrimSuffix(hostname, ".local")
-
-			ipAddr := ""
-			if entry.AddrV4 != nil {
-				ipAddr = entry.AddrV4.String()
-			} else if entry.AddrV6 != nil {
-				ipAddr = entry.AddrV6.String()
-				// IPv6 link-local addresses need a zone ID (%iface) to be routable.
-				if entry.AddrV6.IsLinkLocalUnicast() {
-					ipAddr = ipAddr + "%" + iface.Name
-				}
-			}
-
-			id := ""
-			for _, txt := range entry.InfoFields {
-				if k, v, ok := strings.Cut(txt, "="); ok && k == "id" {
-					id = v
-				}
-			}
-			if id == "" {
-				id = displayName
-			}
-
-			devices = append(devices, models.LANDevice{
-				ID:            id,
-				DisplayName:   displayName,
-				Hostname:      hostname,
-				IPAddress:     ipAddr,
-				Port:          entry.Port,
-				InterfaceType: string(models.InterfaceLAN),
-				IsWendyDevice: true,
-			})
+			devices = append(devices, dev)
 		}
 	}()
 

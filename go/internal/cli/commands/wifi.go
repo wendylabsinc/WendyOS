@@ -678,6 +678,9 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 	}
 
 	if len(networks) == 0 {
+		if wifiScanCacheHint != "" {
+			return "", fmt.Errorf("no WiFi networks found (%s)", wifiScanCacheHint)
+		}
 		return "", fmt.Errorf("no WiFi networks found")
 	}
 
@@ -799,7 +802,11 @@ func wifiListFromHost() error {
 	}
 
 	if len(networks) == 0 {
-		cliNotice("No WiFi networks found.")
+		if wifiScanCacheHint != "" {
+			cliNotice("No WiFi networks found. %s.", wifiScanCacheHint)
+		} else {
+			cliNotice("No WiFi networks found.")
+		}
 		return nil
 	}
 

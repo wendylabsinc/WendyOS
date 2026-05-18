@@ -55,7 +55,8 @@ func newDeviceCmd() *cobra.Command {
 	}
 
 	addToGroup("manage",
-		newDeviceVersionCmd(),
+		newDeviceInfoCmd(),
+		newDeprecatedDeviceVersionCmd(),
 		newDeviceSetDefaultCmd(),
 		newDeviceUnsetDefaultCmd(),
 		newDeviceSetupCmd(),
@@ -82,15 +83,27 @@ func newDeviceCmd() *cobra.Command {
 	return cmd
 }
 
-func newDeviceVersionCmd() *cobra.Command {
+func newDeviceInfoCmd() *cobra.Command {
+	return newDeviceInfoLikeCmd("info", false)
+}
+
+func newDeprecatedDeviceVersionCmd() *cobra.Command {
+	return newDeviceInfoLikeCmd("version", true)
+}
+
+func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 	var checkUpdates bool
 	var prerelease bool
 
 	cmd := &cobra.Command{
-		Use:     "version",
-		Aliases: []string{"info"},
-		Short:   "Show agent version, OS, architecture, GPU, and hardware info for the target device",
+		Use:    use,
+		Short:  "Show agent version, OS, architecture, GPU, and hardware info for the target device",
+		Hidden: deprecated,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if deprecated && !jsonOutput {
+				cmd.PrintErrln("Warning: 'wendy device version' is deprecated; use 'wendy device info' instead.")
+			}
+
 			ctx := cmd.Context()
 			target, err := resolveTarget(ctx)
 			if err != nil {

@@ -8,13 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 
+	toml "github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 )
 
 func newMCPSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Configure the Wendy MCP server in Claude Code and Claude Desktop",
+		Short: "Configure the Wendy MCP server in supported AI tools",
 		Long:  "Detects installed AI tools and adds the wendy MCP server to their configuration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			results := setupMCPForAllTools()
@@ -65,6 +66,37 @@ func setupMCPForAllTools() []mcpSetupResult {
 			results = append(results, mcpSetupResult{tool: "Claude Desktop", path: desktopPath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Claude Desktop", path: desktopPath})
+		}
+	}
+
+	// Cursor (~/.cursor/mcp.json)
+	if cursorPath := cursorConfigPath(); cursorPath != "" {
+		if err := addMCPToJSONConfig(cursorPath, "mcpServers", "wendy", entry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Cursor", path: cursorPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Cursor", path: cursorPath})
+		}
+	}
+
+	// Windsurf (~/.codeium/windsurf/mcp_config.json)
+	if windsurfPath := windsurfConfigPath(); windsurfPath != "" {
+		if err := addMCPToJSONConfig(windsurfPath, "mcpServers", "wendy", entry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Windsurf", path: windsurfPath})
+		}
+	}
+
+	// Codex (~/.codex/config.toml)
+	if codexPath := codexConfigPath(); codexPath != "" {
+		codexEntry := map[string]any{
+			"command": wendyBin,
+			"args":    []string{"mcp", "serve"},
+		}
+		if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", codexEntry); err != nil {
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
+		} else {
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath})
 		}
 	}
 
@@ -132,6 +164,38 @@ func wendyBinaryPath() string {
 	return "wendy"
 }
 
+// cursorConfigPath returns ~/.cursor/mcp.json if Cursor is installed.
+func cursorConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".cursor")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "mcp.json")
+	}
+	if _, err := exec.LookPath("cursor"); err == nil {
+		return filepath.Join(dir, "mcp.json")
+	}
+	return ""
+}
+
+// windsurfConfigPath returns ~/.codeium/windsurf/mcp_config.json if Windsurf is installed.
+func windsurfConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".codeium", "windsurf")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "mcp_config.json")
+	}
+	if _, err := exec.LookPath("windsurf"); err == nil {
+		return filepath.Join(dir, "mcp_config.json")
+	}
+	return ""
+}
+
 // addMCPToJSONConfig reads a JSON config file, sets cfg[topKey][name] = entry,
 // and writes it back. Creates the file if it does not exist.
 func addMCPToJSONConfig(path, topKey, name string, entry any) error {
@@ -163,4 +227,53 @@ func addMCPToJSONConfig(path, topKey, name string, entry any) error {
 		return err
 	}
 	return os.WriteFile(path, out, 0o644)
+}
+
+// addMCPToTOMLConfig reads a TOML config file, sets cfg[topKey][name] = entry,
+// and writes it back. Creates the file if it does not exist.
+func addMCPToTOMLConfig(path, topKey, name string, entry any) error {
+	var cfg map[string]any
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(data) > 0 {
+		if _, err := toml.Decode(string(data), &cfg); err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	top, _ := cfg[topKey].(map[string]any)
+	if top == nil {
+		top = map[string]any{}
+	}
+	top[name] = entry
+	cfg[topKey] = top
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
+// codexConfigPath returns ~/.codex/config.toml if Codex is installed.
+func codexConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".codex")
+	if _, err := os.Stat(dir); err == nil {
+		return filepath.Join(dir, "config.toml")
+	}
+	if _, err := exec.LookPath("codex"); err == nil {
+		return filepath.Join(dir, "config.toml")
+	}
+	return ""
 }

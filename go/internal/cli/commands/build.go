@@ -69,6 +69,28 @@ func newBuildCmd() *cobra.Command {
 					}
 				}
 
+				// Swift projects without a Dockerfile: cross-compile on the host and
+				// build a Docker image, bypassing the provider's normal Build method.
+				projectType, ptErr := detectProjectType(cwd)
+				if ptErr != nil {
+					cliLogln("Warning: could not detect project type: %v", ptErr)
+				}
+				if projectType == "swift" {
+					if _, ok := target.Provider.(providers.ImageBuilder); ok {
+						if err := swifttoolchain.EnsureSwiftVersion(cmd.Context(), &dimWriter{}, os.Stderr); err != nil {
+							return err
+						}
+						cliLogln("Building Swift project for %s...", target.Provider.DisplayName())
+						// runtime.GOARCH is correct here: Docker Desktop loads images into the
+						// host daemon, so the image must match the host architecture.
+						if _, err := buildSwiftDockerImage(cmd.Context(), cwd, product, runtime.GOARCH, &dimWriter{}, os.Stderr); err != nil {
+							return fmt.Errorf("building Swift Docker image: %w", err)
+						}
+						cliSuccess("Build completed successfully.")
+						return nil
+					}
+				}
+
 				cliLogln("Building with %s provider...", target.Provider.DisplayName())
 				app, err := target.Provider.Build(cmd.Context(), *target.External, cwd, product, false)
 				if err != nil {
@@ -323,15 +345,11 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 	case "python":
 		return buildPythonProject(dir, imageName, platform)
 	case "swift":
-		// `swift build` requires a host Swift toolchain. Only darwin and
-		// linux ship one. swift-container-plugin (the buildx-based fallback
-		// used elsewhere) does not yet support Windows either, and neither
-		// does the WASM/WendyLite path, so on Windows the only working
-		// route is a user-provided Dockerfile.
+		// Cross-compiling Swift requires a host toolchain; only darwin and linux ship one.
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 			return fmt.Errorf("`wendy build` for Swift packages is not supported on %s; provide a Dockerfile", runtime.GOOS)
 		}
-		return buildSwiftProject(dir, appID, platform)
+		return buildSwiftContainerProject(ctx, dir, appID, platform)
 	case "xcode":
 		return buildXcodeProject(ctx, dir, option.File)
 	default:
@@ -446,43 +464,25 @@ func buildXcodeProject(ctx context.Context, dir, xcodeproj string) error {
 	return nil
 }
 
-func buildSwiftProject(dir, appID, platform string) error {
-	cliLogln("Building Swift project locally...")
-
-	cmd := exec.Command("swift", "build")
-	cmd.Dir = dir
-
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return err
-		}
-		cliSuccess("Build completed successfully.")
-		return nil
+func buildSwiftContainerProject(ctx context.Context, dir, appID, platform string) error {
+	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
+		return err
 	}
 
-	s := tui.NewSpinner("Building Swift project...")
-	p := tea.NewProgram(s)
-
-	go func() {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-		p.Send(tui.SpinnerDoneMsg{Err: err})
-	}()
-
-	finalModel, err := p.Run()
+	product, err := swifttoolchain.FindSwiftProduct(dir)
 	if err != nil {
-		return fmt.Errorf("TUI error: %w", err)
+		cliLogln("Warning: could not detect Swift product name (%v); using %q", err, appID)
+		product = appID
 	}
 
-	model := finalModel.(tui.SpinnerModel)
-	_, buildErr := model.Result()
-	if buildErr != nil {
-		return buildErr
+	arch := runtime.GOARCH
+	if parts := strings.SplitN(platform, "/", 2); len(parts) == 2 {
+		arch = parts[1]
 	}
 
+	if _, err := buildSwiftDockerImage(ctx, dir, product, arch, &dimWriter{}, os.Stderr); err != nil {
+		return err
+	}
 	cliSuccess("Build completed successfully.")
 	return nil
 }

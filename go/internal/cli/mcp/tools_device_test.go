@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -107,6 +109,62 @@ func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
 	}
 	if len(devices) == 0 {
 		t.Fatal("expected at least one device")
+	}
+}
+
+func TestDeviceList_SourceFieldOnConfigEntries(t *testing.T) {
+	cfg := &config.Config{
+		Auth: []config.AuthConfig{
+			{CloudGRPC: "mydevice.local:50051"},
+		},
+	}
+	srv := New(cfg, nil)
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result")
+	}
+	var devices []map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &devices); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	for _, d := range devices {
+		if d["source"] != "config" {
+			t.Errorf("expected source=config, got %v (device: %v)", d["source"], d)
+		}
+	}
+}
+
+func TestDeviceList_ScanTrue_IncludesScanResults(t *testing.T) {
+	cfg := &config.Config{}
+	srv := New(cfg, nil)
+	srv.discoverLANFn = func(_ context.Context, _ time.Duration) ([]models.LANDevice, error) {
+		return []models.LANDevice{
+			{DisplayName: "test-device", Hostname: "test-device.local", Port: 50051, AgentVersion: "1.0.0"},
+		}, nil
+	}
+
+	result, err := srv.callTool(context.Background(), "device_list", map[string]any{"scan": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result")
+	}
+	var devices []map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &devices); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if devices[0]["source"] != "scan" {
+		t.Errorf("expected source=scan, got %v", devices[0]["source"])
+	}
+	if devices[0]["type"] != "lan" {
+		t.Errorf("expected type=lan, got %v", devices[0]["type"])
 	}
 }
 

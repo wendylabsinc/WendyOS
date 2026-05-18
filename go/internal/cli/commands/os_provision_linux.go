@@ -70,4 +70,4 @@ func findConfigPartition(diskDev string) (string, error) {
 }
 
 // ejectDisk is a no-op on Linux; drives are simply unmounted.
-func ejectDisk(_ string) {}
+func ejectDisk(_ drive) {}

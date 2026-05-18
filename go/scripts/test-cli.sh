@@ -231,10 +231,14 @@ echo -e "${BOLD}Phase 3: Device commands${RESET}"
 run_test "wendy device set-default" \
     "$WENDY" device set-default "$HOSTNAME"
 
-run_test "wendy device version" \
-    "$WENDY" device version --device "$HOSTNAME"
+run_test "wendy device info" \
+    "$WENDY" device info --device "$HOSTNAME"
 
-run_test_json "wendy device version --json" \
+run_test_json "wendy device info --json" \
+    "$WENDY" device info --device "$HOSTNAME" --json
+
+# Backward compatibility: the hidden deprecated alias must remain machine-readable.
+run_test_json "wendy device version --json (deprecated)" \
     "$WENDY" device version --device "$HOSTNAME" --json
 
 echo ""

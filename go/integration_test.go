@@ -208,6 +208,10 @@ func (s *statefulContainerdClient) GetContainerMCPPort(_ context.Context, _ stri
 	return 0, nil
 }
 
+func (m *statefulContainerdClient) GetContainerRestartPolicyLabel(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
 // getLayerData returns the data stored for a given digest, for test assertions.
 func (m *statefulContainerdClient) getLayerData(digest string) ([]byte, bool) {
 	m.mu.Lock()

@@ -13,6 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/internal/shared/config"
+	"github.com/wendylabsinc/wendy/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/internal/shared/models"
 	"github.com/wendylabsinc/wendy/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"google.golang.org/grpc/status"
@@ -23,17 +25,24 @@ type ConnectFunc func(ctx context.Context, address string) (*grpcclient.AgentCon
 
 // mcpServer holds active connection state and implements all MCP tool handlers.
 type mcpServer struct {
-	cfg          *config.Config
-	connectFn    ConnectFunc
-	conn         *grpcclient.AgentConnection
-	cloudTunnels map[string]*mcpCloudTunnel
-	mu           sync.RWMutex
+	cfg           *config.Config
+	connectFn     ConnectFunc
+	conn          *grpcclient.AgentConnection
+	connType      string
+	cloudTunnels  map[string]*mcpCloudTunnel
+	discoverLANFn func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	mu            sync.RWMutex
 }
 
 // New creates a new mcpServer. connectFn is called by device_connect; pass nil
 // to disable dynamic connection (useful in tests that set conn directly).
 func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
-	return &mcpServer{cfg: cfg, connectFn: connectFn, cloudTunnels: make(map[string]*mcpCloudTunnel)}
+	return &mcpServer{
+		cfg:           cfg,
+		connectFn:     connectFn,
+		cloudTunnels:  make(map[string]*mcpCloudTunnel),
+		discoverLANFn: discovery.DiscoverLAN,
+	}
 }
 
 // GetConn returns the current active connection (nil if not connected).
@@ -51,6 +60,23 @@ func (s *mcpServer) SetConn(conn *grpcclient.AgentConnection) {
 		_ = s.conn.Close()
 	}
 	s.conn = conn
+	if conn == nil {
+		s.connType = ""
+	}
+}
+
+// SetConnType records the transport type of the active connection ("direct" or "cloud").
+func (s *mcpServer) SetConnType(t string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connType = t
+}
+
+// GetConnType returns the transport type of the active connection.
+func (s *mcpServer) GetConnType() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.connType
 }
 
 // ConnectTo connects to address and stores the result as the active connection.
@@ -71,7 +97,10 @@ func (s *mcpServer) ConnectTo(ctx context.Context, address string) error {
 func (s *mcpServer) Start(ctx context.Context) error {
 	srv := server.NewMCPServer("wendy", version.Version,
 		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(false, false),
 	)
+	s.registerStatusTools(srv)
+	s.registerGuideResource(srv)
 	s.registerDeviceTools(srv)
 	s.registerContainerTools(srv)
 	s.registerTelemetryTools(srv)

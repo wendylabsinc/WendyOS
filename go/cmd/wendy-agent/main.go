@@ -45,6 +45,43 @@ const (
 	defaultOTELHTTPPort = "4318"
 )
 
+// containerMonitorAdapter wraps *container.ContainerMonitor so it satisfies
+// services.ContainerMonitorRegistrar without creating a circular import.
+// The services package cannot import the container package (container imports
+// services), so we use an adapter with plain-int policy values that mirror the
+// container.RestartPolicy iota.
+type containerMonitorAdapter struct {
+	m *container.ContainerMonitor
+}
+
+func (a *containerMonitorAdapter) Register(appName string, policy int, maxRetries int) {
+	var rp container.RestartPolicy
+	switch policy {
+	case services.RestartPolicyAlways:
+		rp = container.RestartAlways
+	case services.RestartPolicyUnlessStopped:
+		rp = container.RestartUnlessStopped
+	case services.RestartPolicyOnFailure:
+		rp = container.RestartOnFailure
+	default:
+		// Unknown or RestartPolicyNo — skip registration.
+		return
+	}
+	a.m.Register(appName, rp, maxRetries)
+}
+
+func (a *containerMonitorAdapter) Unregister(appName string) {
+	a.m.Unregister(appName)
+}
+
+func (a *containerMonitorAdapter) MarkExplicitStop(appName string) {
+	a.m.MarkExplicitStop(appName)
+}
+
+func (a *containerMonitorAdapter) ClearExplicitStop(appName string) {
+	a.m.ClearExplicitStop(appName)
+}
+
 func main() {
 	if handled, code := handleUtilityCommand(os.Args[1:]); handled {
 		os.Exit(code)
@@ -116,8 +153,22 @@ func main() {
 
 	logManager := services.NewContainerLogManager(logger, broadcaster)
 
+	// Start container monitor only when containerd is available.
+	var monitor *container.ContainerMonitor
+	if containerdClient != nil {
+		monitor = container.NewContainerMonitor(logger, containerdClient, 15*time.Second)
+	}
+
 	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager)
-	containerSvc := services.NewContainerService(logger, containerdClient, services.WithLogManager(logManager))
+	containerSvcOpts := []services.ContainerServiceOption{
+		services.WithLogManager(logManager),
+	}
+	if monitor != nil {
+		containerSvcOpts = append(containerSvcOpts, services.WithMonitor(&containerMonitorAdapter{m: monitor}))
+	}
+	containerSvc := services.NewContainerService(logger, containerdClient,
+		containerSvcOpts...,
+	)
 	audioSvc := services.NewAudioService(logger)
 	videoSvc := services.NewVideoService(logger)
 
@@ -139,9 +190,6 @@ func main() {
 	otelLogReceiver := services.NewOTELLogsReceiver(broadcaster)
 	otelMetricReceiver := services.NewOTELMetricsReceiver(broadcaster)
 	otelTraceReceiver := services.NewOTELTraceReceiver(broadcaster)
-
-	// Start container monitor.
-	monitor := container.NewContainerMonitor(logger, containerdClient, 15*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -195,12 +243,14 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Start container monitor in background.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		monitor.Run(ctx)
-	}()
+	// Start container monitor in background (only when containerd is available).
+	if monitor != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitor.Run(ctx)
+		}()
+	}
 
 	// Collect CPU/memory metrics for all running containers.
 	if containerdClient != nil {

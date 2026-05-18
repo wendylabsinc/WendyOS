@@ -1200,6 +1200,22 @@ func (c *Client) GetContainerMCPPort(ctx context.Context, appName string) (uint3
 	return uint32(p), nil
 }
 
+// GetContainerRestartPolicyLabel returns the raw restart policy label stored on
+// the container (e.g. "unless-stopped", "on-failure:5", "no"). An empty string
+// is returned when the container exists but has no restart policy label.
+func (c *Client) GetContainerRestartPolicyLabel(ctx context.Context, appName string) (string, error) {
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return "", fmt.Errorf("loading container %q: %w", appName, err)
+	}
+	info, err := ctr.Info(ctx)
+	if err != nil {
+		return "", fmt.Errorf("getting container info for %q: %w", appName, err)
+	}
+	return info.Labels[labelKeyRestartPolicy], nil
+}
+
 // GetContainerStats collects memory and image-size stats for all Wendy-managed containers.
 // Memory is read from cgroup metrics (only available for running tasks). Storage is the
 // image size from the content store. Both values are 0 if unavailable.

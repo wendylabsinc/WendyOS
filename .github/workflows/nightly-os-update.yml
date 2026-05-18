@@ -94,7 +94,7 @@ jobs:
           WORKDIR="$(pwd)"
           SSH_ENV="export PATH='$PATH'"
 
-          INFO=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" || true)
+          INFO=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device info --json --device '$DEVICE_HOSTNAME'" || true)
           echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}' || true
           DEVICE_TYPE=$(echo "$INFO" | jq -r '.deviceType // ""' 2>/dev/null || true)
           echo "device_type=$DEVICE_TYPE" >> "$GITHUB_OUTPUT"
@@ -113,7 +113,7 @@ jobs:
           # online, with a 5-minute internal timeout.
           $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy os update --device '$DEVICE_HOSTNAME'"
 
-          $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device version --json --device '$DEVICE_HOSTNAME'" \
+          $SSH "$SSH_ENV && cd '$WORKDIR' && ./bin/wendy device info --json --device '$DEVICE_HOSTNAME'" \
             | jq '{osVersion, agentVersion: .version}'
 
           $SSH "$SSH_ENV && cd '$WORKDIR' && scripts/test-templates.sh -w ./bin/wendy -h '$DEVICE_HOSTNAME'"

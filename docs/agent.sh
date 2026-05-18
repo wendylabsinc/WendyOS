@@ -92,6 +92,39 @@ download() {
   fi
 }
 
+apt_install_or_upgrade() {
+  local package="$1"
+  if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
+    echo "Updating ${package}..."
+    $SUDO apt-get install -y --only-upgrade "$package"
+  else
+    echo "Installing ${package}..."
+    $SUDO apt-get install -y "$package"
+  fi
+}
+
+dnf_install_or_upgrade() {
+  local package="$1"
+  if rpm -q "$package" &>/dev/null; then
+    echo "Updating ${package}..."
+    $SUDO dnf upgrade -y "$package"
+  else
+    echo "Installing ${package}..."
+    $SUDO dnf install -y "$package"
+  fi
+}
+
+yum_install_or_upgrade() {
+  local package="$1"
+  if rpm -q "$package" &>/dev/null; then
+    echo "Updating ${package}..."
+    $SUDO yum update -y "$package"
+  else
+    echo "Installing ${package}..."
+    $SUDO yum install -y "$package"
+  fi
+}
+
 # --- Prompt for confirmation ---
 confirm() {
   if [[ "$YES" == true ]]; then return 0; fi
@@ -111,7 +144,7 @@ if [[ "$ARCH" == "unsupported" ]]; then
 fi
 
 if command -v apt-get &>/dev/null; then
-  echo "APT detected. Will add the Wendy repository and install wendy-agent."
+  echo "APT detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
 
   echo "Adding Wendy APT repository..."
@@ -125,10 +158,10 @@ if command -v apt-get &>/dev/null; then
   echo "deb [signed-by=/usr/share/keyrings/wendy-archive-keyring.gpg] https://us-central1-apt.pkg.dev/projects/cloud-c7e56 wendy-apt main" \
     | $SUDO tee /etc/apt/sources.list.d/wendy.list >/dev/null
   $SUDO apt-get update
-  $SUDO apt-get install -y wendy-agent
+  apt_install_or_upgrade wendy-agent
 
 elif command -v dnf &>/dev/null; then
-  echo "DNF detected. Will add the Wendy repository and install wendy-agent."
+  echo "DNF detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
 
   echo "Adding Wendy YUM repository..."
@@ -139,11 +172,11 @@ baseurl=https://us-central1-yum.pkg.dev/projects/cloud-c7e56/wendy-yum
 enabled=1
 gpgcheck=0
 REPO
-  $SUDO dnf makecache
-  $SUDO dnf install -y wendy-agent
+  $SUDO dnf makecache --refresh
+  dnf_install_or_upgrade wendy-agent
 
 elif command -v yum &>/dev/null; then
-  echo "YUM detected. Will add the Wendy repository and install wendy-agent."
+  echo "YUM detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
 
   echo "Adding Wendy YUM repository..."
@@ -155,7 +188,7 @@ enabled=1
 gpgcheck=0
 REPO
   $SUDO yum makecache
-  $SUDO yum install -y wendy-agent
+  yum_install_or_upgrade wendy-agent
 
 elif command -v pacman &>/dev/null; then
   echo "Pacman detected. Will install wendy-agent from the AUR."
@@ -464,7 +497,7 @@ fi
 # --- Verify ---
 echo ""
 if command -v "$BINARY_NAME" &>/dev/null; then
-  echo "Installed successfully!"
+  echo "Installed or updated successfully!"
 else
   echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}."
 fi

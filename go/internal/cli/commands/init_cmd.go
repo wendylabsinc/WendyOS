@@ -1300,11 +1300,7 @@ func runAIAssistantChoice(choice, appID, target, language string, entitlements [
 
 	cliLogln("\nStarting %s with project context...", choice)
 
-	cmd := exec.Command(choice, prompt)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return launchAssistantWithPrompt(choice, prompt)
 }
 
 func buildAssistantPrompt(appID, target, language string, entitlements []appconfig.Entitlement) string {

@@ -2,9 +2,31 @@ package mcp
 
 import (
 	"context"
+	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
+
+// callToolReq builds a minimal CallToolRequest for tests.
+func callToolReq(name string, args map[string]any) mcpgo.CallToolRequest {
+	req := mcpgo.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = any(args)
+	return req
+}
+
+// toolResultText extracts the text from the first content item of a CallToolResult.
+func toolResultText(t *testing.T, result *mcpgo.CallToolResult) string {
+	t.Helper()
+	if len(result.Content) == 0 {
+		t.Fatal("result has no content")
+	}
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", result.Content[0])
+	}
+	return tc.Text
+}
 
 // callTool invokes a registered tool handler by name. Used in tests only.
 func (s *mcpServer) callTool(ctx context.Context, name string, args map[string]any) (*mcpgo.CallToolResult, error) {
@@ -12,6 +34,8 @@ func (s *mcpServer) callTool(ctx context.Context, name string, args map[string]a
 	req.Params.Name = name
 	req.Params.Arguments = any(args)
 	switch name {
+	case "wendy_status":
+		return s.handleWendyStatus(ctx, req)
 	case "device_list":
 		return s.handleDeviceList(ctx, req)
 	case "device_connect":
@@ -76,8 +100,10 @@ func (s *mcpServer) callTool(ctx context.Context, name string, args map[string]a
 		return s.handleCloudEnrollDevice(ctx, req)
 	case "cloud_tunnel":
 		return s.handleCloudTunnel(ctx, req)
+	case "run":
+		return s.handleRun(ctx, req)
 	case "cloud_run":
-		return s.handleCloudRun(ctx, req)
+		return s.handleRun(ctx, req)
 	default:
 		return mcpgo.NewToolResultError("unknown tool: " + name), nil
 	}

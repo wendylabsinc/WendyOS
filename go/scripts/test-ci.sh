@@ -21,6 +21,7 @@ Tests:
   python-hello          Basic Python deployment (no entitlements)
   python-network        Python with network entitlement (WiFi connectivity)
   python-gpu            Python with GPU entitlement (CUDA verification)
+  python-onnx-gpu       Python with GPU entitlement (ONNX Runtime CUDA inference)
   python-bluetooth      Python with bluetooth entitlement
   python-no-network     Verify network is blocked WITHOUT entitlement
   python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
@@ -158,7 +159,7 @@ echo ""
 # ── Device capability detection ──────────────────────────────────────
 
 DEVICE_HAS_GPU=false
-VERSION_JSON=$("$WENDY" device version --json --device "$HOSTNAME" 2>/dev/null || true)
+VERSION_JSON=$("$WENDY" device info --json --device "$HOSTNAME" 2>/dev/null || true)
 if [[ -n "$VERSION_JSON" ]]; then
     GPU_VAL=$(echo "$VERSION_JSON" | jq -r '.hasGpu // false' 2>/dev/null || true)
     if [[ "$GPU_VAL" == "true" ]]; then
@@ -186,6 +187,7 @@ ALL_TESTS=(
     python-hello
     python-network
     python-gpu
+    python-onnx-gpu
     python-bluetooth
     python-no-network
     python-no-bluetooth

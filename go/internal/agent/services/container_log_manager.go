@@ -10,13 +10,48 @@ import (
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
+// logSubscriber wraps a delivery channel with a mutex that guards the closed
+// state so that Publish and Unsubscribe cannot race on close vs send.
+type logSubscriber struct {
+	mu     sync.Mutex
+	ch     chan ContainerOutput
+	closed bool
+}
+
+// send attempts a non-blocking send to the subscriber.
+// It is a no-op if the subscriber is already closed; the mutex ensures this
+// check and the channel send cannot race with close.
+func (s *logSubscriber) send(output ContainerOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- output:
+	default:
+		// Drop if subscriber is slow.
+	}
+}
+
+// close marks the subscriber as closed and closes the underlying channel.
+// Safe to call once; subsequent calls are no-ops.
+func (s *logSubscriber) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.closed = true
+		close(s.ch)
+	}
+}
+
 // ContainerLogManager manages multi-subscriber fan-out for container output
 // and bridges container stdout/stderr to the TelemetryBroadcaster as OTEL log records.
 type ContainerLogManager struct {
 	logger      *zap.Logger
 	broadcaster *TelemetryBroadcaster
 	mu          sync.Mutex
-	subscribers map[string]map[string]chan ContainerOutput // appName -> subID -> channel
+	subscribers map[string]map[string]*logSubscriber // appName -> subID -> subscriber
 	nextID      uint64
 	resources   map[string]*otelpb.Resource // appName -> pre-built OTel resource (protected by mu)
 }
@@ -26,7 +61,7 @@ func NewContainerLogManager(logger *zap.Logger, broadcaster *TelemetryBroadcaste
 	return &ContainerLogManager{
 		logger:      logger,
 		broadcaster: broadcaster,
-		subscribers: make(map[string]map[string]chan ContainerOutput),
+		subscribers: make(map[string]map[string]*logSubscriber),
 		resources:   make(map[string]*otelpb.Resource),
 	}
 }
@@ -50,37 +85,44 @@ func (m *ContainerLogManager) Subscribe(appName string) (string, <-chan Containe
 	subID := fmt.Sprintf("log-sub-%d", m.nextID)
 
 	if m.subscribers[appName] == nil {
-		m.subscribers[appName] = make(map[string]chan ContainerOutput)
+		m.subscribers[appName] = make(map[string]*logSubscriber)
 	}
 
-	ch := make(chan ContainerOutput, 64)
-	m.subscribers[appName][subID] = ch
+	sub := &logSubscriber{ch: make(chan ContainerOutput, 64)}
+	m.subscribers[appName][subID] = sub
 
 	m.logger.Debug("Container log subscriber added",
 		zap.String("app_name", appName),
 		zap.String("sub_id", subID),
 	)
 
-	return subID, ch
+	return subID, sub.ch
 }
 
 // Unsubscribe removes a subscription and closes its channel.
 func (m *ContainerLogManager) Unsubscribe(appName string, subID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	appSubs, ok := m.subscribers[appName]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 
-	if ch, exists := appSubs[subID]; exists {
-		close(ch)
+	sub, exists := appSubs[subID]
+	if exists {
 		delete(appSubs, subID)
 	}
-
 	if len(appSubs) == 0 {
 		delete(m.subscribers, appName)
+	}
+
+	m.mu.Unlock()
+
+	// Close outside the manager lock so that an in-flight Publish sending to
+	// this subscriber's channel can acquire sub.mu without deadlocking.
+	if exists {
+		sub.close()
 	}
 
 	m.logger.Debug("Container log subscriber removed",
@@ -97,19 +139,15 @@ func (m *ContainerLogManager) Publish(appName string, output ContainerOutput) {
 	// Fan out to all subscribers.
 	m.mu.Lock()
 	appSubs := m.subscribers[appName]
-	// Copy the map values under lock to avoid holding it while sending.
-	channels := make([]chan ContainerOutput, 0, len(appSubs))
-	for _, ch := range appSubs {
-		channels = append(channels, ch)
+	// Copy subscriber pointers under lock to avoid holding it while sending.
+	subs := make([]*logSubscriber, 0, len(appSubs))
+	for _, sub := range appSubs {
+		subs = append(subs, sub)
 	}
 	m.mu.Unlock()
 
-	for _, ch := range channels {
-		select {
-		case ch <- output:
-		default:
-			// Drop if subscriber is slow.
-		}
+	for _, sub := range subs {
+		sub.send(output)
 	}
 }
 

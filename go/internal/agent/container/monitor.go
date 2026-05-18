@@ -123,6 +123,16 @@ func (m *ContainerMonitor) MarkExplicitStop(appName string) {
 	}
 }
 
+// ClearExplicitStop reverts a prior MarkExplicitStop, re-enabling automatic
+// restarts for the container. It is a no-op if appName is not registered.
+func (m *ContainerMonitor) ClearExplicitStop(appName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state, ok := m.states[appName]; ok {
+		state.ExplicitStop = false
+	}
+}
+
 // Start begins the monitoring loop in a goroutine.
 func (m *ContainerMonitor) Start(ctx context.Context) {
 	go m.Run(ctx)
@@ -212,6 +222,10 @@ func (m *ContainerMonitor) shouldRestart(state *containerState) bool {
 	case RestartUnlessStopped:
 		return !state.ExplicitStop
 	case RestartOnFailure:
+		// The monitor detects only whether a container has stopped; it has no
+		// exit-code signal from containerd. Until exit-code detection is added,
+		// ON_FAILURE behaves like UNLESS_STOPPED: it restarts on any exit, not
+		// only non-zero ones. MaxRetries is still enforced.
 		if state.ExplicitStop {
 			return false
 		}
