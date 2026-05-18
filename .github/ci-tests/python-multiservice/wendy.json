@@ -1,0 +1,13 @@
+{
+    "appId": "sh.wendy.ci.python-multiservice",
+    "version": "1.0.0",
+    "services": {
+        "db": {
+            "context": "db"
+        },
+        "api": {
+            "context": "api",
+            "dependsOn": ["db"]
+        }
+    }
+}

@@ -14,22 +14,23 @@ Run CI integration tests against a real WendyOS device. Each test deploys a
 minimal app that exercises a specific entitlement and verifies it works.
 
 Tests:
-  swift-hello           Basic Swift containerized deployment (no entitlements)
-  swift-network         Swift with network entitlement (WiFi connectivity)
-  swift-bluetooth       Swift with bluetooth entitlement
-  swift-resources       Swift app with bundled resources (verifies resource loading)
-  python-hello          Basic Python deployment (no entitlements)
-  python-network        Python with network entitlement (WiFi connectivity)
-  python-gpu            Python with GPU entitlement (CUDA verification)
-  python-onnx-gpu       Python with GPU entitlement (ONNX Runtime CUDA inference)
-  python-bluetooth      Python with bluetooth entitlement
-  python-no-network     Verify network is blocked WITHOUT entitlement
-  python-no-bluetooth   Verify bluetooth is blocked WITHOUT entitlement
-  python-no-ptrace      Verify ptrace is blocked by default seccomp profile (WDY-1099)
-  python-no-unshare     Verify unshare is blocked by default seccomp profile (WDY-1099)
-  compose-hello         docker-compose multi-service deployment with build: Dockerfiles
-  compose-images        docker-compose multi-service deployment using public images
-  otel-localhost-only   Verify OTEL receivers (4317/4318) are not reachable from the network
+  swift-hello               Basic Swift containerized deployment (no entitlements)
+  swift-network             Swift with network entitlement (WiFi connectivity)
+  swift-bluetooth           Swift with bluetooth entitlement
+  swift-resources           Swift app with bundled resources (verifies resource loading)
+  python-hello              Basic Python deployment (no entitlements)
+  python-network            Python with network entitlement (WiFi connectivity)
+  python-gpu                Python with GPU entitlement (CUDA verification)
+  python-onnx-gpu           Python with GPU entitlement (ONNX Runtime CUDA inference)
+  python-bluetooth          Python with bluetooth entitlement
+  python-no-network         Verify network is blocked WITHOUT entitlement
+  python-no-bluetooth       Verify bluetooth is blocked WITHOUT entitlement
+  python-no-ptrace          Verify ptrace is blocked by default seccomp profile (WDY-1099)
+  python-no-unshare         Verify unshare is blocked by default seccomp profile (WDY-1099)
+  python-multiservice       Multi-service wendy.json: parallel build + dep-order creation
+  compose-hello             docker-compose multi-service deployment with build: Dockerfiles
+  compose-images            docker-compose multi-service deployment using public images
+  otel-localhost-only       Verify OTEL receivers (4317/4318) are not reachable from the network
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -193,6 +194,7 @@ ALL_TESTS=(
     python-no-bluetooth
     python-no-ptrace
     python-no-unshare
+    python-multiservice
     compose-hello
     compose-images
     otel-localhost-only
@@ -243,87 +245,51 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
-    # Verify directory exists
-    if [[ ! -d "$test_dir" ]]; then
-        skip_test "$test_name" "no directory"
+    # ── Multi-service test ───────────────────────────────────────────────
+    if [[ "$test_name" == "python-multiservice" ]]; then
+        echo -e "${BOLD}── $test_name${RESET}"
+
+        # 1. Full multi-service deploy: both services build & run.
+        run_test "python-multiservice (all services)" \
+            "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --deploy
+
+        # 2. --service filtering: deploy only 'api' (and its dep 'db').
+        run_test "python-multiservice (--service api)" \
+            "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --deploy --service api
+
+        # 3. --service with unknown name must fail with a clear error.
+        unknown_service_fails() {
+            local out
+            out=$("$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --deploy --service ghost 2>&1)
+            local rc=$?
+            if [[ $rc -ne 0 ]] && echo "$out" | grep -qi "ghost"; then
+                return 0
+            fi
+            echo "Expected non-zero exit and 'ghost' in output; got rc=$rc output=$out"
+            return 1
+        }
+        run_test "python-multiservice (--service ghost → error)" unknown_service_fails
+
         continue
     fi
 
-    # ── Compose tests (docker-compose.{yml,yaml}, compose.{yml,yaml}, no wendy.json) ──
-    compose_file=""
-    for cand in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-        if [[ -f "$test_dir/$cand" ]]; then
-            compose_file="$test_dir/$cand"
-            break
-        fi
-    done
-    if [[ -n "$compose_file" ]]; then
-        # Derive project name from directory name (mirrors CLI logic).
-        project_name="$(basename "$test_dir")"
-
-        # Use docker compose itself to enumerate services so we don't depend
-        # on PyYAML (not in stdlib and not installed on most CI hosts).
-        service_names=$(docker compose -f "$compose_file" config --services 2>/dev/null | tr '\n' ' ')
-
-        # Pre-cleanup: remove leftover service containers.
-        for svc in $service_names; do
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-
-        # Deploy and run.
-        pushd "$test_dir" > /dev/null
-        run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-        popd > /dev/null
-
-        # Post-cleanup.
-        for svc in $service_names; do
-            "$WENDY" apps stop "${project_name}-${svc}" --device "$HOSTNAME" &>/dev/null || true
-            "$WENDY" apps remove "${project_name}-${svc}" --device "$HOSTNAME" --force &>/dev/null || true
-        done
-        docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
+    # ── compose tests ────────────────────────────────────────────────────
+    if [[ "$test_name" == compose-* ]]; then
+        run_test "$test_name" \
+            "$WENDY" compose up --device "$HOSTNAME" --prefix "$test_dir" --detach
         continue
     fi
 
-    # ── Standard single-container tests (wendy.json) ───────────────────
-    if [[ ! -f "$test_dir/wendy.json" ]]; then
-        skip_test "$test_name" "no wendy.json"
-        continue
-    fi
-
-    # Extract appId
-    app_id=$(jq -r '.appId' "$test_dir/wendy.json" 2>/dev/null)
-    if [[ -z "$app_id" || "$app_id" == "null" ]]; then
-        skip_test "$test_name" "no appId"
-        continue
-    fi
-
-    # Pre-cleanup: remove leftover container from previous runs
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-
-    # Deploy and run
-    pushd "$test_dir" > /dev/null
-    run_test "$test_name" "$WENDY" run --device "$HOSTNAME"
-    popd > /dev/null
-
-    # Post-cleanup: stop and remove
-    "$WENDY" apps stop "$app_id" --device "$HOSTNAME" &>/dev/null || true
-    "$WENDY" apps remove "$app_id" --device "$HOSTNAME" --force &>/dev/null || true
-    docker buildx rm "${WENDY_BUILDX_BUILDER:-wendy}" --force &>/dev/null || true
+    # ── Standard single-container tests ─────────────────────────────────
+    run_test "$test_name" \
+        "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir"
 done
-
-echo ""
 
 # ── Summary ──────────────────────────────────────────────────────────
 
-TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
-echo -e "${BOLD}========================================${RESET}"
-echo -e "${BOLD}Results:${RESET} $TOTAL tests"
-echo -e "  ${GREEN}Passed:  $PASS_COUNT${RESET}"
-echo -e "  ${RED}Failed:  $FAIL_COUNT${RESET}"
-if [[ $SKIP_COUNT -gt 0 ]]; then
-    echo -e "  ${YELLOW}Skipped: $SKIP_COUNT${RESET}"
-fi
-echo -e "${BOLD}========================================${RESET}"
+echo ""
+echo -e "${BOLD}==> Results: ${GREEN}${PASS_COUNT} passed${RESET}, ${RED}${FAIL_COUNT} failed${RESET}, ${YELLOW}${SKIP_COUNT} skipped${RESET}"
+echo ""
 
 if [[ $FAIL_COUNT -gt 0 ]]; then
     exit 1

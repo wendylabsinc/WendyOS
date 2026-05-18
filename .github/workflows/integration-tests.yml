@@ -161,12 +161,6 @@ jobs:
       - name: Run integration tests
         if: steps.prepare-docker.outputs.docker_ready == 'true'
         run: |
-          # All wendy CLI calls below run via SSH to localhost rather than
-          # directly. The self-hosted runner runs as a macOS LaunchAgent which
-          # does not hold the Local Network TCC permission that macOS requires
-          # for mDNS (.local) resolution and link-local connections. An SSH
-          # session to localhost runs under the logged-in user, which has that
-          # permission. See nightly-os-update.yml for the same pattern.
           WORKDIR="$(pwd)"
           SSH_ENV="export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}'"
           SSH="ssh -o StrictHostKeyChecking=no localhost"
@@ -186,7 +180,7 @@ jobs:
               exit 0
             fi
           else
-            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in swift-hello swift-network swift-bluetooth swift-resources python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-multiservice otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -210,8 +204,6 @@ jobs:
             echo "==> Found ${#DEVICES[@]} device(s): ${DEVICES[*]}"
           fi
 
-          # Run the test suite on each device in parallel. Each device gets its
-          # own buildx builder (wendy-0, wendy-1, …) so they don't interfere.
           declare -a PIDS
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
@@ -230,24 +222,20 @@ jobs:
           for i in "${!PIDS[@]}"; do
             device="${DEVICES[$i]}"
             if wait "${PIDS[$i]}"; then
-              echo "==> $device: PASSED"
+              echo "==> $device: PASS"
             else
-              echo "==> $device: FAILED"
+              echo "==> $device: FAIL"
               OVERALL_FAIL=1
             fi
           done
           exit $OVERALL_FAIL
-
-      - name: Cleanup
-        if: always()
-        run: make clean
 
   integration-test-linux:
     name: Integration (Linux)
     if: (inputs.jobs == 'all' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'linux')
     runs-on:
       group: wendy-developer
-      labels: [self-hosted, Linux]
+      labels: [self-hosted, Linux, ARM64]
     concurrency:
       group: integration-hw-linux
       cancel-in-progress: false
@@ -270,29 +258,48 @@ jobs:
       - name: Build CLI
         run: make build-cli
 
-      - name: Run integration tests
+      - name: Prepare Docker
+        id: prepare-docker
         run: |
-          TEST_ARGS="-w $(pwd)/bin/wendy"
+          DOCKER_READY=false
+          if docker info >/dev/null 2>&1; then
+            echo "Docker already available"
+            DOCKER_READY=true
+          else
+            echo "WARNING: Docker not available; integration tests will be skipped"
+          fi
+          if [[ "$DOCKER_READY" == "true" ]]; then
+            docker buildx ls 2>/dev/null | awk '/^wendy/{print $1}' | xargs -r docker buildx rm --force 2>/dev/null || true
+            docker system prune -f 2>/dev/null || true
+          fi
+          echo "docker_ready=$DOCKER_READY" >> "$GITHUB_OUTPUT"
+
+      - name: Run integration tests
+        if: steps.prepare-docker.outputs.docker_ready == 'true'
+        run: |
+          WORKDIR="$(pwd)"
+
+          TEST_ARGS="-w $WORKDIR/bin/wendy"
 
           if [[ -n "$INPUT_TESTS" ]]; then
             HAS_TESTS=false
             IFS=',' read -ra TEST_ARRAY <<< "$INPUT_TESTS"
             for t in "${TEST_ARRAY[@]}"; do
               t="$(echo "$t" | xargs)"
-              # Skip swift-* tests on Linux
+              # Skip swift-* tests on Linux.
               if [[ "$t" == swift-* ]]; then
-                echo "Skipping Swift test on Linux: $t"
+                echo "Skipping Swift test $t on Linux"
                 continue
               fi
               TEST_ARGS="$TEST_ARGS -t $t"
               HAS_TESTS=true
             done
             if [[ "$HAS_TESTS" == false ]]; then
-              echo "No applicable tests requested for Linux, skipping."
+              echo "No applicable tests requested, skipping."
               exit 0
             fi
           else
-            for t in python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare otel-localhost-only; do
+            for t in python-hello python-network python-gpu python-onnx-gpu python-bluetooth python-no-network python-no-bluetooth python-no-ptrace python-no-unshare python-multiservice otel-localhost-only; do
               TEST_ARGS="$TEST_ARGS -t $t"
             done
           fi
@@ -301,7 +308,10 @@ jobs:
             DEVICES=("$INPUT_HOSTNAME")
           else
             echo "==> Discovering LAN devices..."
-            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s || true)
+            DISCOVER_STDERR=$(mktemp)
+            DISCOVER_JSON=$(./bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR")
+            cat "$DISCOVER_STDERR" >&2 || true
+            rm -f "$DISCOVER_STDERR"
             DEVICES=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && DEVICES+=("$line")
@@ -317,11 +327,13 @@ jobs:
           OVERALL_FAIL=0
           for i in "${!DEVICES[@]}"; do
             device="${DEVICES[$i]}"
-            echo "==> Starting tests on $device"
+            BUILDER="wendy-$i"
+            echo "==> Starting tests on $device (builder: $BUILDER)"
             (
-              export WENDY_BUILDX_BUILDER="wendy-linux-$i"
-              trap 'docker buildx rm -f "$WENDY_BUILDX_BUILDER" >/dev/null 2>&1 || true' EXIT
-              scripts/test-ci.sh $TEST_ARGS -h "$device"
+              WENDY_BUILDX_BUILDER="$BUILDER" scripts/test-ci.sh $TEST_ARGS -h "$device"
+              rc=$?
+              docker buildx rm "$BUILDER" --force 2>/dev/null || true
+              exit $rc
             ) &
             PIDS[$i]=$!
           done
@@ -329,14 +341,10 @@ jobs:
           for i in "${!PIDS[@]}"; do
             device="${DEVICES[$i]}"
             if wait "${PIDS[$i]}"; then
-              echo "==> $device: PASSED"
+              echo "==> $device: PASS"
             else
-              echo "==> $device: FAILED"
+              echo "==> $device: FAIL"
               OVERALL_FAIL=1
             fi
           done
           exit $OVERALL_FAIL
-
-      - name: Cleanup
-        if: always()
-        run: make clean
