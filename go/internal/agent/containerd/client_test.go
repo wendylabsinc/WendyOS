@@ -86,6 +86,34 @@ func TestBuildContainerBaseEnvOmitsWendyHostnameWhenUnavailable(t *testing.T) {
 	}
 }
 
+func TestBuildContainerBaseEnvIncludesOTLPEndpointDefault(t *testing.T) {
+	t.Setenv("WENDY_OTEL_PORT", "")
+
+	env := buildContainerBaseEnv()
+
+	want := "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
+	for _, kv := range env {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("env missing %q; got %v", want, env)
+}
+
+func TestBuildContainerBaseEnvRespectsWendyOtelPort(t *testing.T) {
+	t.Setenv("WENDY_OTEL_PORT", "9999")
+
+	env := buildContainerBaseEnv()
+
+	want := "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:9999"
+	for _, kv := range env {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("env missing %q; got %v", want, env)
+}
+
 func TestExpandAgentHook(t *testing.T) {
 	t.Setenv("EXTRA_VALUE", "ok")
 

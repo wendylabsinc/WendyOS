@@ -771,7 +771,8 @@ var deviceHostnameWithSuffix = func() string {
 
 // buildContainerBaseEnv builds the wendy-injected env vars layered on top of
 // the image's own env. WENDY_HOSTNAME is the device's mDNS hostname
-// (omitted when unresolvable).
+// (omitted when unresolvable). OTEL_EXPORTER_OTLP_ENDPOINT points at the
+// agent's OTLP gRPC receiver so containers auto-configure their exporters.
 func buildContainerBaseEnv() []string {
 	env := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -780,6 +781,11 @@ func buildContainerBaseEnv() []string {
 	if h := deviceHostnameWithSuffix(); h != "" {
 		env = append(env, "WENDY_HOSTNAME="+h)
 	}
+	otelPort := os.Getenv("WENDY_OTEL_PORT")
+	if otelPort == "" {
+		otelPort = "4317"
+	}
+	env = append(env, "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:"+otelPort)
 	return env
 }
 
