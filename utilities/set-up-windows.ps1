@@ -476,7 +476,7 @@ function Install-GnuMake {
 
   Write-Info "Installing GNU Make $requiredVersion"
 
-  $url = "https://sourceforge.net/projects/ezwinports/files/make-$requiredVersion-without-guile-w32-bin.zip/download"
+  $url = "https://downloads.sourceforge.net/project/ezwinports/make-$requiredVersion-without-guile-w32-bin.zip"
   $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\GNUmake'
   $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnu-make-$([System.Guid]::NewGuid())")
   $zipPath = Join-Path $tempDir 'make.zip'
@@ -486,7 +486,13 @@ function Install-GnuMake {
   New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
   try {
-    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -MaximumRedirection 10 -Headers @{ 'User-Agent' = 'Mozilla/5.0' }
+
+    $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
+    if ($zipBytes.Length -lt 2 -or $zipBytes[0] -ne 0x50 -or $zipBytes[1] -ne 0x4B) {
+      Fail 'Downloaded GNU Make archive was not a zip file.'
+    }
+
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
     $makeExe = Get-ChildItem -Path $extractDir -Filter 'make.exe' -Recurse |
