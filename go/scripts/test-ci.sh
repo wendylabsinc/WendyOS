@@ -268,7 +268,7 @@ for test_name in "${TESTS[@]}"; do
             echo "Expected non-zero exit and 'ghost' in output; got rc=$rc output=$out"
             return 1
         }
-        run_test "python-multiservice (--service ghost → error)" unknown_service_fails
+        run_test "python-multiservice (--service ghost -> error)" unknown_service_fails
 
         continue
     fi

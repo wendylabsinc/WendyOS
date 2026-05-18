@@ -161,6 +161,12 @@ jobs:
       - name: Run integration tests
         if: steps.prepare-docker.outputs.docker_ready == 'true'
         run: |
+          # All wendy CLI calls below run via SSH to localhost rather than
+          # directly. The self-hosted runner runs as a macOS LaunchAgent which
+          # does not hold the Local Network TCC permission that macOS requires
+          # for mDNS (.local) resolution and link-local connections. An SSH
+          # session to localhost runs under the logged-in user, which has that
+          # permission. See nightly-os-update.yml for the same pattern.
           WORKDIR="$(pwd)"
           SSH_ENV="export PATH='$PATH' DOCKER_HOST='${DOCKER_HOST:-}'"
           SSH="ssh -o StrictHostKeyChecking=no localhost"
@@ -235,7 +241,7 @@ jobs:
     if: (inputs.jobs == 'all' || inputs.jobs == 'integration') && (inputs.platform == 'all' || inputs.platform == 'linux')
     runs-on:
       group: wendy-developer
-      labels: [self-hosted, Linux, ARM64]
+      labels: [self-hosted, Linux]
     concurrency:
       group: integration-hw-linux
       cancel-in-progress: false
