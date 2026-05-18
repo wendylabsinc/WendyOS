@@ -307,7 +307,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		return err
 	}
 
-	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath, originalPerm)
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath)
 	if err != nil {
 		return err
 	}
@@ -334,8 +334,8 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 			data := chunk.GetData()
 			written += int64(len(data))
 			if written > maxAgentBinarySize {
-				return status.Errorf(codes.InvalidArgument,
-					"update stream exceeds maximum agent binary size of %d bytes", maxAgentBinarySize)
+				return status.Errorf(codes.ResourceExhausted,
+					"update stream exceeds maximum agent binary size (%d MiB)", maxAgentBinarySize>>20)
 			}
 			if _, err := tmpFile.Write(data); err != nil {
 				return status.Errorf(codes.Internal, "failed to write update chunk: %v", err)
@@ -353,7 +353,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 						"SHA256 mismatch: expected %s, got %s", expectedHash, computedHash)
 				}
 
-				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, s.logger); err != nil {
+				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
 					if errors.Is(err, ErrDirFsync) {
 						// Binary is installed; only directory-entry durability is at risk.
 						s.logger.Warn("Update dir fsync failed; binary installed but rename may not survive power loss", zap.Error(err))

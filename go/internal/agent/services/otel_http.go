@@ -17,9 +17,13 @@ import (
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
 )
 
+// maxOTELHTTPBodySize is the limit on the decompressed (or uncompressed) request
+// body. For gzip requests, the decompressed limit alone is the effective guard
+// against compression bombs: io.LimitReader stops the decompressor after 10 MB
+// of output regardless of how much compressed data is present.
 const (
 	maxOTELHTTPBodySize           = 10 * 1024 * 1024 // 10 MB decompressed
-	maxOTELHTTPCompressedBodySize = 1024 * 1024      // 1 MB compressed — legitimate OTLP protobuf compresses ~10:1
+	maxOTELHTTPCompressedBodySize = 1024 * 1024      // 1 MB compressed
 )
 
 var errBodyTooLarge = fmt.Errorf("request body exceeds %d bytes", maxOTELHTTPBodySize)

@@ -51,10 +51,12 @@ func cleanStaleTempFiles(dir string) {
 	}
 }
 
-// createUpdateTempFile creates a uniquely-named temp file in the same directory
-// as execPath and sets it to the given permissions. Returns the open file (ready
-// for writing), its path, and a cleanup func that closes and removes it.
-func createUpdateTempFile(execPath string, perm os.FileMode) (*os.File, string, func(), error) {
+// createUpdateTempFile creates a uniquely-named temp file (mode 0600) in the
+// same directory as execPath. Returns the open file (ready for writing), its
+// path, and a cleanup func that closes and removes it. The final binary
+// permissions are applied by commitBinaryUpdate after hash verification so that
+// a partial or unverified binary is never executable.
+func createUpdateTempFile(execPath string) (*os.File, string, func(), error) {
 	dir := filepath.Dir(execPath)
 
 	cleanStaleTempFiles(dir)
@@ -67,31 +69,33 @@ func createUpdateTempFile(execPath string, perm os.FileMode) (*os.File, string, 
 		return nil, "", nil, status.Error(codes.FailedPrecondition, "agent binary directory is world-writable; refusing update")
 	}
 
+	// os.CreateTemp creates with mode 0600 — not executable until commitBinaryUpdate.
 	tmpFile, err := os.CreateTemp(dir, ".agent-update-*")
 	if err != nil {
 		return nil, "", nil, status.Errorf(codes.Internal, "failed to create update temp file: %v", err)
 	}
 	tmpPath := tmpFile.Name()
-	cleanup := func() { tmpFile.Close(); os.Remove(tmpPath) }
-
-	if err := tmpFile.Chmod(perm); err != nil {
-		cleanup()
-		return nil, "", nil, status.Errorf(codes.Internal, "failed to set update file permissions: %v", err)
-	}
+	cleanup := func() { _ = tmpFile.Close(); _ = os.Remove(tmpPath) }
 	return tmpFile, tmpPath, cleanup, nil
 }
 
-// commitBinaryUpdate syncs and closes tmpFile, then atomically installs it over
-// execPath via a single rename(2). On same-filesystem paths, rename is atomic:
-// execPath is never absent, and a crash before the rename leaves the old binary
-// intact. On success it returns the installed binary's size. The caller is
-// responsible for removing tmpPath if this returns an error.
-func commitBinaryUpdate(tmpFile *os.File, tmpPath, execPath, sha256Hash string, logger *zap.Logger) (int64, error) {
+// commitBinaryUpdate syncs and closes tmpFile, sets its permissions to perm,
+// then atomically installs it over execPath via a single rename(2). Hash is
+// only passed for logging. Returns the installed size, or ErrDirFsync if the
+// post-rename directory fsync fails (binary IS installed in that case).
+func commitBinaryUpdate(tmpFile *os.File, tmpPath, execPath, sha256Hash string, perm os.FileMode, logger *zap.Logger) (int64, error) {
 	if err := tmpFile.Sync(); err != nil {
 		return 0, status.Errorf(codes.Internal, "failed to sync update file: %v", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		return 0, status.Errorf(codes.Internal, "failed to close update file: %v", err)
+	}
+
+	// Apply final permissions only after the hash has been verified.
+	// The temp file is kept at 0600 during streaming so no partial binary
+	// is ever executable.
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		return 0, status.Errorf(codes.Internal, "failed to set update file permissions: %v", err)
 	}
 
 	// Single atomic rename over the live binary — no intermediate backup so
