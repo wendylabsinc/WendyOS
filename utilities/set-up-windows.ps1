@@ -469,11 +469,24 @@ function Configure-DeveloperMode {
 function Configure-NetworkDiscovery {
   Write-Info 'Enabling network discovery services and mDNS-friendly firewall rules'
 
-  foreach ($serviceName in @('Dnscache', 'FDResPub', 'fdPHost')) {
+  foreach ($serviceName in @('FDResPub', 'fdPHost')) {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {
-      Set-Service -Name $serviceName -StartupType Automatic
-      Start-Service -Name $serviceName -ErrorAction SilentlyContinue
+      try {
+        Set-Service -Name $serviceName -StartupType Automatic
+        Start-Service -Name $serviceName -ErrorAction SilentlyContinue
+      } catch {
+        Write-Warn "Could not configure service ${serviceName}: $($_.Exception.Message)"
+      }
+    }
+  }
+
+  $dnsClient = Get-Service -Name 'Dnscache' -ErrorAction SilentlyContinue
+  if ($dnsClient -and $dnsClient.Status -ne 'Running') {
+    try {
+      Start-Service -Name 'Dnscache' -ErrorAction SilentlyContinue
+    } catch {
+      Write-Warn "Could not start DNS Client service: $($_.Exception.Message)"
     }
   }
 
