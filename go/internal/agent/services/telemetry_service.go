@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	otelpb "github.com/wendylabsinc/wendy/proto/gen/otelpb"
@@ -177,6 +178,10 @@ func (b *TelemetryBroadcaster) PublishMetrics(req *otelpb.ExportMetricsServiceRe
 // metrics. The cached entry is mutated in place and returned; it is a distinct
 // object from any live-broadcast request, so subscribers are unaffected.
 func mergeServiceMetrics(cached *otelpb.ExportMetricsServiceRequest, rm *otelpb.ResourceMetrics) *otelpb.ExportMetricsServiceRequest {
+	// Clone rm so the cache never holds references to live-broadcast request objects.
+	// Without this, a subscriber that has queued a broadcast req could observe mutations
+	// to its ResourceMetrics objects the next time the same service publishes a batch.
+	rm = proto.Clone(rm).(*otelpb.ResourceMetrics)
 	if cached == nil || len(cached.GetResourceMetrics()) == 0 {
 		return &otelpb.ExportMetricsServiceRequest{
 			ResourceMetrics: []*otelpb.ResourceMetrics{rm},
