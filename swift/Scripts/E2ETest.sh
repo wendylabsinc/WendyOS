@@ -388,7 +388,7 @@ build_cli() {
   echo "    Output: $wendy_path"
 
   local command
-  command=$(cat <<EOF
+  IFS= read -r -d '' command <<EOF || true
 set -euo pipefail
 
 expand_target_path() {
@@ -432,7 +432,6 @@ fi
 
 "\$wendy_path" --version
 EOF
-)
 
   local version
   version="$(run_cli_command "$command")"
