@@ -94,7 +94,7 @@ func newBuildCmd() *cobra.Command {
 
 				cliLogln("Building with %s provider...", target.Provider.DisplayName())
 				var (
-					app    *providers.BuiltApp
+					app      *providers.BuiltApp
 					buildErr error
 				)
 				if db, ok := target.Provider.(providers.DockerfileBuilder); ok && opts.dockerfile != "" {
