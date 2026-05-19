@@ -38,6 +38,10 @@ func newBuildCmd() *cobra.Command {
 		Short: "Build the application in the current directory",
 		Long:  "Detects the project type and builds a Docker image for the target device architecture.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
+				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
+			}
+
 			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("getting working directory: %w", err)
@@ -94,7 +98,7 @@ func newBuildCmd() *cobra.Command {
 
 				cliLogln("Building with %s provider...", target.Provider.DisplayName())
 				var (
-					app    *providers.BuiltApp
+					app      *providers.BuiltApp
 					buildErr error
 				)
 				if db, ok := target.Provider.(providers.DockerfileBuilder); ok && opts.dockerfile != "" {
