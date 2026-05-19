@@ -10,7 +10,7 @@ function ConvertTo-SafeRunID([string]$Value) {
 
 $RunID = $env:WENDY_E2E_RUN_ID
 $DefaultRunID = $null
-$OutputDir = if ($env:WENDY_E2E_OUTPUT_DIR) { $env:WENDY_E2E_OUTPUT_DIR } else { 'Build/e2e' }
+$OutputDir = if ($env:WENDY_E2E_OUTPUT_DIR) { $env:WENDY_E2E_OUTPUT_DIR } else { Join-Path $env:TEMP 'wendy\e2e' }
 
 $i = 0
 while ($i -lt $args.Count) {
