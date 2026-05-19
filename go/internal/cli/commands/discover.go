@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -206,6 +205,13 @@ type discoverDeviceInfo struct {
 	Version string `json:"version,omitempty"`
 }
 
+type discoverTableItem struct {
+	picker        tui.PickerItem
+	info          discoverDeviceInfo
+	lanName       string
+	defaultDevice string
+}
+
 // flashClearMsg is sent after a delay to clear the flash message.
 type flashClearMsg struct{}
 
@@ -335,21 +341,19 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
-			rows := discoverTableRows(m.collection)
+			items := discoverTableItems(m.collection)
 			cursor := m.table.Cursor()
-			if len(rows) > 0 && cursor >= 0 && cursor < len(rows) {
-				row := rows[cursor]
-				info := deviceInfoFromRow(row)
-				m.flashMessage, m.flashIsError = copyDeviceJSON(info)
+			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
+				m.flashMessage, m.flashIsError = copyDeviceJSON(items[cursor].info)
 				return m, clearFlashAfter(5 * time.Second)
 			}
 			return m, nil
 		case "a":
-			rows := discoverTableRows(m.collection)
-			if len(rows) > 0 {
+			items := discoverTableItems(m.collection)
+			if len(items) > 0 {
 				var all []discoverDeviceInfo
-				for _, row := range rows {
-					all = append(all, deviceInfoFromRow(row))
+				for _, item := range items {
+					all = append(all, item.info)
 				}
 				m.flashMessage, m.flashIsError = copyDeviceJSON(all)
 				if !m.flashIsError {
@@ -362,42 +366,32 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.updatingDeviceName != "" {
 				return m, nil // already updating
 			}
-			rows := discoverTableRows(m.collection)
+			items := discoverTableItems(m.collection)
 			cursor := m.table.Cursor()
-			if len(rows) == 0 || cursor < 0 || cursor >= len(rows) {
+			if len(items) == 0 || cursor < 0 || cursor >= len(items) {
 				return m, nil
 			}
-			row := rows[cursor]
-			addr := lanDeviceAddr(m.collection, row[rowNameIndex])
+			item := items[cursor]
+			addr := lanDeviceAddr(m.collection, item.lanName)
 			if addr == "" {
 				m.flashMessage = "Update is only supported for LAN devices."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
 			}
-			rowVer := strings.TrimPrefix(row[rowVersionIndex], "* ")
-			if rowVer == "" || version.CompareVersions(version.Version, rowVer) <= 0 {
+			if item.info.Version == "" || version.CompareVersions(version.Version, item.info.Version) <= 0 {
 				m.flashMessage = "Device is already up to date."
 				m.flashIsError = false
 				return m, clearFlashAfter(3 * time.Second)
 			}
-			m.updatingDeviceName = row[rowNameIndex]
-			m.flashMessage = "Updating " + row[rowNameIndex] + "..."
+			m.updatingDeviceName = item.info.Name
+			m.flashMessage = "Updating " + item.info.Name + "..."
 			m.flashIsError = false
-			return m, m.startDeviceUpdateCmd(addr, row[rowNameIndex])
+			return m, m.startDeviceUpdateCmd(addr, item.info.Name)
 		case "d":
-			rows := discoverTableRows(m.collection)
+			items := discoverTableItems(m.collection)
 			cursor := m.table.Cursor()
-			if len(rows) > 0 && cursor >= 0 && cursor < len(rows) {
-				// Use the display name as the device identifier — for LAN devices
-				// this is the mDNS hostname which resolveDeviceAddress can resolve.
-				deviceID := rows[cursor][rowNameIndex]
-				// For LAN devices, prefer the address column (hostname.local).
-				addr := rows[cursor][rowAddressIndex]
-				if addr != "" && !strings.Contains(addr, ":") {
-					deviceID = addr
-				} else if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
-					deviceID = host
-				}
+			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
+				deviceID := items[cursor].defaultDevice
 				if cfg, err := config.Load(); err == nil {
 					cfg.DefaultDevice = deviceID
 					_ = config.Save(cfg)
@@ -580,23 +574,16 @@ func (m discoverModel) View() string {
 }
 
 func (m *discoverModel) refreshTable() {
-	rows := discoverTableRows(m.collection)
-	m.table.SetColumns(discoverTableColumns(rows))
+	items := discoverTableItems(m.collection)
+	pickerItems := discoverPickerItems(items)
+	cols, rows := tui.PickerTableData(pickerItems, discoverDefaultKey(), true)
+	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {
 		m.table.SetCursor(0)
 	}
-	m.table.SetWidth(discoverTableWidth(m.table.Columns()))
-	m.table.SetHeight(discoverTableHeight(len(rows), m.windowHeight, true))
-}
-
-// markOutdated prefixes the version string with "* " when the agent is behind
-// the CLI, serving as a visible indicator in the discover table.
-func markOutdated(agentVer string) string {
-	if agentVer != "" && version.CompareVersions(version.Version, agentVer) > 0 {
-		return "* " + agentVer
-	}
-	return agentVer
+	m.table.SetWidth(tui.PickerTableWidth(m.table.Columns()))
+	m.table.SetHeight(tui.PickerTableHeight(len(rows), m.windowHeight))
 }
 
 // lanDeviceAddr returns the gRPC address for the first LAN device whose
@@ -678,38 +665,31 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 // --- shared table rendering ---
 
 func renderDeviceTable(collection *models.DevicesCollection) string {
-	rows := discoverTableRows(collection)
+	items := discoverTableItems(collection)
+	pickerItems := discoverPickerItems(items)
+	cols, rows := tui.PickerTableData(pickerItems, discoverDefaultKey(), true)
 	if len(rows) == 0 {
 		return ""
 	}
 
 	t := newDiscoverTable(false)
-	t.SetColumns(discoverTableColumns(rows))
+	t.SetColumns(cols)
 	t.SetRows(rows)
-	t.SetWidth(discoverTableWidth(t.Columns()))
-	t.SetHeight(discoverTableHeight(len(rows), 0, false))
+	t.SetWidth(tui.PickerTableWidth(t.Columns()))
+	t.SetHeight(max(len(rows)+1, 1))
 
 	return t.View() + "\n"
 }
 
-var (
-	discoverTableHeaders   = []string{"", "Name", "Device Type", "USB", "Address", "Version"}
-	discoverTableMinWidths = []int{3, 12, 10, 5, 14, 10}
-	discoverTableMaxWidths = []int{3, 33, 20, 24, 28, 16}
-)
-
-const (
-	rowDefaultIndex = iota
-	rowNameIndex
-	rowDeviceTypeIndex
-	rowUSBIndex
-	rowAddressIndex
-	rowVersionIndex
-)
-
 func newDiscoverTable(interactive bool) bubbleTable.Model {
-	return tui.NewBubbleTable(interactive, discoverTableColumns(nil))
+	return tui.NewBubbleTable(interactive, nil)
 }
+
+var (
+	discoverTableHeaders   = []string{"", "Name", "Type", "Address", "Version"}
+	discoverTableMinWidths = []int{3, 12, 10, 14, 10}
+	discoverTableMaxWidths = []int{3, 33, 20, 28, 16}
+)
 
 var deviceTypeNames = map[string]string{
 	"raspberry-pi-3":   "Raspberry Pi 3",
@@ -725,6 +705,54 @@ func humanReadableDeviceType(dt string) string {
 		return name
 	}
 	return dt
+}
+
+// markOutdated prefixes the version string with "* " when the agent is behind
+// the CLI, serving as a visible indicator in discover-style tables.
+func markOutdated(agentVer string) string {
+	if agentVer != "" && version.CompareVersions(version.Version, agentVer) > 0 {
+		return "* " + agentVer
+	}
+	return agentVer
+}
+
+func discoverTableColumns(rows []bubbleTable.Row) []bubbleTable.Column {
+	cols := make([]bubbleTable.Column, len(discoverTableHeaders))
+	for i, title := range discoverTableHeaders {
+		width := lipgloss.Width(title)
+		for _, row := range rows {
+			if i >= len(row) {
+				continue
+			}
+			width = max(width, lipgloss.Width(row[i]))
+		}
+		width += 2
+		width = max(width, discoverTableMinWidths[i])
+		width = min(width, discoverTableMaxWidths[i])
+		cols[i] = bubbleTable.Column{Title: title, Width: width}
+	}
+	return cols
+}
+
+func discoverTableWidth(cols []bubbleTable.Column) int {
+	total := 0
+	for _, col := range cols {
+		total += col.Width + 2
+	}
+	return total
+}
+
+func discoverTableHeight(rowCount, windowHeight int, interactive bool) int {
+	height := rowCount + 1
+	if !interactive {
+		return max(height, 1)
+	}
+
+	height = max(height, 4)
+	if windowHeight > 0 {
+		return min(height, max(windowHeight-4, 4))
+	}
+	return min(height, 12)
 }
 
 func sortLANDevicesForDiscover(devices []models.LANDevice) {
@@ -788,45 +816,94 @@ func ethernetInterfaceUSBSummary(iface models.EthernetInterface) string {
 	return label
 }
 
-func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
-	var rows []bubbleTable.Row
+func discoverDefaultKey() string {
+	if cfg, err := config.Load(); err == nil {
+		return strings.ToLower(cfg.DefaultDevice)
+	}
+	return ""
+}
+
+func discoverTableItems(collection *models.DevicesCollection) []discoverTableItem {
+	var items []discoverTableItem
+	if collection == nil {
+		return items
+	}
 	annotateLANUSBFromEthernet(collection)
 
-	// Load default device to show ★ indicator.
-	var defaultDevice string
-	if cfg, err := config.Load(); err == nil {
-		defaultDevice = strings.ToLower(cfg.DefaultDevice)
-	}
-
-	defaultMark := func(name string) string {
-		if defaultDevice != "" && strings.ToLower(name) == defaultDevice {
-			return "★"
-		}
-		return ""
-	}
-
 	for _, d := range collection.USBDevices {
-		deviceType := ""
+		deviceType := "USB"
 		if d.IsESP32 {
 			deviceType = "ESP32"
 		}
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, deviceType, d.USBVersion, d.Hostname, markOutdated(d.AgentVersion)})
+		items = append(items, discoverTableItem{
+			picker: tui.PickerItem{
+				Name:     discoverDisplayName(d.DisplayName, d.AgentVersion),
+				Type:     deviceType,
+				USB:      d.USBVersion,
+				Address:  d.Hostname,
+				DedupKey: d.DisplayName,
+				SortKey:  usbFirstSortKey(d.DisplayName, d.USBVersion),
+			},
+			info: discoverDeviceInfo{
+				Name:    d.DisplayName,
+				Type:    deviceType,
+				USB:     d.USBVersion,
+				Address: d.Hostname,
+				Version: d.AgentVersion,
+			},
+			defaultDevice: firstNonEmpty(d.Hostname, d.DisplayName),
+		})
 	}
 	for _, d := range collection.MergedDevices() {
-		deviceType := ""
+		deviceType := d.ConnectionTypes()
 		usb := ""
-		if d.LAN != nil && d.LAN.DeviceType != "" {
-			deviceType = humanReadableDeviceType(d.LAN.DeviceType)
-		} else if d.Bluetooth != nil && !d.Bluetooth.IsWendyAgent() {
-			deviceType = "ESP32"
-		}
 		if d.LAN != nil {
 			usb = d.LAN.USB
 		}
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, deviceType, usb, d.Address(), markOutdated(d.AgentVersion)})
+		address := d.Address()
+		defaultDevice := d.DisplayName
+		lanName := ""
+		if d.LAN != nil {
+			lanName = d.LAN.DisplayName
+			address = preferredLANAddress(*d.LAN)
+			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
+		}
+		items = append(items, discoverTableItem{
+			picker: tui.PickerItem{
+				Name:     discoverDisplayName(d.DisplayName, d.AgentVersion),
+				Type:     deviceType,
+				USB:      usb,
+				Address:  address,
+				DedupKey: d.DisplayName,
+				SortKey:  usbFirstSortKey(d.DisplayName, usb),
+			},
+			info: discoverDeviceInfo{
+				Name:    d.DisplayName,
+				Type:    deviceType,
+				USB:     usb,
+				Address: address,
+				Version: d.AgentVersion,
+			},
+			lanName:       lanName,
+			defaultDevice: defaultDevice,
+		})
 	}
 	for _, d := range collection.EthernetInterfaces {
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "", "", d.IPAddress, markOutdated(d.AgentVersion)})
+		items = append(items, discoverTableItem{
+			picker: tui.PickerItem{
+				Name:     discoverDisplayName(d.DisplayName, d.AgentVersion),
+				Type:     "Ethernet",
+				Address:  d.IPAddress,
+				DedupKey: d.DisplayName,
+			},
+			info: discoverDeviceInfo{
+				Name:    d.DisplayName,
+				Type:    "Ethernet",
+				Address: d.IPAddress,
+				Version: d.AgentVersion,
+			},
+			defaultDevice: firstNonEmpty(d.IPAddress, d.DisplayName),
+		})
 	}
 	for _, d := range collection.ExternalDevices {
 		// Wendy Lite devices are merged with BLE Lite in MergedDevices().
@@ -834,72 +911,77 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 			continue
 		}
 		addr := fmt.Sprintf("%s: %s", d.ProviderKey, d.ID)
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "", "", addr, markOutdated(d.AgentVersion)})
+		deviceType := externalProviderDisplayName(d.ProviderKey)
+		items = append(items, discoverTableItem{
+			picker: tui.PickerItem{
+				Name:     discoverDisplayName(d.DisplayName, d.AgentVersion),
+				Type:     deviceType,
+				Address:  addr,
+				DedupKey: d.DisplayName,
+			},
+			info: discoverDeviceInfo{
+				Name:    d.DisplayName,
+				Type:    deviceType,
+				Address: addr,
+				Version: d.AgentVersion,
+			},
+			defaultDevice: firstNonEmpty(d.ID, d.DisplayName),
+		})
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		iHasUSB := rows[i][rowUSBIndex] != ""
-		jHasUSB := rows[j][rowUSBIndex] != ""
-		if iHasUSB != jHasUSB {
-			return iHasUSB
-		}
-		if rows[i][rowDeviceTypeIndex] != rows[j][rowDeviceTypeIndex] {
-			return rows[i][rowDeviceTypeIndex] < rows[j][rowDeviceTypeIndex]
-		}
-		return strings.ToLower(rows[i][rowNameIndex]) < strings.ToLower(rows[j][rowNameIndex])
+	sort.SliceStable(items, func(i, j int) bool {
+		return discoverSortKey(items[i].picker) < discoverSortKey(items[j].picker)
 	})
 
-	return rows
+	return items
 }
 
-func discoverTableColumns(rows []bubbleTable.Row) []bubbleTable.Column {
-	cols := make([]bubbleTable.Column, len(discoverTableHeaders))
-	for i, title := range discoverTableHeaders {
-		width := lipgloss.Width(title)
-		for _, row := range rows {
-			if i >= len(row) {
-				continue
-			}
-			width = max(width, lipgloss.Width(row[i]))
+func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
+	pickerItems := make([]tui.PickerItem, 0, len(items))
+	for _, item := range items {
+		pickerItems = append(pickerItems, item.picker)
+	}
+	return pickerItems
+}
+
+func discoverDisplayName(name, agentVer string) string {
+	if agentVer == "" {
+		return name
+	}
+	displayVersion := agentVer
+	if version.CompareVersions(version.Version, agentVer) > 0 {
+		displayVersion += " ⚠"
+	}
+	return name + " v" + displayVersion
+}
+
+func discoverSortKey(item tui.PickerItem) string {
+	if item.SortKey != "" {
+		return item.SortKey
+	}
+	key := item.DedupKey
+	if key == "" {
+		key = item.Name
+	}
+	return strings.ToLower(key)
+}
+
+func externalProviderDisplayName(key string) string {
+	for _, provider := range providers.AllProviders() {
+		if provider.Key() == key {
+			return provider.DisplayName()
 		}
-		width += 2
-		width = max(width, discoverTableMinWidths[i])
-		width = min(width, discoverTableMaxWidths[i])
-		cols[i] = bubbleTable.Column{Title: title, Width: width}
 	}
-	return cols
+	return key
 }
 
-func discoverTableWidth(cols []bubbleTable.Column) int {
-	total := 0
-	for _, col := range cols {
-		total += col.Width + 2
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
 	}
-	return total
-}
-
-func discoverTableHeight(rowCount, windowHeight int, interactive bool) int {
-	height := rowCount + 1
-	if !interactive {
-		return max(height, 1)
-	}
-
-	height = max(height, 4)
-	if windowHeight > 0 {
-		return min(height, max(windowHeight-4, 4))
-	}
-	return min(height, 12)
-}
-
-// deviceInfoFromRow converts a table row to a discoverDeviceInfo.
-func deviceInfoFromRow(row bubbleTable.Row) discoverDeviceInfo {
-	return discoverDeviceInfo{
-		Name:    row[rowNameIndex],
-		Type:    row[rowDeviceTypeIndex],
-		USB:     row[rowUSBIndex],
-		Address: row[rowAddressIndex],
-		Version: strings.TrimPrefix(row[rowVersionIndex], "* "),
-	}
+	return ""
 }
 
 // copyDeviceJSON marshals v as indented JSON, copies it to the clipboard,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wendylabsinc/wendy/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/internal/shared/env"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
@@ -179,52 +180,14 @@ func TestRenderDeviceTable(t *testing.T) {
 	}
 
 	output := renderDeviceTable(collection)
-	for _, want := range []string{"Name", "Device Type", "Address", "Version", "wendy-alpha", "192.168.1.10", "1.2.3"} {
+	for _, want := range []string{"Name", "Type", "Address", "wendy-alpha v1.2.3", "LAN", "192.168.1.10:8443"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, output)
 		}
 	}
 }
 
-func TestHumanReadableDeviceType(t *testing.T) {
-	cases := []struct {
-		input string
-		want  string
-	}{
-		{"raspberry-pi-4", "Raspberry Pi 4"},
-		{"raspberry-pi-5", "Raspberry Pi 5"},
-		{"raspberry-pi-3", "Raspberry Pi 3"},
-		{"jetson-agx-orin", "Jetson AGX Orin"},
-		{"jetson-orin-nano", "Jetson Orin Nano"},
-		{"x86_64", "x86-64"},
-		{"unknown-board", "unknown-board"},
-		{"", ""},
-	}
-	for _, tc := range cases {
-		if got := humanReadableDeviceType(tc.input); got != tc.want {
-			t.Errorf("humanReadableDeviceType(%q) = %q; want %q", tc.input, got, tc.want)
-		}
-	}
-}
-
-func TestRenderDeviceTable_DeviceType(t *testing.T) {
-	collection := &models.DevicesCollection{
-		LANDevices: []models.LANDevice{{
-			DisplayName:  "wendy-pi",
-			IPAddress:    "192.168.1.20",
-			Port:         8443,
-			AgentVersion: "1.0.0",
-			DeviceType:   "raspberry-pi-4",
-		}},
-	}
-
-	output := renderDeviceTable(collection)
-	if !strings.Contains(output, "Raspberry Pi 4") {
-		t.Fatalf("expected output to contain %q, got %q", "Raspberry Pi 4", output)
-	}
-}
-
-func TestDiscoverTableRowsPrioritizesUSBDevices(t *testing.T) {
+func TestDiscoverTableItemsPrioritizesUSBDevices(t *testing.T) {
 	collection := &models.DevicesCollection{
 		LANDevices: []models.LANDevice{
 			{
@@ -239,22 +202,27 @@ func TestDiscoverTableRowsPrioritizesUSBDevices(t *testing.T) {
 		},
 	}
 
-	rows := discoverTableRows(collection)
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want 2", len(rows))
+	items := discoverTableItems(collection)
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
 	}
-	if rows[0][rowNameIndex] != "wendy-usb" {
-		t.Fatalf("first row name = %q, want USB device first", rows[0][rowNameIndex])
+	if items[0].info.Name != "wendy-usb" {
+		t.Fatalf("first item name = %q, want USB device first", items[0].info.Name)
 	}
-	if rows[0][rowUSBIndex] != "enp0s20f0u9 480 Mbps" {
-		t.Fatalf("USB column = %q, want interface summary", rows[0][rowUSBIndex])
+	if items[0].picker.USB != "enp0s20f0u9 480 Mbps" {
+		t.Fatalf("USB detail = %q, want interface summary", items[0].picker.USB)
 	}
-	if rows[1][rowUSBIndex] != "" {
-		t.Fatalf("non-USB row USB column = %q, want empty", rows[1][rowUSBIndex])
+	if items[1].picker.USB != "" {
+		t.Fatalf("non-USB item USB detail = %q, want empty", items[1].picker.USB)
+	}
+
+	_, rows := tui.PickerTableData(discoverPickerItems(items), "", true)
+	if rows[0][3] != "Yes" {
+		t.Fatalf("USB display cell = %q, want Yes", rows[0][3])
 	}
 }
 
-func TestDiscoverTableRowsAnnotatesLANUSBFromEthernetInterface(t *testing.T) {
+func TestDiscoverTableItemsAnnotatesLANUSBFromEthernetInterface(t *testing.T) {
 	collection := &models.DevicesCollection{
 		LANDevices: []models.LANDevice{{
 			DisplayName:      "wendy-usb",
@@ -268,16 +236,21 @@ func TestDiscoverTableRowsAnnotatesLANUSBFromEthernetInterface(t *testing.T) {
 		}},
 	}
 
-	rows := discoverTableRows(collection)
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want LAN and Ethernet rows", len(rows))
+	items := discoverTableItems(collection)
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want LAN and Ethernet rows", len(items))
 	}
-	if rows[0][rowNameIndex] != "wendy-usb" {
-		t.Fatalf("first row name = %q, want annotated LAN device first", rows[0][rowNameIndex])
+	if items[0].info.Name != "wendy-usb" {
+		t.Fatalf("first item name = %q, want annotated LAN device first", items[0].info.Name)
 	}
 	wantUSB := "Wendy Gadget Mode (Ethernet 3) 1 Gbps"
-	if rows[0][rowUSBIndex] != wantUSB {
-		t.Fatalf("USB column = %q, want %q", rows[0][rowUSBIndex], wantUSB)
+	if items[0].picker.USB != wantUSB {
+		t.Fatalf("USB detail = %q, want %q", items[0].picker.USB, wantUSB)
+	}
+
+	_, rows := tui.PickerTableData(discoverPickerItems(items), "", true)
+	if rows[0][3] != "Yes" {
+		t.Fatalf("USB display cell = %q, want Yes", rows[0][3])
 	}
 }
 

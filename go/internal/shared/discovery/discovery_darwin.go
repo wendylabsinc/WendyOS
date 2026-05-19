@@ -326,15 +326,23 @@ func discoverLANContinuous(ctx context.Context, ch chan<- models.LANDevice) {
 			continue
 		}
 
+		interfaceName := ""
+		if interfaceIndex, err := strconv.Atoi(fields[3]); err == nil {
+			if iface, ifaceErr := net.InterfaceByIndex(interfaceIndex); ifaceErr == nil {
+				interfaceName = iface.Name
+			}
+		}
 		inst := browseResult{
-			instanceName: strings.Join(fields[6:], " "),
-			domain:       fields[4],
+			instanceName:  strings.Join(fields[6:], " "),
+			domain:        fields[4],
+			interfaceName: interfaceName,
 		}
 
-		if seen[inst.instanceName] {
+		key := inst.instanceName + "%" + inst.interfaceName
+		if seen[key] {
 			continue
 		}
-		seen[inst.instanceName] = true
+		seen[key] = true
 
 		resolveCtx, resolveCancel := context.WithTimeout(ctx, 2*time.Second)
 		dev, err := dnssdResolve(resolveCtx, inst)

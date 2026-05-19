@@ -1056,6 +1056,14 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 		md.LAN = nd.LAN
 		existing.Address = incoming.Address
 	}
+	if nd.LAN != nil && md.LAN != nil && nd.LAN.USB != "" && md.LAN.USB == "" {
+		md.LAN.USB = nd.LAN.USB
+		md.LAN.NetworkInterface = nd.LAN.NetworkInterface
+	}
+	if nd.LAN != nil && nd.LAN.USB != "" && existing.USB == "" {
+		existing.USB = incoming.USB
+		existing.SortKey = incoming.SortKey
+	}
 	if nd.Bluetooth != nil && md.Bluetooth == nil {
 		md.Bluetooth = nd.Bluetooth
 	}
@@ -1092,6 +1100,13 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 	if nd.LAN != nil {
 		existing.Insecure = incoming.Insecure
 	}
+}
+
+func usbFirstSortKey(name, usb string) string {
+	if usb == "" {
+		return ""
+	}
+	return "0_" + strings.ToLower(name)
 }
 
 // pickDevice runs an interactive TUI that discovers devices across all
@@ -1143,8 +1158,10 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, excludeBl
 		p.Send(tui.PickerAddMsg{Items: []tui.PickerItem{{
 			Name:     name,
 			Type:     "LAN",
+			USB:      dev.USB,
 			Address:  preferredLANAddress(dev),
 			DedupKey: dev.DisplayName,
+			SortKey:  usbFirstSortKey(dev.DisplayName, dev.USB),
 			Insecure: insecure,
 			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 				DisplayName:     dev.DisplayName,
