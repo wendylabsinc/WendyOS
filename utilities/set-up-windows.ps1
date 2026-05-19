@@ -33,6 +33,8 @@ $script:InstallVisualStudioBuildTools = $true
 $script:InstallSwiftToolchain = $true
 $script:InstallWendyCli = $true
 $script:ConfigureRemoteDesktop = $false
+$script:ConfigureTerminalDefaultPowerShell = $false
+$script:ConfigureSshDefaultPowerShell = $false
 $script:DisableAcSleep = $false
 $script:DisableScreenLocking = $false
 $script:EnableDeveloperMode = $true
@@ -129,6 +131,8 @@ without creating duplicates.
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $true
   $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $true
   $script:ConfigureRemoteDesktop = Ask-YesNo 'Enable Remote Desktop?' $false
+  $script:ConfigureTerminalDefaultPowerShell = Ask-YesNo 'Make Windows Terminal open PowerShell by default?' $false
+  $script:ConfigureSshDefaultPowerShell = Ask-YesNo 'Make SSH sessions start in PowerShell?' $false
   $script:DisableAcSleep = Ask-YesNo 'Disable automatic sleep on AC power?' $false
   $script:DisableScreenLocking = Ask-YesNo 'Disable screen locking for the current user?' $false
 }
@@ -150,6 +154,8 @@ function Confirm-Plan {
   $swiftSummary = if ($script:InstallSwiftToolchain) { 'Swift toolchain will be installed' } else { 'Swift toolchain will not be installed' }
   $wendySummary = if ($script:InstallWendyCli) { 'Wendy CLI will be installed or updated' } else { 'Wendy CLI will not be installed' }
   $rdpSummary = if ($script:ConfigureRemoteDesktop) { 'Remote Desktop will be enabled' } else { 'Remote Desktop will not be changed' }
+  $terminalSummary = if ($script:ConfigureTerminalDefaultPowerShell) { 'Windows Terminal will open PowerShell by default' } else { 'Windows Terminal default profile will not be changed' }
+  $sshShellSummary = if ($script:ConfigureSshDefaultPowerShell) { 'SSH sessions will start in PowerShell' } else { 'SSH default shell will not be changed' }
   $sleepSummary = if ($script:DisableAcSleep) { 'AC sleep will be disabled; display dimming/timeout will not be changed' } else { 'AC sleep and display timeout will not be changed' }
   $lockSummary = if ($script:DisableScreenLocking) { 'Screen locking will be disabled for the current user' } else { 'Screen locking will not be changed' }
   $developerModeSummary = if ($script:EnableDeveloperMode) { 'Windows Developer Mode will be enabled' } else { 'Windows Developer Mode will not be changed' }
@@ -173,6 +179,8 @@ This script will configure this machine by doing the following:
       $developerModeSummary
       Network discovery services and firewall rules
       $rdpSummary
+      $terminalSummary
+      $sshShellSummary
       $sleepSummary
       $lockSummary
       $wendySummary
@@ -624,6 +632,117 @@ function Install-GnuMake {
   Write-Ok "GNU Make $installedVersion installed"
 }
 
+function Find-PowerShellExecutable {
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} 'PowerShell\7\pwsh.exe')
+  )
+
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path $candidate)) { return $candidate }
+  }
+
+  $command = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
+  if ($command) { return $command.Source }
+
+  return $null
+}
+
+function Get-WindowsTerminalSettingsPath {
+  $candidates = @(
+    (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+    (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json')
+  )
+
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) { return $candidate }
+  }
+
+  if (Get-Command 'wt.exe' -ErrorAction SilentlyContinue) {
+    return $candidates[0]
+  }
+
+  return $null
+}
+
+function Set-JsonTopLevelStringProperty {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Value
+  )
+
+  $parent = Split-Path -Parent $Path
+  if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+
+  $escapedName = [regex]::Escape($Name)
+  $escapedValue = $Value.Replace('\', '\\').Replace('"', '\"')
+  $propertyLine = '    "{0}": "{1}"' -f $Name, $escapedValue
+
+  if (-not (Test-Path $Path)) {
+    Set-Content -Path $Path -Encoding utf8 -Value @('{', $propertyLine, '}')
+    return
+  }
+
+  $settings = Get-Content -Path $Path -Raw
+  if ([string]::IsNullOrWhiteSpace($settings) -or $settings -match '^\s*\{\s*\}\s*$') {
+    Set-Content -Path $Path -Encoding utf8 -Value @('{', $propertyLine, '}')
+    return
+  }
+
+  $pattern = '(?m)^(\s*)"' + $escapedName + '"\s*:\s*"[^"]*"'
+  if ([regex]::IsMatch($settings, $pattern)) {
+    $replacement = '$1"{0}": "{1}"' -f $Name, $escapedValue
+    $settings = [regex]::Replace($settings, $pattern, $replacement, 1)
+  } else {
+    $settings = [regex]::Replace($settings, '\{', "{`r`n$propertyLine,", 1)
+  }
+
+  Set-Content -Path $Path -Encoding utf8 -Value $settings
+}
+
+function Configure-WindowsTerminalDefaultPowerShell {
+  if (-not $script:ConfigureTerminalDefaultPowerShell) {
+    Write-Ok 'Windows Terminal default profile not changed'
+    return
+  }
+
+  Write-Info 'Setting Windows Terminal to open PowerShell by default'
+
+  $settingsPath = Get-WindowsTerminalSettingsPath
+  if (-not $settingsPath) {
+    Write-Warn 'Windows Terminal was not found; skipping default profile configuration.'
+    return
+  }
+
+  # Windows Terminal's built-in PowerShell 7 dynamic profile GUID.
+  Set-JsonTopLevelStringProperty `
+    -Path $settingsPath `
+    -Name 'defaultProfile' `
+    -Value '{574e775e-4f2a-5b96-ac1e-a2962a402336}'
+
+  Write-Ok "Windows Terminal default profile is PowerShell ($settingsPath)"
+}
+
+function Configure-SshDefaultPowerShell {
+  if (-not $script:ConfigureSshDefaultPowerShell) {
+    Write-Ok 'SSH default shell not changed'
+    return
+  }
+
+  Write-Info 'Setting SSH sessions to start in PowerShell'
+
+  $pwshPath = Find-PowerShellExecutable
+  if (-not $pwshPath) { Fail 'PowerShell 7 was not found after installation.' }
+
+  $openSshPath = 'HKLM:\SOFTWARE\OpenSSH'
+  if (-not (Test-Path $openSshPath)) { New-Item -Path $openSshPath -Force | Out-Null }
+  New-ItemProperty -Path $openSshPath -Name 'DefaultShell' -Value $pwshPath -PropertyType String -Force | Out-Null
+
+  Write-Ok "SSH sessions will start in PowerShell ($pwshPath)"
+}
+
 function Configure-Editor {
   Write-Info 'Setting Neovim as the default CLI editor'
   [Environment]::SetEnvironmentVariable('EDITOR', 'nvim', 'User')
@@ -844,6 +963,8 @@ function Main {
   Configure-SshKeys
   Test-LocalSshEndpoint
   Install-Packages
+  Configure-WindowsTerminalDefaultPowerShell
+  Configure-SshDefaultPowerShell
   Install-GnuMake
   Configure-Editor
   Configure-WendyUtilitiesPath
