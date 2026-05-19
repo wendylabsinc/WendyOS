@@ -33,7 +33,8 @@ $script:InstallVisualStudioBuildTools = $true
 $script:InstallSwiftToolchain = $true
 $script:InstallWendyCli = $true
 $script:ConfigureRemoteDesktop = $false
-$script:ConfigurePowerSettings = $true
+$script:DisableAcSleep = $false
+$script:DisableScreenLocking = $false
 $script:EnableDeveloperMode = $true
 
 function Write-Bold { param([string]$Message) Write-Host $Message -ForegroundColor White }
@@ -128,7 +129,8 @@ without creating duplicates.
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $true
   $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $true
   $script:ConfigureRemoteDesktop = Ask-YesNo 'Enable Remote Desktop?' $false
-  $script:ConfigurePowerSettings = Ask-YesNo 'Disable AC sleep and screen locking?' $true
+  $script:DisableAcSleep = Ask-YesNo 'Disable automatic sleep on AC power?' $false
+  $script:DisableScreenLocking = Ask-YesNo 'Disable screen locking for the current user?' $false
 }
 
 function Confirm-Plan {
@@ -148,7 +150,8 @@ function Confirm-Plan {
   $swiftSummary = if ($script:InstallSwiftToolchain) { 'Swift toolchain will be installed' } else { 'Swift toolchain will not be installed' }
   $wendySummary = if ($script:InstallWendyCli) { 'Wendy CLI will be installed or updated' } else { 'Wendy CLI will not be installed' }
   $rdpSummary = if ($script:ConfigureRemoteDesktop) { 'Remote Desktop will be enabled' } else { 'Remote Desktop will not be changed' }
-  $powerSummary = if ($script:ConfigurePowerSettings) { 'AC sleep and screen locking will be disabled; display dimming/timeout will not be changed' } else { 'Power and lock settings will not be changed' }
+  $sleepSummary = if ($script:DisableAcSleep) { 'AC sleep will be disabled; display dimming/timeout will not be changed' } else { 'AC sleep and display timeout will not be changed' }
+  $lockSummary = if ($script:DisableScreenLocking) { 'Screen locking will be disabled for the current user' } else { 'Screen locking will not be changed' }
   $developerModeSummary = if ($script:EnableDeveloperMode) { 'Windows Developer Mode will be enabled' } else { 'Windows Developer Mode will not be changed' }
 
   Write-Host @"
@@ -170,7 +173,8 @@ This script will configure this machine by doing the following:
       $developerModeSummary
       Network discovery services and firewall rules
       $rdpSummary
-      $powerSummary
+      $sleepSummary
+      $lockSummary
       $wendySummary
       $gitSummary
 
@@ -710,23 +714,34 @@ function Configure-RemoteDesktopAccess {
 }
 
 function Configure-PowerSettings {
-  if (-not $script:ConfigurePowerSettings) {
-    Write-Ok 'power settings not changed'
+  if (-not $script:DisableAcSleep -and -not $script:DisableScreenLocking) {
+    Write-Ok 'power and lock settings not changed'
     return
   }
 
-  Write-Info 'Disabling automatic sleep on AC power and screen locking'
+  if ($script:DisableAcSleep) {
+    Write-Info 'Disabling automatic sleep on AC power'
 
-  Invoke-External 'powercfg.exe' @('/change', 'standby-timeout-ac', '0')
-  Invoke-External 'powercfg.exe' @('/change', 'hibernate-timeout-ac', '0')
+    Invoke-External 'powercfg.exe' @('/change', 'standby-timeout-ac', '0')
+    Invoke-External 'powercfg.exe' @('/change', 'hibernate-timeout-ac', '0')
 
-  # Do not change monitor/display timeout settings here: the screen should still
-  # be allowed to dim or turn off on AC power. Only disable secure screen saver
-  # locking for the current user.
-  $desktopPath = 'HKCU:\Control Panel\Desktop'
-  Set-ItemProperty -Path $desktopPath -Name 'ScreenSaverIsSecure' -Value '0'
+    # Do not change monitor/display timeout settings here: the screen should
+    # still be allowed to dim or turn off on AC power.
+    Write-Ok 'AC sleep policy configured; display timeout unchanged'
+  } else {
+    Write-Ok 'AC sleep policy not changed'
+  }
 
-  Write-Ok 'AC sleep policy configured; display timeout unchanged; screen locking disabled for the current user'
+  if ($script:DisableScreenLocking) {
+    Write-Info 'Disabling screen locking for the current user'
+
+    $desktopPath = 'HKCU:\Control Panel\Desktop'
+    Set-ItemProperty -Path $desktopPath -Name 'ScreenSaverIsSecure' -Value '0'
+
+    Write-Ok 'screen locking disabled for the current user'
+  } else {
+    Write-Ok 'screen locking not changed'
+  }
 }
 
 function Install-WendyCli {
