@@ -503,6 +503,17 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return runComposeCommand(ctx, cwd, opts)
 	}
 
+	// For docker-type projects, resolve which Dockerfile to use before
+	// connecting to the target — so the picker shows regardless of whether
+	// we end up on the agent path or a provider path (Docker Desktop, etc.).
+	if projectType == "docker" && opts.dockerfile == "" {
+		resolved, err := resolveRunDockerfile(cwd, opts, !opts.yes && isInteractiveTerminal())
+		if err != nil {
+			return err
+		}
+		opts.dockerfile = resolved
+	}
+
 	cfgPath := filepath.Join(cwd, "wendy.json")
 	appCfg, err := ensureAppConfig(cfgPath, opts.yes)
 	if err != nil {
@@ -1059,9 +1070,10 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if app == nil {
 		cliLogln("Building with %s provider...", p.DisplayName())
 		var err error
-		// Pass the resolved project type to providers that can disambiguate
-		// between buildable markers (e.g. Docker vs Compose).
-		if tb, ok := p.(providers.TypedBuilder); ok {
+		// Pass the resolved project type and Dockerfile to providers that support it.
+		if db, ok := p.(providers.DockerfileBuilder); ok && opts.dockerfile != "" {
+			app, err = db.BuildWithDockerfile(ctx, device, projectPath, product, projectType, opts.dockerfile, opts.debug)
+		} else if tb, ok := p.(providers.TypedBuilder); ok {
 			app, err = tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
 		} else {
 			app, err = p.Build(ctx, device, projectPath, product, opts.debug)
@@ -1244,11 +1256,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return err
 	}
 
-	// Resolve which Dockerfile to use — shows a picker when multiple are present.
-	dockerfile, err := resolveRunDockerfile(cwd, opts, !opts.yes && isInteractiveTerminal())
-	if err != nil {
-		return err
-	}
+	dockerfile := opts.dockerfile
 
 	// Build and push the Docker image directly to the device's registry.
 	regPort := registryPort(agentOS)

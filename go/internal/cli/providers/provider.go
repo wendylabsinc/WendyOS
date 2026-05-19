@@ -71,6 +71,13 @@ type TypedBuilder interface {
 	BuildWithType(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType string, debug bool) (*BuiltApp, error)
 }
 
+// DockerfileBuilder is optionally implemented by providers that support
+// building from a specific Dockerfile (e.g. Dockerfile.prod). When dockerfile
+// is empty, the provider uses its default Dockerfile resolution.
+type DockerfileBuilder interface {
+	BuildWithDockerfile(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType, dockerfile string, debug bool) (*BuiltApp, error)
+}
+
 // ContainerManager is optionally implemented by providers that support
 // managing container lifecycle (list, start, stop, remove).
 type ContainerManager interface {
