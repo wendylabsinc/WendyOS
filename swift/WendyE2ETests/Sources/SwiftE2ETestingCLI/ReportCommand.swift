@@ -97,10 +97,16 @@ private struct TestResultKey: Hashable {
     var name: String
 }
 
+private struct ReportTestDuration {
+    var seconds: Double
+    var formatted: String
+    var color: String
+}
+
 private enum ReportTestStatus {
-    case passed(duration: String?)
-    case failed(String?, duration: String?)
-    case skipped(String?, duration: String?)
+    case passed(duration: ReportTestDuration?)
+    case failed(String?, duration: ReportTestDuration?)
+    case skipped(String?, duration: ReportTestDuration?)
     case unknown
 
     var statusClass: String {
@@ -142,7 +148,7 @@ private enum ReportTestStatus {
         }
     }
 
-    var duration: String? {
+    var duration: ReportTestDuration? {
         switch self {
         case .passed(let duration):
             return duration
@@ -460,7 +466,7 @@ private final class XUnitResultParser: NSObject, XMLParserDelegate {
     var results: [TestResultKey: ReportTestStatus] = [:]
 
     private var current:
-        (key: TestResultKey, duration: String?, failure: String?, skipped: String?)?
+        (key: TestResultKey, duration: ReportTestDuration?, failure: String?, skipped: String?)?
     private var currentElement: String?
     private var currentText = ""
 
@@ -481,7 +487,7 @@ private final class XUnitResultParser: NSObject, XMLParserDelegate {
             }
             current = (
                 key: key,
-                duration: formattedTestDuration(attributeDict["time"]),
+                duration: parsedTestDuration(attributeDict["time"]),
                 failure: nil,
                 skipped: nil
             )
@@ -552,11 +558,19 @@ private final class XUnitResultParser: NSObject, XMLParserDelegate {
     }
 }
 
-private func formattedTestDuration(_ value: String?) -> String? {
+private func parsedTestDuration(_ value: String?) -> ReportTestDuration? {
     guard let value, let seconds = Double(value), seconds >= 0 else {
         return nil
     }
 
+    return ReportTestDuration(
+        seconds: seconds,
+        formatted: formattedTestDuration(seconds),
+        color: durationColor(seconds: seconds)
+    )
+}
+
+private func formattedTestDuration(_ seconds: Double) -> String {
     if seconds < 0.01 {
         return "<0.01s"
     }
@@ -570,6 +584,48 @@ private func formattedTestDuration(_ value: String?) -> String? {
     let minutes = Int(seconds / 60)
     let remainingSeconds = Int(seconds.rounded()) % 60
     return "\(minutes)m \(remainingSeconds)s"
+}
+
+private func durationColor(seconds: Double) -> String {
+    let white = RGB(red: 255, green: 255, blue: 255)
+    let orange = RGB(red: 245, green: 158, blue: 11)
+    let deepRed = RGB(red: 153, green: 27, blue: 27)
+    let black = RGB(red: 0, green: 0, blue: 0)
+
+    let color: RGB
+    if seconds <= 0 {
+        color = white
+    } else if seconds <= 1 {
+        color = interpolateRGB(from: white, to: orange, t: seconds)
+    } else if seconds <= 10 {
+        color = interpolateRGB(from: orange, to: deepRed, t: (seconds - 1) / 9)
+    } else if seconds < 30 {
+        color = interpolateRGB(from: deepRed, to: black, t: (seconds - 10) / 20)
+    } else {
+        color = black
+    }
+
+    return "rgb(\(color.red), \(color.green), \(color.blue))"
+}
+
+private struct RGB {
+    var red: Int
+    var green: Int
+    var blue: Int
+}
+
+private func interpolateRGB(from start: RGB, to end: RGB, t: Double) -> RGB {
+    let amount = min(max(t, 0), 1)
+
+    func component(_ start: Int, _ end: Int) -> Int {
+        Int((Double(start) + (Double(end - start) * amount)).rounded())
+    }
+
+    return RGB(
+        red: component(start.red, end.red),
+        green: component(start.green, end.green),
+        blue: component(start.blue, end.blue)
+    )
 }
 
 private func testResultKey(classname: String, name: String) -> TestResultKey? {
@@ -880,8 +936,8 @@ private func renderCards(
             let statusClass = test.status.statusClass
             let statusText = test.status.statusText
             let durationBadge =
-                test.status.duration.map {
-                    "<span class=\"badge duration\" title=\"Test duration\">\(escapeHTML($0))</span>"
+                test.status.duration.map { duration in
+                    "<span class=\"badge duration\" title=\"Test duration: \(escapeHTML(duration.formatted))\"><span class=\"duration-dot\" style=\"--duration-dot-color: \(duration.color)\" aria-hidden=\"true\"></span>\(escapeHTML(duration.formatted))</span>"
                 } ?? ""
             let hasAI = test.aiItems.isEmpty ? "false" : "true"
             let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
