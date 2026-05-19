@@ -128,7 +128,7 @@ without creating duplicates.
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $true
   $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $true
   $script:ConfigureRemoteDesktop = Ask-YesNo 'Enable Remote Desktop?' $false
-  $script:ConfigurePowerSettings = Ask-YesNo 'Disable AC sleep/blanking and screen locking?' $true
+  $script:ConfigurePowerSettings = Ask-YesNo 'Disable AC sleep and screen locking?' $true
 }
 
 function Confirm-Plan {
@@ -148,7 +148,7 @@ function Confirm-Plan {
   $swiftSummary = if ($script:InstallSwiftToolchain) { 'Swift toolchain will be installed' } else { 'Swift toolchain will not be installed' }
   $wendySummary = if ($script:InstallWendyCli) { 'Wendy CLI will be installed or updated' } else { 'Wendy CLI will not be installed' }
   $rdpSummary = if ($script:ConfigureRemoteDesktop) { 'Remote Desktop will be enabled' } else { 'Remote Desktop will not be changed' }
-  $powerSummary = if ($script:ConfigurePowerSettings) { 'AC sleep/blanking and screen locking will be disabled' } else { 'Power and lock settings will not be changed' }
+  $powerSummary = if ($script:ConfigurePowerSettings) { 'AC sleep and screen locking will be disabled; display dimming/timeout will not be changed' } else { 'Power and lock settings will not be changed' }
   $developerModeSummary = if ($script:EnableDeveloperMode) { 'Windows Developer Mode will be enabled' } else { 'Windows Developer Mode will not be changed' }
 
   Write-Host @"
@@ -715,18 +715,18 @@ function Configure-PowerSettings {
     return
   }
 
-  Write-Info 'Disabling automatic sleep/blanking on AC power and screen locking'
+  Write-Info 'Disabling automatic sleep on AC power and screen locking'
 
   Invoke-External 'powercfg.exe' @('/change', 'standby-timeout-ac', '0')
-  Invoke-External 'powercfg.exe' @('/change', 'monitor-timeout-ac', '0')
   Invoke-External 'powercfg.exe' @('/change', 'hibernate-timeout-ac', '0')
 
+  # Do not change monitor/display timeout settings here: the screen should still
+  # be allowed to dim or turn off on AC power. Only disable secure screen saver
+  # locking for the current user.
   $desktopPath = 'HKCU:\Control Panel\Desktop'
-  Set-ItemProperty -Path $desktopPath -Name 'ScreenSaveActive' -Value '0'
   Set-ItemProperty -Path $desktopPath -Name 'ScreenSaverIsSecure' -Value '0'
-  Set-ItemProperty -Path $desktopPath -Name 'ScreenSaveTimeOut' -Value '0'
 
-  Write-Ok 'AC power policy configured; screen locking disabled for the current user'
+  Write-Ok 'AC sleep policy configured; display timeout unchanged; screen locking disabled for the current user'
 }
 
 function Install-WendyCli {
