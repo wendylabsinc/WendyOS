@@ -1245,3 +1245,76 @@ func TestStartMTLSRegistryHTTPProxy_UntrustedClientCert(t *testing.T) {
 		t.Errorf("expected non-200 when proxy presents a client cert from an untrusted CA, got 200")
 	}
 }
+
+func TestResolveDockerfile_NoDockerfiles(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveDockerfile(dir, "", false)
+	if err != nil {
+		t.Fatalf("resolveDockerfile: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+func TestResolveDockerfile_RequestedPassthrough(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Dockerfile.prod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := resolveDockerfile(dir, "Dockerfile.prod", false)
+	if err != nil {
+		t.Fatalf("resolveDockerfile: %v", err)
+	}
+	if got != "Dockerfile.prod" {
+		t.Fatalf("got %q, want Dockerfile.prod", got)
+	}
+}
+
+func TestResolveDockerfile_SingleVariant(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile.dev"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveDockerfile(dir, "", false)
+	if err != nil {
+		t.Fatalf("resolveDockerfile: %v", err)
+	}
+	if got != "Dockerfile.dev" {
+		t.Fatalf("got %q, want Dockerfile.dev", got)
+	}
+}
+
+func TestResolveDockerfile_MultipleNonInteractivePrefersBase(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Dockerfile.prod", "Dockerfile.dev"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := resolveDockerfile(dir, "", false)
+	if err != nil {
+		t.Fatalf("resolveDockerfile: %v", err)
+	}
+	if got != "Dockerfile" {
+		t.Fatalf("got %q, want Dockerfile", got)
+	}
+}
+
+func TestResolveDockerfile_MultipleNonInteractiveVariantOnlyPrefersFirst(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile.dev", "Dockerfile.prod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := resolveDockerfile(dir, "", false)
+	if err != nil {
+		t.Fatalf("resolveDockerfile: %v", err)
+	}
+	if got == "" {
+		t.Fatal("got empty, want a Dockerfile variant")
+	}
+}
