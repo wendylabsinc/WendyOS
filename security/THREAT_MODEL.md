@@ -195,11 +195,10 @@ Severity scale: **CRITICAL > HIGH > MEDIUM > LOW > INFO**
 #### TM-I-01 — OTEL receivers accept unauthenticated data from any source
 - **Severity:** MEDIUM
 - **Component:** OTEL gRPC (4317), OTEL HTTP (4318)
-- **Description:** OpenTelemetry receivers listen on all interfaces with no authentication. Any process on the network can submit arbitrary logs, metrics, and traces, polluting the telemetry stream with false data or extracting device observability data.
-- **Existing mitigations:** None.
+- **Description:** OpenTelemetry receivers listen on loopback only (`127.0.0.1` and `[::1]`) with no authentication. Any local process can submit arbitrary logs, metrics, and traces, polluting the telemetry stream with false data or extracting device observability data.
+- **Existing mitigations:** Receivers are bound to loopback interfaces only (both IPv4 and IPv6); remote network access is blocked.
 - **Recommended controls:**
-  - Bind OTEL receivers to localhost or an internal-only network interface.
-  - Require mTLS or a bearer token for OTEL submissions from external sources.
+  - Require mTLS or a bearer token for OTEL submissions from local sources.
 
 #### TM-I-02 — Private key at rest in `/etc/wendy-agent/`
 - **Severity:** HIGH
@@ -245,11 +244,10 @@ Severity scale: **CRITICAL > HIGH > MEDIUM > LOW > INFO**
 #### TM-D-01 — Resource exhaustion via unauthenticated OTEL receivers
 - **Severity:** MEDIUM
 - **Component:** OTEL gRPC/HTTP receivers
-- **Description:** Unauthenticated OTEL endpoints on ports 4317/4318 accept arbitrary payloads. An attacker on the same network could flood the device with telemetry data, exhausting memory or CPU.
-- **Existing mitigations:** In-memory broadcaster is the only sink; data is not persisted.
+- **Description:** Unauthenticated OTEL endpoints on ports 4317/4318 accept arbitrary payloads. A local process could flood the device with telemetry data, exhausting memory or CPU.
+- **Existing mitigations:** In-memory broadcaster is the only sink; data is not persisted. Receivers are bound to loopback only, so remote network attackers cannot reach them.
 - **Recommended controls:**
   - Apply rate limiting and maximum payload size to OTEL receivers.
-  - Bind OTEL receivers to localhost or a dedicated management interface.
 
 #### TM-D-02 — Container resource exhaustion
 - **Severity:** MEDIUM
