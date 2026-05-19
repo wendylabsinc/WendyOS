@@ -316,6 +316,19 @@ func TestDetectProjectType_DockerfileTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestDetectProjectType_DockerfileVariantOnly(t *testing.T) {
+	dir := t.TempDir()
+	// No base Dockerfile — only variants.
+	for _, name := range []string{"Dockerfile.dev", "Dockerfile.prod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM alpine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := mustDetectProjectType(t, dir); got != "docker" {
+		t.Errorf("detectProjectType = %q; want %q (Dockerfile variant should be recognised)", got, "docker")
+	}
+}
+
 func TestDetectProjectType_XcodeOnly(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
@@ -411,6 +424,41 @@ func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
 	}
 	if got == nil || got.File != "Dockerfile" {
 		t.Fatalf("got %+v, want Dockerfile", got)
+	}
+}
+
+// resolveDetectedBuildOption uses term.IsTerminal which returns false in test
+// environments (stdin is a pipe). These tests therefore exercise the
+// non-interactive code path.
+
+func TestResolveDetectedBuildOption_NonInteractiveMultipleDockerfilesPrefersBase(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile.prod", Type: "docker", File: "Dockerfile.prod"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "", "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile" {
+		t.Fatalf("got %+v, want base Dockerfile", got)
+	}
+}
+
+func TestResolveDetectedBuildOption_NonInteractiveVariantOnlyDockerfilesPrefersFirst(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile.prod", Type: "docker", File: "Dockerfile.prod"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "", "")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile.dev" {
+		t.Fatalf("got %+v, want Dockerfile.dev (first variant)", got)
 	}
 }
 

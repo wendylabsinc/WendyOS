@@ -61,8 +61,20 @@ func detectProjectType(dir string) (string, error) {
 			return "compose", nil
 		}
 	}
+	// Check base Dockerfile first (fast path), then any Dockerfile.* / Dockerfile-* variant.
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
 		return "docker", nil
+	}
+	if entries, readErr := os.ReadDir(dir); readErr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+				return "docker", nil
+			}
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Package.swift")); err == nil {
 		return "swift", nil

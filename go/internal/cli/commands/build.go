@@ -178,6 +178,28 @@ func resolveDetectedBuildOption(options []BuildOption, requestedType, requestedD
 		return preferred, nil
 	}
 
+	// Non-interactive (CI) fallback: when all detected options are Dockerfiles,
+	// prefer the base "Dockerfile" and fall back to the first variant rather than
+	// failing with "multiple build types detected". This mirrors the run-command
+	// behaviour and lets CI pipelines that omit --dockerfile build predictably.
+	if !interactive {
+		allDocker := len(options) > 0
+		for _, opt := range options {
+			if opt.Type != "docker" {
+				allDocker = false
+				break
+			}
+		}
+		if allDocker {
+			for i := range options {
+				if options[i].File == "Dockerfile" {
+					return &options[i], nil
+				}
+			}
+			return &options[0], nil
+		}
+	}
+
 	return pickBuildOption(options)
 }
 
