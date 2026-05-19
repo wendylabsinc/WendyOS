@@ -391,6 +391,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 // runOptions holds the parsed flags for the run command.
 type runOptions struct {
 	buildType            string
+	dockerfile           string
 	debug                bool
 	deploy               bool
 	detach               bool
@@ -417,6 +418,7 @@ func newRunCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when Dockerfile is present alongside Package.swift or Python project markers: docker, swift, or python")
+	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Dockerfile to build from (e.g. Dockerfile.prod); shows a selection menu when multiple Dockerfiles exist")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container but do not stream logs")
@@ -470,6 +472,23 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	cwd, err := resolveRunWorkingDir(opts)
 	if err != nil {
 		return fmt.Errorf("resolving working directory: %w", err)
+	}
+
+	// --dockerfile implies a docker build; validate the file exists and ensure
+	// --build-type is compatible.
+	if opts.dockerfile != "" {
+		if opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
+			return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
+		}
+		if _, statErr := os.Stat(filepath.Join(cwd, opts.dockerfile)); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return fmt.Errorf("--dockerfile %q does not exist in %s", opts.dockerfile, cwd)
+			}
+			return fmt.Errorf("checking --dockerfile: %w", statErr)
+		}
+		if opts.buildType == "" {
+			opts.buildType = "docker"
+		}
 	}
 
 	// Compose projects don't use wendy.json — each service carries its own config.
@@ -906,11 +925,25 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 			}
 		}
 	case "docker":
-		marker := filepath.Join(dir, "Dockerfile")
-		if _, err := os.Stat(marker); err == nil {
-			return "docker", nil
-		} else if !os.IsNotExist(err) {
-			return "", fmt.Errorf("checking for %s: %w", marker, err)
+		// Accept the base Dockerfile or any Dockerfile.* / Dockerfile-* variant.
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			marker := filepath.Join(dir, "Dockerfile")
+			if _, err := os.Stat(marker); err == nil {
+				return "docker", nil
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("checking for %s: %w", marker, err)
+			}
+		} else {
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				if name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+					return "docker", nil
+				}
+			}
 		}
 	case "swift":
 		marker := filepath.Join(dir, "Package.swift")
@@ -931,6 +964,49 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	}
 
 	return "", fmt.Errorf("build type %q is not available in %s", requestedType, dir)
+}
+
+// resolveRunDockerfile returns the Dockerfile filename to pass to docker buildx for a
+// docker-type project. If opts.dockerfile is set it is returned directly (already
+// validated by the caller). Otherwise all Dockerfiles in cwd are detected: a single
+// match is returned immediately; multiple matches trigger an interactive picker or,
+// in non-interactive mode, prefer the base "Dockerfile" and fall back to the first
+// variant found.
+func resolveRunDockerfile(cwd string, opts runOptions, interactive bool) (string, error) {
+	if opts.dockerfile != "" {
+		return opts.dockerfile, nil
+	}
+
+	var dockerfiles []BuildOption
+	for _, opt := range detectBuildOptions(cwd) {
+		if opt.Type == "docker" {
+			dockerfiles = append(dockerfiles, opt)
+		}
+	}
+
+	if len(dockerfiles) <= 1 {
+		// Zero or one Dockerfile — let Docker use its default resolution.
+		if len(dockerfiles) == 1 {
+			return dockerfiles[0].File, nil
+		}
+		return "", nil
+	}
+
+	// Multiple Dockerfiles found.
+	if !interactive {
+		for _, opt := range dockerfiles {
+			if opt.File == "Dockerfile" {
+				return opt.File, nil
+			}
+		}
+		return dockerfiles[0].File, nil
+	}
+
+	picked, err := pickBuildOptionWithTitle(dockerfiles, "Select a Dockerfile")
+	if err != nil {
+		return "", err
+	}
+	return picked.File, nil
 }
 
 // runWithProvider builds and runs via an external device provider.
@@ -1168,6 +1244,12 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return err
 	}
 
+	// Resolve which Dockerfile to use — shows a picker when multiple are present.
+	dockerfile, err := resolveRunDockerfile(cwd, opts, !opts.yes && isInteractiveTerminal())
+	if err != nil {
+		return err
+	}
+
 	// Build and push the Docker image directly to the device's registry.
 	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
@@ -1182,7 +1264,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, dockerfile, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")

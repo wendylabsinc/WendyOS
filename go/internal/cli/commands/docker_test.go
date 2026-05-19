@@ -361,7 +361,7 @@ func TestResolveDetectedBuildOption_PrefersDockerfileOverSwift(t *testing.T) {
 		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
 	}
 
-	got, err := resolveDetectedBuildOption(options, "")
+	got, err := resolveDetectedBuildOption(options, "", "")
 	if err != nil {
 		t.Fatalf("resolveDetectedBuildOption: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestResolveDetectedBuildOption_PrefersDockerfileOverPython(t *testing.T) {
 		{Label: "requirements.txt (Python)", Type: "python", File: "requirements.txt"},
 	}
 
-	got, err := resolveDetectedBuildOption(options, "")
+	got, err := resolveDetectedBuildOption(options, "", "")
 	if err != nil {
 		t.Fatalf("resolveDetectedBuildOption: %v", err)
 	}
@@ -411,6 +411,98 @@ func TestBuildOptionForType_DockerUsesExactDockerfile(t *testing.T) {
 	}
 	if got == nil || got.File != "Dockerfile" {
 		t.Fatalf("got %+v, want Dockerfile", got)
+	}
+}
+
+func TestResolveDetectedBuildOption_DockerfileFlag(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+		{Label: "Dockerfile.dev", Type: "docker", File: "Dockerfile.dev"},
+		{Label: "Dockerfile.prod", Type: "docker", File: "Dockerfile.prod"},
+		{Label: "Package.swift (Swift)", Type: "swift", File: "Package.swift"},
+	}
+
+	got, err := resolveDetectedBuildOption(options, "", "Dockerfile.prod")
+	if err != nil {
+		t.Fatalf("resolveDetectedBuildOption: %v", err)
+	}
+	if got == nil || got.File != "Dockerfile.prod" {
+		t.Fatalf("got %+v, want Dockerfile.prod", got)
+	}
+}
+
+func TestResolveDetectedBuildOption_DockerfileFlagNotFound(t *testing.T) {
+	options := []BuildOption{
+		{Label: "Dockerfile", Type: "docker", File: "Dockerfile"},
+	}
+
+	_, err := resolveDetectedBuildOption(options, "", "Dockerfile.missing")
+	if err == nil {
+		t.Fatal("expected error for missing dockerfile")
+	}
+}
+
+func TestResolveRunDockerfile_SingleDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile.prod"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveRunDockerfile(dir, runOptions{}, false)
+	if err != nil {
+		t.Fatalf("resolveRunDockerfile: %v", err)
+	}
+	if got != "Dockerfile.prod" {
+		t.Fatalf("got %q, want Dockerfile.prod", got)
+	}
+}
+
+func TestResolveRunDockerfile_ExplicitFlag(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Dockerfile.prod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunDockerfile(dir, runOptions{dockerfile: "Dockerfile.prod"}, false)
+	if err != nil {
+		t.Fatalf("resolveRunDockerfile: %v", err)
+	}
+	if got != "Dockerfile.prod" {
+		t.Fatalf("got %q, want Dockerfile.prod", got)
+	}
+}
+
+func TestResolveRunDockerfile_MultipleNonInteractivePrefersBase(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Dockerfile", "Dockerfile.dev", "Dockerfile.prod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := resolveRunDockerfile(dir, runOptions{}, false)
+	if err != nil {
+		t.Fatalf("resolveRunDockerfile: %v", err)
+	}
+	if got != "Dockerfile" {
+		t.Fatalf("got %q, want Dockerfile", got)
+	}
+}
+
+func TestResolveRunProjectType_DockerfileVariantOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile.prod"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveRunProjectType(dir, "docker")
+	if err != nil {
+		t.Fatalf("resolveRunProjectType: %v", err)
+	}
+	if got != "docker" {
+		t.Fatalf("got %q, want docker", got)
 	}
 }
 

@@ -178,7 +178,7 @@ func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform st
 		return fmt.Errorf("writing debugpy Dockerfile: %w", err)
 	}
 
-	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, buildArgs, streamOutput, useMTLS)
+	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, "", buildArgs, streamOutput, useMTLS)
 }
 
 // generatePythonDockerfile creates a Dockerfile for Python projects that do not already have one.
@@ -886,7 +886,8 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 // it directly to the given registry using docker buildx. The registry transport
 // is conditional: plain HTTP for plaintext devices, and TLS/mTLS for provisioned
 // devices when useMTLS is enabled. buildArgs is passed as --build-arg KEY=VALUE flags.
-func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
+// dockerfile is passed as -f to docker buildx; an empty string uses the default Dockerfile.
+func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform, dockerfile string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
 	builder, effectiveAddr, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
 	if err != nil {
 		return err
@@ -973,6 +974,9 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
+	}
+	if dockerfile != "" {
+		args = append(args, "-f", dockerfile)
 	}
 	if _, err := os.Stat(filepath.Join(cacheDir, "index.json")); err == nil {
 		args = append(args, "--cache-from", "type=local,src="+cacheDirSlash)

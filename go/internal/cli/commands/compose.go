@@ -519,21 +519,11 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 		cliLogln("Building image for service %s...", name)
 
-		// If a non-default Dockerfile is specified, we need to pass it via -f.
-		// buildAndPushImage always uses "." as the path; for compose we pass the
-		// build context dir and rely on a Dockerfile inside it (or via ARG).
-		// We temporarily write a wrapper that delegates to the real Dockerfile when
-		// the dockerfile field differs. For the common case (Dockerfile in context),
-		// it just works.
-		if dockerfile != "Dockerfile" {
-			// Rewrite -f by creating a temp Dockerfile that uses the named file.
-			// Actually, buildAndPushImage doesn't support -f. We need a small workaround:
-			// copy the Dockerfile to the context dir as "Dockerfile" temporarily.
-			// For now, just error with a helpful message.
-			return fmt.Errorf("service %s: custom Dockerfile path %q is not yet supported; rename it to 'Dockerfile'", name, dockerfile)
+		buildDockerfile := dockerfile
+		if buildDockerfile == "Dockerfile" {
+			buildDockerfile = ""
 		}
-
-		if err := buildAndPushImage(ctx, ctxDir, registryAddr, imageName, platform, allBuildArgs, os.Stdout, conn.IsMTLS); err != nil {
+		if err := buildAndPushImage(ctx, ctxDir, registryAddr, imageName, platform, buildDockerfile, allBuildArgs, os.Stdout, conn.IsMTLS); err != nil {
 			return fmt.Errorf("building service %s: %w", name, err)
 		}
 		cliLogln("Service %s image built and pushed.", name)

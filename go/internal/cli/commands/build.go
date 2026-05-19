@@ -26,7 +26,8 @@ type BuildResult struct {
 }
 
 type buildOptions struct {
-	buildType string
+	buildType  string
+	dockerfile string
 }
 
 func newBuildCmd() *cobra.Command {
@@ -114,7 +115,7 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("no supported build type found for this target; check that the project contains the right files")
 			}
 
-			selected, err := resolveDetectedBuildOption(options, opts.buildType)
+			selected, err := resolveDetectedBuildOption(options, opts.buildType, opts.dockerfile)
 			if err != nil {
 				return err
 			}
@@ -151,12 +152,23 @@ func newBuildCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when multiple project markers are present: docker, swift, or python")
+	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Dockerfile to build from (e.g. Dockerfile.prod); shows a selection menu when multiple Dockerfiles exist")
 
 	return cmd
 }
 
-func resolveDetectedBuildOption(options []BuildOption, requestedType string) (*BuildOption, error) {
+func resolveDetectedBuildOption(options []BuildOption, requestedType, requestedDockerfile string) (*BuildOption, error) {
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+
+	// --dockerfile selects a specific Dockerfile directly, bypassing type detection.
+	if strings.TrimSpace(requestedDockerfile) != "" {
+		for i := range options {
+			if options[i].Type == "docker" && options[i].File == requestedDockerfile {
+				return &options[i], nil
+			}
+		}
+		return nil, fmt.Errorf("dockerfile %q not found; detected %s", requestedDockerfile, strings.Join(buildOptionLabels(options), ", "))
+	}
 
 	if strings.TrimSpace(requestedType) != "" {
 		return buildOptionForType(options, requestedType, interactive)
