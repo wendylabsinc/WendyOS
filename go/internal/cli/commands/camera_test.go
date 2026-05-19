@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,14 +78,58 @@ func TestPlaybackPipelineArgs_VP8UsesMatroskademux(t *testing.T) {
 }
 
 func TestPlayVideoWithGStreamer_MissingGStreamer(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // empty dir — no executables
+	t.Setenv("PATH", t.TempDir()) // empty dir — no executables on PATH
+	stubGSTFallback(t, nil)       // no install-location fallbacks either
 
 	stream := &mockVideoStream{}
 	err := playVideoWithGStreamer(context.Background(), stream)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "gst-launch-1.0 not found") {
-		t.Errorf("expected 'gst-launch-1.0 not found' error, got: %v", err)
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+// stubGSTFallback overrides the platform-specific fallback path list for the
+// duration of the test.
+func stubGSTFallback(t *testing.T, paths []string) {
+	t.Helper()
+	prev := gstLaunchFallbackPathsFn
+	gstLaunchFallbackPathsFn = func() []string { return paths }
+	t.Cleanup(func() { gstLaunchFallbackPathsFn = prev })
+}
+
+func TestResolveGSTLaunch_FoundViaFallback(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // not on PATH
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, gstLaunchName)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("writing fake binary: %v", err)
+	}
+	stubGSTFallback(t, []string{filepath.Join(dir, "missing"), bin})
+
+	got, err := resolveGSTLaunch()
+	if err != nil {
+		t.Fatalf("expected to resolve via fallback, got error: %v", err)
+	}
+	if got != bin {
+		t.Errorf("got %q, want %q", got, bin)
+	}
+}
+
+func TestResolveGSTLaunch_IgnoresDirectories(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	dir := t.TempDir()
+	// A directory named like the binary must not be treated as a match.
+	if err := os.Mkdir(filepath.Join(dir, gstLaunchName), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stubGSTFallback(t, []string{filepath.Join(dir, gstLaunchName)})
+
+	if _, err := resolveGSTLaunch(); err == nil {
+		t.Fatal("expected error when only a directory matches, got nil")
 	}
 }

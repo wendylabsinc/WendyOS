@@ -138,9 +138,9 @@ func pipeVideoToStdout(stream interface {
 func playVideoWithGStreamer(ctx context.Context, stream interface {
 	Recv() (*agentpb.VideoFrame, error)
 }) error {
-	gstPath, err := exec.LookPath("gst-launch-1.0")
+	gstPath, err := resolveGSTLaunch()
 	if err != nil {
-		return fmt.Errorf("gst-launch-1.0 not found; install GStreamer or use --stdout to pipe raw video")
+		return err
 	}
 
 	// Peek first frame to learn the codec.
