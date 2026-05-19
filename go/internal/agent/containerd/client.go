@@ -793,24 +793,35 @@ func injectOTELEnvIfNeeded(env []string, appCfg *appconfig.AppConfig) []string {
 	if !hasHostNetworkEntitlement(appCfg) {
 		return env
 	}
+	hasEndpoint, hasProtocol := false, false
 	for _, e := range env {
 		if strings.HasPrefix(e, "OTEL_EXPORTER_OTLP_ENDPOINT=") {
-			return env // already set; do not override
+			hasEndpoint = true
 		}
+		if strings.HasPrefix(e, "OTEL_EXPORTER_OTLP_PROTOCOL=") {
+			hasProtocol = true
+		}
+	}
+	if hasEndpoint {
+		return env // image already configured the exporter; do not override
 	}
 	otelPort := os.Getenv("WENDY_OTEL_PORT")
 	if otelPort == "" {
 		otelPort = "4317"
 	}
-	return append(env,
-		"OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:"+otelPort,
-		"OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
-	)
+	if p, err := strconv.Atoi(otelPort); err != nil || p < 1 || p > 65535 {
+		otelPort = "4317"
+	}
+	env = append(env, "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:"+otelPort)
+	if !hasProtocol {
+		env = append(env, "OTEL_EXPORTER_OTLP_PROTOCOL=grpc")
+	}
+	return env
 }
 
 func hasHostNetworkEntitlement(appCfg *appconfig.AppConfig) bool {
 	for _, e := range appCfg.Entitlements {
-		if e.Type == appconfig.EntitlementNetwork && e.Mode != "none" {
+		if e.Type == appconfig.EntitlementNetwork && (e.Mode == "host" || e.Mode == "") {
 			return true
 		}
 	}

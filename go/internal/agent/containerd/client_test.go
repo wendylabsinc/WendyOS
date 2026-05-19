@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
@@ -162,6 +163,53 @@ func TestInjectOTELEnvSkipsWhenEndpointAlreadySet(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected exactly 1 OTEL_EXPORTER_OTLP_ENDPOINT entry, got %d: %v", count, env)
+	}
+}
+
+func TestInjectOTELEnvDoesNotOverrideExistingProtocol(t *testing.T) {
+	existing := []string{"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"}
+
+	env := injectOTELEnvIfNeeded(existing, hostNetworkCfg())
+
+	count := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OTEL_EXPORTER_OTLP_PROTOCOL=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 OTEL_EXPORTER_OTLP_PROTOCOL entry, got %d: %v", count, env)
+	}
+	for _, kv := range env {
+		if kv == "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" {
+			return
+		}
+	}
+	t.Errorf("image-set protocol was overridden; got %v", env)
+}
+
+func TestInjectOTELEnvInvalidPortFallsBackToDefault(t *testing.T) {
+	t.Setenv("WENDY_OTEL_PORT", "notaport")
+
+	env := injectOTELEnvIfNeeded(nil, hostNetworkCfg())
+
+	const want = "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
+	for _, kv := range env {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("expected fallback to default port; got %v", env)
+}
+
+func TestHasHostNetworkEntitlementEmptyModeIsHost(t *testing.T) {
+	cfg := &appconfig.AppConfig{
+		Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementNetwork, Mode: ""},
+		},
+	}
+	if !hasHostNetworkEntitlement(cfg) {
+		t.Error("empty mode should imply host networking")
 	}
 }
 

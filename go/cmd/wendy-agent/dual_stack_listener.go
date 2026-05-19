@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 // listenDualStackLoopback binds to both 127.0.0.1:port (IPv4) and [::1]:port
@@ -58,12 +60,16 @@ func (l *dualStackListener) acceptLoop(lis net.Listener) {
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-l.done:
-				return // normal shutdown
+				return
 			default:
-				continue // not shutting down; treat as transient and retry
 			}
+			time.Sleep(5 * time.Millisecond)
+			continue
 		}
 		// Prioritise done over enqueuing to avoid leaking connections after Close.
 		select {
