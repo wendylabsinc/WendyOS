@@ -224,10 +224,68 @@ func TestRenderDeviceTable_DeviceType(t *testing.T) {
 	}
 }
 
+func TestDiscoverTableRowsPrioritizesUSBDevices(t *testing.T) {
+	collection := &models.DevicesCollection{
+		LANDevices: []models.LANDevice{
+			{
+				DisplayName: "wendy-wifi",
+				IPAddress:   "192.168.1.20",
+			},
+			{
+				DisplayName: "wendy-usb",
+				IPAddress:   "169.254.20.30",
+				USB:         "enp0s20f0u9 480 Mbps",
+			},
+		},
+	}
+
+	rows := discoverTableRows(collection)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	if rows[0][rowNameIndex] != "wendy-usb" {
+		t.Fatalf("first row name = %q, want USB device first", rows[0][rowNameIndex])
+	}
+	if rows[0][rowUSBIndex] != "enp0s20f0u9 480 Mbps" {
+		t.Fatalf("USB column = %q, want interface summary", rows[0][rowUSBIndex])
+	}
+	if rows[1][rowUSBIndex] != "" {
+		t.Fatalf("non-USB row USB column = %q, want empty", rows[1][rowUSBIndex])
+	}
+}
+
+func TestDiscoverTableRowsAnnotatesLANUSBFromEthernetInterface(t *testing.T) {
+	collection := &models.DevicesCollection{
+		LANDevices: []models.LANDevice{{
+			DisplayName:      "wendy-usb",
+			IPAddress:        "169.254.20.30",
+			NetworkInterface: "Ethernet 3",
+		}},
+		EthernetInterfaces: []models.EthernetInterface{{
+			Name:        "Ethernet 3",
+			DisplayName: "Wendy Gadget Mode",
+			LinkSpeed:   "1 Gbps",
+		}},
+	}
+
+	rows := discoverTableRows(collection)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want LAN and Ethernet rows", len(rows))
+	}
+	if rows[0][rowNameIndex] != "wendy-usb" {
+		t.Fatalf("first row name = %q, want annotated LAN device first", rows[0][rowNameIndex])
+	}
+	wantUSB := "Wendy Gadget Mode (Ethernet 3) 1 Gbps"
+	if rows[0][rowUSBIndex] != wantUSB {
+		t.Fatalf("USB column = %q, want %q", rows[0][rowUSBIndex], wantUSB)
+	}
+}
+
 func TestDiscoverDeviceInfo_JSONSingleDevice(t *testing.T) {
 	info := discoverDeviceInfo{
 		Name:    "wendyos-brave-phoenix",
 		Type:    "LAN",
+		USB:     "en6 1 Gbps",
 		Address: "192.168.1.42",
 		Version: "2026.03.16-163942",
 	}
@@ -247,6 +305,9 @@ func TestDiscoverDeviceInfo_JSONSingleDevice(t *testing.T) {
 	}
 	if parsed["address"] != "192.168.1.42" {
 		t.Errorf("address = %v", parsed["address"])
+	}
+	if parsed["usb"] != "en6 1 Gbps" {
+		t.Errorf("usb = %v", parsed["usb"])
 	}
 }
 

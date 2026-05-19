@@ -97,6 +97,33 @@ func getInterfaceIP(ctx context.Context, bsdName string) string {
 	return ""
 }
 
+func darwinInterfaceDisplayName(ctx context.Context, bsdName string) string {
+	if bsdName == "" {
+		return ""
+	}
+
+	cmd := exec.CommandContext(ctx, "networksetup", "-listallhardwareports")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	var currentDisplayName string
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		switch {
+		case strings.HasPrefix(line, "Hardware Port:"):
+			currentDisplayName = strings.TrimSpace(strings.TrimPrefix(line, "Hardware Port:"))
+		case strings.HasPrefix(line, "Device:"):
+			if strings.TrimSpace(strings.TrimPrefix(line, "Device:")) == bsdName {
+				return currentDisplayName
+			}
+		}
+	}
+	return ""
+}
+
 // linkSpeedRe matches speed values in ifconfig media lines, e.g. "1000baseT", "10Gbase-T".
 var linkSpeedRe = regexp.MustCompile(`(\d+\.?\d*)(G)?base`)
 

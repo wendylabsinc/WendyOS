@@ -50,19 +50,21 @@ func (d USBDevice) HumanReadable() string {
 
 // LANDevice represents a device discovered via mDNS on the local network.
 type LANDevice struct {
-	ID              string `json:"id"`
-	DisplayName     string `json:"displayName"`
-	Hostname        string `json:"hostname"`
-	IPAddress       string `json:"ipAddress,omitempty"`
-	Port            int    `json:"port"`
-	IsMTLS          bool   `json:"isMTLS,omitempty"`
-	InterfaceType   string `json:"interfaceType"`
-	IsWendyDevice   bool   `json:"isWendyDevice"`
-	AgentVersion    string `json:"agentVersion,omitempty"`
-	DeviceType      string `json:"deviceType,omitempty"`
-	OS              string `json:"os,omitempty"`
-	OSVersion       string `json:"osVersion,omitempty"`
-	CPUArchitecture string `json:"cpuArchitecture,omitempty"`
+	ID               string `json:"id"`
+	DisplayName      string `json:"displayName"`
+	Hostname         string `json:"hostname"`
+	IPAddress        string `json:"ipAddress,omitempty"`
+	Port             int    `json:"port"`
+	IsMTLS           bool   `json:"isMTLS,omitempty"`
+	InterfaceType    string `json:"interfaceType"`
+	NetworkInterface string `json:"-"`
+	USB              string `json:"usb,omitempty"`
+	IsWendyDevice    bool   `json:"isWendyDevice"`
+	AgentVersion     string `json:"agentVersion,omitempty"`
+	DeviceType       string `json:"deviceType,omitempty"`
+	OS               string `json:"os,omitempty"`
+	OSVersion        string `json:"osVersion,omitempty"`
+	CPUArchitecture  string `json:"cpuArchitecture,omitempty"`
 }
 
 // HumanReadable returns a human-friendly string describing this LAN device.

@@ -126,7 +126,7 @@ func lanDeviceFromMDNSEntry(entry *mdns.ServiceEntry, iface *net.Interface) (mod
 		id = displayName
 	}
 
-	return models.LANDevice{
+	dev := models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
@@ -135,7 +135,11 @@ func lanDeviceFromMDNSEntry(entry *mdns.ServiceEntry, iface *net.Interface) (mod
 		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
-	}, true
+	}
+	if iface != nil {
+		setLANNetworkInterface(&dev, iface.Name, "", "")
+	}
+	return dev, true
 }
 
 func parseMDNSTXTRecords(fields []string) map[string]string {
@@ -198,6 +202,9 @@ func lanDeviceDedupKey(dev models.LANDevice) string {
 }
 
 func preferLANDevice(candidate, existing models.LANDevice) bool {
+	if (candidate.USB != "") != (existing.USB != "") {
+		return candidate.USB != ""
+	}
 	if existing.IPAddress == "" && candidate.IPAddress != "" {
 		return true
 	}
@@ -234,6 +241,12 @@ func lanDeviceMetadataScore(dev models.LANDevice) int {
 	}
 	if dev.IsMTLS {
 		score++
+	}
+	if dev.NetworkInterface != "" {
+		score++
+	}
+	if dev.USB != "" {
+		score += 2
 	}
 	return score
 }

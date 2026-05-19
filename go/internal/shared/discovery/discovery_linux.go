@@ -57,7 +57,7 @@ func discoverLANAvahi(ctx context.Context, timeout time.Duration) ([]models.LAND
 	}
 
 	var devices []models.LANDevice
-	seen := make(map[string]bool)
+	indexes := make(map[string]int)
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -66,11 +66,7 @@ func discoverLANAvahi(ctx context.Context, timeout time.Duration) ([]models.LAND
 			continue
 		}
 		key := fmt.Sprintf("%s-%s-%d", dev.DisplayName, dev.Hostname, dev.Port)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		devices = append(devices, dev)
+		devices = appendPreferredLANDevice(devices, indexes, key, dev)
 	}
 
 	scanErr := scanner.Err()
@@ -135,7 +131,7 @@ func parseAvahiResolveLine(line string) (models.LANDevice, bool) {
 		id = instanceName
 	}
 
-	return models.LANDevice{
+	dev := models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
@@ -144,7 +140,9 @@ func parseAvahiResolveLine(line string) (models.LANDevice, bool) {
 		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
-	}, true
+	}
+	setLANNetworkInterface(&dev, ifaceName, "", linuxInterfaceLinkSpeed(ifaceName))
+	return dev, true
 }
 
 // avahiUnescape replaces avahi's \NNN decimal escape sequences with the
@@ -201,7 +199,7 @@ func discoverLANMDNS(ctx context.Context, timeout time.Duration) ([]models.LANDe
 	}
 
 	var allDevices []models.LANDevice
-	seen := make(map[string]bool)
+	indexes := make(map[string]int)
 
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 {
@@ -215,11 +213,7 @@ func discoverLANMDNS(ctx context.Context, timeout time.Duration) ([]models.LANDe
 		devices := queryInterface(ctx, &iface, timeout)
 		for _, dev := range devices {
 			key := fmt.Sprintf("%s-%s-%d", dev.DisplayName, dev.Hostname, dev.Port)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			allDevices = append(allDevices, dev)
+			allDevices = appendPreferredLANDevice(allDevices, indexes, key, dev)
 		}
 	}
 
@@ -266,7 +260,7 @@ func lanDeviceFromMDNSEntry(entry *mdns.ServiceEntry, iface *net.Interface) (mod
 		id = displayName
 	}
 
-	return models.LANDevice{
+	dev := models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
@@ -275,7 +269,11 @@ func lanDeviceFromMDNSEntry(entry *mdns.ServiceEntry, iface *net.Interface) (mod
 		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
-	}, true
+	}
+	if iface != nil {
+		setLANNetworkInterface(&dev, iface.Name, "", linuxInterfaceLinkSpeed(iface.Name))
+	}
+	return dev, true
 }
 
 // queryInterface runs a single mDNS query on a specific network interface.

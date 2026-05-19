@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice
 	}
 
 	var devices []models.LANDevice
-	seen := make(map[string]bool)
+	indexes := make(map[string]int)
 
 	for _, inst := range instances {
 		resolveCtx, resolveCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -45,19 +46,16 @@ func discoverLAN(ctx context.Context, timeout time.Duration) ([]models.LANDevice
 		}
 
 		key := fmt.Sprintf("%s-%s-%d", dev.DisplayName, dev.Hostname, dev.Port)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		devices = append(devices, dev)
+		devices = appendPreferredLANDevice(devices, indexes, key, dev)
 	}
 
 	return devices, nil
 }
 
 type browseResult struct {
-	instanceName string
-	domain       string
+	instanceName  string
+	domain        string
+	interfaceName string
 }
 
 // dnssdBrowse runs dns-sd -B and returns as soon as results stop arriving.
@@ -92,10 +90,17 @@ func dnssdBrowse(ctx context.Context, serviceType string) ([]browseResult, error
 			if len(fields) < 7 {
 				continue
 			}
+			interfaceName := ""
+			if interfaceIndex, err := strconv.Atoi(fields[3]); err == nil {
+				if iface, ifaceErr := net.InterfaceByIndex(interfaceIndex); ifaceErr == nil {
+					interfaceName = iface.Name
+				}
+			}
 			lineCh <- parsedLine{
 				result: browseResult{
-					instanceName: strings.Join(fields[6:], " "),
-					domain:       fields[4],
+					instanceName:  strings.Join(fields[6:], " "),
+					domain:        fields[4],
+					interfaceName: interfaceName,
 				},
 				ok: true,
 			}
@@ -119,8 +124,9 @@ func dnssdBrowse(ctx context.Context, serviceType string) ([]browseResult, error
 				_ = cmd.Wait()
 				return results, nil
 			}
-			if pl.ok && !seen[pl.result.instanceName] {
-				seen[pl.result.instanceName] = true
+			key := pl.result.instanceName + "%" + pl.result.interfaceName
+			if pl.ok && !seen[key] {
+				seen[key] = true
 				results = append(results, pl.result)
 				// Reset settle timer: wait 500ms for more results.
 				settle = time.After(500 * time.Millisecond)
@@ -231,7 +237,7 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 		id = displayName
 	}
 
-	return models.LANDevice{
+	dev := models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
@@ -239,7 +245,9 @@ func dnssdResolve(ctx context.Context, inst browseResult) (models.LANDevice, err
 		IsMTLS:        txtRecords["tls"] == "true",
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
-	}, nil
+	}
+	setLANNetworkInterface(&dev, inst.interfaceName, darwinInterfaceDisplayName(ctx, inst.interfaceName), getInterfaceLinkSpeed(ctx, inst.interfaceName))
+	return dev, nil
 }
 
 // deviceFromBrowse builds a LANDevice from browse results alone, without
@@ -280,7 +288,7 @@ func deviceFromBrowse(inst browseResult) models.LANDevice {
 		port = 50051
 	}
 
-	return models.LANDevice{
+	dev := models.LANDevice{
 		ID:            id,
 		DisplayName:   displayName,
 		Hostname:      hostname,
@@ -288,6 +296,8 @@ func deviceFromBrowse(inst browseResult) models.LANDevice {
 		InterfaceType: string(models.InterfaceLAN),
 		IsWendyDevice: true,
 	}
+	setLANNetworkInterface(&dev, inst.interfaceName, "", "")
+	return dev
 }
 
 // discoverLANContinuous keeps dns-sd -B running and sends each newly
