@@ -109,12 +109,20 @@ public struct WendyE2ERecorder: Sendable {
         return slug.isEmpty ? "unknown" : slug
     }
 
+    public static func recordingSuiteDirectoryName(filePath: String) -> String {
+        Self.recordingFileStem(filePath: filePath)
+    }
+
+    public static func recordingTestDirectoryName(testName: String) -> String {
+        Self.slug(testName)
+    }
+
     public static func recordingDirectoryName(filePath: String, testName: String) -> String {
-        "\(Self.recordingFileStem(filePath: filePath)).\(Self.slug(testName))"
+        "\(Self.recordingSuiteDirectoryName(filePath: filePath))/\(Self.recordingTestDirectoryName(testName: testName))"
     }
 
     static func recordingFileName(filePath: String, suite: String, testName: String) -> String {
-        "\(Self.recordingDirectoryName(filePath: filePath, testName: testName)).md"
+        "\(Self.recordingFileStem(filePath: filePath)).\(Self.slug(testName)).md"
     }
 
     // MARK: - Private
@@ -176,10 +184,11 @@ public struct WendyE2ERecorder: Sendable {
             let directoryURL = URL(fileURLWithPath: runDirectory, isDirectory: true)
                 .appendingPathComponent("tests", isDirectory: true)
                 .appendingPathComponent(
-                    Self.recordingDirectoryName(
-                        filePath: identity.filePath,
-                        testName: identity.testName
-                    ),
+                    Self.recordingSuiteDirectoryName(filePath: identity.filePath),
+                    isDirectory: true
+                )
+                .appendingPathComponent(
+                    Self.recordingTestDirectoryName(testName: identity.testName),
                     isDirectory: true
                 )
             try FileManager.default.createDirectory(
@@ -191,10 +200,11 @@ public struct WendyE2ERecorder: Sendable {
 
         let directoryURL = try Self.recordsDirectoryURL()
             .appendingPathComponent(
-                Self.recordingDirectoryName(
-                    filePath: identity.filePath,
-                    testName: identity.testName
-                ),
+                Self.recordingSuiteDirectoryName(filePath: identity.filePath),
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                Self.recordingTestDirectoryName(testName: identity.testName),
                 isDirectory: true
             )
         try FileManager.default.createDirectory(

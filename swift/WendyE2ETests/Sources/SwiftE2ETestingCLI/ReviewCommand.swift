@@ -1,10 +1,6 @@
 import ArgumentParser
 import Foundation
 
-#if canImport(FoundationNetworking)
-    import FoundationNetworking
-#endif
-
 #if canImport(FoundationXML)
     import FoundationXML
 #endif
@@ -12,7 +8,7 @@ import Foundation
 struct ReviewCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "review",
-        abstract: "Review Swift E2E recordings with an AI provider."
+        abstract: "Review Swift E2E recordings with an AI coding agent."
     )
 
     @Option(name: .long, help: "Swift package directory.")
@@ -24,129 +20,115 @@ struct ReviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "E2E run directory. Reads tests/ and writes AI review files.")
     var runDir: String
 
-    @Option(name: .long, help: "AI provider: auto, anthropic, claude, openai, or none.")
+    @Option(name: .long, help: "AI agent: auto, claude, codex, or none.")
     var provider: AIProvider = .auto
 
-    @Option(name: .long, help: "Model name. Defaults depend on provider.")
+    @Option(name: .long, help: "Model name. Passed through as provider-specific environment.")
     var model: String?
 
-    @Option(name: .long, help: "Maximum recording characters to include per test.")
-    var maxRecordingCharacters = 60_000
-
-    @Option(name: .long, help: "Maximum source characters to include per test.")
-    var maxSourceCharacters = 20_000
+    @Option(name: .long, help: "Tests at or above this duration are reviewed as slow-ish.")
+    var slowTestSeconds = 5.0
 
     @Flag(name: .long, help: "Overwrite existing per-test ai-review.md files.")
     var overwrite = false
 
     mutating func run() async throws {
-        let packageURL = URL(fileURLWithPath: packageDir)
+        let packageURL = URL(fileURLWithPath: packageDir).standardizedFileURL
         let testsURL = URL(
             fileURLWithPath: testsDir ?? defaultReviewTestsDir(packageURL: packageURL).path
-        )
-        let runURL = URL(fileURLWithPath: runDir, isDirectory: true)
+        ).standardizedFileURL
+        let runURL = URL(fileURLWithPath: runDir, isDirectory: true).standardizedFileURL
         let recordingURL = runURL.appendingPathComponent("tests", isDirectory: true)
-        let outputDirectoryURL = runURL
+        let repoURL = packageURL.deletingLastPathComponent().deletingLastPathComponent()
+            .standardizedFileURL
 
         let records = try loadReviewRecords(in: recordingURL)
         let testResults = try loadReviewTestResults(
             in: recordingURL,
-            outputDirectoryURL: outputDirectoryURL
+            outputDirectoryURL: runURL
         )
         let tests = try parseReviewTests(in: testsURL, records: records, testResults: testResults)
-        let reviewableTests = tests.filter { !$0.aiComments.isEmpty }
-
-        let reviewer = try makeReviewer(provider: provider, model: model)
-        if reviewer.isConfigured {
-            print("==> Running Swift E2E AI review")
-            print("    Provider: \(reviewer.providerName)")
-            print("    Model:    \(reviewer.modelName)")
-            print("    Tests:    \(reviewableTests.count)")
-        } else {
-            print("==> Swift E2E AI review skipped: no provider API key configured")
-            print("    Tests:    \(reviewableTests.count)")
-        }
-        if reviewableTests.isEmpty {
-            print("    No tests with // AI comments found.")
+        let reviewableTests = tests.filter {
+            $0.requiresAgentReview(slowTestSeconds: slowTestSeconds)
         }
 
-        var results: [ReviewTestAIResult] = []
-        let reviewableTestCount = reviewableTests.count
-        for (offset, test) in reviewableTests.enumerated() {
-            let progress = reviewProgressLabel(
-                for: test,
-                index: offset + 1,
-                total: reviewableTestCount
-            )
-            guard let recordURL = test.recordURL else {
-                print("    Skipping \(progress): missing recording \(test.recordName)")
-                results.append(.missingRecord(test: test))
-                continue
-            }
-            let reviewURL = recordURL.deletingLastPathComponent()
-                .appendingPathComponent("ai-review.md")
-            if FileManager.default.fileExists(atPath: reviewURL.path), !overwrite {
-                let existing = try String(contentsOf: reviewURL, encoding: .utf8)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if !existing.isEmpty {
-                    print("    Skipping \(progress): ai-review.md already exists")
-                    results.append(.existing(test: test, path: reviewURL))
-                    continue
-                }
-            }
+        if overwrite {
+            try removeExistingPerTestReviews(in: recordingURL)
+            try? FileManager.default.removeItem(at: runURL.appendingPathComponent("ai-review.md"))
+        }
 
-            guard reviewer.isConfigured else {
-                print("    Skipping \(progress): no provider configured")
-                results.append(.skipped(test: test))
-                continue
-            }
+        guard !reviewableTests.isEmpty else {
+            try removeEmptyReviewSummary(runURL: runURL)
+            print("==> Swift E2E agent review skipped: no failed, annotated, or slow-ish tests")
+            print("    Tests discovered: \(tests.count)")
+            print("    Slow threshold:   \(formatSeconds(slowTestSeconds))s")
+            return
+        }
 
-            print("    Reviewing \(progress)")
-            let request = try ReviewAIRequest(
-                test: test,
-                source: clipped(test.sourceBody, limit: maxSourceCharacters),
-                recording: clipped(
-                    String(contentsOf: recordURL, encoding: .utf8),
-                    limit: maxRecordingCharacters
-                )
-            )
-            let markdown = try await reviewer.review(request: request)
-            try markdown.write(to: reviewURL, atomically: true, encoding: .utf8)
-            print("    Wrote \(reviewURL.path)")
-            results.append(.written(test: test, path: reviewURL, markdown: markdown))
+        let agent = try makeAgent(provider: provider, model: model)
+        guard agent.isConfigured else {
+            try removeEmptyReviewSummary(runURL: runURL)
+            print("==> Swift E2E agent review skipped: no agent API key configured")
+            print("    Tests discovered: \(tests.count)")
+            print("    Tests selected:   \(reviewableTests.count)")
+            return
+        }
+
+        print("==> Running Swift E2E agent review")
+        print("    Agent:    \(agent.providerName)")
+        print("    Model:    \(agent.modelName)")
+        print("    Repo:     \(repoURL.path)")
+        print("    Run dir:  \(runURL.path)")
+        print("    Tests:    \(reviewableTests.count)")
+
+        let request = ReviewAgentRequest(
+            repoURL: repoURL,
+            packageURL: packageURL,
+            testsURL: testsURL,
+            runURL: runURL,
+            recordingURL: recordingURL,
+            tests: tests,
+            reviewableTests: reviewableTests,
+            slowTestSeconds: slowTestSeconds,
+            overwrite: overwrite
+        )
+        try agent.review(request: request)
+
+        let reviewFiles = try enforceConcernOnlyReviews(in: recordingURL)
+        if reviewFiles.isEmpty {
+            try removeEmptyReviewSummary(runURL: runURL)
+            print("==> Swift E2E agent review found no concern-level issues")
+            return
         }
 
         try writeReviewSummary(
             runURL: runURL,
-            reviewer: reviewer,
+            agent: agent,
             tests: tests,
             reviewableTests: reviewableTests,
-            results: results
+            reviewFiles: reviewFiles,
+            slowTestSeconds: slowTestSeconds
         )
-        updateReviewReadmeBlock(runURL: runURL)
-
-        let written = results.filter(\.isWritten).count
-        let skipped = results.filter(\.isSkipped).count
+        updateReviewReadmeBlock(runURL: runURL, hasReview: true)
         print(
             "==> Wrote Swift E2E AI review summary: \(runURL.appendingPathComponent("ai-review.md").path)"
         )
-        print("    Per-test reviews written: \(written)")
-        if skipped > 0 {
-            print("    Per-test reviews skipped: \(skipped)")
-        }
+        print("    Per-test concern reviews: \(reviewFiles.count)")
     }
 }
 
 enum AIProvider: String, ExpressibleByArgument {
     case auto
-    case anthropic
-    case openai
+    case claude
+    case codex
     case none
 
     init?(argument: String) {
         switch argument.lowercased() {
-        case "claude":
-            self = .anthropic
+        case "claude", "claude-code", "anthropic":
+            self = .claude
+        case "codex", "openai":
+            self = .codex
         default:
             self.init(rawValue: argument.lowercased())
         }
@@ -154,6 +136,7 @@ enum AIProvider: String, ExpressibleByArgument {
 }
 
 private struct ReviewTestCase {
+    var sourcePath: String
     var fileName: String
     var suite: String
     var name: String
@@ -162,12 +145,13 @@ private struct ReviewTestCase {
     var sourceBody: String
     var aiComments: [String]
     var status: ReviewTestStatus
+    var durationSeconds: Double?
     var recordName: String
     var recordURL: URL?
-}
 
-private func reviewProgressLabel(for test: ReviewTestCase, index: Int, total: Int) -> String {
-    "[\(index)/\(total)] \(test.suite) › \(test.name)"
+    func requiresAgentReview(slowTestSeconds: Double) -> Bool {
+        status.isFailed || !aiComments.isEmpty || (durationSeconds ?? 0) >= slowTestSeconds
+    }
 }
 
 private enum ReviewTestStatus {
@@ -204,10 +188,9 @@ private enum ReviewTestStatus {
     }
 }
 
-private struct ReviewCommandRun {
-    var recordURL: URL
-    var sourceFile: String
-    var sourceLine: Int
+private struct ReviewTestObservation {
+    var status: ReviewTestStatus
+    var durationSeconds: Double?
 }
 
 private struct ReviewResultKey: Hashable {
@@ -215,281 +198,295 @@ private struct ReviewResultKey: Hashable {
     var name: String
 }
 
-private struct ReviewAIRequest {
-    var test: ReviewTestCase
-    var source: String
-    var recording: String
+private struct ReviewAgentRequest {
+    var repoURL: URL
+    var packageURL: URL
+    var testsURL: URL
+    var runURL: URL
+    var recordingURL: URL
+    var tests: [ReviewTestCase]
+    var reviewableTests: [ReviewTestCase]
+    var slowTestSeconds: Double
+    var overwrite: Bool
 
     var prompt: String {
         var lines: [String] = []
-        lines.append("You are reviewing a WendyAgent Swift end-to-end test recording.")
-        lines.append("Pay special attention to every // AI: comment in the test source.")
         lines.append(
-            "Treat // AI: comments as prompts, notes, or instructions; they are not necessarily checklist items."
+            "You are reviewing WendyAgent Swift end-to-end test artifacts as a coding agent."
+        )
+        lines.append("")
+        lines.append("You are running from the repository root and may inspect:")
+        lines.append("- the full source tree")
+        lines.append("- git history via git log / git blame / git diff")
+        lines.append("- all E2E run artifacts under the run directory")
+        lines.append("- recordings, xUnit XML, README/report metadata, and generated logs")
+        lines.append("")
+        lines.append("Repository root: `\(repoURL.path)`")
+        lines.append("Swift package: `\(packageURL.path)`")
+        lines.append("Swift E2E tests: `\(testsURL.path)`")
+        lines.append("E2E run directory: `\(runURL.path)`")
+        lines.append("Recorded tests directory: `\(recordingURL.path)`")
+        lines.append("Slow-ish threshold: `\(formatSeconds(slowTestSeconds))s`")
+        lines.append("")
+        lines.append("## Progress output")
+        lines.append("")
+        lines.append(
+            "Print brief progress updates to stdout while you work so CI shows a health signal. Mention what test, artifact, source file, or hypothesis you are currently inspecting. Keep updates short and useful, for example:"
         )
         lines.append(
-            "Use the full test source, captured recording, and failure text as context when needed."
+            "- `Progress: inspecting wendy-device-info.prints-human-readable-device-information recording.md`"
         )
-        lines.append("Return concise Markdown only using this shape:")
+        lines.append("- `Progress: checking device info implementation for terminal probe output`")
+        lines.append("- `Progress: writing concern for tests/<suite-key>/<test-key>/ai-review.md`")
+        lines.append(
+            "Print a progress line at least before each selected test and before writing each review file. Do not wait until the final summary to report progress."
+        )
+        lines.append("")
+        lines.append("## Task")
+        lines.append("")
+        lines.append(
+            "Investigate the selected tests below. They were selected because they failed, contain `// AI:` review notes, or are slow-ish."
+        )
+        lines.append(
+            "For each selected test, inspect its recording, source, relevant implementation code, nearby tests, and git history as needed."
+        )
+        lines.append(
+            "Look for real issues that a human reviewer should discuss: regressions, product bugs, test bugs, flaky or infrastructure problems, suspicious slowness, misleading output, missing assertions, or unresolved `// AI:` concerns."
+        )
+        lines.append("")
+        lines.append("## Output contract")
+        lines.append("")
+        lines.append(
+            "Write Markdown review files only for tests with at least a concern-level issue."
+        )
+        lines.append(
+            "Do not write any file for tests that are OK, expected, or purely informational."
+        )
+        lines.append(
+            "Do not write `Status: pass` reviews. A missing `ai-review.md` means no concern."
+        )
+        lines.append(
+            "Do not edit product code, tests, or generated recordings. Only create, replace, or remove per-test `ai-review.md` files under the E2E run directory."
+        )
+        if !overwrite {
+            lines.append(
+                "If a non-empty `ai-review.md` already exists, leave it in place unless it is clearly stale or says the test passed."
+            )
+        }
+        lines.append("")
+        lines.append("Each concern file must use this shape:")
+        lines.append("")
+        lines.append("```markdown")
         lines.append("# AI Review")
         lines.append("")
-        lines.append("Status: pass|concern|fail")
-        lines.append("Source: `File.swift:line`")
-        lines.append("Record: `recording.md`")
+        lines.append("Status: concern|fail")
+        lines.append("Source: `path/to/TestFile.swift:line`")
+        lines.append("Record: `tests/<suite-key>/<test-key>/recording.md`")
         lines.append("")
-        lines.append("## AI comments")
-        lines.append("- pass|concern|fail: address each // AI: instruction or note")
-        lines.append("  Evidence: brief evidence")
+        lines.append("## Issue")
+        lines.append("One concise paragraph naming the issue.")
         lines.append("")
-        lines.append("## Failure investigation")
-        lines.append("Only include if the test failed.")
+        lines.append("## Evidence")
+        lines.append("- Quote or cite exact recording/source/result evidence.")
         lines.append("")
-        lines.append("## Notes")
-        lines.append("Optional. Keep it brief. Quote only relevant lines.")
+        lines.append("## Likely cause")
+        lines.append("Best current hypothesis. Say when uncertain.")
         lines.append("")
-        lines.append("Test: \(test.suite) › \(test.name)")
-        lines.append("Source: \(test.fileName):\(test.funcLine)")
-        lines.append("Status: \(test.status.statusText)")
-        if let detail = test.status.detail, !detail.isEmpty {
-            lines.append("Failure detail:\n\(detail)")
+        lines.append("## Suggested actions")
+        lines.append("- Concrete options for a human or follow-up agent.")
+        lines.append("```")
+        lines.append("")
+        lines.append(
+            "Prefer `Status: fail` when the evidence points to a real regression or broken required behavior. Use `Status: concern` for flakes, slowness, ambiguous behavior, missing evidence, or follow-up-worthy test quality issues."
+        )
+        lines.append("")
+        lines.append("## Selected tests")
+        lines.append("")
+        for test in reviewableTests {
+            lines.append("### \(test.suite) › \(test.name)")
+            lines.append("- Status: `\(test.status.statusText)`")
+            if let duration = test.durationSeconds {
+                lines.append("- Duration: `\(formatSeconds(duration))s`")
+            }
+            if let detail = test.status.detail, !detail.isEmpty {
+                lines.append("- Failure/skipped detail:")
+                lines.append("  ```")
+                lines.append(indent(detail, prefix: "  "))
+                lines.append("  ```")
+            }
+            lines.append("- Source: `\(test.sourcePath):\(test.funcLine)`")
+            lines.append("- Record: `\(test.recordName)`")
+            if let recordURL = test.recordURL {
+                lines.append("- Recording path: `\(recordURL.path)`")
+                lines.append(
+                    "- Review path: `\(recordURL.deletingLastPathComponent().appendingPathComponent("ai-review.md").path)`"
+                )
+            } else {
+                lines.append("- Recording path: `<missing>`")
+            }
+            if !test.aiComments.isEmpty {
+                lines.append("- `// AI:` comments:")
+                for comment in test.aiComments {
+                    lines.append("  - \(comment.replacingOccurrences(of: "\n", with: "\n    "))")
+                }
+            }
+            lines.append("")
         }
-        lines.append("// AI comments:")
-        lines.append(formattedAIComments)
+        lines.append("## All-run context")
         lines.append("")
-        lines.append("Swift source excerpt:")
-        lines.append("```swift")
-        lines.append(source)
-        lines.append("```")
-        lines.append("")
-        lines.append("Recording:")
-        lines.append("```markdown")
-        lines.append(recording)
-        lines.append("```")
+        lines.append(
+            "The full xUnit result file and all other test recordings are available in the run directory. You may inspect non-selected tests to compare behavior or identify shared causes, but only write per-test review files for concern-level findings."
+        )
         return lines.joined(separator: "\n")
     }
-
-    private var formattedAIComments: String {
-        guard !test.aiComments.isEmpty else {
-            return "<none>"
-        }
-        return test.aiComments.joined(separator: "\n\n")
-    }
 }
 
-private enum ReviewTestAIResult {
-    case written(test: ReviewTestCase, path: URL, markdown: String)
-    case existing(test: ReviewTestCase, path: URL)
-    case skipped(test: ReviewTestCase)
-    case missingRecord(test: ReviewTestCase)
-
-    var test: ReviewTestCase {
-        switch self {
-        case .written(let test, _, _), .existing(let test, _), .skipped(let test),
-            .missingRecord(let test):
-            test
-        }
-    }
-
-    var isWritten: Bool {
-        if case .written = self { return true }
-        return false
-    }
-
-    var isSkipped: Bool {
-        if case .skipped = self { return true }
-        return false
-    }
-}
-
-private protocol E2EAIReviewer {
+private protocol E2EAgentReviewer {
     var isConfigured: Bool { get }
     var providerName: String { get }
     var modelName: String { get }
 
-    func review(request: ReviewAIRequest) async throws -> String
+    func review(request: ReviewAgentRequest) throws
 }
 
-private struct UnconfiguredReviewer: E2EAIReviewer {
+private struct UnconfiguredAgentReviewer: E2EAgentReviewer {
+    var reason: String
     var isConfigured: Bool { false }
     var providerName: String { "none" }
     var modelName: String { "none" }
 
-    func review(request _: ReviewAIRequest) async throws -> String {
-        throw ValidationError("AI reviewer is not configured.")
+    func review(request _: ReviewAgentRequest) throws {
+        throw ValidationError(reason)
     }
 }
 
-private struct AnthropicReviewer: E2EAIReviewer {
-    var apiKey: String
+private struct ShellAgentReviewer: E2EAgentReviewer {
+    var providerName: String
     var modelName: String
-    var isConfigured: Bool { !apiKey.isEmpty }
-    var providerName: String { "anthropic" }
+    var shellCommand: String
+    var modelEnvironmentKey: String?
 
-    func review(request: ReviewAIRequest) async throws -> String {
-        let payload = AnthropicMessagesRequest(
-            model: modelName,
-            maxTokens: 2_000,
-            messages: [
-                .init(role: "user", content: request.prompt)
-            ]
+    var isConfigured: Bool { true }
+
+    func review(request: ReviewAgentRequest) throws {
+        let promptURL = request.runURL.appendingPathComponent(
+            ".agent-review-prompt-\(UUID().uuidString).md"
         )
-        var urlRequest = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        urlRequest.httpBody = try JSONEncoder().encode(payload)
+        try request.prompt.write(to: promptURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: promptURL) }
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validateHTTP(response: response, data: data, provider: providerName)
-        let decoded = try JSONDecoder().decode(AnthropicMessagesResponse.self, from: data)
-        let text = decoded.content.map(\.text).joined(separator: "\n").trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard !text.isEmpty else {
-            throw ValidationError("Anthropic returned an empty review.")
-        }
-        return text
-    }
-}
-
-private struct OpenAIReviewer: E2EAIReviewer {
-    var apiKey: String
-    var modelName: String
-    var isConfigured: Bool { !apiKey.isEmpty }
-    var providerName: String { "openai" }
-
-    func review(request: ReviewAIRequest) async throws -> String {
-        let payload = OpenAIChatRequest(
-            model: modelName,
-            messages: [
-                .init(
-                    role: "system",
-                    content: "You write concise Markdown review of E2E test recordings."
-                ),
-                .init(role: "user", content: request.prompt),
-            ]
-        )
-        var urlRequest = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        urlRequest.httpBody = try JSONEncoder().encode(payload)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validateHTTP(response: response, data: data, provider: providerName)
-        let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
-        let text =
-            decoded.choices.first?.message.content.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ) ?? ""
-        guard !text.isEmpty else {
-            throw ValidationError("OpenAI returned an empty review.")
-        }
-        return text
-    }
-}
-
-private struct AnthropicMessagesRequest: Encodable {
-    struct Message: Encodable {
-        var role: String
-        var content: String
-    }
-
-    var model: String
-    var maxTokens: Int
-    var messages: [Message]
-
-    enum CodingKeys: String, CodingKey {
-        case model
-        case maxTokens = "max_tokens"
-        case messages
-    }
-}
-
-private struct AnthropicMessagesResponse: Decodable {
-    struct Content: Decodable {
-        var type: String
-        var text: String
-    }
-
-    var content: [Content]
-}
-
-private struct OpenAIChatRequest: Encodable {
-    struct Message: Encodable {
-        var role: String
-        var content: String
-    }
-
-    var model: String
-    var messages: [Message]
-}
-
-private struct OpenAIChatResponse: Decodable {
-    struct Choice: Decodable {
-        struct Message: Decodable {
-            var content: String
+        var environment = ProcessInfo.processInfo.environment
+        environment["WENDY_E2E_AGENT_PROMPT"] = promptURL.path
+        environment["WENDY_E2E_REVIEW_RUN_DIR"] = request.runURL.path
+        environment["WENDY_E2E_REVIEW_RECORDINGS_DIR"] = request.recordingURL.path
+        environment["WENDY_E2E_REVIEW_REPO_DIR"] = request.repoURL.path
+        if let modelEnvironmentKey {
+            if usesAgentDefaultModel(modelName) {
+                environment.removeValue(forKey: modelEnvironmentKey)
+            } else {
+                environment[modelEnvironmentKey] = modelName
+            }
         }
 
-        var message: Message
-    }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-lc", shellCommand]
+        process.currentDirectoryURL = request.repoURL
+        process.environment = environment
 
-    var choices: [Choice]
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw ValidationError(
+                "\(providerName) agent review failed with exit status \(process.terminationStatus)."
+            )
+        }
+    }
 }
 
-private let defaultAnthropicReviewModel = "claude-sonnet-4-6"
-private let defaultOpenAIReviewModel = "gpt-5.5"
-
-private func makeReviewer(provider: AIProvider, model: String?) throws -> any E2EAIReviewer {
+private func makeAgent(provider: AIProvider, model: String?) throws -> any E2EAgentReviewer {
     let environment = ProcessInfo.processInfo.environment
     let anthropicKey = environment["ANTHROPIC_API_KEY", default: ""]
     let openAIKey = environment["OPENAI_API_KEY", default: ""]
 
     switch provider {
     case .none:
-        return UnconfiguredReviewer()
-    case .anthropic:
+        return UnconfiguredAgentReviewer(reason: "AI review disabled with --provider none.")
+    case .claude:
         guard !anthropicKey.isEmpty else {
-            throw ValidationError("ANTHROPIC_API_KEY is required for --provider anthropic.")
+            throw ValidationError("ANTHROPIC_API_KEY is required for --provider claude.")
         }
-        return AnthropicReviewer(
-            apiKey: anthropicKey,
-            modelName: model ?? environment["ANTHROPIC_MODEL", default: defaultAnthropicReviewModel]
-        )
-    case .openai:
+        if environment["WENDY_E2E_CLAUDE_COMMAND", default: ""].isEmpty {
+            try requireExecutable("claude", provider: "claude")
+        }
+        return claudeAgent(model: model, environment: environment)
+    case .codex:
         guard !openAIKey.isEmpty else {
-            throw ValidationError("OPENAI_API_KEY is required for --provider openai.")
+            throw ValidationError("OPENAI_API_KEY is required for --provider codex.")
         }
-        return OpenAIReviewer(
-            apiKey: openAIKey,
-            modelName: model ?? environment["OPENAI_MODEL", default: defaultOpenAIReviewModel]
-        )
+        if environment["WENDY_E2E_CODEX_COMMAND", default: ""].isEmpty {
+            try requireExecutable("codex", provider: "codex")
+        }
+        return codexAgent(model: model, environment: environment)
     case .auto:
         if !anthropicKey.isEmpty {
-            return AnthropicReviewer(
-                apiKey: anthropicKey,
-                modelName: model
-                    ?? environment["ANTHROPIC_MODEL", default: defaultAnthropicReviewModel]
-            )
+            if environment["WENDY_E2E_CLAUDE_COMMAND", default: ""].isEmpty {
+                try requireExecutable("claude", provider: "claude")
+            }
+            return claudeAgent(model: model, environment: environment)
         }
         if !openAIKey.isEmpty {
-            return OpenAIReviewer(
-                apiKey: openAIKey,
-                modelName: model ?? environment["OPENAI_MODEL", default: defaultOpenAIReviewModel]
-            )
+            if environment["WENDY_E2E_CODEX_COMMAND", default: ""].isEmpty {
+                try requireExecutable("codex", provider: "codex")
+            }
+            return codexAgent(model: model, environment: environment)
         }
-        return UnconfiguredReviewer()
+        return UnconfiguredAgentReviewer(reason: "No agent API key configured.")
     }
 }
 
-private func validateHTTP(response: URLResponse, data: Data, provider: String) throws {
-    guard let httpResponse = response as? HTTPURLResponse else {
-        throw ValidationError("\(provider) returned a non-HTTP response.")
-    }
-    guard 200..<300 ~= httpResponse.statusCode else {
-        let body = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
-        throw ValidationError("\(provider) returned HTTP \(httpResponse.statusCode): \(body)")
+private func claudeAgent(model: String?, environment: [String: String]) -> ShellAgentReviewer {
+    ShellAgentReviewer(
+        providerName: "claude",
+        modelName: model ?? environment["ANTHROPIC_MODEL", default: "default"],
+        shellCommand: environment[
+            "WENDY_E2E_CLAUDE_COMMAND",
+            default:
+                #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_AGENT_PROMPT."; if [[ -n "${ANTHROPIC_MODEL:-}" ]]; then claude --model "$ANTHROPIC_MODEL" -p "$prompt" --dangerously-skip-permissions; else claude -p "$prompt" --dangerously-skip-permissions; fi"#
+        ],
+        modelEnvironmentKey: "ANTHROPIC_MODEL"
+    )
+}
+
+private func codexAgent(model: String?, environment: [String: String]) -> ShellAgentReviewer {
+    ShellAgentReviewer(
+        providerName: "codex",
+        modelName: model ?? environment["OPENAI_MODEL", default: "default"],
+        shellCommand: environment[
+            "WENDY_E2E_CODEX_COMMAND",
+            default:
+                #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_AGENT_PROMPT."; if [[ -n "${OPENAI_MODEL:-}" ]]; then codex exec --model "$OPENAI_MODEL" --sandbox workspace-write --ask-for-approval never "$prompt"; else codex exec --sandbox workspace-write --ask-for-approval never "$prompt"; fi"#
+        ],
+        modelEnvironmentKey: "OPENAI_MODEL"
+    )
+}
+
+private func usesAgentDefaultModel(_ modelName: String) -> Bool {
+    let normalized = modelName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalized.isEmpty || normalized == "default" || normalized == "latest"
+}
+
+private func requireExecutable(_ name: String, provider: String) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["which", name]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw ValidationError("\(provider) requires `\(name)` to be installed on PATH.")
     }
 }
 
@@ -517,7 +514,14 @@ private func loadReviewRecords(in recordingURL: URL) throws -> [String: URL] {
     var records: [String: URL] = [:]
     for case let recordURL as URL in enumerator where recordURL.lastPathComponent == "recording.md"
     {
-        records[recordURL.deletingLastPathComponent().lastPathComponent] = recordURL
+        let relative = reviewRelativePath(recordURL, base: recordingURL)
+        let components = relative.split(separator: "/").map(String.init)
+        if components.count >= 3 {
+            records["\(components[components.count - 3]).\(components[components.count - 2])"] =
+                recordURL
+        } else {
+            records[recordURL.deletingLastPathComponent().lastPathComponent] = recordURL
+        }
     }
     return records
 }
@@ -525,7 +529,7 @@ private func loadReviewRecords(in recordingURL: URL) throws -> [String: URL] {
 private func parseReviewTests(
     in testsURL: URL,
     records: [String: URL],
-    testResults: [ReviewResultKey: ReviewTestStatus]
+    testResults: [ReviewResultKey: ReviewTestObservation]
 ) throws -> [ReviewTestCase] {
     let sourceURLs = try reviewSwiftTestFiles(in: testsURL)
     var tests: [ReviewTestCase] = []
@@ -547,7 +551,7 @@ private func parseReviewTests(
             if line.contains("@Test") {
                 pendingTest = (
                     line: lineNumber,
-                    disabled: reviewFirstMatch(#"\.disabled\(\"([^\"]*)\"\)"#, in: line)
+                    disabled: reviewFirstMatch(#"\.disabled\("([^"]*)"\)"#, in: line)
                 )
             }
             if let functionName = reviewFirstMatch(#"\bfunc\s+`([^`]+)`\s*\("#, in: line)
@@ -572,14 +576,18 @@ private func parseReviewTests(
                 index + 1 < discovered.count ? discovered[index + 1].funcLine : lines.count + 1
             let bodyLines = Array(lines[(test.funcLine - 1)..<(nextLine - 1)])
             let aiComments = extractReviewAIComments(from: bodyLines)
-            let recordKey = "\(reviewRecordFileStem(sourceURL)).\(reviewSlug(test.name))"
+            let recordSuiteKey = reviewRecordFileStem(sourceURL)
+            let recordTestKey = reviewSlug(test.name)
+            let recordKey = "\(recordSuiteKey).\(recordTestKey)"
             let key = ReviewResultKey(suite: test.suite, name: test.name)
+            let observation = testResults[key]
             let status =
                 test.disabled.map { ReviewTestStatus.skipped($0) }
-                ?? testResults[key]
+                ?? observation?.status
                 ?? .unknown
             tests.append(
                 ReviewTestCase(
+                    sourcePath: sourceURL.path,
                     fileName: sourceURL.lastPathComponent,
                     suite: test.suite,
                     name: test.name,
@@ -588,7 +596,8 @@ private func parseReviewTests(
                     sourceBody: bodyLines.joined(separator: "\n"),
                     aiComments: aiComments,
                     status: status,
-                    recordName: "\(recordKey)/recording.md",
+                    durationSeconds: observation?.durationSeconds,
+                    recordName: "\(recordSuiteKey)/\(recordTestKey)/recording.md",
                     recordURL: records[recordKey]
                 )
             )
@@ -646,9 +655,7 @@ private func extractReviewAIComments(from lines: [String]) -> [String] {
             continue
         }
 
-        guard inAI else {
-            continue
-        }
+        guard inAI else { continue }
 
         if trimmed.hasPrefix("//") {
             currentBlock.append(stripReviewCommentPrefix(from: trimmed))
@@ -679,7 +686,7 @@ private func stripReviewCommentPrefix(from line: String) -> String {
 private func loadReviewTestResults(
     in recordingURL: URL,
     outputDirectoryURL: URL
-) throws -> [ReviewResultKey: ReviewTestStatus] {
+) throws -> [ReviewResultKey: ReviewTestObservation] {
     guard
         let resultURL = try reviewTestResultsURL(
             in: [recordingURL, outputDirectoryURL, recordingURL.deletingLastPathComponent()]
@@ -722,9 +729,9 @@ private func reviewTestResultsURL(in searchURLs: [URL]) throws -> URL? {
 }
 
 private final class ReviewXUnitResultParser: NSObject, XMLParserDelegate {
-    var results: [ReviewResultKey: ReviewTestStatus] = [:]
+    var results: [ReviewResultKey: ReviewTestObservation] = [:]
 
-    private var current: (key: ReviewResultKey, failure: String?, skipped: String?)?
+    private var current: (key: ReviewResultKey, failure: String?, skipped: String?, time: Double?)?
     private var currentElement: String?
     private var currentText = ""
 
@@ -743,7 +750,12 @@ private final class ReviewXUnitResultParser: NSObject, XMLParserDelegate {
                 current = nil
                 return
             }
-            current = (key: key, failure: nil, skipped: nil)
+            current = (
+                key: key,
+                failure: nil,
+                skipped: nil,
+                time: attributeDict["time"].flatMap(Double.init)
+            )
         case "failure", "skipped":
             currentElement = elementName
             currentText = ""
@@ -785,13 +797,18 @@ private final class ReviewXUnitResultParser: NSObject, XMLParserDelegate {
             currentText = ""
         case "testcase":
             guard let current else { return }
+            let status: ReviewTestStatus
             if let skipped = current.skipped {
-                results[current.key] = .skipped(skipped.isEmpty ? nil : skipped)
+                status = .skipped(skipped.isEmpty ? nil : skipped)
             } else if let failure = current.failure {
-                results[current.key] = .failed(failure.isEmpty ? nil : failure)
+                status = .failed(failure.isEmpty ? nil : failure)
             } else {
-                results[current.key] = .passed
+                status = .passed
             }
+            results[current.key] = ReviewTestObservation(
+                status: status,
+                durationSeconds: current.time
+            )
             self.current = nil
         default:
             break
@@ -829,65 +846,139 @@ private func reviewStripBackticks(_ value: String) -> String {
     return value
 }
 
+private struct ReviewFile {
+    var testKey: String
+    var url: URL
+    var status: String
+}
+
+private func removeExistingPerTestReviews(in recordingURL: URL) throws {
+    guard FileManager.default.fileExists(atPath: recordingURL.path),
+        let enumerator = FileManager.default.enumerator(
+            at: recordingURL,
+            includingPropertiesForKeys: nil
+        )
+    else { return }
+
+    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "ai-review.md"
+    {
+        let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
+        guard FileManager.default.fileExists(atPath: recordURL.path) else { continue }
+        try FileManager.default.removeItem(at: reviewURL)
+    }
+}
+
+private func enforceConcernOnlyReviews(in recordingURL: URL) throws -> [ReviewFile] {
+    guard FileManager.default.fileExists(atPath: recordingURL.path),
+        let enumerator = FileManager.default.enumerator(
+            at: recordingURL,
+            includingPropertiesForKeys: nil
+        )
+    else { return [] }
+
+    var reviewFiles: [ReviewFile] = []
+    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "ai-review.md"
+    {
+        let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
+        guard FileManager.default.fileExists(atPath: recordURL.path) else { continue }
+        let markdown = try String(contentsOf: reviewURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markdown.isEmpty else {
+            try FileManager.default.removeItem(at: reviewURL)
+            continue
+        }
+        guard let status = parseReviewStatus(from: markdown), status != "pass" else {
+            try FileManager.default.removeItem(at: reviewURL)
+            continue
+        }
+        guard status == "concern" || status == "fail" else {
+            try FileManager.default.removeItem(at: reviewURL)
+            continue
+        }
+        reviewFiles.append(
+            ReviewFile(
+                testKey: reviewURL.deletingLastPathComponent().deletingLastPathComponent()
+                    .lastPathComponent
+                    + "." + reviewURL.deletingLastPathComponent().lastPathComponent,
+                url: reviewURL,
+                status: status
+            )
+        )
+    }
+    return reviewFiles.sorted { $0.url.path < $1.url.path }
+}
+
+private func parseReviewStatus(from markdown: String) -> String? {
+    for line in markdown.components(separatedBy: .newlines) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard trimmed.hasPrefix("status:") else { continue }
+        let status = trimmed.dropFirst("status:".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(status.split(separator: " ").first ?? "")
+    }
+    return nil
+}
+
 private func writeReviewSummary(
     runURL: URL,
-    reviewer: any E2EAIReviewer,
+    agent: any E2EAgentReviewer,
     tests: [ReviewTestCase],
     reviewableTests: [ReviewTestCase],
-    results: [ReviewTestAIResult]
+    reviewFiles: [ReviewFile],
+    slowTestSeconds: Double
 ) throws {
     let markdownURL = runURL.appendingPathComponent("ai-review.md")
-    let written = results.filter(\.isWritten).count
-    let skipped = results.filter(\.isSkipped).count
-    let missingRecords = results.filter { result in
-        if case .missingRecord = result { return true }
-        return false
-    }.count
-    let existing = results.filter { result in
-        if case .existing = result { return true }
-        return false
-    }.count
     let aiTestCount = tests.filter { !$0.aiComments.isEmpty }.count
     let failedTestCount = tests.filter(\.status.isFailed).count
+    let slowTestCount = tests.filter { ($0.durationSeconds ?? 0) >= slowTestSeconds }.count
 
     var markdown: [String] = []
+    let summaryStatus = reviewFiles.contains { $0.status == "fail" } ? "fail" : "concern"
+
     markdown.append("# Swift E2E AI Review")
     markdown.append("")
-    if reviewer.isConfigured {
-        markdown.append("Status: complete")
-    } else {
-        markdown.append("Status: skipped")
-        markdown.append("")
-        markdown.append("AI review skipped: ANTHROPIC_API_KEY or OPENAI_API_KEY not configured.")
-    }
+    markdown.append("Status: \(summaryStatus)")
     markdown.append("")
-    markdown.append("- Provider: `\(reviewer.providerName)`")
-    markdown.append("- Model: `\(reviewer.modelName)`")
+    markdown.append("- Agent: `\(agent.providerName)`")
+    markdown.append("- Model: `\(agent.modelName)`")
     markdown.append("- Tests discovered: `\(tests.count)`")
     markdown.append("- Tests with `// AI:` comments: `\(aiTestCount)`")
     markdown.append("- Failed tests: `\(failedTestCount)`")
+    markdown.append("- Slow-ish tests: `\(slowTestCount)`")
     markdown.append("- Tests selected for review: `\(reviewableTests.count)`")
-    markdown.append("- Per-test reviews written: `\(written)`")
-    markdown.append("- Existing reviews kept: `\(existing)`")
-    markdown.append("- Missing recordings: `\(missingRecords)`")
-    markdown.append("- Skipped: `\(skipped)`")
+    markdown.append("- Per-test concern reviews: `\(reviewFiles.count)`")
     markdown.append("")
-    markdown.append("## Tests")
+    markdown.append("## Per-test reviews")
     markdown.append("")
-    for result in results {
-        markdown.append(
-            "- `\(result.test.suite) › \(result.test.name)` — \(result.test.status.statusText)"
-        )
+    for review in reviewFiles {
+        let relative = reviewRelativePath(review.url, base: runURL)
+        markdown.append("- `\(review.status)`: `\(review.testKey)` — `\(relative)`")
     }
     try markdown.joined(separator: "\n").appending("\n").write(
         to: markdownURL,
         atomically: true,
         encoding: .utf8
     )
-
 }
 
-private func updateReviewReadmeBlock(runURL: URL) {
+private func reviewRelativePath(_ url: URL, base: URL) -> String {
+    let path = url.path
+    let basePath = base.path
+    if path.hasPrefix(basePath + "/") {
+        return String(path.dropFirst(basePath.count + 1))
+    }
+    if let range = path.range(of: "/tests/") {
+        return "tests/" + path[range.upperBound...]
+    }
+    return path
+}
+
+private func removeEmptyReviewSummary(runURL: URL) throws {
+    try? FileManager.default.removeItem(at: runURL.appendingPathComponent("ai-review.md"))
+    updateReviewReadmeBlock(runURL: runURL, hasReview: false)
+}
+
+private func updateReviewReadmeBlock(runURL: URL, hasReview: Bool) {
     let readmeURL = runURL.appendingPathComponent("README.md")
     let start = "<!-- swift-e2e-review:start -->"
     let end = "<!-- swift-e2e-review:end -->"
@@ -904,6 +995,16 @@ private func updateReviewReadmeBlock(runURL: URL) {
         end: "<!-- swift-e2e-analyze:end -->"
     )
     let stripped = withoutLegacyAnalyzeBlock.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard hasReview else {
+        guard !original.isEmpty else { return }
+        try? (stripped.isEmpty ? "" : stripped + "\n").write(
+            to: readmeURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        return
+    }
+
     let block = """
 
         \(start)
@@ -925,14 +1026,6 @@ private func stripReviewBlock(from text: String, start: String, end: String) -> 
     var output = text
     output.removeSubrange(startRange.lowerBound..<endRange.upperBound)
     return output
-}
-
-private func clipped(_ value: String, limit: Int) -> String {
-    guard value.count > limit else {
-        return value
-    }
-    let prefix = value.prefix(limit)
-    return String(prefix) + "\n\n[... clipped to \(limit) characters ...]"
 }
 
 private func reviewRecordFileStem(_ sourceURL: URL) -> String {
@@ -1019,4 +1112,15 @@ private func reviewFirstMatch(_ pattern: String, in text: String, group: Int = 1
         return nil
     }
     return String(text[swiftRange])
+}
+
+private func formatSeconds(_ value: Double) -> String {
+    if value.rounded() == value {
+        return String(Int(value))
+    }
+    return String(format: "%.3f", value)
+}
+
+private func indent(_ value: String, prefix: String) -> String {
+    value.components(separatedBy: .newlines).map { prefix + $0 }.joined(separator: "\n")
 }

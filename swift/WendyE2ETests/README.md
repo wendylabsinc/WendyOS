@@ -45,10 +45,12 @@ swift test --filter WendyE2ETests
 ```
 
 Each implemented test writes recordings under
-`<run-dir>/tests/<suite-file-stem-dasherized>.<test-name-dasherized>/`, where
+`<run-dir>/tests/<suite-file-stem-dasherized>/<test-name-dasherized>/`, where
 the suite file stem is the test file name with the `Tests` suffix removed. For
-example, `WendyDeviceInfoTests.swift` records under `wendy-device-info.*`.
-The `recording.sh.txt` file replays the captured `sh()` invocations in order for
+example, `WendyDeviceInfoTests.swift` records under
+`wendy-device-info/<test-name>/`. This keeps per-suite space available for
+suite-level artifacts while each test retains its own recording directory. The
+`recording.sh.txt` file replays the captured `sh()` invocations in order for
 manual debugging while remaining browser-viewable from the HTML report.
 
 Sandbox isolation is controlled by `--isolation` or `WENDY_E2E_ISOLATION`:

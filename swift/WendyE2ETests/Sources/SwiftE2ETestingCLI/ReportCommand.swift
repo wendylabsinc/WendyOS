@@ -66,6 +66,7 @@ struct ReportCommand: ParsableCommand {
         )
         let files = try parseTests(
             in: testsURL,
+            recordingURL: recordingURL,
             records: records,
             aiReviews: aiReviews,
             testResults: testResults
@@ -252,7 +253,7 @@ private func loadRecords(in recordingURL: URL) throws -> [String: [CommandRun]] 
 
     var records: [String: [CommandRun]] = [:]
     for recordURL in recordURLs {
-        records[recordKey(for: recordURL)] = try parseRecord(
+        records[recordKey(for: recordURL, relativeTo: recordingURL)] = try parseRecord(
             at: recordURL,
             relativeTo: recordingURL
         )
@@ -277,7 +278,11 @@ private func loadAIReviews(in recordingURL: URL) throws -> [String: AIReview] {
     var reviews: [String: AIReview] = [:]
     for case let reviewURL as URL in enumerator
     where reviewURL.lastPathComponent == "ai-review.md" {
-        let recordKey = reviewURL.deletingLastPathComponent().lastPathComponent
+        let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
+        guard FileManager.default.fileExists(atPath: recordURL.path) else {
+            continue
+        }
+        let recordKey = recordKey(for: recordURL, relativeTo: recordingURL)
         let review = try String(contentsOf: reviewURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !recordKey.isEmpty, !review.isEmpty {
@@ -324,8 +329,13 @@ private func commandRecordURLs(in recordingURL: URL) throws -> [URL] {
     }.sorted { $0.path < $1.path }
 }
 
-private func recordKey(for recordURL: URL) -> String {
+private func recordKey(for recordURL: URL, relativeTo recordingURL: URL) -> String {
     if recordURL.lastPathComponent == "recording.md" {
+        let relative = relativePath(from: recordingURL, to: recordURL)
+        let components = relative.split(separator: "/").map(String.init)
+        if components.count >= 3 {
+            return "\(components[components.count - 3]).\(components[components.count - 2])"
+        }
         return recordURL.deletingLastPathComponent().lastPathComponent
     }
     return recordURL.deletingPathExtension().lastPathComponent
@@ -670,6 +680,7 @@ private func stripBackticks(_ value: String) -> String {
 
 private func parseTests(
     in testsURL: URL,
+    recordingURL: URL,
     records: [String: [CommandRun]],
     aiReviews: [String: AIReview],
     testResults: [TestResultKey: ReportTestStatus]
@@ -723,9 +734,15 @@ private func parseTests(
             let body = Array(lines[(tests[testIndex].funcLine - 1)..<(nextLine - 1)])
             tests[testIndex].nextLine = nextLine
             tests[testIndex].aiItems = extractAIItems(from: body)
-            let recordKey =
-                "\(recordFileStem(sourceURL)).\(slug(tests[testIndex].name))"
-            tests[testIndex].recordName = "\(recordKey)/recording.md"
+            let recordSuiteKey = recordFileStem(sourceURL)
+            let recordTestKey = slug(tests[testIndex].name)
+            let recordKey = "\(recordSuiteKey).\(recordTestKey)"
+            let nestedRecordName = "\(recordSuiteKey)/\(recordTestKey)/recording.md"
+            let legacyRecordName = "\(recordKey)/recording.md"
+            tests[testIndex].recordName =
+                FileManager.default.fileExists(
+                    atPath: recordingURL.appendingPathComponent(nestedRecordName).path
+                ) ? nestedRecordName : legacyRecordName
             tests[testIndex].aiReview = aiReviews[recordKey]
             tests[testIndex].commands = records[recordKey, default: []].filter {
                 command in

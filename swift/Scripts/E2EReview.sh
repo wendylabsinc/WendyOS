@@ -16,24 +16,30 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") --run-dir DIR [OPTIONS]
 
-Review WendyAgent Swift E2E run artifacts with Anthropic/Claude or OpenAI.
+Review WendyAgent Swift E2E run artifacts with Claude Code or Codex.
 
 Options:
   --run-dir DIR      Required E2E run directory produced by E2ETest.sh.
   --package-dir DIR  Swift package directory containing swift-e2e-testing;
                      defaults to $DEFAULT_PACKAGE_DIR.
-  --provider NAME    AI provider: auto, anthropic, claude, openai, or none; defaults to auto.
-  --model NAME       Provider model override.
+  --provider NAME    AI agent: auto, claude, codex, or none; defaults to auto.
+                    Legacy aliases claude-code/anthropic and openai are accepted.
+  --model NAME       Provider model override. Use latest/default to let the
+                     agent CLI choose its default model.
   --overwrite        Overwrite existing per-test ai-review.md files.
   --help             Show this help message.
 
 Environment:
-  ANTHROPIC_API_KEY  API key used when provider is anthropic or auto.
-  ANTHROPIC_MODEL    Optional Anthropic model override.
-  OPENAI_API_KEY     API key used when provider is openai or auto.
-  OPENAI_MODEL       Optional OpenAI model override.
+  ANTHROPIC_API_KEY  Enables Claude when provider is claude or auto.
+  ANTHROPIC_MODEL    Optional Claude model override.
+  OPENAI_API_KEY     Enables Codex when provider is codex or auto.
+  OPENAI_MODEL       Optional Codex model override.
   WENDY_E2E_AI_PROVIDER  Default provider override.
   WENDY_E2E_AI_MODEL     Default model override.
+  WENDY_E2E_CLAUDE_COMMAND Optional shell command for Claude Code. Reads the
+                           prompt from WENDY_E2E_AGENT_PROMPT.
+  WENDY_E2E_CODEX_COMMAND  Optional shell command for Codex. Reads the prompt
+                           from WENDY_E2E_AGENT_PROMPT.
 EOF
 }
 
