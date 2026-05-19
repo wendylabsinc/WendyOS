@@ -41,6 +41,11 @@ func newBuildCmd() *cobra.Command {
 			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
 				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
 			}
+			// --dockerfile implies a Docker build; prevent the provider from
+			// auto-selecting a Compose file when both markers are present.
+			if opts.dockerfile != "" && opts.buildType == "" {
+				opts.buildType = "docker"
+			}
 
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -93,6 +98,20 @@ func newBuildCmd() *cobra.Command {
 						}
 						cliSuccess("Build completed successfully.")
 						return nil
+					}
+				}
+
+				// For docker-type projects, resolve which Dockerfile to use before
+				// calling the provider — shows an interactive picker when multiple
+				// Dockerfiles exist and no --dockerfile flag was given.
+				if projectType == "docker" && opts.dockerfile == "" {
+					resolved, resolveErr := resolveDockerfile(cwd, "", isInteractiveTerminal())
+					if resolveErr != nil {
+						return resolveErr
+					}
+					opts.dockerfile = resolved
+					if resolved != "" && opts.buildType == "" {
+						opts.buildType = "docker"
 					}
 				}
 

@@ -977,47 +977,10 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	return "", fmt.Errorf("build type %q is not available in %s", requestedType, dir)
 }
 
-// resolveRunDockerfile returns the Dockerfile filename to pass to docker buildx for a
-// docker-type project. If opts.dockerfile is set it is returned directly (already
-// validated by the caller). Otherwise all Dockerfiles in cwd are detected: a single
-// match is returned immediately; multiple matches trigger an interactive picker or,
-// in non-interactive mode, prefer the base "Dockerfile" and fall back to the first
-// variant found.
+// resolveRunDockerfile returns the Dockerfile for a docker-type project.
+// It delegates to the shared resolveDockerfile helper in docker.go.
 func resolveRunDockerfile(cwd string, opts runOptions, interactive bool) (string, error) {
-	if opts.dockerfile != "" {
-		return opts.dockerfile, nil
-	}
-
-	var dockerfiles []BuildOption
-	for _, opt := range detectBuildOptions(cwd) {
-		if opt.Type == "docker" {
-			dockerfiles = append(dockerfiles, opt)
-		}
-	}
-
-	if len(dockerfiles) <= 1 {
-		// Zero or one Dockerfile — let Docker use its default resolution.
-		if len(dockerfiles) == 1 {
-			return dockerfiles[0].File, nil
-		}
-		return "", nil
-	}
-
-	// Multiple Dockerfiles found.
-	if !interactive {
-		for _, opt := range dockerfiles {
-			if opt.File == "Dockerfile" {
-				return opt.File, nil
-			}
-		}
-		return dockerfiles[0].File, nil
-	}
-
-	picked, err := pickBuildOptionWithTitle(dockerfiles, "Select a Dockerfile")
-	if err != nil {
-		return "", err
-	}
-	return picked.File, nil
+	return resolveDockerfile(cwd, opts.dockerfile, interactive)
 }
 
 // runWithProvider builds and runs via an external device provider.

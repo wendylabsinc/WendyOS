@@ -98,6 +98,47 @@ func detectProjectType(dir string) (string, error) {
 	return "unknown", nil
 }
 
+// resolveDockerfile returns the Dockerfile filename to pass to docker build for
+// a docker-type project. If requested is non-empty it is returned as-is (the
+// caller has already validated that the file exists). Otherwise all Dockerfiles
+// in cwd are detected: a single match is returned immediately; multiple matches
+// trigger an interactive picker or, in non-interactive mode, prefer the base
+// "Dockerfile" and fall back to the first variant found.
+func resolveDockerfile(cwd, requested string, interactive bool) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+
+	var dockerfiles []BuildOption
+	for _, opt := range detectBuildOptions(cwd) {
+		if opt.Type == "docker" {
+			dockerfiles = append(dockerfiles, opt)
+		}
+	}
+
+	if len(dockerfiles) <= 1 {
+		if len(dockerfiles) == 1 {
+			return dockerfiles[0].File, nil
+		}
+		return "", nil
+	}
+
+	if !interactive {
+		for _, opt := range dockerfiles {
+			if opt.File == "Dockerfile" {
+				return opt.File, nil
+			}
+		}
+		return dockerfiles[0].File, nil
+	}
+
+	picked, err := pickBuildOptionWithTitle(dockerfiles, "Select a Dockerfile")
+	if err != nil {
+		return "", err
+	}
+	return picked.File, nil
+}
+
 // BuildOption represents a detected build type in a project directory.
 type BuildOption struct {
 	Label string // display name shown in the picker
