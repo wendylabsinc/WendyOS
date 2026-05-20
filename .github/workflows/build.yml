@@ -1284,6 +1284,7 @@ jobs:
     needs: [determine-version, release, publish-linux-repos, publish-aur, publish-winget]
     if: |
       always() &&
+      needs.determine-version.result == 'success' &&
       needs.release.result == 'success' &&
       needs.publish-linux-repos.result == 'success' &&
       needs.publish-aur.result == 'success' &&
@@ -1336,35 +1337,47 @@ jobs:
 
           ${INSTALL_INSTRUCTIONS}"
 
-          ESCAPED_DESC=$(echo "$FULL_DESCRIPTION" | jq -Rs .)
-
           PAYLOAD_FILE=$(mktemp /tmp/discord_payload.XXXXXX.json)
           trap 'rm -f "$PAYLOAD_FILE"' EXIT
 
-          cat > "$PAYLOAD_FILE" << PAYLOAD_EOF
-          {
-            "content": "🚀 **New CLI release**: **${VERSION}**",
-            "embeds": [
-              {
-                "title": "Release ${VERSION}",
-                "url": "${URL}",
-                "description": ${ESCAPED_DESC},
-                "color": 5814783,
-                "footer": { "text": "${REPO} • ${VERSION}" }
-              }
-            ]
-          }
-          PAYLOAD_EOF
+          # Build payload via jq so all values are properly escaped (no JSON injection)
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "$URL" \
+            --arg desc "$FULL_DESCRIPTION" \
+            --arg repo "$REPO" \
+            '{
+              content: ("🚀 **New CLI release**: **" + $version + "**"),
+              embeds: [{
+                title: ("Release " + $version),
+                url: $url,
+                description: $desc,
+                color: 5814783,
+                footer: { text: ($repo + " • " + $version) }
+              }]
+            }' > "$PAYLOAD_FILE"
 
           if [ -n "$DISCORD_WEBHOOK_URL" ]; then
-            if curl -sS -X POST -H "Content-Type: application/json" \
-                -d @"$PAYLOAD_FILE" \
-                "$DISCORD_WEBHOOK_URL"; then
-              echo "Discord notification sent"
-            else
-              echo "Discord notification failed" >&2
+            # Validate URL is a Discord webhook before use
+            if [[ ! "$DISCORD_WEBHOOK_URL" =~ ^https://discord(app)?\.com/api/webhooks/ ]]; then
+              echo "Invalid webhook URL format, skipping notification" >&2
               exit 1
             fi
+
+            for attempt in 1 2 3; do
+              if curl -sS --fail -X POST -H "Content-Type: application/json" \
+                  --url "$DISCORD_WEBHOOK_URL" \
+                  -d @"$PAYLOAD_FILE"; then
+                echo "Discord notification sent (attempt ${attempt})"
+                break
+              fi
+              echo "Attempt ${attempt} failed" >&2
+              if [ "$attempt" -eq 3 ]; then
+                echo "All Discord notification attempts failed — release succeeded, notification skipped" >&2
+              else
+                sleep 5
+              fi
+            done
           else
             echo "DISCORD_WEBHOOK_URL not configured, skipping notification"
           fi
