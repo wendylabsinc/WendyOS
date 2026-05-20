@@ -10,7 +10,7 @@ on:
 jobs:
   vscode-update:
     name: Propose update to wendylabsinc/wendy-vscode
-    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
     runs-on: ubuntu-latest
     permissions:
       contents: read
