@@ -1,0 +1,375 @@
+name: Swift E2E Tests
+
+on:
+  push:
+    branches:
+      - kb.swift-e2e-tests
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'Comma-separated SwiftPM test filters (empty = WendyE2ETests)'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      tests:
+        type: string
+        required: false
+        default: ''
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+
+concurrency:
+  group: swift-e2e-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-e2e-tests:
+    name: ${{ matrix.target.name }}
+    # Unsupported entries remain visible as no-op placeholders on GitHub-hosted
+    # runners while supported entries run the Swift E2E harness on their target
+    # self-hosted CLI runner.
+    runs-on: ${{ matrix.target.status == 'enabled' && matrix.target.runner_id == 'macos-26' && fromJSON('["self-hosted", "macOS"]') || matrix.target.status == 'enabled' && matrix.target.runner_id == 'ubuntu-24-04' && fromJSON('["self-hosted", "linux"]') || matrix.target.status == 'enabled' && matrix.target.runner_id == 'windows-11' && fromJSON('["self-hosted", "Windows", "X64", "windows-11"]') || 'ubuntu-latest' }}
+    concurrency:
+      group: ${{ matrix.target.status == 'enabled' && format('swift-e2e-{0}', matrix.target.device_id) || format('swift-e2e-placeholder-{0}', matrix.target.id) }}
+      cancel-in-progress: false
+    timeout-minutes: ${{ matrix.target.status == 'enabled' && 120 || 5 }}
+    strategy:
+      fail-fast: false
+      # GitHub concurrency groups keep only one pending job, so they cannot
+      # safely serialize three CLI routes to the same device within a matrix.
+      # Run the hardware matrix one route at a time to avoid device contention
+      # without losing pending matrix entries.
+      max-parallel: 1
+      matrix:
+        target:
+          - id: macos-26-to-jetson-orin-nano
+            name: macOS 26 → Jetson Orin Nano
+            status: enabled
+            status_label: Enabled
+            runner_id: macos-26
+            runner_name: macOS 26
+            runner_labels: 'self-hosted, macOS, ARM64, macos-26'
+            cli_os: macOS
+            device_id: jetson-orin-nano
+            device_name: Jetson Orin Nano
+            device_address: wendyos-jetson-orin-nano.local
+            agent_os: wendyOS
+            transport: lan
+
+          - id: macos-26-to-mac-mini
+            name: macOS 26 → Mac mini
+            status: enabled
+            status_label: Enabled
+            runner_id: macos-26
+            runner_name: macOS 26
+            runner_labels: 'self-hosted, macOS, ARM64, macos-26'
+            cli_os: macOS
+            device_id: mac-mini
+            device_name: Mac mini
+            device_address: mac-mini.local
+            agent_os: macOS
+            transport: lan
+
+          - id: ubuntu-24-04-to-mac-mini
+            name: Ubuntu 24.04 → Mac mini
+            status: enabled
+            status_label: Enabled
+            runner_id: ubuntu-24-04
+            runner_name: Ubuntu 24.04
+            runner_labels: 'self-hosted, Linux, X64, ubuntu-24-04'
+            cli_os: linux
+            device_id: mac-mini
+            device_name: Mac mini
+            device_address: mac-mini.local
+            agent_os: macOS
+            transport: lan
+
+          - id: ubuntu-24-04-to-jetson-orin-nano
+            name: Ubuntu 24.04 → Jetson Orin Nano
+            status: enabled
+            status_label: Enabled
+            runner_id: ubuntu-24-04
+            runner_name: Ubuntu 24.04
+            runner_labels: 'self-hosted, Linux, X64, ubuntu-24-04'
+            cli_os: linux
+            device_id: jetson-orin-nano
+            device_name: Jetson Orin Nano
+            device_address: wendyos-jetson-orin-nano.local
+            agent_os: wendyOS
+            transport: lan
+
+          - id: windows-11-to-jetson-orin-nano
+            name: Windows 11 → Jetson Orin Nano
+            status: enabled
+            status_label: Enabled
+            runner_id: windows-11
+            runner_name: Windows 11
+            runner_labels: 'self-hosted, Windows, X64, windows-11'
+            cli_os: windows
+            device_id: jetson-orin-nano
+            device_name: Jetson Orin Nano
+            device_address: wendyos-jetson-orin-nano.local
+            agent_os: wendyOS
+            transport: lan
+
+          - id: macos-26-to-raspberry-pi-5
+            name: macOS 26 → Raspberry Pi 5
+            status: enabled
+            status_label: Enabled
+            runner_id: macos-26
+            runner_name: macOS 26
+            runner_labels: 'self-hosted, macOS, ARM64, macos-26'
+            cli_os: macOS
+            device_id: raspberry-pi-5
+            device_name: Raspberry Pi 5
+            device_address: wendyos-raspberry-pi-5.local
+            agent_os: wendyOS
+            transport: lan
+
+          - id: ubuntu-24-04-to-raspberry-pi-5
+            name: Ubuntu 24.04 → Raspberry Pi 5
+            status: enabled
+            status_label: Enabled
+            runner_id: ubuntu-24-04
+            runner_name: Ubuntu 24.04
+            runner_labels: 'self-hosted, Linux, X64, ubuntu-24-04'
+            cli_os: linux
+            device_id: raspberry-pi-5
+            device_name: Raspberry Pi 5
+            device_address: wendyos-raspberry-pi-5.local
+            agent_os: wendyOS
+            transport: lan
+
+          - id: windows-11-to-raspberry-pi-5
+            name: Windows 11 → Raspberry Pi 5
+            status: enabled
+            status_label: Enabled
+            runner_id: windows-11
+            runner_name: Windows 11
+            runner_labels: 'self-hosted, Windows, X64, windows-11'
+            cli_os: windows
+            device_id: raspberry-pi-5
+            device_name: Raspberry Pi 5
+            device_address: wendyos-raspberry-pi-5.local
+            agent_os: wendyOS
+            transport: lan
+
+    steps:
+      - uses: actions/checkout@v6
+        if: matrix.target.status == 'enabled'
+
+      - name: Capture Swift toolchain version (Unix)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id != 'windows-11'
+        id: swift-toolchain-unix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target.runner_id }}" == "macos-26" ]]; then
+            version="$(xcodebuild -version | awk '/Xcode/ { print $2 }')"
+          else
+            version="$(swift --version | head -n 1 | tr -cs '[:alnum:]._-' '-')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Capture Swift toolchain version (Windows)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id == 'windows-11'
+        id: swift-toolchain-windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (& swift --version | Select-Object -First 1) -replace '[^A-Za-z0-9._-]+', '-'
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Cache SwiftPM package resolution
+        if: matrix.target.status == 'enabled'
+        uses: actions/cache@v5
+        with:
+          path: |
+            swift/WendyE2ETests/.build/checkouts
+            swift/WendyE2ETests/.build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.cache/org.swift.swiftpm
+            ~/AppData/Local/org.swift.swiftpm
+          key: swift-e2e-swiftpm-${{ runner.os }}-${{ steps.swift-toolchain-unix.outputs.version || steps.swift-toolchain-windows.outputs.version }}-${{ hashFiles('swift/WendyE2ETests/Package.resolved') }}
+          restore-keys: |
+            swift-e2e-swiftpm-${{ runner.os }}-${{ steps.swift-toolchain-unix.outputs.version || steps.swift-toolchain-windows.outputs.version }}-
+            swift-e2e-swiftpm-${{ runner.os }}-
+
+      - name: Compute Swift E2E run ID (Unix)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id != 'windows-11'
+        id: e2e-run-unix
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug() {
+            printf '%s' "$1" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^[:alnum:]._-]+/-/g; s/-+/-/g; s/^-//; s/-$//'
+          }
+
+          workflow_id="$(slug "${GITHUB_WORKFLOW:-swift-e2e-tests}")"
+          matrix_id="$(slug "${{ matrix.target.id }}")"
+          printf -v attempt_suffix '%04d' "${GITHUB_RUN_ATTEMPT:-1}"
+          echo "run_id=${workflow_id}.gh${GITHUB_RUN_ID}.${matrix_id}.${attempt_suffix}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute Swift E2E run ID (Windows)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id == 'windows-11'
+        id: e2e-run-windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Convert-ToSlug([string]$Value) {
+            $slug = $Value.ToLowerInvariant() -replace '[^a-z0-9._-]+', '-'
+            $slug = $slug -replace '-+', '-'
+            return $slug.Trim('-')
+          }
+
+          $workflowID = Convert-ToSlug $(if ($env:GITHUB_WORKFLOW) { $env:GITHUB_WORKFLOW } else { 'swift-e2e-tests' })
+          $matrixID = Convert-ToSlug '${{ matrix.target.id }}'
+          $attempt = if ($env:GITHUB_RUN_ATTEMPT) { [int]$env:GITHUB_RUN_ATTEMPT } else { 1 }
+          $runID = '{0}.gh{1}.{2}.{3:D4}' -f $workflowID, $env:GITHUB_RUN_ID, $matrixID, $attempt
+          "run_id=$runID" >> $env:GITHUB_OUTPUT
+
+      - name: Run Swift E2E tests (Unix)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id != 'windows-11'
+        working-directory: swift
+        shell: bash
+        env:
+          WENDY_E2E_TEST_FILTERS: ${{ inputs.tests || '' }}
+          WENDY_E2E_RUN_ID: ${{ steps.e2e-run-unix.outputs.run_id }}
+          WENDY_E2E_CLI_OS: ${{ matrix.target.cli_os }}
+          WENDY_E2E_AGENT_OS: ${{ matrix.target.agent_os }}
+          WENDY_E2E_TRANSPORT: ${{ matrix.target.transport }}
+        run: |
+          set -euo pipefail
+          bash ./Scripts/E2ETest.sh \
+            --output-dir /tmp/wendy \
+            --agent-address "${{ matrix.target.device_address }}"
+
+      - name: Run Swift E2E tests (Windows)
+        if: matrix.target.status == 'enabled' && matrix.target.runner_id == 'windows-11'
+        working-directory: swift
+        shell: pwsh
+        env:
+          WENDY_E2E_TEST_FILTERS: ${{ inputs.tests || '' }}
+          WENDY_E2E_RUN_ID: ${{ steps.e2e-run-windows.outputs.run_id }}
+          WENDY_E2E_CLI_OS: ${{ matrix.target.cli_os }}
+          WENDY_E2E_AGENT_OS: ${{ matrix.target.agent_os }}
+          WENDY_E2E_TRANSPORT: ${{ matrix.target.transport }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = Join-Path $env:RUNNER_TEMP 'wendy'
+          & ./Scripts/E2ETest.ps1 --output-dir $outputDir --agent-address "${{ matrix.target.device_address }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Swift E2E run (Unix)
+        if: always() && matrix.target.status == 'enabled' && matrix.target.runner_id != 'windows-11'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.e2e-run-unix.outputs.run_id }}
+          path: /tmp/wendy/${{ steps.e2e-run-unix.outputs.run_id }}/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Swift E2E run (Windows)
+        if: always() && matrix.target.status == 'enabled' && matrix.target.runner_id == 'windows-11'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.e2e-run-windows.outputs.run_id }}
+          path: ${{ runner.temp }}/wendy/${{ steps.e2e-run-windows.outputs.run_id }}/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Not Supported Yet
+        if: matrix.target.status != 'enabled'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${{ matrix.target.name }}"
+            echo
+            echo "Status: **${{ matrix.target.status_label }}**"
+            echo
+            echo "This matrix entry is intentionally visible but currently runs as a no-op."
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Runner | ${{ matrix.target.runner_name }} |"
+            echo "| Planned runner labels | \`${{ matrix.target.runner_labels }}\` |"
+            echo "| CLI OS | \`${{ matrix.target.cli_os }}\` |"
+            echo "| Device | ${{ matrix.target.device_name }} |"
+            echo "| Device ID | \`${{ matrix.target.device_id }}\` |"
+            echo "| Transport | \`${{ matrix.target.transport }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  swift-e2e-aggregate:
+    name: Aggregate Swift E2E Results
+    if: ${{ always() && !cancelled() }}
+    needs: swift-e2e-tests
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute Swift E2E aggregate ID
+        id: e2e-aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug() {
+            printf '%s' "$1" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^[:alnum:]._-]+/-/g; s/-+/-/g; s/^-//; s/-$//'
+          }
+
+          workflow_id="$(slug "${GITHUB_WORKFLOW:-swift-e2e-tests}")"
+          printf -v attempt_suffix '%04d' "${GITHUB_RUN_ATTEMPT:-1}"
+          echo "aggregate_id=${workflow_id}.gh${GITHUB_RUN_ID}.aggregate.${attempt_suffix}" >> "$GITHUB_OUTPUT"
+          echo "aggregate_dir=/tmp/wendy/${workflow_id}.gh${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download Swift E2E runs
+        uses: actions/download-artifact@v5
+        with:
+          path: /tmp/wendy-raw
+          pattern: swift-e2e-tests.gh${{ github.run_id }}.*
+
+      - name: Aggregate Swift E2E runs
+        working-directory: swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t run_dirs < <(find /tmp/wendy-raw -mindepth 1 -maxdepth 1 -type d | sort)
+          if [[ ${#run_dirs[@]} -eq 0 ]]; then
+            echo "ERROR: no Swift E2E run artifacts downloaded." >&2
+            exit 1
+          fi
+          bash ./Scripts/E2EAggregate.sh \
+            --output-dir /tmp/wendy \
+            "${run_dirs[@]}"
+
+      - name: Skip Swift E2E aggregate AI review
+        if: always()
+        shell: bash
+        run: echo "Swift E2E aggregate AI review is disabled for now."
+
+      - name: Render Swift E2E aggregate index
+        if: always()
+        working-directory: swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./Scripts/E2EReport.sh \
+            --run-dir "${{ steps.e2e-aggregate.outputs.aggregate_dir }}"
+
+      - name: Upload Swift E2E aggregate
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.e2e-aggregate.outputs.aggregate_id }}
+          path: ${{ steps.e2e-aggregate.outputs.aggregate_dir }}/**
+          if-no-files-found: warn
+          retention-days: 14

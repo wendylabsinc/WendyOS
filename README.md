@@ -18,6 +18,12 @@ On Windows:
 winget install WendyLabs.Wendy
 ```
 
+If you are running a local PowerShell setup script and script execution is disabled, run it with a one-time bypass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\set-up-windows.ps1
+```
+
 Also available via [Homebrew, .deb, .rpm, and AUR](INSTALL.md).
 
 ## Installing the Agent

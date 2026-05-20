@@ -7,7 +7,7 @@ When you need to run the local macOS app-backed agent for testing:
 1. Start it with:
 
    ```sh
-   make run
+   make agent-start
    ```
 
    This will:
@@ -35,13 +35,13 @@ When you need to run the local macOS app-backed agent for testing:
 4. When finished, stop the macOS app with:
 
    ```sh
-   make quit
+   make agent-stop
    ```
 
 ## Expectations
 
 - Do not leave `WendyAgentMac` running after tests complete.
-- Prefer `make run` and `make quit` over launching or killing the app manually.
+- Prefer `make agent-start` and `make agent-stop` over launching or killing the app manually.
 - Prefer deterministic smoke-test commands over exploratory manual testing when possible.
 
 ## Formatting

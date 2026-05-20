@@ -7,4 +7,7 @@
    <FileRef
       location = "group:WendyAgentMac/WendyAgentMac.xcodeproj">
    </FileRef>
+   <FileRef
+      location = "group:WendyE2ETests">
+   </FileRef>
 </Workspace>

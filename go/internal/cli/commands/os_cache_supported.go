@@ -3,8 +3,10 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -22,10 +24,30 @@ func addOSCacheCmd(parent *cobra.Command) {
 }
 
 func newOSCacheListCmd() *cobra.Command {
+	type osCacheEntry struct {
+		Name      string  `json:"name"`
+		SizeBytes int64   `json:"sizeBytes"`
+		SizeMB    float64 `json:"sizeMB"`
+	}
+
+	printJSON := func(items []osCacheEntry) error {
+		if items == nil {
+			items = []osCacheEntry{}
+		}
+		data, err := json.MarshalIndent(items, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List cached OS images",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			explicitJSON := jsonOutput && cmd.Root().PersistentFlags().Changed("json")
 			dir, err := osCacheDir()
 			if err != nil {
 				return err
@@ -34,29 +56,46 @@ func newOSCacheListCmd() *cobra.Command {
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
+					if explicitJSON {
+						return printJSON(nil)
+					}
 					fmt.Println("No cached OS images.")
 					return nil
 				}
 				return fmt.Errorf("reading cache: %w", err)
 			}
 
-			var found bool
+			var items []osCacheEntry
 			for _, entry := range entries {
+				path := filepath.Join(dir, entry.Name())
 				if entry.IsDir() {
+					if _, err := entrySize(path); err != nil {
+						return fmt.Errorf("determining OS cache entry size for %s: %w", entry.Name(), err)
+					}
 					continue
 				}
 				info, err := entry.Info()
 				if err != nil {
-					continue
+					return fmt.Errorf("reading OS cache entry info for %s: %w", entry.Name(), err)
 				}
 				sizeMB := float64(info.Size()) / (1024 * 1024)
-				fmt.Printf("  %s  (%.1f MB)\n", entry.Name(), sizeMB)
-				found = true
+				items = append(items, osCacheEntry{
+					Name:      entry.Name(),
+					SizeBytes: info.Size(),
+					SizeMB:    sizeMB,
+				})
 			}
 
-			if !found {
+			if explicitJSON {
+				return printJSON(items)
+			}
+
+			if len(items) == 0 {
 				fmt.Println("No cached OS images.")
 			} else {
+				for _, item := range items {
+					fmt.Printf("  %s  (%.1f MB)\n", item.Name, item.SizeMB)
+				}
 				fmt.Printf("\nCache directory: %s\n", dir)
 			}
 

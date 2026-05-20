@@ -1,0 +1,1835 @@
+import ArgumentParser
+import Foundation
+
+#if canImport(FoundationXML)
+    import FoundationXML
+#endif
+
+struct ReportCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "report",
+        abstract: "Generate an aggregate HTML report from a Swift E2E aggregate run.",
+        discussion: """
+            Generates the static HTML index for an aggregate Swift E2E run.
+            """
+    )
+
+    @Option(name: .long, help: "Swift package directory.")
+    var packageDir = "."
+
+    @Option(name: .long, help: "Directory containing Swift E2E test sources.")
+    var testsDir: String?
+
+    @Option(name: .long, help: "HTML report template path.")
+    var template: String?
+
+    @Option(name: .long, help: "Aggregate E2E run directory. Writes index.html.")
+    var runDir: String
+
+    mutating func run() throws {
+        let packageURL = URL(fileURLWithPath: packageDir)
+        let testsURL = URL(
+            fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: packageURL).path
+        )
+        let templateURL = URL(
+            fileURLWithPath: template
+                ?? packageURL.appendingPathComponent("Support/e2e-report.template.html")
+                .path
+        )
+        let runURL = URL(fileURLWithPath: runDir, isDirectory: true)
+        guard try isAggregateRunDirectory(runURL) else {
+            throw ValidationError("Report input must be a Swift E2E aggregate directory: \(runURL.path)")
+        }
+
+        let outputURL = runURL.appendingPathComponent("index.html")
+        let records = try loadRecords(in: runURL)
+        let aiReviews = try loadAggregateAIReviews(in: runURL)
+        let testResults = try loadAggregateTestResults(in: runURL)
+        let files = try parseTests(
+            in: testsURL,
+            recordingURL: runURL,
+            records: records,
+            aiReviews: aiReviews,
+            testResults: testResults
+        )
+        try renderReport(
+            templateURL: templateURL,
+            recordingURL: runURL,
+            files: files,
+            aiReviews: aiReviews,
+            outputURL: outputURL
+        )
+    }
+}
+
+private struct CommandRun {
+    var record: String
+    var sourcePath: String
+    var sourceFile: String
+    var sourceLine: Int
+    var machine = ""
+    var command = ""
+    var status = ""
+    var duration = ""
+    var stdout = ""
+    var stderr = ""
+}
+
+private struct TestResultKey: Hashable {
+    var suite: String
+    var name: String
+}
+
+private struct AggregatePathKey: Hashable {
+    var suiteKey: String
+    var testKey: String
+}
+
+private struct ReportTestDuration {
+    var seconds: Double
+    var formatted: String
+    var color: String
+    var barWidth: String
+}
+
+private struct ReportTestDurationRange {
+    var count: Int
+    var minSeconds: Double
+    var maxSeconds: Double
+
+    var formatted: String {
+        let min = formattedTestDuration(minSeconds)
+        let max = formattedTestDuration(maxSeconds)
+        if count == 1 || min == max {
+            return min
+        }
+        return "\(min)–\(max)"
+    }
+
+    var barLeft: String {
+        let minPercent = durationBarPercent(seconds: minSeconds)
+        let maxPercent = durationBarPercent(seconds: maxSeconds)
+        if minPercent == maxPercent {
+            let markerWidth = 2.0
+            return percentString(Swift.min(Swift.max(minPercent - (markerWidth / 2), 0), 100 - markerWidth))
+        }
+        return percentString(minPercent)
+    }
+
+    var barWidth: String {
+        let minPercent = durationBarPercent(seconds: minSeconds)
+        let maxPercent = durationBarPercent(seconds: maxSeconds)
+        if minPercent == maxPercent {
+            return "2.0%"
+        }
+        return percentString(maxPercent - minPercent)
+    }
+
+    var barColor: String {
+        let minColor = durationColor(seconds: minSeconds)
+        let maxColor = durationColor(seconds: maxSeconds)
+        if minSeconds == maxSeconds || minColor == maxColor {
+            return minColor
+        }
+        return "linear-gradient(90deg, \(minColor), \(maxColor))"
+    }
+
+    init?(_ seconds: [Double]) {
+        let validSeconds = seconds.filter { $0 >= 0 }.sorted()
+        guard let min = validSeconds.first, let max = validSeconds.last else {
+            return nil
+        }
+        self.count = validSeconds.count
+        self.minSeconds = min
+        self.maxSeconds = max
+    }
+}
+
+private struct ReportAggregateTestResult {
+    var targetOutcomes: ReportTargetOutcomeCounts
+    var durationRange: ReportTestDurationRange?
+    var observations: [ReportTestObservation]
+}
+
+private struct ReportTestObservation {
+    var target: String
+    var route: TargetRoute
+    var attempt: String
+    var status: ReportTestStatus
+    var recordingPath: String?
+    var shellPath: String?
+
+    var duration: ReportTestDuration? {
+        status.duration
+    }
+}
+
+private enum ReportTestStatus {
+    case passed(duration: ReportTestDuration?)
+    case failed(String?, duration: ReportTestDuration?)
+    case skipped(String?, duration: ReportTestDuration?)
+    case unknown
+
+    var statusClass: String {
+        switch self {
+        case .passed:
+            return "pass"
+        case .failed:
+            return "fail"
+        case .skipped:
+            return "skipped"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    var statusText: String {
+        switch self {
+        case .passed:
+            return "Passed"
+        case .failed:
+            return "Failed"
+        case .skipped:
+            return "Skipped"
+        case .unknown:
+            return "Unknown"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .failed(let message, _):
+            return message
+        case .skipped(let reason, _):
+            return reason
+        case .unknown:
+            return "No Swift Testing result was found for this test in the recording."
+        case .passed:
+            return nil
+        }
+    }
+
+    var duration: ReportTestDuration? {
+        switch self {
+        case .passed(let duration):
+            return duration
+        case .failed(_, let duration):
+            return duration
+        case .skipped(_, let duration):
+            return duration
+        case .unknown:
+            return nil
+        }
+    }
+}
+
+private struct ReportTargetOutcomeCounts {
+    var passed = 0
+    var flaked = 0
+    var skipped = 0
+    var failed = 0
+    var unknown = 0
+
+    var isEmpty: Bool {
+        passed == 0 && flaked == 0 && skipped == 0 && failed == 0 && unknown == 0
+    }
+
+    var primaryStatusClass: String {
+        if failed > 0 { return "fail" }
+        if flaked > 0 { return "flaked" }
+        if skipped > 0 { return "skipped" }
+        if passed > 0 { return "pass" }
+        return "unknown"
+    }
+
+    var filterStatusClasses: [String] {
+        var classes: [String] = []
+        if passed > 0 { classes.append("pass") }
+        if flaked > 0 { classes.append("flaked") }
+        if failed > 0 { classes.append("fail") }
+        if skipped > 0 { classes.append("skipped") }
+        if unknown > 0 { classes.append("unknown") }
+        return classes.isEmpty ? ["unknown"] : classes
+    }
+
+    mutating func add(_ outcome: ReportTargetOutcome) {
+        switch outcome {
+        case .passed:
+            passed += 1
+        case .flaked:
+            flaked += 1
+        case .skipped:
+            skipped += 1
+        case .failed:
+            failed += 1
+        case .unknown:
+            unknown += 1
+        }
+    }
+
+    static func fallback(for status: ReportTestStatus) -> ReportTargetOutcomeCounts {
+        var counts = ReportTargetOutcomeCounts()
+        switch status {
+        case .passed:
+            counts.passed = 1
+        case .failed:
+            counts.failed = 1
+        case .skipped:
+            counts.skipped = 1
+        case .unknown:
+            counts.unknown = 1
+        }
+        return counts
+    }
+}
+
+private enum ReportTargetOutcome {
+    case passed
+    case flaked
+    case skipped
+    case failed
+    case unknown
+}
+
+private struct ReportTestCase {
+    var fileName: String
+    var suite: String
+    var name: String
+    var funcLine: Int
+    var disabled: String?
+    var status: ReportTestStatus
+    var targetOutcomes = ReportTargetOutcomeCounts()
+    var durationRange: ReportTestDurationRange?
+    var observations: [ReportTestObservation] = []
+    var nextLine = 0
+    var aiItems: [String] = []
+    var recordName = ""
+    var aiReview: AIReview?
+    var commands: [CommandRun] = []
+
+    var aiReviewMarkdown: String {
+        aiReview?.markdown ?? ""
+    }
+}
+
+private struct AIReview {
+    var markdown: String
+    var detailsPath: String?
+}
+
+private struct AggregateAIReviews {
+    var root: AIReview?
+    var suites: [String: AIReview] = [:]
+    var tests: [AggregatePathKey: AIReview] = [:]
+}
+
+private struct ReportTestFile {
+    var url: URL
+    var suiteKey: String
+    var suiteReview: AIReview?
+    var tests: [ReportTestCase]
+}
+
+private func defaultTestsDir(packageURL: URL) -> URL {
+    let e2eTestsURL = packageURL.appendingPathComponent("Tests/WendyE2ETests")
+    if FileManager.default.fileExists(atPath: e2eTestsURL.path) {
+        return e2eTestsURL
+    }
+    return packageURL.appendingPathComponent("Tests")
+}
+
+private func loadRecords(in recordingURL: URL) throws -> [String: [CommandRun]] {
+    let recordURLs = try commandRecordURLs(in: recordingURL)
+
+    var records: [String: [CommandRun]] = [:]
+    for recordURL in recordURLs {
+        records[recordKey(for: recordURL, relativeTo: recordingURL), default: []] += try parseRecord(
+            at: recordURL,
+            relativeTo: recordingURL
+        )
+    }
+    return records
+}
+
+private func loadAggregateAIReviews(in aggregateURL: URL) throws -> AggregateAIReviews {
+    guard FileManager.default.fileExists(atPath: aggregateURL.path) else {
+        return AggregateAIReviews()
+    }
+
+    var reviews = AggregateAIReviews(
+        root: try loadAIReview(
+            summaryURL: aggregateURL.appendingPathComponent("review.summary.md"),
+            detailsURL: aggregateURL.appendingPathComponent("review.details.md"),
+            aggregateURL: aggregateURL
+        )
+    )
+
+    for suiteURL in try directoryChildren(of: aggregateURL) {
+        let suiteKey = suiteURL.lastPathComponent
+        if let suiteReview = try loadAIReview(
+            summaryURL: suiteURL.appendingPathComponent("review.summary.md"),
+            detailsURL: suiteURL.appendingPathComponent("review.details.md"),
+            aggregateURL: aggregateURL
+        ) {
+            reviews.suites[suiteKey] = suiteReview
+        }
+
+        for testURL in try directoryChildren(of: suiteURL) {
+            let testKey = testURL.lastPathComponent
+            if let testReview = try loadAIReview(
+                summaryURL: testURL.appendingPathComponent("review.summary.md"),
+                detailsURL: testURL.appendingPathComponent("review.details.md"),
+                aggregateURL: aggregateURL
+            ) {
+                reviews.tests[AggregatePathKey(suiteKey: suiteKey, testKey: testKey)] = testReview
+            }
+        }
+    }
+
+    return reviews
+}
+
+private func loadAIReview(summaryURL: URL, detailsURL: URL, aggregateURL: URL) throws -> AIReview? {
+    guard FileManager.default.fileExists(atPath: summaryURL.path) else {
+        return nil
+    }
+
+    let review = try String(contentsOf: summaryURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard isBulletListAIReviewSummary(review) else {
+        return nil
+    }
+    guard FileManager.default.fileExists(atPath: detailsURL.path) else {
+        return nil
+    }
+    let details = try String(contentsOf: detailsURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !details.isEmpty, !containsAIReviewStatusLine(details) else {
+        return nil
+    }
+
+    return AIReview(
+        markdown: review,
+        detailsPath: relativePath(from: aggregateURL, to: detailsURL)
+    )
+}
+
+private func isBulletListAIReviewSummary(_ markdown: String) -> Bool {
+    let lines = markdown.components(separatedBy: .newlines)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    return !lines.isEmpty && lines.allSatisfy { $0.hasPrefix("- ") || $0.hasPrefix("* ") }
+}
+
+private func containsAIReviewStatusLine(_ markdown: String) -> Bool {
+    markdown.components(separatedBy: .newlines).contains { line in
+        line.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("status:")
+    }
+}
+
+private func commandRecordURLs(in recordingURL: URL) throws -> [URL] {
+    guard FileManager.default.fileExists(atPath: recordingURL.path) else {
+        return []
+    }
+
+    return try aggregateObservationFileURLs(in: recordingURL, fileName: "recording.md")
+}
+
+private func recordKey(for recordURL: URL, relativeTo recordingURL: URL) -> String {
+    if recordURL.lastPathComponent == "recording.md" {
+        let relative = relativePath(from: recordingURL, to: recordURL)
+        let components = relative.split(separator: "/").map(String.init)
+        if components.count >= 2 {
+            return "\(components[0]).\(components[1])"
+        }
+        return recordURL.deletingLastPathComponent().lastPathComponent
+    }
+    return recordURL.deletingPathExtension().lastPathComponent
+}
+
+private func relativePath(from baseURL: URL, to url: URL) -> String {
+    let basePath = baseURL.standardizedFileURL.path
+    let path = url.standardizedFileURL.path
+    let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+    guard path.hasPrefix(prefix) else {
+        return url.lastPathComponent
+    }
+    return String(path.dropFirst(prefix.count))
+}
+
+private func parseRecord(at recordURL: URL, relativeTo recordingURL: URL) throws -> [CommandRun] {
+    let text = try String(contentsOf: recordURL, encoding: .utf8)
+    var commands: [CommandRun] = []
+
+    for part in text.components(separatedBy: "\n---\n") where part.contains("## Command") {
+        let sourcePath = firstMatch(#"- Source: `([^`]+):(\d+)`"#, in: part, group: 1) ?? ""
+        let sourceLine =
+            Int(firstMatch(#"- Source: `([^`]+):(\d+)`"#, in: part, group: 2) ?? "") ?? -1
+        var command = CommandRun(
+            record: relativePath(from: recordingURL, to: recordURL),
+            sourcePath: sourcePath,
+            sourceFile: sourcePath.isEmpty
+                ? "" : URL(fileURLWithPath: sourcePath).lastPathComponent,
+            sourceLine: sourceLine
+        )
+        command.machine = firstMatch(#"- Machine: `([^`]*)`"#, in: part) ?? ""
+        command.command = firstMatch(#"- Command: `([\s\S]*?)`\n- Process ID:"#, in: part) ?? ""
+        command.status = firstMatch(#"- Termination status: `([^`]*)`"#, in: part) ?? ""
+        command.duration = firstMatch(#"- Duration: `([^`]*)`"#, in: part) ?? ""
+        command.stdout = fenced(label: "stdout", in: part)
+        command.stderr = fenced(label: "stderr", in: part)
+        commands.append(command)
+    }
+
+    return commands
+}
+
+private func fenced(label: String, in text: String) -> String {
+    firstMatch("### \(label)\\n\\n```text\\n([\\s\\S]*?)\\n```", in: text) ?? ""
+}
+
+private func isAggregateRunDirectory(_ runURL: URL) throws -> Bool {
+    let infoURL = runURL.appendingPathComponent("info.json")
+    guard FileManager.default.fileExists(atPath: infoURL.path) else {
+        return false
+    }
+
+    let data = try Data(contentsOf: infoURL)
+    guard
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        object["kind"] as? String == "swift-e2e-aggregate"
+    else {
+        return false
+    }
+    return true
+}
+
+private func parseXUnitResults(at resultURL: URL) throws -> [TestResultKey: ReportTestStatus] {
+    let data = try Data(contentsOf: resultURL)
+    let parser = XUnitResultParser()
+    let xmlParser = XMLParser(data: data)
+    xmlParser.delegate = parser
+    guard xmlParser.parse() else {
+        throw ValidationError(
+            "Could not parse Swift Testing xUnit results: \(resultURL.path)"
+        )
+    }
+    return parser.results
+}
+
+private func loadAggregateTestResults(in aggregateURL: URL) throws -> [AggregatePathKey: ReportAggregateTestResult] {
+    var observed: [AggregatePathKey: [String: [ReportTestStatus]]] = [:]
+    var durations: [AggregatePathKey: [Double]] = [:]
+    var observations: [AggregatePathKey: [ReportTestObservation]] = [:]
+
+    for suiteURL in try directoryChildren(of: aggregateURL) {
+        let suiteKey = suiteURL.lastPathComponent
+        for testURL in try directoryChildren(of: suiteURL) {
+            let testKey = testURL.lastPathComponent
+            let pathKey = AggregatePathKey(suiteKey: suiteKey, testKey: testKey)
+            for targetURL in try directoryChildren(of: testURL) {
+                let targetName = targetURL.lastPathComponent
+                for attemptURL in try directoryChildren(of: targetURL) {
+                    let attemptName = attemptURL.lastPathComponent
+                    let status = try aggregateObservationStatus(
+                        suiteKey: suiteKey,
+                        testKey: testKey,
+                        attemptURL: attemptURL
+                    )
+                    observed[pathKey, default: [:]][targetName, default: []].append(status)
+                    observations[pathKey, default: []].append(
+                        ReportTestObservation(
+                            target: targetName,
+                            route: try targetRoute(for: targetName, attemptURL: attemptURL),
+                            attempt: attemptName,
+                            status: status,
+                            recordingPath: observationFilePath(
+                                fileName: "recording.md",
+                                attemptURL: attemptURL,
+                                aggregateURL: aggregateURL
+                            ),
+                            shellPath: observationFilePath(
+                                fileName: "recording.sh.txt",
+                                attemptURL: attemptURL,
+                                aggregateURL: aggregateURL
+                            )
+                        )
+                    )
+                    if let duration = status.duration {
+                        durations[pathKey, default: []].append(duration.seconds)
+                    }
+                }
+            }
+        }
+    }
+
+    let keys = Set(observed.keys).union(durations.keys).union(observations.keys)
+    return Dictionary(uniqueKeysWithValues: keys.map { key in
+        var counts = ReportTargetOutcomeCounts()
+        for statuses in observed[key, default: [:]].values {
+            counts.add(targetOutcome(for: statuses))
+        }
+        return (
+            key,
+            ReportAggregateTestResult(
+                targetOutcomes: counts,
+                durationRange: ReportTestDurationRange(durations[key, default: []]),
+                observations: observations[key, default: []].sorted(by: observationSort)
+            )
+        )
+    })
+}
+
+private func observationFilePath(fileName: String, attemptURL: URL, aggregateURL: URL) -> String? {
+    let fileURL = attemptURL.appendingPathComponent(fileName)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        return nil
+    }
+    return relativePath(from: aggregateURL, to: fileURL)
+}
+
+private func aggregateObservationStatus(
+    suiteKey: String,
+    testKey: String,
+    attemptURL: URL
+) throws -> ReportTestStatus {
+    let resultURL = attemptURL.appendingPathComponent("test-results.xml")
+    guard FileManager.default.fileExists(atPath: resultURL.path) else {
+        return .unknown
+    }
+
+    let results = try parseXUnitResults(at: resultURL)
+    return results.first { key, _ in
+        slug(key.suite) == suiteKey && slug(key.name) == testKey
+    }?.value ?? .unknown
+}
+
+private func observationSort(_ lhs: ReportTestObservation, _ rhs: ReportTestObservation) -> Bool {
+    if lhs.target != rhs.target {
+        return lhs.target < rhs.target
+    }
+    return lhs.attempt < rhs.attempt
+}
+
+private func aggregateObservationFileURLs(in aggregateURL: URL, fileName: String) throws -> [URL] {
+    guard FileManager.default.fileExists(atPath: aggregateURL.path) else {
+        return []
+    }
+
+    var urls: [URL] = []
+    for suiteURL in try directoryChildren(of: aggregateURL) {
+        for testURL in try directoryChildren(of: suiteURL) {
+            for targetURL in try directoryChildren(of: testURL) {
+                for attemptURL in try directoryChildren(of: targetURL) {
+                    let candidate = attemptURL.appendingPathComponent(fileName)
+                    if FileManager.default.fileExists(atPath: candidate.path) {
+                        urls.append(candidate)
+                    }
+                }
+            }
+        }
+    }
+    return urls.sorted { $0.path < $1.path }
+}
+
+private func directoryChildren(of url: URL) throws -> [URL] {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        return []
+    }
+    return try FileManager.default.contentsOfDirectory(
+        at: url,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    )
+    .filter { isDirectory($0) }
+    .sorted { $0.path < $1.path }
+}
+
+private func isDirectory(_ url: URL) -> Bool {
+    (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+}
+
+private func targetOutcome(for statuses: [ReportTestStatus]) -> ReportTargetOutcome {
+    guard !statuses.isEmpty else {
+        return .unknown
+    }
+
+    let passed = statuses.contains { $0.statusClass == "pass" }
+    let failed = statuses.contains { $0.statusClass == "fail" }
+    let skipped = statuses.contains { $0.statusClass == "skipped" }
+    let unknown = statuses.contains { $0.statusClass == "unknown" }
+
+    if skipped && !passed && !failed && !unknown {
+        return .skipped
+    }
+    if passed && failed {
+        return .flaked
+    }
+    if passed && !failed && !skipped && !unknown {
+        return .passed
+    }
+    if failed && !passed && !skipped && !unknown {
+        return .failed
+    }
+    return .unknown
+}
+
+private final class XUnitResultParser: NSObject, XMLParserDelegate {
+    var results: [TestResultKey: ReportTestStatus] = [:]
+
+    private var current:
+        (key: TestResultKey, duration: ReportTestDuration?, failure: String?, skipped: String?)?
+    private var currentElement: String?
+    private var currentText = ""
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        switch elementName {
+        case "testcase":
+            guard let classname = attributeDict["classname"], let name = attributeDict["name"],
+                let key = testResultKey(classname: classname, name: name)
+            else {
+                current = nil
+                return
+            }
+            current = (
+                key: key,
+                duration: parsedTestDuration(attributeDict["time"]),
+                failure: nil,
+                skipped: nil
+            )
+        case "failure", "skipped":
+            currentElement = elementName
+            currentText = ""
+            guard var current else {
+                return
+            }
+            if elementName == "failure" {
+                current.failure = attributeDict["message"] ?? ""
+            } else {
+                current.skipped = attributeDict["message"] ?? ""
+            }
+            self.current = current
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if currentElement == "failure" || currentElement == "skipped" {
+            currentText.append(string)
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        switch elementName {
+        case "failure", "skipped":
+            guard var current else {
+                return
+            }
+            let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if elementName == "failure", current.failure?.isEmpty != false, !text.isEmpty {
+                current.failure = text
+            } else if elementName == "skipped", current.skipped?.isEmpty != false, !text.isEmpty {
+                current.skipped = text
+            }
+            self.current = current
+            currentElement = nil
+            currentText = ""
+        case "testcase":
+            guard let current else {
+                return
+            }
+            if let skipped = current.skipped {
+                results[current.key] = .skipped(
+                    skipped.isEmpty ? nil : skipped,
+                    duration: current.duration
+                )
+            } else if let failure = current.failure {
+                results[current.key] = .failed(
+                    failure.isEmpty ? nil : failure,
+                    duration: current.duration
+                )
+            } else {
+                results[current.key] = .passed(duration: current.duration)
+            }
+            self.current = nil
+        default:
+            break
+        }
+    }
+}
+
+private func parsedTestDuration(_ value: String?) -> ReportTestDuration? {
+    guard let value, let seconds = Double(value), seconds >= 0 else {
+        return nil
+    }
+
+    return ReportTestDuration(
+        seconds: seconds,
+        formatted: formattedTestDuration(seconds),
+        color: durationColor(seconds: seconds),
+        barWidth: durationBarWidth(seconds: seconds)
+    )
+}
+
+private func formattedTestDuration(_ seconds: Double) -> String {
+    if seconds < 0.01 {
+        return "<0.01s"
+    }
+    if seconds < 10 {
+        return String(format: "%.2fs", seconds)
+    }
+    if seconds < 60 {
+        return String(format: "%.1fs", seconds)
+    }
+
+    let minutes = Int(seconds / 60)
+    let remainingSeconds = Int(seconds.rounded()) % 60
+    return "\(minutes)m \(remainingSeconds)s"
+}
+
+private func durationBarWidth(seconds: Double) -> String {
+    percentString(durationBarPercent(seconds: seconds))
+}
+
+private func durationBarPercent(seconds: Double) -> Double {
+    min(max(seconds / 30, 0), 1) * 100
+}
+
+private func percentString(_ percent: Double) -> String {
+    String(format: "%.1f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
+}
+
+private func durationColor(seconds: Double) -> String {
+    let white = RGB(red: 255, green: 255, blue: 255)
+    let orange = RGB(red: 245, green: 158, blue: 11)
+    let deepRed = RGB(red: 153, green: 27, blue: 27)
+    let black = RGB(red: 0, green: 0, blue: 0)
+
+    let color: RGB
+    if seconds <= 0 {
+        color = white
+    } else if seconds <= 1 {
+        color = interpolateRGB(from: white, to: orange, t: seconds)
+    } else if seconds <= 10 {
+        color = interpolateRGB(from: orange, to: deepRed, t: (seconds - 1) / 9)
+    } else if seconds < 30 {
+        color = interpolateRGB(from: deepRed, to: black, t: (seconds - 10) / 20)
+    } else {
+        color = black
+    }
+
+    return "rgb(\(color.red), \(color.green), \(color.blue))"
+}
+
+private struct RGB {
+    var red: Int
+    var green: Int
+    var blue: Int
+}
+
+private func interpolateRGB(from start: RGB, to end: RGB, t: Double) -> RGB {
+    let amount = min(max(t, 0), 1)
+
+    func component(_ start: Int, _ end: Int) -> Int {
+        Int((Double(start) + (Double(end - start) * amount)).rounded())
+    }
+
+    return RGB(
+        red: component(start.red, end.red),
+        green: component(start.green, end.green),
+        blue: component(start.blue, end.blue)
+    )
+}
+
+private func testResultKey(classname: String, name: String) -> TestResultKey? {
+    let suite = normalizedClassname(classname)
+    let testName = normalizedTestName(name)
+    guard !suite.isEmpty, !testName.isEmpty else {
+        return nil
+    }
+    return TestResultKey(suite: suite, name: testName)
+}
+
+private func normalizedClassname(_ classname: String) -> String {
+    if classname.last == "`", let start = classname.dropLast().lastIndex(of: "`") {
+        let suiteStart = classname.index(after: start)
+        return String(classname[suiteStart..<classname.index(before: classname.endIndex)])
+    }
+
+    return stripBackticks(String(classname.split(separator: ".").last ?? ""))
+}
+
+private func normalizedTestName(_ name: String) -> String {
+    var value = name
+    if value.hasSuffix("()") {
+        value.removeLast(2)
+    }
+    return stripBackticks(value)
+}
+
+private func stripBackticks(_ value: String) -> String {
+    if value.first == "`", value.last == "`" {
+        return String(value.dropFirst().dropLast())
+    }
+    return value
+}
+
+private func parseTests(
+    in testsURL: URL,
+    recordingURL: URL,
+    records: [String: [CommandRun]],
+    aiReviews: AggregateAIReviews,
+    testResults: [AggregatePathKey: ReportAggregateTestResult]
+) throws -> [ReportTestFile] {
+    let sourceURLs = try swiftTestFiles(in: testsURL)
+    var files: [ReportTestFile] = []
+
+    for sourceURL in sourceURLs {
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let lines = source.components(separatedBy: .newlines)
+        var suite = sourceURL.deletingPathExtension().lastPathComponent
+        var pendingTest: (line: Int, disabled: String?)?
+        var tests: [ReportTestCase] = []
+
+        for (offset, line) in lines.enumerated() {
+            let lineNumber = offset + 1
+            if let suiteName = firstMatch(#"\bstruct\s+`([^`]+)`\s*\{"#, in: line)
+                ?? firstMatch(#"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{"#, in: line)
+            {
+                suite = suiteName
+            }
+
+            if line.contains("@Test") {
+                pendingTest = (
+                    line: lineNumber,
+                    disabled: firstMatch(#"\.disabled\(\"([^\"]*)\"\)"#, in: line)
+                )
+            }
+
+            if let functionName = firstMatch(#"\bfunc\s+`([^`]+)`\s*\("#, in: line)
+                ?? firstMatch(#"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("#, in: line),
+                let test = pendingTest
+            {
+                tests.append(
+                    ReportTestCase(
+                        fileName: sourceURL.lastPathComponent,
+                        suite: suite,
+                        name: functionName,
+                        funcLine: lineNumber,
+                        disabled: test.disabled,
+                        status: test.disabled.map { .skipped($0, duration: nil) } ?? .unknown
+                    )
+                )
+                pendingTest = nil
+            }
+        }
+
+        for testIndex in tests.indices {
+            let nextLine =
+                testIndex + 1 < tests.count ? tests[testIndex + 1].funcLine : lines.count + 1
+            let body = Array(lines[(tests[testIndex].funcLine - 1)..<(nextLine - 1)])
+            tests[testIndex].nextLine = nextLine
+            tests[testIndex].aiItems = extractAIItems(from: body)
+            let recordSuiteKey = recordFileStem(sourceURL)
+            let recordTestKey = slug(tests[testIndex].name)
+            let recordKey = "\(recordSuiteKey).\(recordTestKey)"
+            let directRecordName = "recording.md"
+            let nestedRecordName = "\(recordSuiteKey)/\(recordTestKey)/recording.md"
+            if records[recordKey] != nil,
+                FileManager.default.fileExists(
+                    atPath: recordingURL.appendingPathComponent(directRecordName).path
+                )
+            {
+                tests[testIndex].recordName = directRecordName
+            } else {
+                tests[testIndex].recordName = nestedRecordName
+            }
+            let key = AggregatePathKey(suiteKey: recordSuiteKey, testKey: recordTestKey)
+            tests[testIndex].aiReview = aiReviews.tests[key]
+            tests[testIndex].commands = records[recordKey, default: []].filter {
+                command in
+                command.sourceFile == sourceURL.lastPathComponent
+                    && tests[testIndex].funcLine <= command.sourceLine
+                    && command.sourceLine < nextLine
+            }
+            if let result = testResults[key] {
+                tests[testIndex].targetOutcomes = result.targetOutcomes
+                tests[testIndex].durationRange = result.durationRange
+                tests[testIndex].observations = result.observations
+            }
+        }
+
+        if !tests.isEmpty {
+            let suiteKey = recordFileStem(sourceURL)
+            files.append(
+                ReportTestFile(
+                    url: sourceURL,
+                    suiteKey: suiteKey,
+                    suiteReview: aiReviews.suites[suiteKey],
+                    tests: tests
+                )
+            )
+        }
+    }
+
+    return files
+}
+
+private func swiftTestFiles(in testsURL: URL) throws -> [URL] {
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: testsURL.path, isDirectory: &isDirectory) else {
+        throw ValidationError("Tests directory not found: \(testsURL.path)")
+    }
+
+    if !isDirectory.boolValue {
+        return testsURL.lastPathComponent.hasSuffix("Tests.swift") ? [testsURL] : []
+    }
+
+    guard let enumerator = FileManager.default.enumerator(atPath: testsURL.path) else {
+        throw ValidationError("Tests directory cannot be read: \(testsURL.path)")
+    }
+
+    return enumerator.compactMap { element -> URL? in
+        guard let relativePath = element as? String, relativePath.hasSuffix("Tests.swift") else {
+            return nil
+        }
+        return testsURL.appendingPathComponent(relativePath)
+    }.sorted { $0.path < $1.path }
+}
+
+private func extractAIItems(from lines: [String]) -> [String] {
+    var items: [String] = []
+    var inAI = false
+
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if line.contains("// AI:") {
+            inAI = true
+            continue
+        }
+
+        guard inAI else {
+            continue
+        }
+
+        if trimmed.hasPrefix("//") {
+            if let item = firstMatch(#"//\s*-\s*(.*)"#, in: line) {
+                items.append(item.trimmingCharacters(in: .whitespaces))
+            }
+        } else if trimmed.isEmpty {
+            continue
+        } else {
+            inAI = false
+        }
+    }
+
+    return items
+}
+
+private func renderReport(
+    templateURL: URL,
+    recordingURL: URL,
+    files: [ReportTestFile],
+    aiReviews: AggregateAIReviews,
+    outputURL: URL
+) throws {
+    let tests = files.flatMap(\.tests)
+    let outcomeCounts = tests.map(displayOutcomeCounts(for:))
+    let passed = outcomeCounts.filter { $0.passed > 0 }.count
+    let flaked = outcomeCounts.filter { $0.flaked > 0 }.count
+    let skipped = outcomeCounts.filter { $0.skipped > 0 }.count
+    let failed = outcomeCounts.filter { $0.failed > 0 }.count
+    let unknown = outcomeCounts.filter { $0.unknown > 0 }.count
+    let total = tests.count
+    let commandCount = tests.map(\.commands.count).reduce(0, +)
+
+    var template = try String(contentsOf: templateURL, encoding: .utf8)
+    template = replacingFirstMatch(
+        #"\n  <!--\n    Wendy E2E Report HTML Template[\s\S]*?\n  -->"#,
+        in: template,
+        with: ""
+    )
+
+    guard let start = template.range(of: "    <!-- Repeat this .card section once per test file."),
+        let footerStart = template.range(
+            of: "    <footer>",
+            range: start.lowerBound..<template.endIndex
+        )
+    else {
+        throw ValidationError("Report template does not contain expected card/footer markers.")
+    }
+
+    let reviewHTML = renderAggregateAIReview(aiReviews.root)
+    let testCards = renderCards(files: files)
+
+    template.replaceSubrange(
+        start.lowerBound..<footerStart.lowerBound,
+        with: reviewHTML + testCards + "\n\n"
+    )
+
+    let replacements: [String: String] = [
+        "{{REPORT_TITLE}}": "Wendy E2E Report",
+        "{{REPORT_HEADING}}": "Wendy E2E Report",
+        "{{REPORT_SUMMARY}}":
+            "Generated from aggregated Swift E2E runs, Swift Testing results, and captured command recordings.",
+        "{{RUN_ID}}": runID(outputURL: outputURL),
+        "{{TESTS_PASSED_COUNT}}": String(passed),
+        "{{TESTS_FLAKED_COUNT}}": String(flaked),
+        "{{TESTS_SKIPPED_COUNT}}": String(skipped),
+        "{{TESTS_FAILED_COUNT}}": String(failed),
+        "{{TESTS_UNKNOWN_COUNT}}": String(unknown),
+        "{{COMMAND_RUN_COUNT}}": String(commandCount),
+        "{{VISIBLE_TEST_COUNT}}": String(total),
+        "{{TOTAL_TEST_COUNT}}": String(total),
+        "{{RECORDING_DIRECTORY}}": recordingURL.path,
+    ]
+    let rawPlaceholders: Set<String> = [
+        "{{REPORT_TITLE}}",
+        "{{TESTS_PASSED_COUNT}}",
+        "{{TESTS_FLAKED_COUNT}}",
+        "{{TESTS_SKIPPED_COUNT}}",
+        "{{TESTS_FAILED_COUNT}}",
+        "{{TESTS_UNKNOWN_COUNT}}",
+        "{{COMMAND_RUN_COUNT}}",
+        "{{VISIBLE_TEST_COUNT}}",
+        "{{TOTAL_TEST_COUNT}}",
+    ]
+
+    for (placeholder, value) in replacements {
+        template = template.replacingOccurrences(
+            of: placeholder,
+            with: rawPlaceholders.contains(placeholder) ? value : escapeHTML(value)
+        )
+    }
+
+    if let leftover = firstMatch(#"\{\{[A-Z0-9_]+\}\}"#, in: template) {
+        throw ValidationError("Unreplaced report template placeholder: \(leftover)")
+    }
+
+    try FileManager.default.createDirectory(
+        at: outputURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try template.write(to: outputURL, atomically: true, encoding: .utf8)
+
+    print(outputURL.path)
+    print(
+        "tests=\(total) passed=\(passed) flaked=\(flaked) skipped=\(skipped) failed=\(failed) unknown=\(unknown) commands=\(commandCount)"
+    )
+}
+
+private func runID(outputURL: URL) -> String {
+    outputURL.deletingLastPathComponent().lastPathComponent
+}
+
+private func renderAggregateAIReview(_ review: AIReview?) -> String {
+    renderScopedAIReview(review, className: "ai-review-inline ai-review-report", heading: "AI report review")
+}
+
+private func renderSuiteAIReview(_ review: AIReview?) -> String {
+    renderScopedAIReview(review, className: "ai-review-inline ai-review-suite", heading: "AI suite review")
+}
+
+private func renderTestAIReview(_ review: AIReview?) -> String {
+    renderScopedAIReview(review, className: "ai-review-inline ai-review-test", heading: "AI test review")
+}
+
+private func renderScopedAIReview(_ review: AIReview?, className: String, heading: String) -> String {
+    guard let review else {
+        return ""
+    }
+
+    return """
+        <section class="\(className)">
+        <h4>\(escapeHTML(heading))\(renderAIReviewDetailsLink(review.detailsPath))</h4>
+        <div class="ai-review-markdown">\(renderMarkdown(review.markdown))</div>
+        </section>
+        """
+}
+
+private func renderAIReviewDetailsLink(_ detailsPath: String?) -> String {
+    guard let detailsPath else {
+        return ""
+    }
+    return "<a class=\"ai-review-details-link\" href=\"\(escapeHTML(detailsPath))\">Details</a>"
+}
+
+private func renderCards(files: [ReportTestFile]) -> String {
+    var cards: [String] = []
+
+    for file in files {
+        cards.append("<section class=\"card\" data-test-file-card>")
+        cards.append(
+            "<div class=\"card-title\"><h2>\(escapeHTML(displayName(file.url.lastPathComponent)))</h2></div>"
+        )
+        cards.append(renderSuiteAIReview(file.suiteReview))
+        cards.append("<div class=\"suite-group\">")
+
+        for test in file.tests {
+            let targetOutcomes = displayOutcomeCounts(for: test)
+            let statusClass = targetOutcomes.primaryStatusClass
+            let statusClasses = targetOutcomes.filterStatusClasses.joined(separator: " ")
+            let outcomeBadges = renderTargetOutcomeBadges(targetOutcomes)
+            let hasAI = test.aiItems.isEmpty ? "false" : "true"
+            let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
+            let aiBadge = hasAIReview == "true" ? renderAIReviewBadge() : ""
+            let pathText = "\(test.suite) › \(test.name)"
+
+            cards.append(
+                "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
+            )
+            cards.append(
+                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)\(aiBadge)</span>\(aggregateDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
+            )
+            cards.append(renderObservations(test.observations, aiReview: test.aiReview))
+            cards.append("</details>")
+        }
+
+        cards.append("</div></section>")
+    }
+
+    return cards.joined(separator: "\n")
+}
+
+private func displayOutcomeCounts(for test: ReportTestCase) -> ReportTargetOutcomeCounts {
+    test.targetOutcomes.isEmpty ? .fallback(for: test.status) : test.targetOutcomes
+}
+
+private func renderTargetOutcomeBadges(_ counts: ReportTargetOutcomeCounts) -> String {
+    let buckets: [(className: String, label: String, count: Int)] = [
+        ("pass", "Passed", counts.passed),
+        ("flaked", "Flaked", counts.flaked),
+        ("fail", "Failed", counts.failed),
+        ("skipped", "Skipped", counts.skipped),
+        ("unknown", "Unknown", counts.unknown),
+    ].filter { $0.count > 0 }
+
+    let includeCounts = buckets.count > 1 || (buckets.first?.count ?? 0) > 1
+    return buckets.map { bucket in
+        let text = includeCounts ? "\(bucket.label) (\(bucket.count))" : bucket.label
+        return "<span class=\"badge \(bucket.className)\">\(text)</span>"
+    }.joined()
+}
+
+private func renderObservations(_ observations: [ReportTestObservation], aiReview: AIReview?) -> String {
+    guard !observations.isEmpty else {
+        return "<div class=\"test-body\"><p class=\"note\">No concrete observations were found for this test.</p>\(renderTestAIReview(aiReview))</div>"
+    }
+
+    var chunks: [String] = [
+        "<div class=\"test-body\">",
+        renderTestAIReview(aiReview),
+        "<section class=\"observations\" aria-label=\"Concrete observations\">",
+    ]
+    var previousTarget: String?
+    for observation in observations.sorted(by: observationSort) {
+        let isFirstTargetRow = observation.target != previousTarget
+        previousTarget = observation.target
+        let target = isFirstTargetRow ? escapeHTML(observation.target) : ""
+        let route = isFirstTargetRow ? renderTargetRoute(observation.route, title: observation.target) : ""
+        let rowClass = isFirstTargetRow ? "observation-row" : "observation-row same-target"
+        chunks.append(
+            "<div class=\"\(rowClass)\"><span class=\"observation-route-cell\">\(route)</span><span class=\"observation-target\">\(target)</span><span class=\"observation-spacer\" aria-hidden=\"true\"></span>\(renderObservationLinks(observation))<span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
+        )
+    }
+    chunks.append("</section>")
+    chunks.append("</div>")
+    return chunks.joined(separator: "\n")
+}
+
+private func renderObservationLinks(_ observation: ReportTestObservation) -> String {
+    var links: [String] = []
+    if let shellPath = observation.shellPath {
+        links.append(
+            "<a class=\"observation-button\" href=\"\(escapeHTML(shellPath))\">Shell</a>"
+        )
+    }
+    if let recordingPath = observation.recordingPath {
+        links.append(
+            "<a class=\"observation-button\" href=\"\(escapeHTML(recordingPath))\">Record</a>"
+        )
+    }
+    return "<span class=\"observation-actions\">\(links.joined())</span>"
+}
+
+private func renderTargetRoute(_ route: TargetRoute, title: String) -> String {
+    let cli = "<span class=\"target-route-cli\">\(renderTargetLogo(route.cli))</span>"
+    let arrow = "<span class=\"target-route-arrow\" aria-hidden=\"true\">›</span>"
+    let agent = "<span class=\"target-route-agent\">\(route.agent.map(renderTargetLogo) ?? "")</span>"
+    return "<span class=\"target-route\" title=\"\(escapeHTML(title))\">\(cli)\(arrow)\(agent)</span>"
+}
+
+private func targetRoute(for target: String, attemptURL: URL) throws -> TargetRoute {
+    let components = targetRouteComponents(for: target)
+    let info = try targetInfo(at: attemptURL)
+    let cliPlatform = info.cliOS.map(targetPlatformForOS) ?? targetPlatform(for: components.cli)
+    let agentPlatform = targetPlatformForAgent(
+        component: components.agent,
+        os: info.agentOS
+    )
+    return TargetRoute(cli: cliPlatform, agent: agentPlatform)
+}
+
+private func targetRouteComponents(for target: String) -> (cli: String, agent: String?) {
+    let separator = "-to-"
+    guard let range = target.range(of: separator) else {
+        return (target, nil)
+    }
+
+    return (String(target[..<range.lowerBound]), String(target[range.upperBound...]))
+}
+
+private func targetInfo(at attemptURL: URL) throws -> (cliOS: String?, agentOS: String?) {
+    let infoURL = attemptURL.appendingPathComponent("info.json")
+    guard FileManager.default.fileExists(atPath: infoURL.path) else {
+        return (nil, nil)
+    }
+
+    let data = try Data(contentsOf: infoURL)
+    guard
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let target = object["target"] as? [String: Any]
+    else {
+        return (nil, nil)
+    }
+
+    return (
+        nonEmptyString(target["cliOS"]),
+        nonEmptyString(target["agentOS"])
+    )
+}
+
+private func nonEmptyString(_ value: Any?) -> String? {
+    guard let string = value as? String, !string.isEmpty else {
+        return nil
+    }
+    return string
+}
+
+private func renderTargetLogo(_ platform: TargetPlatform) -> String {
+    "<span class=\"target-logo \(platform.cssClass)\" role=\"img\" aria-label=\"\(escapeHTML(platform.label))\">\(platform.symbol)</span>"
+}
+
+private func targetPlatformForAgent(component: String?, os: String?) -> TargetPlatform? {
+    guard component != nil || os != nil else {
+        return nil
+    }
+
+    if let component {
+        let hardwarePlatform = targetHardwarePlatform(for: component)
+        if hardwarePlatform != .unknown {
+            return hardwarePlatform
+        }
+    }
+    if let os {
+        return targetPlatformForOS(os)
+    }
+    if let component {
+        return targetPlatform(for: component)
+    }
+    return nil
+}
+
+private func targetPlatformForOS(_ value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    if normalized.contains("macos") || normalized.contains("darwin") || normalized == "mac" {
+        return .apple
+    }
+    if normalized.contains("windows") || normalized == "win" {
+        return .windows
+    }
+    if normalized.contains("linux") || normalized.contains("ubuntu") || normalized.contains("debian")
+        || normalized.contains("wendyos")
+    {
+        return .linux
+    }
+    return .unknown
+}
+
+private func targetHardwarePlatform(for value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    if normalized.contains("jetson") || normalized.contains("nvidia") {
+        return .nvidia
+    }
+    if normalized.contains("raspberry") || normalized.contains("raspi") {
+        return .raspberryPi
+    }
+    return .unknown
+}
+
+private func targetPlatform(for value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    let hardwarePlatform = targetHardwarePlatform(for: value)
+    if hardwarePlatform != .unknown {
+        return hardwarePlatform
+    }
+    if normalized.contains("macos") || normalized.contains("darwin") || normalized.contains("mac") {
+        return .apple
+    }
+    if normalized.contains("windows") || normalized.contains("win") {
+        return .windows
+    }
+    if normalized.contains("linux") || normalized.contains("ubuntu") || normalized.contains("debian") {
+        return .linux
+    }
+    return .unknown
+}
+
+private struct TargetRoute {
+    var cli: TargetPlatform
+    var agent: TargetPlatform?
+}
+
+private enum TargetPlatform {
+    case apple
+    case linux
+    case nvidia
+    case raspberryPi
+    case windows
+    case unknown
+
+    var cssClass: String {
+        switch self {
+        case .apple:
+            return "apple"
+        case .linux:
+            return "linux"
+        case .nvidia:
+            return "nvidia"
+        case .raspberryPi:
+            return "raspberry-pi"
+        case .windows:
+            return "windows"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .apple:
+            return "Apple"
+        case .linux:
+            return "Linux"
+        case .nvidia:
+            return "NVIDIA Jetson"
+        case .raspberryPi:
+            return "Raspberry Pi"
+        case .windows:
+            return "Windows"
+        case .unknown:
+            return "Unknown target"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .apple:
+            return ""
+        case .linux:
+            return "🐧"
+        case .nvidia:
+            return "NV"
+        case .raspberryPi:
+            return "RPi"
+        case .windows:
+            return "⊞"
+        case .unknown:
+            return "?"
+        }
+    }
+}
+
+private func observationDurationBadge(_ duration: ReportTestDuration?) -> String {
+    guard let duration else {
+        return "<span class=\"badge duration empty\" aria-hidden=\"true\"><span class=\"duration-bar\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\"></span></span>"
+    }
+
+    return "<span class=\"badge duration\" title=\"Test duration: \(escapeHTML(duration.formatted))\" style=\"--duration-bar-color: \(duration.color); --duration-bar-width: \(duration.barWidth)\"><span class=\"duration-bar\" aria-hidden=\"true\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\">\(escapeHTML(duration.formatted))</span></span>"
+}
+
+private func aggregateDurationBadge(_ duration: ReportTestDurationRange?) -> String {
+    guard let duration else {
+        return "<span class=\"badge duration empty\" aria-hidden=\"true\"><span class=\"duration-bar\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\"></span></span>"
+    }
+
+    return "<span class=\"badge duration\" title=\"Test duration: \(escapeHTML(duration.formatted))\" style=\"--duration-bar-left: \(duration.barLeft); --duration-bar-width: \(duration.barWidth); --duration-bar-color: \(duration.barColor)\"><span class=\"duration-bar\" aria-hidden=\"true\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\">\(escapeHTML(duration.formatted))</span></span>"
+}
+
+private func renderAIReviewBadge() -> String {
+    "<span class=\"badge ai\">AI</span>"
+}
+
+private func renderAIChecklist(_ test: ReportTestCase) -> String {
+    guard !test.aiItems.isEmpty else {
+        return ""
+    }
+
+    let items = test.aiItems.map { item in
+        "<li><span>\(escapeHTML(item))</span><span class=\"status pass\" aria-label=\"pass\"></span></li>"
+    }.joined()
+
+    return
+        "<section class=\"ai-review-checklist\"><h4>AI review checklist</h4><ul class=\"checks\">\(items)</ul></section>"
+}
+
+private func renderAIReview(_ markdown: String) -> String {
+    guard !markdown.isEmpty else {
+        return ""
+    }
+
+    return """
+        <section class="ai-review-inline">
+        <h4>AI review</h4>
+        <div class="ai-review-markdown">\(renderMarkdown(markdown))</div>
+        </section>
+        """
+}
+
+private func renderMarkdown(_ markdown: String) -> String {
+    let lines = markdown.components(separatedBy: .newlines)
+    var chunks: [String] = []
+    var paragraph: [String] = []
+    var unorderedItems: [String] = []
+    var orderedItems: [String] = []
+    var codeLines: [String] = []
+    var inCodeFence = false
+
+    func flushParagraph() {
+        guard !paragraph.isEmpty else {
+            return
+        }
+        chunks.append("<p>\(renderInlineMarkdown(paragraph.joined(separator: " ")))</p>")
+        paragraph = []
+    }
+
+    func flushUnorderedList() {
+        guard !unorderedItems.isEmpty else {
+            return
+        }
+        chunks.append("<ul>\(unorderedItems.joined())</ul>")
+        unorderedItems = []
+    }
+
+    func flushOrderedList() {
+        guard !orderedItems.isEmpty else {
+            return
+        }
+        chunks.append("<ol>\(orderedItems.joined())</ol>")
+        orderedItems = []
+    }
+
+    func flushLists() {
+        flushUnorderedList()
+        flushOrderedList()
+    }
+
+    func flushCodeFence() {
+        chunks.append("<pre><code>\(escapeHTML(codeLines.joined(separator: "\n")))</code></pre>")
+        codeLines = []
+    }
+
+    for rawLine in lines {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+
+        if trimmed.hasPrefix("```") {
+            if inCodeFence {
+                flushCodeFence()
+                inCodeFence = false
+            } else {
+                flushParagraph()
+                flushLists()
+                inCodeFence = true
+                codeLines = []
+            }
+            continue
+        }
+
+        if inCodeFence {
+            codeLines.append(rawLine)
+            continue
+        }
+
+        guard !trimmed.isEmpty else {
+            flushParagraph()
+            flushLists()
+            continue
+        }
+
+        if trimmed == "# AI Review" {
+            continue
+        }
+
+        if let heading = markdownHeading(from: trimmed) {
+            flushParagraph()
+            flushLists()
+            chunks.append("<\(heading.tag)>\(renderInlineMarkdown(heading.text))</\(heading.tag)>")
+            continue
+        }
+
+        if let item = markdownUnorderedListItem(from: trimmed) {
+            flushParagraph()
+            flushOrderedList()
+            unorderedItems.append("<li>\(renderInlineMarkdown(item))</li>")
+            continue
+        }
+
+        if let item = markdownOrderedListItem(from: trimmed) {
+            flushParagraph()
+            flushUnorderedList()
+            orderedItems.append("<li>\(renderInlineMarkdown(item))</li>")
+            continue
+        }
+
+        flushLists()
+        paragraph.append(trimmed)
+    }
+
+    if inCodeFence {
+        flushCodeFence()
+    }
+    flushParagraph()
+    flushLists()
+
+    return chunks.joined(separator: "\n")
+}
+
+private func markdownHeading(from line: String) -> (tag: String, text: String)? {
+    let hashes = line.prefix { $0 == "#" }.count
+    guard hashes > 0, hashes <= 6 else {
+        return nil
+    }
+    let text = line.dropFirst(hashes).trimmingCharacters(in: .whitespaces)
+    guard !text.isEmpty else {
+        return nil
+    }
+    return (hashes == 1 ? "h5" : "h6", text)
+}
+
+private func markdownUnorderedListItem(from line: String) -> String? {
+    guard line.hasPrefix("- ") || line.hasPrefix("* ") else {
+        return nil
+    }
+    return String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+}
+
+private func markdownOrderedListItem(from line: String) -> String? {
+    guard let match = firstMatch(#"^\d+\.\s+(.+)$"#, in: line) else {
+        return nil
+    }
+    return match.trimmingCharacters(in: .whitespaces)
+}
+
+private func renderInlineMarkdown(_ text: String) -> String {
+    var output = ""
+    var index = text.startIndex
+    var strong = false
+
+    while index < text.endIndex {
+        if text[index] == "`" {
+            let afterOpening = text.index(after: index)
+            if let closing = text[afterOpening...].firstIndex(of: "`") {
+                output += "<code>\(escapeHTML(String(text[afterOpening..<closing])))</code>"
+                index = text.index(after: closing)
+                continue
+            }
+        }
+
+        if text[index...].hasPrefix("**") {
+            output += strong ? "</strong>" : "<strong>"
+            strong.toggle()
+            index = text.index(index, offsetBy: 2)
+            continue
+        }
+
+        output += escapeHTML(String(text[index]))
+        index = text.index(after: index)
+    }
+
+    if strong {
+        output += "</strong>"
+    }
+    return output
+}
+
+private func renderCommands(_ commands: [CommandRun]) -> String {
+    guard !commands.isEmpty else {
+        return ""
+    }
+
+    var chunks = ["<div class=\"commands\">"]
+    for command in commands {
+        chunks.append("<section class=\"command-run\">")
+        chunks.append(
+            "<div class=\"command-line\"><span class=\"command-prompt\">❯</span><span class=\"command-text\">\(escapeHTML(command.command))</span></div>"
+        )
+
+        var output: [String] = []
+        for line in command.stdout.components(separatedBy: .newlines) where !line.isEmpty {
+            output.append(
+                "<div class=\"output-line stdout\"><span class=\"stream-marker\">!</span><span class=\"output-text\">\(escapeHTML(line))</span></div>"
+            )
+        }
+        for line in command.stderr.components(separatedBy: .newlines) where !line.isEmpty {
+            output.append(
+                "<div class=\"output-line stderr\"><span class=\"stream-marker\">!</span><span class=\"output-text\">\(escapeHTML(line))</span></div>"
+            )
+        }
+        if !output.isEmpty {
+            chunks.append("<div class=\"command-output\">\(output.joined())</div>")
+        }
+
+        let metadata = [command.machine, command.status, command.duration]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        chunks.append("<p class=\"command-run-meta\">\(escapeHTML(metadata))</p>")
+        chunks.append("</section>")
+    }
+    chunks.append("</div>")
+    return chunks.joined(separator: "\n")
+}
+
+private func recordFileStem(_ sourceURL: URL) -> String {
+    var fileName = sourceURL.deletingPathExtension().lastPathComponent
+    if fileName.hasSuffix("Tests") {
+        fileName.removeLast("Tests".count)
+    }
+    return slug(fileName)
+}
+
+private func slug(_ value: String) -> String {
+    var result = ""
+    var needsSeparator = false
+    var previousKind: SlugCharacterKind?
+    let scalars = Array(value.unicodeScalars)
+
+    for index in scalars.indices {
+        let scalar = scalars[index]
+        guard let kind = SlugCharacterKind(scalar) else {
+            needsSeparator = !result.isEmpty
+            previousKind = nil
+            continue
+        }
+
+        let nextKind =
+            scalars.index(after: index) < scalars.endIndex
+            ? SlugCharacterKind(scalars[scalars.index(after: index)]) : nil
+        if !result.isEmpty,
+            needsSeparator
+                || needsCamelCaseSeparator(
+                    previousKind: previousKind,
+                    currentKind: kind,
+                    nextKind: nextKind
+                )
+        {
+            result.append("-")
+        }
+
+        result.append(String(scalar).lowercased())
+        needsSeparator = false
+        previousKind = kind
+    }
+
+    return result.isEmpty ? "unknown" : result
+}
+
+private func needsCamelCaseSeparator(
+    previousKind: SlugCharacterKind?,
+    currentKind: SlugCharacterKind,
+    nextKind: SlugCharacterKind?
+) -> Bool {
+    switch (previousKind, currentKind, nextKind) {
+    case (.lower?, .upper, _), (.digit?, .upper, _), (.upper?, .upper, .lower?):
+        return true
+    default:
+        return false
+    }
+}
+
+private enum SlugCharacterKind {
+    case digit
+    case lower
+    case upper
+
+    init?(_ scalar: Unicode.Scalar) {
+        switch scalar.value {
+        case 48...57:
+            self = .digit
+        case 65...90:
+            self = .upper
+        case 97...122:
+            self = .lower
+        default:
+            return nil
+        }
+    }
+}
+
+private func displayName(_ fileName: String) -> String {
+    let stem = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+    let withoutTests = stem.hasSuffix("Tests") ? String(stem.dropLast("Tests".count)) : stem
+    var result = ""
+    var previous: Character?
+    for character in withoutTests {
+        if let previous, previous.isLowercase || previous.isNumber, character.isUppercase {
+            result.append(" ")
+        }
+        result.append(character)
+        previous = character
+    }
+    return result
+}
+
+private func firstMatch(_ pattern: String, in text: String, group: Int = 1) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        return nil
+    }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, range: range), match.numberOfRanges > group,
+        let swiftRange = Range(match.range(at: group), in: text)
+    else {
+        return nil
+    }
+    return String(text[swiftRange])
+}
+
+private func replacingFirstMatch(
+    _ pattern: String,
+    in text: String,
+    with replacement: String
+) -> String {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        return text
+    }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, range: range),
+        let swiftRange = Range(match.range, in: text)
+    else {
+        return text
+    }
+    var text = text
+    text.replaceSubrange(swiftRange, with: replacement)
+    return text
+}
+
+private func escapeHTML(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+}

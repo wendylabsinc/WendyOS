@@ -1,0 +1,1426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{REPORT_TITLE}}</title>
+  <script>
+    (() => {
+      try {
+        const stored = localStorage.getItem('wendy-e2e-theme');
+        const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = stored || preferred;
+      } catch {
+        document.documentElement.dataset.theme = 'light';
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+
+      /* Wendy CLI emerald palette (go/internal/cli/tui/theme.go). */
+      --emerald-50: #ecfdf5;
+      --emerald-100: #d1fae5;
+      --emerald-200: #a7f3d0;
+      --emerald-300: #6ee7b7;
+      --emerald-400: #34d399;
+      --emerald-500: #10b981;
+      --emerald-600: #059669;
+      --emerald-700: #047857;
+      --emerald-800: #065f46;
+      --emerald-900: #064e3b;
+      --emerald-950: #022c22;
+
+      --bg: #f8fafc;
+      --card: rgba(255, 255, 255, .92);
+      --panel: rgba(255, 255, 255, .78);
+      --text: #111827;
+      --muted: #64748b;
+      --line: #e5e7eb;
+      --soft: #f3f4f6;
+      --green: var(--emerald-700);
+      --green-bg: var(--emerald-50);
+      --green-line: var(--emerald-200);
+      --amber: #a16207;
+      --amber-bg: #fffbeb;
+      --amber-line: #fde68a;
+      --skipped-blue: #64748b;
+      --skipped-blue-bg: #f0f9ff;
+      --skipped-blue-line: #bae6fd;
+      --red: #b91c1c;
+      --red-bg: #fef2f2;
+      --red-line: #fecaca;
+      --blue: var(--emerald-600);
+      --shadow: rgba(15, 23, 42, .08);
+      --shadow-strong: rgba(15, 23, 42, .14);
+      --focus-ring: rgba(16, 185, 129, .18);
+      --code-bg: rgba(243, 244, 246, .90);
+      --stream-bg: #0f172a;
+      --stream-heading: #111827;
+      --stream-text: #e5e7eb;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #020617;
+      --card: rgba(15, 23, 42, .88);
+      --panel: rgba(30, 41, 59, .58);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --line: rgba(148, 163, 184, .22);
+      --soft: rgba(51, 65, 85, .48);
+      --green: var(--emerald-300);
+      --green-bg: rgba(16, 185, 129, .14);
+      --green-line: rgba(52, 211, 153, .35);
+      --amber: #fbbf24;
+      --amber-bg: rgba(245, 158, 11, .14);
+      --amber-line: rgba(245, 158, 11, .34);
+      --skipped-blue: #94a3b8;
+      --skipped-blue-bg: rgba(14, 165, 233, .12);
+      --skipped-blue-line: rgba(125, 211, 252, .28);
+      --red: #fca5a5;
+      --red-bg: rgba(239, 68, 68, .14);
+      --red-line: rgba(248, 113, 113, .34);
+      --blue: var(--emerald-400);
+      --shadow: rgba(0, 0, 0, .28);
+      --shadow-strong: rgba(0, 0, 0, .38);
+      --focus-ring: rgba(52, 211, 153, .22);
+      --code-bg: rgba(51, 65, 85, .62);
+      --stream-bg: #020617;
+      --stream-heading: #0f172a;
+      --stream-text: #d1fae5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 24px 72px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    .brand-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      color: var(--text);
+    }
+
+    .brand-mark svg {
+      display: block;
+      width: 30px;
+      height: 30px;
+      fill: currentColor;
+    }
+
+    .brand-copy {
+      display: grid;
+      gap: 0;
+      line-height: 1.1;
+    }
+
+    .brand-copy strong {
+      font-size: 15px;
+      letter-spacing: -.02em;
+    }
+
+    .brand-copy span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .header-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .theme-toggle {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 8px 12px;
+      box-shadow: 0 8px 22px var(--shadow);
+    }
+
+    .theme-toggle:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 26px var(--shadow-strong);
+    }
+
+    .theme-toggle:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    .theme-toggle-icon {
+      color: var(--blue);
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 40px);
+      line-height: 1.04;
+      letter-spacing: -0.045em;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .run-meta {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(80px, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .metric {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      box-shadow: 0 6px 18px var(--shadow);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .compact-stats {
+      min-width: min(520px, 100%);
+    }
+
+    .filter-bar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 18px 0;
+      padding: 12px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 10px 28px var(--shadow-strong);
+      backdrop-filter: blur(12px);
+    }
+
+    .filter-label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .filter-button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 8px 12px;
+    }
+
+    .filter-button[data-filter="pass"],
+    .filter-button[data-filter="passed"] {
+      color: var(--green);
+      background: var(--green-bg);
+      border-color: var(--green-line);
+    }
+
+    .filter-button[data-filter="flaked"] {
+      color: var(--amber);
+      background: var(--amber-bg);
+      border-color: var(--amber-line);
+    }
+
+    .filter-button[data-filter="skipped"] {
+      color: var(--skipped-blue);
+      background: var(--skipped-blue-bg);
+      border-color: var(--skipped-blue-line);
+    }
+
+    .filter-button[data-filter="unknown"] {
+      color: var(--muted);
+      background: var(--soft);
+      border-color: var(--line);
+    }
+
+    .filter-button[data-filter="fail"],
+    .filter-button[data-filter="failed"] {
+      color: var(--red);
+      background: var(--red-bg);
+      border-color: var(--red-line);
+    }
+
+    .filter-button[data-filter="ai"] {
+      color: #fff;
+      background: #000;
+      border-color: #000;
+    }
+
+    .filter-button:hover,
+    .filter-button[aria-pressed="true"] {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px var(--shadow-strong);
+    }
+
+    .filter-button[aria-pressed="true"] {
+      outline: 2px solid currentColor;
+      outline-offset: 2px;
+    }
+
+    .search-field {
+      flex: 1 1 260px;
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      font-size: 14px;
+      padding: 8px 13px;
+    }
+
+    .search-field:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+      outline: none;
+    }
+
+    .filter-count {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card {
+      margin-top: 30px;
+    }
+
+    .is-hidden { display: none !important; }
+
+    .card-title {
+      margin: 0 0 8px;
+      padding: 0 0 6px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: -0.025em;
+    }
+
+    .suite-group {
+      margin: 4px 0 16px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.4;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      vertical-align: 1px;
+    }
+
+    .badge.pass {
+      color: var(--green);
+      background: var(--green-bg);
+      border: 1px solid var(--green-line);
+    }
+
+    .badge.flaked {
+      color: var(--amber);
+      background: var(--amber-bg);
+      border: 1px solid var(--amber-line);
+    }
+
+    .badge.skipped {
+      color: var(--skipped-blue);
+      background: var(--skipped-blue-bg);
+      border: 1px solid var(--skipped-blue-line);
+    }
+
+    .badge.concern,
+    .badge.no-ai {
+      color: var(--amber);
+      background: var(--amber-bg);
+      border: 1px solid var(--amber-line);
+    }
+
+    .badge.unknown {
+      color: var(--muted);
+      background: var(--soft);
+      border: 1px solid var(--line);
+    }
+
+    .badge.duration {
+      display: inline-grid;
+      grid-template-columns: 100px 100px;
+      align-items: center;
+      gap: 8px;
+      width: 208px;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      padding: 0;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .badge.duration.empty {
+      visibility: hidden;
+    }
+
+    .duration-bar {
+      position: relative;
+      display: block;
+      width: 100px;
+      height: 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--soft);
+      overflow: hidden;
+    }
+
+    .duration-bar-fill {
+      position: absolute;
+      top: 0;
+      left: var(--duration-bar-left, 0%);
+      display: block;
+      min-width: 2px;
+      width: var(--duration-bar-width, 0%);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--duration-bar-color, var(--muted));
+    }
+
+    .duration-value {
+      text-align: right;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .test-summary .badge.skipped,
+    .test-summary .badge.unknown {
+      display: inline-block;
+      width: auto;
+      min-width: 0;
+      max-width: max-content;
+      padding: 2px 7px;
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+
+    .badge.fail {
+      color: var(--red);
+      background: var(--red-bg);
+      border: 1px solid var(--red-line);
+    }
+
+    .badge.ai {
+      gap: 5px;
+      color: #fff;
+      background: #000;
+      border: 1px solid #000;
+    }
+
+    .ai-filter-review {
+      display: none;
+      margin: 7px 0 2px 22px;
+      user-select: text;
+    }
+
+    .ai-filter-review pre {
+      margin: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--code-bg);
+      color: var(--text);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    body.ai-filter-active .test-details[data-has-ai-review="true"]:not(.is-hidden) .ai-filter-review {
+      display: block;
+    }
+
+    .test-details {
+      display: block;
+      margin: 1px 0;
+      border-radius: 8px;
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .test-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 208px max-content max-content;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 2px;
+      cursor: pointer;
+      user-select: none;
+      border-radius: 8px;
+    }
+
+    .test-summary:hover { background: var(--panel); }
+
+    .test-title {
+      min-width: 0;
+    }
+
+    .test-path {
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .test-path .arrow {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0;
+      font-weight: 700;
+      margin: 0 6px;
+      vertical-align: 1px;
+    }
+
+    .test-path .arrow::before {
+      content: "›";
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .test-path code {
+      color: var(--text);
+      font-size: .9em;
+      font-weight: 650;
+    }
+
+    .test-summary .badge {
+      margin-left: 0;
+    }
+
+    .test-title .badge {
+      margin-left: 8px;
+    }
+
+    .report-links {
+      display: inline-flex;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .report-links .report-button {
+      float: none;
+      margin-left: 0;
+    }
+
+    .test-body {
+      margin: 4px 6px 14px 6px;
+      padding: 4px 0 0;
+    }
+
+    .observations {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      overflow: hidden;
+    }
+
+    .observation-row {
+      display: grid;
+      grid-template-columns: 74px max-content minmax(18px, 1fr) 112px 78px max-content 208px;
+      column-gap: 10px;
+      row-gap: 10px;
+      align-items: center;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    .observation-route-cell {
+      margin-right: 18px;
+    }
+
+    .observation-row + .observation-row:not(.same-target) {
+      border-top: 1px solid var(--line);
+    }
+
+    .observation-target,
+    .observation-spacer,
+    .observation-attempt {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .observation-route-cell {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      line-height: 1;
+    }
+
+    .observation-actions {
+      display: inline-flex;
+      justify-content: flex-end;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .observation-button {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.4;
+      opacity: 0;
+      padding: 4px 9px;
+      pointer-events: none;
+      text-decoration: none;
+      transition: opacity .12s ease, border-color .12s ease, color .12s ease;
+    }
+
+    .observation-row:hover .observation-button,
+    .observation-row:focus-within .observation-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .observation-button:hover {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .target-route {
+      display: inline-grid;
+      grid-template-columns: 30px 14px 30px;
+      align-items: center;
+      width: 74px;
+      height: 22px;
+      line-height: 1;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
+    .target-route-cli,
+    .target-route-agent,
+    .target-route-arrow {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      min-width: 0;
+    }
+
+    .target-route-cli {
+      justify-content: flex-end;
+    }
+
+    .target-route-agent {
+      justify-content: flex-start;
+    }
+
+    .target-route-arrow {
+      justify-content: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .target-logo {
+      box-sizing: border-box;
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--soft);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+      padding: 0;
+    }
+
+    .target-logo.apple {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      font-size: 15px;
+    }
+
+    .target-logo.linux {
+      font-size: 14px;
+    }
+
+    .target-logo.nvidia {
+      color: #fff;
+      background: #76b900;
+      border-color: #76b900;
+      letter-spacing: -.03em;
+    }
+
+    .target-logo.raspberry-pi {
+      color: #fff;
+      background: #c51a4a;
+      border-color: #c51a4a;
+      font-size: 10px;
+      letter-spacing: -.04em;
+    }
+
+    .target-logo.windows {
+      color: #fff;
+      background: #0078d4;
+      border-color: #0078d4;
+      font-size: 15px;
+    }
+
+    h3 {
+      margin: 0 0 7px;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: -0.015em;
+    }
+
+    .test-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .skip-reason,
+    .no-ai-note {
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--soft);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .record {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .88em;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: .12em .34em;
+    }
+
+    ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .ai-review-checklist {
+      margin: 0 0 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      font-size: 14px;
+    }
+
+    .ai-review-checklist h4 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .ai-review-inline {
+      margin: 0 0 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--green-line);
+      border-radius: 12px;
+      background: var(--green-bg);
+      font-size: 14px;
+    }
+
+    .ai-review-inline h4 {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 8px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .ai-review-details-link {
+      margin-left: auto;
+      border: 1px solid var(--green-line);
+      border-radius: 999px;
+      color: var(--green);
+      background: var(--card);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .04em;
+      padding: 2px 8px;
+      text-decoration: none;
+    }
+
+    .ai-review-details-link:hover {
+      border-color: var(--green);
+    }
+
+    .ai-review-report {
+      margin: 18px 0 22px;
+    }
+
+    .ai-review-suite {
+      margin: 0 0 14px;
+    }
+
+    .ai-review-test {
+      margin: 12px 0 10px;
+    }
+
+    .ai-review-markdown {
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .ai-review-markdown h5,
+    .ai-review-markdown h6 {
+      margin: 12px 0 5px;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.35;
+      letter-spacing: -.01em;
+    }
+
+    .ai-review-markdown h5:first-child,
+    .ai-review-markdown h6:first-child {
+      margin-top: 0;
+    }
+
+    .ai-review-markdown p {
+      margin: 7px 0;
+    }
+
+    .ai-review-markdown ul,
+    .ai-review-markdown ol {
+      margin: 7px 0 7px 18px;
+      padding: 0;
+      list-style: revert;
+    }
+
+    .ai-review-markdown li {
+      margin: 4px 0;
+      padding-left: 2px;
+    }
+
+    .ai-review-markdown pre {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--code-bg);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .ai-review-markdown pre code {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .checks {
+      margin: 0;
+    }
+
+    .checks li {
+      display: block;
+      padding: 3px 0;
+    }
+
+    .status {
+      margin-left: 6px;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .status.pass::before { content: "✓"; }
+    .status.concern::before,
+    .status.skipped::before { content: "!"; }
+    .status.fail::before { content: "✕"; }
+
+    .status.pass { color: var(--green); }
+    .status.concern,
+    .status.skipped { color: var(--amber); }
+    .status.fail { color: var(--red); }
+
+    .note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .report-button {
+      float: right;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.4;
+      margin-left: 12px;
+      opacity: 0;
+      padding: 4px 9px;
+      pointer-events: none;
+      text-decoration: none;
+      transform: translateY(-1px);
+      transition: opacity .12s ease, border-color .12s ease, color .12s ease;
+    }
+
+    .test-details:hover .report-button,
+    .test-details:focus-within .report-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .test-details-link:focus-visible {
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    .report-button:hover {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .skipped {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      padding: 22px;
+    }
+
+    .skipped li {
+      color: var(--muted);
+      background: var(--soft);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+
+    .commands {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--stream-bg);
+      overflow: hidden;
+    }
+
+    .command-run {
+      padding: 14px 16px;
+      color: var(--stream-text);
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .command-run + .command-run {
+      border-top: 1px solid rgba(148, 163, 184, .24);
+    }
+
+    .command-line {
+      display: flex;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .command-prompt {
+      flex: 0 0 auto;
+      color: var(--emerald-400);
+      font-weight: 900;
+    }
+
+    .command-text {
+      min-width: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .command-output {
+      display: grid;
+      gap: 2px;
+      margin: 10px 0 0 22px;
+      white-space: pre-wrap;
+    }
+
+    .command-output:empty {
+      display: none;
+    }
+
+    .output-line {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .output-line.stdout .stream-marker {
+      visibility: hidden;
+    }
+
+    .output-line.stderr .stream-marker {
+      color: #f59e0b;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .output-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .command-run-meta {
+      margin: 8px 0 0 22px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    footer {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 680px) {
+      main { padding: 24px 16px 56px; }
+      header { grid-template-columns: 1fr; }
+      .header-side { justify-items: stretch; }
+      .theme-toggle { justify-self: start; }
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .filter-bar { position: static; }
+      .filter-count { flex-basis: 100%; margin-left: 0; }
+      .search-field { flex-basis: 100%; }
+      .test-summary {
+        grid-template-columns: minmax(0, 1fr) max-content;
+      }
+      .test-title {
+        grid-column: 1 / -1;
+      }
+      .badge.duration {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
+      .report-links {
+        grid-column: 1 / -1;
+        justify-self: end;
+      }
+      .test-body { margin: 4px 6px 14px 6px; padding: 4px 0 0; }
+      .observation-row {
+        grid-template-columns: minmax(0, 1fr) 72px;
+      }
+      .observation-spacer,
+      .observation-route-cell,
+      .observation-actions,
+      .observation-row > .badge,
+      .observation-row > .badge.duration {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
+      .observation-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .command-output { margin-left: 0; }
+      .command-run-meta { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <!--
+    Wendy E2E Report HTML Template
+
+    Fill every {{PLACEHOLDER}} with escaped text. Duplicate the marked repeat
+    blocks as needed, then remove these instructions and any unused example
+    sections. This template is intended to list every E2E test, including
+    passed tests, disabled/skipped tests, and tests without // AI: review
+    comments. For checklist and test statuses, use one of: pass, concern,
+    flaked, fail, skipped, unknown, no-ai.
+
+    Command run details are optional but recommended for every test that ran
+    commands. Fill them from the matching Markdown command record. Render each
+    command as a terminal-style run followed by captured output lines. Leave
+    stdout lines unmarked. Mark stderr lines with an amber ! in the gutter.
+    If a command produced no output, omit the command-output block. Test
+    details should only include command runs, AI review checklists when present,
+    generated AI review Markdown when present, and skipped reasons for skipped tests.
+
+    The filter bar expects every test details row to have data-test-status set
+    to its primary status, and data-test-statuses set to all matching statuses:
+    pass, flaked, skipped, fail, or unknown. Rows with generated AI reports that
+    need human review should set data-has-ai-review to true and render the inline
+    TEST_AI_FILTER_ANALYSIS block. Activating the AI filter reveals that inline
+    Markdown report verbatim under each matching test line. The search field filters
+    against the row text content, including suite name, test title, command
+    text, stdout, and stderr. File cards are hidden automatically when none of
+    their test rows match the active filter and search query.
+  -->
+  <main>
+    <header>
+      <div>
+        <div class="brand-row" aria-label="Wendy E2E Report">
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 1024 1024" role="img"><rect x="407.04" y="299.64" width="424.72" height="424.72" transform="translate(-180.62 587.94) rotate(-45)"/><path d="M335.3,743.03l-231.03-231.03,231.03-231.02,231.02,231.02-231.02,231.03ZM179.04,512l156.27,156.27,156.27-156.27-156.27-156.27-156.27,156.27Z"/></svg></span>
+          <span class="brand-copy"><strong>E2E Report</strong><span>Swift Specs</span></span>
+        </div>
+        <h1>{{REPORT_HEADING}}</h1>
+        <p class="lead">{{REPORT_SUMMARY}}</p>
+        <p class="run-meta">Run ID: <code>{{RUN_ID}}</code></p>
+      </div>
+      <div class="header-side">
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">
+          <span class="theme-toggle-icon" data-theme-toggle-icon aria-hidden="true">◐</span>
+          <span data-theme-toggle-label>Theme</span>
+        </button>
+        <section class="summary compact-stats" aria-label="Summary">
+          <div class="metric"><strong>{{TESTS_PASSED_COUNT}}</strong><span>Passed</span></div>
+          <div class="metric"><strong>{{TESTS_FLAKED_COUNT}}</strong><span>Flaked</span></div>
+          <div class="metric"><strong>{{TESTS_FAILED_COUNT}}</strong><span>Failed</span></div>
+          <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
+          <div class="metric"><strong>{{TESTS_UNKNOWN_COUNT}}</strong><span>Unknown</span></div>
+          <div class="metric"><strong>{{COMMAND_RUN_COUNT}}</strong><span>Commands</span></div>
+        </section>
+      </div>
+    </header>
+
+    <section class="filter-bar" aria-label="Filter tests by status">
+      <span class="filter-label">Filter</span>
+      <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
+      <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
+      <button class="filter-button" type="button" data-filter="flaked" aria-pressed="false">Flaked</button>
+      <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
+      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
+      <button class="filter-button" type="button" data-filter="unknown" aria-pressed="false">Unknown</button>
+      <button class="filter-button" type="button" data-filter="ai" aria-pressed="false">AI</button>
+      <input class="search-field" type="search" data-search placeholder="Search tests…" aria-label="Search tests" />
+      <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
+    </section>
+
+    <!-- Repeat this .card section once per test file. Use prose display names, e.g. WendyAnalyticsTests.swift → Wendy Analytics. -->
+    <section class="card" data-test-file-card>
+      <div class="card-title">
+        <h2>{{TEST_FILE_DISPLAY_NAME}}</h2>
+      </div>
+
+      <!-- Repeat this .suite-group once per suite in the file. Do not add a visible suite heading; the suite appears in each test sentence. -->
+      <div class="suite-group">
+        <!-- Repeat this details.test-details once per test function in the suite. Set data-has-ai to true when // AI: checklist items are present, and data-has-ai-review to true only when a generated Markdown report needs human review. Render TEST_AI_BADGE only when generated AI review notes exist. -->
+        <details class="test-details" data-test-status="{{TEST_STATUS_CLASS}}" data-has-ai="{{TEST_HAS_AI}}" data-has-ai-review="{{TEST_HAS_AI_REVIEW}}">
+          <summary class="test-summary">
+            <span class="test-title"><span class="test-path">{{TEST_PATH_TEXT}}</span><span class="badge {{TEST_STATUS_CLASS}}">{{TEST_STATUS_TEXT}}</span></span><span class="badge duration" style="--duration-bar-color: {{TEST_DURATION_BAR_COLOR}}; --duration-bar-width: {{TEST_DURATION_BAR_WIDTH}}"><span class="duration-bar" aria-hidden="true"><span class="duration-bar-fill"></span></span><span class="duration-value">{{TEST_DURATION}}</span></span>{{TEST_AI_BADGE}}<span class="report-links">{{TEST_REPORT_LINK}}</span>{{TEST_AI_FILTER_ANALYSIS}}
+          </summary>
+          <div class="test-body">
+          <!-- Optional: render when the test has // AI: checklist items. -->
+          <section class="ai-review-checklist">
+            <h4>AI review checklist</h4>
+            <ul class="checks">
+              <!-- Repeat this li once per checklist item. -->
+              <li><span>{{CHECKLIST_ITEM_TEXT}}</span><span class="status {{CHECKLIST_STATUS_CLASS}}" aria-label="{{CHECKLIST_STATUS_TEXT}}"></span></li>
+            </ul>
+            <p class="note">{{TEST_NOTES}}</p>
+          </section>
+
+          <!-- Optional: render when the test was disabled/skipped. -->
+          <p class="skip-reason">{{SKIP_REASON}}</p>
+
+          <!-- Optional: remove this block when the test did not run commands. -->
+          <div class="commands">
+            <!-- Repeat this section.command-run once per command captured in the record. -->
+            <section class="command-run">
+              <div class="command-line">
+                <span class="command-prompt">❯</span>
+                <span class="command-text">{{COMMAND_TEXT}}</span>
+              </div>
+
+              <!-- Optional: remove this block when the command produced no output. Repeat .output-line in captured order when available; otherwise render stdout lines before stderr lines. -->
+              <div class="command-output">
+                <!-- stdout line: empty marker keeps text aligned with stderr lines. -->
+                <div class="output-line stdout"><span class="stream-marker">!</span><span class="output-text">{{COMMAND_STDOUT_LINE}}</span></div>
+                <!-- stderr line: show ! marker in the gutter. -->
+                <div class="output-line stderr"><span class="stream-marker">!</span><span class="output-text">{{COMMAND_STDERR_LINE}}</span></div>
+              </div>
+
+              <p class="command-run-meta">{{COMMAND_MACHINE}} · {{COMMAND_TERMINATION_STATUS}} · {{COMMAND_DURATION}}</p>
+            </section>
+          </div>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Optional: remove this section when no files were skipped. -->
+    <section class="card">
+      <div class="card-title">
+        <h2>Skipped</h2>
+        <span class="badge pass">No AI checklist</span>
+      </div>
+      <ul class="skipped">
+        <!-- Repeat this li once per skipped test file. -->
+        <li>{{SKIPPED_TEST_FILE_NAME}}</li>
+      </ul>
+    </section>
+
+    <footer>
+      Aggregate: <code>{{RECORDING_DIRECTORY}}</code>
+    </footer>
+  </main>
+  <script>
+    (() => {
+      const buttons = Array.from(document.querySelectorAll('[data-filter]'));
+      const search = document.querySelector('[data-search]');
+      const tests = Array.from(document.querySelectorAll('[data-test-status]'));
+      const cards = Array.from(document.querySelectorAll('[data-test-file-card]'));
+      const count = document.querySelector('[data-filter-count]');
+      const themeToggle = document.querySelector('[data-theme-toggle]');
+      const themeToggleIcon = document.querySelector('[data-theme-toggle-icon]');
+      const themeToggleLabel = document.querySelector('[data-theme-toggle-label]');
+      const reportButtons = Array.from(document.querySelectorAll('.report-button'));
+      let activeFilter = defaultFilter();
+
+      function defaultFilter() {
+        if (tests.some(test => testStatusSet(test).has('fail'))) return 'fail';
+        if (tests.some(test => testStatusSet(test).has('flaked'))) return 'flaked';
+        return 'all';
+      }
+
+      function testStatusSet(test) {
+        return new Set((test.dataset.testStatuses || test.dataset.testStatus || '').split(/\s+/).filter(Boolean));
+      }
+
+      function currentTheme() {
+        return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      }
+
+      function setTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        try { localStorage.setItem('wendy-e2e-theme', theme); } catch {}
+        updateThemeToggle();
+      }
+
+      function updateThemeToggle() {
+        const theme = currentTheme();
+        if (themeToggle) {
+          themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+          themeToggle.setAttribute('title', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
+        }
+        if (themeToggleIcon) themeToggleIcon.textContent = theme === 'dark' ? '☾' : '☼';
+        if (themeToggleLabel) themeToggleLabel.textContent = theme === 'dark' ? 'Dark' : 'Light';
+      }
+
+      function renderQuotedCode(root = document.querySelector('main')) {
+        if (!root) return;
+
+        const ignoredParents = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            if (!node.nodeValue.includes("'")) return NodeFilter.FILTER_REJECT;
+            if (node.parentElement?.closest('code, pre, script, style, textarea, .command-line, .command-output')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (ignoredParents.has(node.parentNode?.nodeName ?? '')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+
+        for (const node of nodes) {
+          const text = node.nodeValue;
+          const fragment = document.createDocumentFragment();
+          const pattern = /'([^'\n]+)'/g;
+          let lastIndex = 0;
+          let match;
+          let replaced = false;
+
+          while ((match = pattern.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+              fragment.append(document.createTextNode(text.slice(lastIndex, match.index)));
+            }
+
+            const code = document.createElement('code');
+            code.textContent = match[1];
+            fragment.append(code);
+            lastIndex = pattern.lastIndex;
+            replaced = true;
+          }
+
+          if (!replaced) continue;
+          if (lastIndex < text.length) {
+            fragment.append(document.createTextNode(text.slice(lastIndex)));
+          }
+          node.replaceWith(fragment);
+        }
+      }
+
+      function applyFilters() {
+        const query = (search?.value ?? '').trim().toLowerCase();
+        let visible = 0;
+
+        for (const test of tests) {
+          const statuses = testStatusSet(test);
+          const statusMatches = activeFilter === 'all'
+            || statuses.has(activeFilter)
+            || (activeFilter === 'ai' && test.dataset.hasAiReview === 'true');
+          const searchMatches = query === '' || test.textContent.toLowerCase().includes(query);
+          const matches = statusMatches && searchMatches;
+          test.classList.toggle('is-hidden', !matches);
+          if (matches) visible += 1;
+        }
+
+        for (const card of cards) {
+          const hasVisibleTest = Boolean(card.querySelector('[data-test-status]:not(.is-hidden)'));
+          card.classList.toggle('is-hidden', !hasVisibleTest);
+        }
+
+        for (const button of buttons) {
+          button.setAttribute('aria-pressed', String(button.dataset.filter === activeFilter));
+        }
+
+        document.body.classList.toggle('ai-filter-active', activeFilter === 'ai');
+
+        if (count) {
+          const suffix = query ? ` matching “${search.value}”` : '';
+          count.textContent = `${visible} of ${tests.length} tests shown${suffix}`;
+        }
+      }
+
+      for (const button of buttons) {
+        button.addEventListener('click', () => {
+          activeFilter = button.dataset.filter;
+          applyFilters();
+        });
+      }
+
+      themeToggle?.addEventListener('click', () => {
+        setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+      });
+
+      for (const button of reportButtons) {
+        button.addEventListener('click', event => event.stopPropagation());
+      }
+
+      search?.addEventListener('input', applyFilters);
+      updateThemeToggle();
+      renderQuotedCode();
+      applyFilters();
+    })();
+  </script>
+</body>
+</html>

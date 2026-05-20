@@ -1,0 +1,455 @@
+import Foundation
+import Testing
+
+@testable import WendyE2ETesting
+
+@Suite
+struct `machine` {
+    @Test
+    func `creates remote machine metadata`() {
+        let machine = WendyE2EMachine(
+            id: "ssh",
+            name: "SSH",
+            user: "ai",
+            address: "example.local"
+        )
+
+        #expect(machine.name == "SSH")
+        #expect(machine.isLocal == false)
+        #expect(machine.user == "ai")
+        #expect(machine.address == "example.local")
+        #expect(machine.id == "ssh")
+        #expect(machine.description == "ssh")
+    }
+
+    @Test
+    func `creates remote machine without session state`() {
+        let machine = WendyE2EMachine(id: "ssh", name: "SSH", user: "ai", address: "example.local")
+
+        #expect(machine.isLocal == false)
+        #expect(machine.user == "ai")
+        #expect(machine.address == "example.local")
+        #expect(machine.id == "ssh")
+        #expect(machine.description == "ssh")
+    }
+
+    @Test
+    func `defaults machine to current host`() {
+        let machine = WendyE2EMachine(id: "local", name: "Local")
+
+        #expect(machine.isLocal)
+        #expect(machine.user == nil)
+        #expect(!machine.address.isEmpty)
+        #expect(machine.id == "local")
+        #expect(machine.description == "local")
+    }
+
+    @Test
+    func `declares current runner machine`() {
+        #expect(WendyE2EMachine.current.id == "current")
+        #expect(WendyE2EMachine.current.name == "Current")
+        #expect(WendyE2EMachine.current.tags == [.runner])
+        #expect(WendyE2EMachine.current.isLocal)
+        #expect(WendyE2EMachine.current.user == nil)
+        #expect(!WendyE2EMachine.current.address.isEmpty)
+    }
+
+    @Test
+    func `stores a routable address`() {
+        let machine = WendyE2EMachine(id: "remote", name: "Remote", address: "192.168.64.2")
+
+        #expect(machine.isLocal == false)
+        #expect(machine.address == "192.168.64.2")
+    }
+}
+
+@Suite
+struct `session` {
+    @Test
+    func `runs a simple shell command`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        )
+        try await session.sh("printf 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(result.stdout == "wendy-machine-smoke")
+            #expect(result.stderr == "")
+        }
+    }
+
+    @Test
+    func `returns a rich shell result`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        )
+        try await session.sh("printf 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(!result.status.isFailure)
+            #expect(result.stdout == "wendy-machine-smoke")
+            #expect(result.stderr == "")
+            #expect(result.normalizedStdout == "wendy-machine-smoke")
+        }
+    }
+
+    @Test
+    func `runs a simple PowerShell command when PowerShell is available`() async throws {
+        guard Self.hasPowerShell else {
+            return
+        }
+
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .windows)
+        )
+        try await session.sh(posix: "", power: "Write-Output 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(result.normalizedStdout == "wendy-machine-smoke\n")
+            #expect(result.stderr == "")
+        }
+    }
+
+    @Test
+    func `runs local commands in working directory`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-local-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        let session = try await WendyE2ESession.begin(
+            for: machine,
+            workingDirectory: directory.path
+        )
+        try await session.sh("touch local.txt")
+
+        #expect(!session.machine.address.isEmpty)
+        #expect(session.workingDirectory == directory.path)
+        #expect(session.description == "local")
+        #expect(FileManager.default.fileExists(atPath: directory.path + "/local.txt"))
+    }
+
+    @Test
+    func `sets environment variables before running local commands`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-env-" + UUID().uuidString, isDirectory: true)
+        let binDirectory = directory.appendingPathComponent("bin", isDirectory: true)
+        let homeDirectory = directory.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: homeDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        let session = try await WendyE2ESession.begin(
+            for: machine,
+            workingDirectory: directory.path,
+            env: [
+                "HOME": homeDirectory.path,
+                "PATH": "\(binDirectory.path):$PATH",
+                "WENDY_ANALYTICS": "false",
+                "WENDY_TEST_BIN": binDirectory.path,
+            ]
+        )
+
+        try await session.sh(
+            "case \":$PATH:\" in *\":$WENDY_TEST_BIN:\"*) printf 'PATH=ok\n' ;; *) printf 'PATH=missing\n'; exit 1 ;; esac; printf 'HOME=%s\n' \"$HOME\"; printf 'WENDY_ANALYTICS=%s\n' \"$WENDY_ANALYTICS\""
+        ) { result in
+            #expect(result.status.isSuccess)
+            #expect(result.stdout == "PATH=ok\nHOME=\(homeDirectory.path)\nWENDY_ANALYTICS=false\n")
+            #expect(result.stderr == "")
+        }
+    }
+
+    @Test
+    func `computes macOS wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "mac", name: "Mac", os: .macOS),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/Library/Caches/wendy")
+    }
+
+    @Test
+    func `computes Linux wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "linux", name: "Linux", os: .linux),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/.cache/wendy")
+    }
+
+    @Test
+    func `uses XDG cache home for Linux wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "linux", name: "Linux", os: .linux),
+            env: [
+                "HOME": "/tmp/e2e-home",
+                "XDG_CACHE_HOME": "/tmp/e2e-cache",
+            ]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-cache/wendy")
+    }
+
+    @Test
+    func `computes WendyOS wendy cache directory`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "wendyos", name: "WendyOS", os: .wendyOS),
+            env: ["HOME": "/tmp/e2e-home"]
+        )
+
+        #expect(session.wendyCacheDirectory == "/tmp/e2e-home/.cache/wendy")
+    }
+
+    @Test
+    func `creates session directories lazily before running commands`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-lazy-" + UUID().uuidString, isDirectory: true)
+        let homeDirectory = directory.appendingPathComponent("home", isDirectory: true)
+        let temporaryDirectory = directory.appendingPathComponent("tmp", isDirectory: true)
+        let workingDirectory = homeDirectory.appendingPathComponent("work", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
+            workingDirectory: workingDirectory.path,
+            env: [
+                "HOME": homeDirectory.path,
+                "TMPDIR": temporaryDirectory.path,
+            ]
+        )
+
+        try await session.sh("if pwd -W >/dev/null 2>&1; then pwd -W | tr -d '\n'; else printf '%s' \"$PWD\"; fi") { result in
+            try result.requireSuccess()
+
+            #expect(result.stdout == workingDirectory.path)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: homeDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: temporaryDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: workingDirectory.path))
+    }
+
+    @Test
+    func `resets session directories only before the first command`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-reset-" + UUID().uuidString, isDirectory: true)
+        let homeDirectory = directory.appendingPathComponent("home", isDirectory: true)
+        let temporaryDirectory = directory.appendingPathComponent("tmp", isDirectory: true)
+        let workingDirectory = homeDirectory.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: homeDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: homeDirectory.appendingPathComponent("stale", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
+            workingDirectory: workingDirectory.path,
+            env: [
+                "HOME": homeDirectory.path,
+                "TMPDIR": temporaryDirectory.path,
+            ],
+            resetDirectoriesOnFirstCommand: true
+        )
+
+        try await session.sh("test ! -e \"$HOME/stale\" && touch \"$HOME/fresh\"")
+        try await session.sh("test -e \"$HOME/fresh\"")
+    }
+
+    @Test
+    func `runs commands locally by default`() async throws {
+        try await Self.withTemporarySession { session, directory in
+            try await session.sh("touch first.txt")
+            try await session.sh("touch second.txt")
+
+            #expect(FileManager.default.fileExists(atPath: directory.path + "/first.txt"))
+            #expect(FileManager.default.fileExists(atPath: directory.path + "/second.txt"))
+        }
+    }
+
+    @Test
+    func `collected output API returns shell result`() async throws {
+        try await Self.withTemporarySession { session, _ in
+            try await session.sh("printf 'hello'") { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "hello")
+                #expect(result.stderr == "")
+            }
+        }
+    }
+
+    @Test
+    func `collected output callback receives command output`() async throws {
+        try await Self.withTemporarySession { session, _ in
+            try await session.sh("printf 'hello'; printf 'oops' >&2") { result in
+                try result.requireSuccess()
+
+                #expect(result.stdout == "hello")
+                #expect(result.stderr == "oops")
+                #expect(result.stdout.contains(/he.*o/))
+            }
+        }
+    }
+
+    @Test
+    func `simple shell command throws when the command exits non-zero`() async throws {
+        try await Self.withTemporarySession { session, _ in
+            await #expect(throws: WendyE2EMachineError.self) {
+                try await session.sh("exit 7")
+            }
+            return ()
+        }
+    }
+
+    @Test
+    func `sh runs command`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-command-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        let session = try await WendyE2ESession.begin(
+            for: machine,
+            workingDirectory: directory.path
+        )
+        try await session.sh("touch builder.txt")
+
+        #expect(FileManager.default.fileExists(atPath: directory.path + "/builder.txt"))
+    }
+
+    @Test
+    func `sh callback receives command output`() async throws {
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
+        )
+
+        try await session.sh("printf 'hello'; printf 'oops' >&2") { result in
+            try result.requireSuccess()
+
+            #expect(result.stdout == "hello")
+            #expect(result.stderr == "oops")
+        }
+    }
+
+    @Test
+    func `sh selects command for machine shell`() async throws {
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .current)
+        let session = try await WendyE2ESession.begin(for: machine)
+
+        try await session.sh(
+            posix: "printf 'posix'",
+            power: "Write-Output 'power'"
+        ) { result in
+            try result.requireSuccess()
+
+            switch machine.os {
+            case .windows:
+                #expect(result.normalizedStdout == "power\n")
+            case .macOS, .linux, .wendyOS:
+                #expect(result.stdout == "posix")
+            }
+        }
+    }
+
+    @Test
+    func `requires command recordings to start from test bodies`() {
+        #expect(throws: (any Error).self) {
+            _ = try WendyE2ERecorder(filePath: #filePath, function: "init()", line: #line)
+        }
+    }
+
+    @Test
+    func `dasherizes command record file names`() {
+        #expect(WendyE2ERecorder.slug("buildAgent(with:)") == "build-agent-with")
+        #expect(WendyE2ERecorder.slug("URLParserTests") == "url-parser-tests")
+        #expect(
+            WendyE2ERecorder.slug("'--json' reports a missing device")
+                == "json-reports-a-missing-device"
+        )
+        #expect(
+            WendyE2ERecorder.recordingFileName(
+                filePath: "/tmp/WendyDeviceInfoTests.swift",
+                suite: "'wendy device info'",
+                testName: "'--device' selects an explicit device"
+            )
+                == "wendy-device-info.device-selects-an-explicit-device.md"
+        )
+    }
+
+    @Test
+    func `with begins sessions and ends them after the body`() async throws {
+        try await WendyE2ESession.with(
+            WendyE2EMachine(id: "first", name: "Local"),
+            WendyE2EMachine(id: "second", name: "Local")
+        ) { first, second in
+            #expect(first.machine.name == "Local")
+            #expect(second.machine.name == "Local")
+        }
+    }
+
+    private static var hasPowerShell: Bool {
+        let candidates = ["pwsh", "pwsh.exe", "powershell", "powershell.exe"]
+        let environment = ProcessInfo.processInfo.environment
+        let pathValue = environment["PATH"] ?? environment["Path"] ?? environment["path"] ?? ""
+        let pathSeparator: Character
+        #if os(Windows)
+            pathSeparator = ";"
+        #else
+            pathSeparator = ":"
+        #endif
+
+        for directory in pathValue.split(separator: pathSeparator, omittingEmptySubsequences: false)
+        {
+            let directoryPath = directory.isEmpty ? "." : String(directory)
+            for candidate in candidates {
+                let path = Self.executablePath(directory: directoryPath, candidate: candidate)
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private static func executablePath(directory: String, candidate: String) -> String {
+        if directory.hasSuffix("/") || directory.hasSuffix("\\") {
+            return "\(directory)\(candidate)"
+        }
+
+        #if os(Windows)
+            return "\(directory)\\\(candidate)"
+        #else
+            return "\(directory)/\(candidate)"
+        #endif
+    }
+
+    private static func withTemporarySession<Result>(
+        _ body: (WendyE2ESession, URL) async throws -> Result
+    ) async throws -> Result {
+        let directory = try Self.makeTemporaryDirectory()
+        let session = try await WendyE2ESession.begin(
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
+            workingDirectory: directory.path
+        )
+
+        defer { try? FileManager.default.removeItem(at: directory) }
+        return try await body(session, directory)
+    }
+
+    private static func makeTemporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machine-local-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+}

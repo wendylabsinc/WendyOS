@@ -1,0 +1,218 @@
+# E2E Report Pipeline Plan
+
+## Goal
+
+Unify Swift E2E reference generation, E2E test recordings, human-facing viewing, and optional AI review into one explicit pipeline.
+
+The pipeline should separate expensive/environment-dependent test execution from deterministic processing and rendering. AI analysis should be optional and happen after the report data exists.
+
+## Terminology
+
+- **E2E recording**: Raw captured data from one E2E test run, analogous to an Instruments recording of a run.
+- **E2E report**: Processed Markdown report data derived from test sources and one or more E2E recordings.
+- **AI analysis**: Optional augmentation added to an E2E report.
+- **Viewer**: Rendered static/interactive UI for inspecting an E2E report.
+
+## Pipeline
+
+```text
+run      → E2E recording
+process  → E2E report
+analyze  → augmented E2E report
+render   → Viewer
+```
+
+Data flow:
+
+```text
+test sources
+  ↓
+run
+  → E2E recording
+
+test sources + one-or-more E2E recordings
+  ↓
+process
+  → E2E report
+
+E2E report
+  ↓
+analyze optional
+  → augmented E2E report
+
+E2E report
+  ↓
+render viewer
+  → Viewer
+```
+
+## Command Shape
+
+### Run
+
+Runs tests and captures a single raw E2E recording.
+
+```sh
+swift-e2e-testing run Tests/WendyE2ETests \
+  --output .build/e2e-recording/mac-mini
+```
+
+### Process
+
+Creates an E2E report from test sources and one or more recordings.
+
+```sh
+swift-e2e-testing process Tests/WendyE2ETests \
+  --recording .build/e2e-recording/mac-mini \
+  --recording .build/e2e-recording/jetson \
+  --output .build/e2e-report/current
+```
+
+A single E2E report may cover one run or many runs. There is no separate aggregate-report concept.
+
+### Analyze
+
+Optionally augments an existing E2E report with AI analysis.
+
+```sh
+swift-e2e-testing analyze .build/e2e-report/current
+```
+
+The analysis step is optional. Rendering must work whether or not analysis has been run.
+
+### Render
+
+Renders a Viewer from an E2E report.
+
+```sh
+swift-e2e-testing render viewer .build/e2e-report/current \
+  --output Build/E2EViewer
+```
+
+## Markdown E2E Report Shape
+
+The E2E report should be a Markdown corpus, not a directory full of JSON files. Markdown is readable in editors, terminals, GitHub, and CI artifacts, and it is natural input/output for AI review.
+
+The report should keep one file per test per recording. Multiple runs are represented by grouping test files under recording IDs, rather than suffixing every file name with the recording ID.
+
+```text
+.build/e2e-report/current/
+  index.md
+  recordings.md
+  recordings/
+    mac-mini-2026-05-13T091231Z/
+      index.md
+      tests/
+        WendyDeviceInfoTests.device-selects-an-explicit-device.md
+        WendyDeviceInfoTests.uses-the-configured-default-device.md
+    jetson-2026-05-13T091802Z/
+      index.md
+      tests/
+        WendyDeviceInfoTests.device-selects-an-explicit-device.md
+```
+
+Top-level files provide cross-recording context:
+
+- `index.md`: overall report summary, test list, and cross-recording matrix.
+- `recordings.md`: list of included recordings and their run-level metadata.
+
+Per-recording files provide run-specific context:
+
+- `recordings/<recording-id>/index.md`: summary for one recording.
+- `recordings/<recording-id>/tests/<test-id>.md`: processed evidence for one test in one recording.
+
+A per-test-per-recording file should contain the source-derived spec, run result, captured commands, stdout/stderr, and optional AI analysis for that specific test run.
+
+Example shape:
+
+````markdown
+# `wendy device info --device` selects an explicit device
+
+Recording: `mac-mini-2026-05-13T091231Z`  
+Source: `Tests/WendyE2ETests/WendyDeviceInfoTests.swift:42`  
+Suite: `wendy device info`  
+Status: `passed`  
+Duration: `1.2s`
+
+## Spec
+
+Selects a device explicitly with `--device`.
+
+Use this form when the target device is already known.
+
+## Commands
+
+### Command 1
+
+```sh
+wendy --device 127.0.0.1 device info
+```
+
+Status: `0`  
+Duration: `320ms`
+
+#### stdout
+
+```text
+...
+```
+
+#### stderr
+
+```text
+...
+```
+
+## AI checklist
+
+- The command should target the explicitly selected device.
+
+## AI analysis
+
+...
+````
+
+## Reference vs Viewer
+
+The current “reference” should stop being a separate top-level product. It becomes a view inside the Viewer.
+
+The Viewer can expose sections such as:
+
+- Specs: source-derived behavioral documentation, replacing the current standalone reference.
+- Results: test outcomes across one or more recordings.
+- Commands: captured command evidence.
+- AI Review: optional analysis when present.
+
+This avoids separate `generate reference` and `generate report` paths. The canonical output is the Viewer.
+
+## Existing Systems to Unify
+
+Current pieces that should become stages/views of this pipeline:
+
+- Swift reference generation from test source comments and suites.
+- E2E test execution and command record capture.
+- HTML report generated by the current AI review skill/script.
+- Optional AI checklist analysis based on `// AI:` comments and captured evidence.
+
+## Design Principles
+
+- Keep `run` environment-dependent and everything after it rerunnable.
+- Preserve raw evidence in the E2E recording.
+- Make `process` deterministic from sources plus recordings.
+- Let `process` accept multiple recordings so one report can compare platforms/devices/runs.
+- Make the E2E report a stable Markdown contract.
+- Keep one report file per test per recording.
+- Group processed test files by recording ID.
+- Make `analyze` optional and last before rendering.
+- Let `analyze` augment the Markdown report.
+- Let `render viewer` read the report as-is and include AI review only if present.
+- Avoid mutating raw recordings during analysis or rendering.
+
+## Open Questions
+
+- Exact on-disk layout for E2E recordings.
+- Precise Markdown conventions needed for reliable processing and rendering.
+- How `analyze` should mark generated AI sections so reruns are idempotent.
+- How much SwiftSyntax should be used for source parsing.
+- How to migrate the existing `reference` command and `make reference` target.
+- How to replace or absorb the current skill-local Python HTML report script.
