@@ -237,3 +237,16 @@ jobs:
 
           print(f'Done: {updated} file(s) updated')
           PYEOF
+
+      - name: Open PR to wendy-vscode
+        if: env.HAS_CHANGES == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.WENDY_TEMPLATE_SYNC_TOKEN }}
+          path: vscode
+          branch: vscode-update/${{ github.event.repository.name }}-${{ github.event.pull_request.number }}
+          title: "feat(vscode): proposal for ${{ github.event.repository.name }}#${{ github.event.pull_request.number }}"
+          body-path: pr_description.md
+          commit-message: "feat(vscode): proposal from ${{ github.repository }}#${{ github.event.pull_request.number }}"
+          base: main
+          labels: ai-suggestion
