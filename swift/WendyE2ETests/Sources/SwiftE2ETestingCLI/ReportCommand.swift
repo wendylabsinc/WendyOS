@@ -242,8 +242,8 @@ private struct ReportTargetOutcomeCounts {
         var classes: [String] = []
         if passed > 0 { classes.append("pass") }
         if flaked > 0 { classes.append("flaked") }
-        if skipped > 0 { classes.append("skipped") }
         if failed > 0 { classes.append("fail") }
+        if skipped > 0 { classes.append("skipped") }
         if unknown > 0 { classes.append("unknown") }
         return classes.isEmpty ? ["unknown"] : classes
     }
@@ -1116,8 +1116,8 @@ private func renderTargetOutcomeBadges(_ counts: ReportTargetOutcomeCounts) -> S
     let buckets: [(className: String, label: String, count: Int)] = [
         ("pass", "Passed", counts.passed),
         ("flaked", "Flaked", counts.flaked),
-        ("skipped", "Skipped", counts.skipped),
         ("fail", "Failed", counts.failed),
+        ("skipped", "Skipped", counts.skipped),
         ("unknown", "Unknown", counts.unknown),
     ].filter { $0.count > 0 }
 

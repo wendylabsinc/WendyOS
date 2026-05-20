@@ -42,12 +42,12 @@
       --green: var(--emerald-700);
       --green-bg: var(--emerald-50);
       --green-line: var(--emerald-200);
-      --amber: #854d0e;
-      --amber-bg: #fefce8;
-      --amber-line: #fef08a;
-      --orange: #c2410c;
-      --orange-bg: #fff7ed;
-      --orange-line: #fed7aa;
+      --amber: #a16207;
+      --amber-bg: #fffbeb;
+      --amber-line: #fde68a;
+      --skipped-blue: #1d4ed8;
+      --skipped-blue-bg: #eff6ff;
+      --skipped-blue-line: #bfdbfe;
       --red: #b91c1c;
       --red-bg: #fef2f2;
       --red-line: #fecaca;
@@ -73,12 +73,12 @@
       --green: var(--emerald-300);
       --green-bg: rgba(16, 185, 129, .14);
       --green-line: rgba(52, 211, 153, .35);
-      --amber: #fde047;
-      --amber-bg: rgba(250, 204, 21, .14);
-      --amber-line: rgba(250, 204, 21, .34);
-      --orange: #fb923c;
-      --orange-bg: rgba(249, 115, 22, .16);
-      --orange-line: rgba(251, 146, 60, .36);
+      --amber: #fbbf24;
+      --amber-bg: rgba(245, 158, 11, .14);
+      --amber-line: rgba(245, 158, 11, .34);
+      --skipped-blue: #93c5fd;
+      --skipped-blue-bg: rgba(59, 130, 246, .16);
+      --skipped-blue-line: rgba(96, 165, 250, .36);
       --red: #fca5a5;
       --red-bg: rgba(239, 68, 68, .14);
       --red-line: rgba(248, 113, 113, .34);
@@ -296,15 +296,15 @@
     }
 
     .filter-button[data-filter="flaked"] {
-      color: var(--orange);
-      background: var(--orange-bg);
-      border-color: var(--orange-line);
-    }
-
-    .filter-button[data-filter="skipped"] {
       color: var(--amber);
       background: var(--amber-bg);
       border-color: var(--amber-line);
+    }
+
+    .filter-button[data-filter="skipped"] {
+      color: var(--skipped-blue);
+      background: var(--skipped-blue-bg);
+      border-color: var(--skipped-blue-line);
     }
 
     .filter-button[data-filter="unknown"] {
@@ -405,13 +405,18 @@
     }
 
     .badge.flaked {
-      color: var(--orange);
-      background: var(--orange-bg);
-      border: 1px solid var(--orange-line);
+      color: var(--amber);
+      background: var(--amber-bg);
+      border: 1px solid var(--amber-line);
+    }
+
+    .badge.skipped {
+      color: var(--skipped-blue);
+      background: var(--skipped-blue-bg);
+      border: 1px solid var(--skipped-blue-line);
     }
 
     .badge.concern,
-    .badge.skipped,
     .badge.no-ai {
       color: var(--amber);
       background: var(--amber-bg);
@@ -426,10 +431,10 @@
 
     .badge.duration {
       display: inline-grid;
-      grid-template-columns: 92px 46px;
+      grid-template-columns: 100px 100px;
       align-items: center;
-      gap: 7px;
-      width: 145px;
+      gap: 8px;
+      width: 208px;
       color: var(--muted);
       background: transparent;
       border: 1px solid transparent;
@@ -445,7 +450,7 @@
     .duration-bar {
       position: relative;
       display: block;
-      width: 92px;
+      width: 100px;
       height: 10px;
       border: 1px solid var(--line);
       border-radius: 999px;
@@ -455,8 +460,10 @@
 
     .duration-bar-fill {
       position: absolute;
+      top: 0;
       left: var(--duration-bar-left, 0%);
       display: block;
+      min-width: 2px;
       width: var(--duration-bar-width, 0%);
       height: 100%;
       border-radius: inherit;
@@ -467,6 +474,7 @@
       text-align: right;
       font-size: 12px;
       font-weight: 800;
+      white-space: nowrap;
     }
 
     .test-summary .badge.skipped,
@@ -539,7 +547,7 @@
 
     .test-summary {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 145px max-content max-content;
+      grid-template-columns: minmax(0, 1fr) 208px max-content max-content;
       align-items: center;
       gap: 8px;
       padding: 4px 2px;
@@ -605,7 +613,7 @@
     }
 
     .test-body {
-      margin: 4px 0 14px 22px;
+      margin: 4px 22px 14px 22px;
       padding: 4px 0 0;
     }
 
@@ -618,7 +626,7 @@
 
     .observation-row {
       display: grid;
-      grid-template-columns: minmax(150px, 1fr) 78px max-content 145px;
+      grid-template-columns: minmax(150px, 1fr) 78px max-content 208px;
       gap: 10px;
       align-items: center;
       padding: 8px 12px;
@@ -1032,8 +1040,8 @@
         <section class="summary compact-stats" aria-label="Summary">
           <div class="metric"><strong>{{TESTS_PASSED_COUNT}}</strong><span>Passed</span></div>
           <div class="metric"><strong>{{TESTS_FLAKED_COUNT}}</strong><span>Flaked</span></div>
-          <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
           <div class="metric"><strong>{{TESTS_FAILED_COUNT}}</strong><span>Failed</span></div>
+          <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
           <div class="metric"><strong>{{TESTS_UNKNOWN_COUNT}}</strong><span>Unknown</span></div>
           <div class="metric"><strong>{{COMMAND_RUN_COUNT}}</strong><span>Commands</span></div>
         </section>
@@ -1045,8 +1053,8 @@
       <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
       <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
       <button class="filter-button" type="button" data-filter="flaked" aria-pressed="false">Flaked</button>
-      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
       <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
+      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
       <button class="filter-button" type="button" data-filter="unknown" aria-pressed="false">Unknown</button>
       <button class="filter-button" type="button" data-filter="ai" aria-pressed="false">AI</button>
       <input class="search-field" type="search" data-search placeholder="Search tests…" aria-label="Search tests" />
