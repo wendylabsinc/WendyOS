@@ -26,10 +26,19 @@ struct ReviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Model name. Passed through as provider-specific environment.")
     var model: String?
 
+    @Option(name: .long, help: "Aggregate suite review prompt path.")
+    var suiteReviewPrompt: String?
+
+    @Option(name: .long, help: "Aggregate report review prompt path.")
+    var reportReviewPrompt: String?
+
+    @Option(name: .long, help: "Aggregate review stage: suites, report, or all.")
+    var stage: AggregateReviewStage = .all
+
     @Option(name: .long, help: "Tests at or above this duration are reviewed as slow-ish.")
     var slowTestSeconds = 5.0
 
-    @Flag(name: .long, help: "Overwrite existing per-test review.md files.")
+    @Flag(name: .long, help: "Overwrite existing review.md files.")
     var overwrite = false
 
     mutating func run() async throws {
@@ -41,6 +50,16 @@ struct ReviewCommand: AsyncParsableCommand {
         let recordingURL = defaultReviewRecordingDirectory(runURL: runURL)
         let repoURL = packageURL.deletingLastPathComponent().deletingLastPathComponent()
             .standardizedFileURL
+
+        if try isReviewAggregateRunDirectory(runURL) {
+            try await runAggregateReview(
+                packageURL: packageURL,
+                testsURL: testsURL,
+                runURL: runURL,
+                repoURL: repoURL
+            )
+            return
+        }
 
         let records = try loadReviewRecords(in: recordingURL)
         let testResults = try loadReviewTestResults(
@@ -108,6 +127,109 @@ struct ReviewCommand: AsyncParsableCommand {
 
         print("==> Swift E2E agent review wrote per-test concern reviews")
         print("    Per-test concern reviews: \(reviewFiles.count)")
+    }
+}
+
+extension ReviewCommand {
+    fileprivate func runAggregateReview(
+        packageURL: URL,
+        testsURL: URL,
+        runURL: URL,
+        repoURL: URL
+    ) async throws {
+        let suitePromptURL = URL(
+            fileURLWithPath: suiteReviewPrompt
+                ?? packageURL.appendingPathComponent("Support/e2e-review-suite.prompt.md").path
+        ).standardizedFileURL
+        let reportPromptURL = URL(
+            fileURLWithPath: reportReviewPrompt
+                ?? packageURL.appendingPathComponent("Support/e2e-review-report.prompt.md").path
+        ).standardizedFileURL
+        let suitePrompt = try String(contentsOf: suitePromptURL, encoding: .utf8)
+        let reportPrompt = try String(contentsOf: reportPromptURL, encoding: .utf8)
+        let suites = try loadAggregateReviewSuites(testsURL: testsURL, aggregateURL: runURL)
+
+        let probeAgent = try makeAgent(provider: provider, model: model)
+        guard probeAgent.isConfigured else {
+            print("==> Swift E2E aggregate AI review skipped: no agent API key configured")
+            print("    Suites discovered: \(suites.count)")
+            return
+        }
+
+        print("==> Running Swift E2E aggregate AI review")
+        print("    Agent:          \(probeAgent.providerName)")
+        print("    Model:          \(probeAgent.modelName)")
+        print("    Repo:           \(repoURL.path)")
+        print("    Aggregate:      \(runURL.path)")
+        print("    Suites:         \(suites.count)")
+        print("    Suite prompt:   \(suitePromptURL.path)")
+        print("    Report prompt:  \(reportPromptURL.path)")
+
+        if overwrite {
+            try removeExistingAggregateReviews(in: runURL)
+        }
+
+        if stage == .suites || stage == .all {
+            print("==> Running suite-scoped aggregate AI reviews")
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for suite in suites {
+                    group.addTask {
+                        let agent = try makeAgent(provider: provider, model: model)
+                        let prompt = aggregateSuitePrompt(
+                            basePrompt: suitePrompt,
+                            suite: suite,
+                            repoURL: repoURL,
+                            packageURL: packageURL,
+                            testsURL: testsURL,
+                            aggregateURL: runURL,
+                            overwrite: overwrite
+                        )
+                        print("Progress: reviewing suite \(suite.suiteKey)")
+                        try agent.review(
+                            prompt: prompt,
+                            repoURL: repoURL,
+                            runURL: runURL,
+                            recordingURL: runURL
+                        )
+                    }
+                }
+                try await group.waitForAll()
+            }
+            let suiteFiles = try enforceAggregateSuiteReviewContract(in: runURL)
+            print("==> Suite-scoped aggregate AI reviews complete")
+            print("    Review files: \(suiteFiles)")
+        }
+
+        if stage == .report || stage == .all {
+            print("==> Running aggregate report AI review")
+            let prompt = try aggregateReportPrompt(
+                basePrompt: reportPrompt,
+                suites: suites,
+                repoURL: repoURL,
+                packageURL: packageURL,
+                testsURL: testsURL,
+                aggregateURL: runURL,
+                overwrite: overwrite
+            )
+            try probeAgent.review(
+                prompt: prompt,
+                repoURL: repoURL,
+                runURL: runURL,
+                recordingURL: runURL
+            )
+            try enforceAggregateReportReviewContract(in: runURL)
+            print("==> Aggregate report AI review complete")
+        }
+    }
+}
+
+enum AggregateReviewStage: String, ExpressibleByArgument {
+    case suites
+    case report
+    case all
+
+    init?(argument: String) {
+        self.init(rawValue: argument.lowercased())
     }
 }
 
@@ -185,6 +307,39 @@ private enum ReviewTestStatus {
 private struct ReviewTestObservation {
     var status: ReviewTestStatus
     var durationSeconds: Double?
+}
+
+private struct AggregateReviewObservation {
+    var target: String
+    var attempt: String
+    var status: ReviewTestStatus
+    var durationSeconds: Double?
+    var recordingPath: String?
+    var shellPath: String?
+
+    var isFailed: Bool { status.isFailed }
+}
+
+private struct AggregateReviewTest {
+    var test: ReviewTestCase
+    var suiteKey: String
+    var testKey: String
+    var observations: [AggregateReviewObservation]
+    var existingReview: String?
+
+    var hasReviewTrigger: Bool {
+        !test.aiComments.isEmpty
+            || observations.contains { $0.isFailed }
+            || observations.contains { ($0.durationSeconds ?? 0) >= 5 }
+    }
+}
+
+private struct AggregateReviewSuite {
+    var suiteKey: String
+    var displayName: String
+    var sourceURL: URL
+    var tests: [AggregateReviewTest]
+    var existingReview: String?
 }
 
 private struct ReviewResultKey: Hashable {
@@ -341,6 +496,7 @@ private protocol E2EAgentReviewer {
     var modelName: String { get }
 
     func review(request: ReviewAgentRequest) throws
+    func review(prompt: String, repoURL: URL, runURL: URL, recordingURL: URL) throws
 }
 
 private struct UnconfiguredAgentReviewer: E2EAgentReviewer {
@@ -350,6 +506,10 @@ private struct UnconfiguredAgentReviewer: E2EAgentReviewer {
     var modelName: String { "none" }
 
     func review(request _: ReviewAgentRequest) throws {
+        throw ValidationError(reason)
+    }
+
+    func review(prompt _: String, repoURL _: URL, runURL _: URL, recordingURL _: URL) throws {
         throw ValidationError(reason)
     }
 }
@@ -363,17 +523,26 @@ private struct ShellAgentReviewer: E2EAgentReviewer {
     var isConfigured: Bool { true }
 
     func review(request: ReviewAgentRequest) throws {
-        let promptURL = request.runURL.appendingPathComponent(
+        try review(
+            prompt: request.prompt,
+            repoURL: request.repoURL,
+            runURL: request.runURL,
+            recordingURL: request.recordingURL
+        )
+    }
+
+    func review(prompt: String, repoURL: URL, runURL: URL, recordingURL: URL) throws {
+        let promptURL = runURL.appendingPathComponent(
             ".agent-review-prompt-\(UUID().uuidString).md"
         )
-        try request.prompt.write(to: promptURL, atomically: true, encoding: .utf8)
+        try prompt.write(to: promptURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: promptURL) }
 
         var environment = ProcessInfo.processInfo.environment
         environment["WENDY_E2E_AGENT_PROMPT"] = promptURL.path
-        environment["WENDY_E2E_REVIEW_RUN_DIR"] = request.runURL.path
-        environment["WENDY_E2E_REVIEW_RECORDINGS_DIR"] = request.recordingURL.path
-        environment["WENDY_E2E_REVIEW_REPO_DIR"] = request.repoURL.path
+        environment["WENDY_E2E_REVIEW_RUN_DIR"] = runURL.path
+        environment["WENDY_E2E_REVIEW_RECORDINGS_DIR"] = recordingURL.path
+        environment["WENDY_E2E_REVIEW_REPO_DIR"] = repoURL.path
         if let modelEnvironmentKey {
             if usesAgentDefaultModel(modelName) {
                 environment.removeValue(forKey: modelEnvironmentKey)
@@ -385,7 +554,7 @@ private struct ShellAgentReviewer: E2EAgentReviewer {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-lc", shellCommand]
-        process.currentDirectoryURL = request.repoURL
+        process.currentDirectoryURL = repoURL
         process.environment = environment
 
         try process.run()
@@ -482,6 +651,432 @@ private func requireExecutable(_ name: String, provider: String) throws {
     guard process.terminationStatus == 0 else {
         throw ValidationError("\(provider) requires `\(name)` to be installed on PATH.")
     }
+}
+
+private func isReviewAggregateRunDirectory(_ runURL: URL) throws -> Bool {
+    let infoURL = runURL.appendingPathComponent("info.json")
+    guard FileManager.default.fileExists(atPath: infoURL.path) else { return false }
+    let data = try Data(contentsOf: infoURL)
+    guard
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        object["kind"] as? String == "swift-e2e-aggregate"
+    else {
+        return false
+    }
+    return true
+}
+
+private func loadAggregateReviewSuites(testsURL: URL, aggregateURL: URL) throws -> [AggregateReviewSuite] {
+    let tests = try parseReviewTests(in: testsURL, records: [:], testResults: [:])
+    let testsByPathKey = Dictionary(grouping: tests) { test in
+        let sourceURL = URL(fileURLWithPath: test.sourcePath)
+        return AggregateReviewPathKey(
+            suiteKey: reviewRecordFileStem(sourceURL),
+            testKey: reviewSlug(test.name)
+        )
+    }
+
+    var suites: [AggregateReviewSuite] = []
+    for suiteURL in try aggregateReviewDirectoryChildren(of: aggregateURL) {
+        let suiteKey = suiteURL.lastPathComponent
+        var suiteTests: [AggregateReviewTest] = []
+        var sourceURL: URL?
+        var displayName = suiteKey
+
+        for testURL in try aggregateReviewDirectoryChildren(of: suiteURL) {
+            let testKey = testURL.lastPathComponent
+            guard let test = testsByPathKey[
+                AggregateReviewPathKey(suiteKey: suiteKey, testKey: testKey)
+            ]?.first else {
+                continue
+            }
+            let testSourceURL = URL(fileURLWithPath: test.sourcePath)
+            sourceURL = sourceURL ?? testSourceURL
+            displayName = test.suite
+            suiteTests.append(
+                AggregateReviewTest(
+                    test: test,
+                    suiteKey: suiteKey,
+                    testKey: testKey,
+                    observations: try aggregateReviewObservations(
+                        suiteKey: suiteKey,
+                        testKey: testKey,
+                        testURL: testURL,
+                        aggregateURL: aggregateURL
+                    ),
+                    existingReview: try aggregateReviewMarkdown(
+                        at: testURL.appendingPathComponent("review.md")
+                    )
+                )
+            )
+        }
+
+        if !suiteTests.isEmpty, let sourceURL {
+            suites.append(
+                AggregateReviewSuite(
+                    suiteKey: suiteKey,
+                    displayName: displayName,
+                    sourceURL: sourceURL,
+                    tests: suiteTests.sorted { $0.test.funcLine < $1.test.funcLine },
+                    existingReview: try aggregateReviewMarkdown(
+                        at: suiteURL.appendingPathComponent("review.md")
+                    )
+                )
+            )
+        }
+    }
+    return suites.sorted { $0.suiteKey < $1.suiteKey }
+}
+
+private struct AggregateReviewPathKey: Hashable {
+    var suiteKey: String
+    var testKey: String
+}
+
+private func aggregateReviewObservations(
+    suiteKey: String,
+    testKey: String,
+    testURL: URL,
+    aggregateURL: URL
+) throws -> [AggregateReviewObservation] {
+    var observations: [AggregateReviewObservation] = []
+    for targetURL in try aggregateReviewDirectoryChildren(of: testURL) {
+        let targetName = targetURL.lastPathComponent
+        for attemptURL in try aggregateReviewDirectoryChildren(of: targetURL) {
+            let attemptName = attemptURL.lastPathComponent
+            let result = try aggregateReviewObservationResult(
+                suiteKey: suiteKey,
+                testKey: testKey,
+                attemptURL: attemptURL
+            )
+            observations.append(
+                AggregateReviewObservation(
+                    target: targetName,
+                    attempt: attemptName,
+                    status: result.status,
+                    durationSeconds: result.durationSeconds,
+                    recordingPath: aggregateReviewRelativeFilePath(
+                        fileName: "recording.md",
+                        attemptURL: attemptURL,
+                        aggregateURL: aggregateURL
+                    ),
+                    shellPath: aggregateReviewRelativeFilePath(
+                        fileName: "recording.sh.txt",
+                        attemptURL: attemptURL,
+                        aggregateURL: aggregateURL
+                    )
+                )
+            )
+        }
+    }
+    return observations.sorted {
+        if $0.target != $1.target { return $0.target < $1.target }
+        return $0.attempt < $1.attempt
+    }
+}
+
+private func aggregateReviewObservationResult(
+    suiteKey: String,
+    testKey: String,
+    attemptURL: URL
+) throws -> ReviewTestObservation {
+    let resultURL = attemptURL.appendingPathComponent("test-results.xml")
+    guard FileManager.default.fileExists(atPath: resultURL.path) else {
+        return ReviewTestObservation(status: .unknown, durationSeconds: nil)
+    }
+    let data = try Data(contentsOf: resultURL)
+    let parser = ReviewXUnitResultParser()
+    let xmlParser = XMLParser(data: data)
+    xmlParser.delegate = parser
+    guard xmlParser.parse() else {
+        throw ValidationError("Could not parse Swift Testing xUnit results: \(resultURL.path)")
+    }
+    return parser.results.first { key, _ in
+        reviewSlug(key.suite) == suiteKey && reviewSlug(key.name) == testKey
+    }?.value ?? ReviewTestObservation(status: .unknown, durationSeconds: nil)
+}
+
+private func aggregateReviewDirectoryChildren(of url: URL) throws -> [URL] {
+    guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+    return try FileManager.default.contentsOfDirectory(
+        at: url,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    )
+    .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+    .sorted { $0.path < $1.path }
+}
+
+private func aggregateReviewRelativeFilePath(fileName: String, attemptURL: URL, aggregateURL: URL) -> String? {
+    let url = attemptURL.appendingPathComponent(fileName)
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    return reviewRelativePath(url, base: aggregateURL)
+}
+
+private func aggregateReviewMarkdown(at url: URL) throws -> String? {
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let markdown = try String(contentsOf: url, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return markdown.isEmpty ? nil : markdown
+}
+
+private func aggregateSuitePrompt(
+    basePrompt: String,
+    suite: AggregateReviewSuite,
+    repoURL: URL,
+    packageURL: URL,
+    testsURL: URL,
+    aggregateURL: URL,
+    overwrite: Bool
+) -> String {
+    var lines = aggregatePromptHeader(
+        title: "Suite-scoped Swift E2E aggregate review",
+        basePrompt: basePrompt,
+        repoURL: repoURL,
+        packageURL: packageURL,
+        testsURL: testsURL,
+        aggregateURL: aggregateURL
+    )
+    lines.append("## Suite")
+    lines.append("")
+    lines.append("- Suite key: `\(suite.suiteKey)`")
+    lines.append("- Suite name: `\(suite.displayName)`")
+    lines.append("- Source: `\(suite.sourceURL.path)`")
+    lines.append("- Suite review path: `\(aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.md").path)`")
+    lines.append("")
+    lines.append("## Output contract")
+    lines.append("")
+    lines.append("Write only concern-level Markdown reviews. Do not write `Status: pass` files.")
+    lines.append("You may write per-test reviews at `<aggregate>/\(suite.suiteKey)/<test-key>/review.md`.")
+    lines.append("You may write one suite review at `<aggregate>/\(suite.suiteKey)/review.md`.")
+    lines.append("If nothing is noteworthy for a test or the suite, leave that review file absent.")
+    if !overwrite {
+        lines.append("If a non-empty existing review is still valid, leave it in place.")
+    }
+    lines.append("")
+    lines.append("Each review file should use:")
+    lines.append("")
+    lines.append("```md")
+    lines.append("Status: concern|fail")
+    lines.append("")
+    lines.append("# Summary")
+    lines.append("")
+    lines.append("...")
+    lines.append("")
+    lines.append("# Evidence")
+    lines.append("")
+    lines.append("- Cite source, result, recording, or artifact paths.")
+    lines.append("")
+    lines.append("# Action Items")
+    lines.append("")
+    lines.append("- ...")
+    lines.append("```")
+    lines.append("")
+    lines.append("## Tests in this suite")
+    lines.append("")
+    for test in suite.tests {
+        appendAggregateReviewTest(test, to: &lines, aggregateURL: aggregateURL)
+    }
+    return lines.joined(separator: "\n")
+}
+
+private func aggregateReportPrompt(
+    basePrompt: String,
+    suites: [AggregateReviewSuite],
+    repoURL: URL,
+    packageURL: URL,
+    testsURL: URL,
+    aggregateURL: URL,
+    overwrite: Bool
+) throws -> String {
+    var lines = aggregatePromptHeader(
+        title: "Top-level Swift E2E aggregate review",
+        basePrompt: basePrompt,
+        repoURL: repoURL,
+        packageURL: packageURL,
+        testsURL: testsURL,
+        aggregateURL: aggregateURL
+    )
+    lines.append("## Output contract")
+    lines.append("")
+    lines.append("Write the top-level aggregate review to `\(aggregateURL.appendingPathComponent("review.md").path)`.")
+    lines.append("Use `Status: pass`, `Status: concern`, or `Status: fail`.")
+    lines.append("Highlight the most important results, action items, and links to relevant suite/test details.")
+    if !overwrite {
+        lines.append("If an existing top-level review is still valid, update it only when needed.")
+    }
+    lines.append("")
+    lines.append("## Aggregate summary")
+    lines.append("")
+    for suite in suites {
+        lines.append("### \(suite.displayName) (`\(suite.suiteKey)`)")
+        if let suiteReview = try aggregateReviewMarkdown(
+            at: aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.md")
+        ) {
+            lines.append("- Suite review:")
+            lines.append("  ```md")
+            lines.append(indent(suiteReview, prefix: "  "))
+            lines.append("  ```")
+        } else {
+            lines.append("- Suite review: `<none>`")
+        }
+        for test in suite.tests {
+            let reviewPath = aggregateURL
+                .appendingPathComponent(test.suiteKey)
+                .appendingPathComponent(test.testKey)
+                .appendingPathComponent("review.md")
+            let failures = test.observations.filter(\.isFailed).count
+            let flaked = aggregateReviewTargetOutcomeCounts(test.observations).flaked
+            lines.append("- `\(test.test.name)` (`\(test.suiteKey)/\(test.testKey)`): observations=\(test.observations.count), failed=\(failures), flaked-targets=\(flaked)")
+            if let review = try aggregateReviewMarkdown(at: reviewPath) {
+                lines.append("  - Test review:")
+                lines.append("    ```md")
+                lines.append(indent(review, prefix: "    "))
+                lines.append("    ```")
+            }
+        }
+        lines.append("")
+    }
+    return lines.joined(separator: "\n")
+}
+
+private func aggregatePromptHeader(
+    title: String,
+    basePrompt: String,
+    repoURL: URL,
+    packageURL: URL,
+    testsURL: URL,
+    aggregateURL: URL
+) -> [String] {
+    [
+        "# \(title)",
+        "",
+        basePrompt.trimmingCharacters(in: .whitespacesAndNewlines),
+        "",
+        "## Context",
+        "",
+        "- Repository root: `\(repoURL.path)`",
+        "- Swift package: `\(packageURL.path)`",
+        "- Swift E2E tests: `\(testsURL.path)`",
+        "- Aggregate directory: `\(aggregateURL.path)`",
+        "",
+        "Walk only the canonical aggregate depth. Do not recursively scan copied `cli/` or `agent/` sandboxes unless you intentionally inspect a specific artifact referenced below.",
+        "Print short `Progress:` lines while reviewing so CI shows activity.",
+        "",
+    ]
+}
+
+private func appendAggregateReviewTest(
+    _ test: AggregateReviewTest,
+    to lines: inout [String],
+    aggregateURL: URL
+) {
+    lines.append("### \(test.test.suite) › \(test.test.name)")
+    lines.append("- Test key: `\(test.suiteKey)/\(test.testKey)`")
+    lines.append("- Source: `\(test.test.sourcePath):\(test.test.funcLine)`")
+    lines.append("- Review path: `\(aggregateURL.appendingPathComponent(test.suiteKey).appendingPathComponent(test.testKey).appendingPathComponent("review.md").path)`")
+    if let existingReview = test.existingReview {
+        lines.append("- Existing review:")
+        lines.append("  ```md")
+        lines.append(indent(existingReview, prefix: "  "))
+        lines.append("  ```")
+    }
+    if !test.test.aiComments.isEmpty {
+        lines.append("- `// AI:` comments:")
+        for comment in test.test.aiComments {
+            lines.append("  - \(comment.replacingOccurrences(of: "\n", with: "\n    "))")
+        }
+    }
+    lines.append("- Source body:")
+    lines.append("  ```swift")
+    lines.append(indent(test.test.sourceBody, prefix: "  "))
+    lines.append("  ```")
+    lines.append("- Target outcomes: \(aggregateReviewTargetOutcomeSummary(test.observations))")
+    lines.append("- Observations:")
+    for observation in test.observations {
+        lines.append("  - target=`\(observation.target)` attempt=`\(observation.attempt)` status=`\(observation.status.statusText)` duration=`\(observation.durationSeconds.map(formatSeconds) ?? "unknown")`")
+        if let detail = observation.status.detail, !detail.isEmpty {
+            lines.append("    detail: \(detail.replacingOccurrences(of: "\n", with: "\n      "))")
+        }
+        if let recordingPath = observation.recordingPath {
+            lines.append("    recording: `\(recordingPath)`")
+        }
+        if let shellPath = observation.shellPath {
+            lines.append("    shell: `\(shellPath)`")
+        }
+    }
+    lines.append("")
+}
+
+private func aggregateReviewTargetOutcomeSummary(_ observations: [AggregateReviewObservation]) -> String {
+    let counts = aggregateReviewTargetOutcomeCounts(observations)
+    return "passed=\(counts.passed), flaked=\(counts.flaked), failed=\(counts.failed), skipped=\(counts.skipped), unknown=\(counts.unknown)"
+}
+
+private func aggregateReviewTargetOutcomeCounts(_ observations: [AggregateReviewObservation]) -> (passed: Int, flaked: Int, failed: Int, skipped: Int, unknown: Int) {
+    var counts = (passed: 0, flaked: 0, failed: 0, skipped: 0, unknown: 0)
+    for statuses in Dictionary(grouping: observations, by: \.target).values.map({ $0.map(\.status) }) {
+        let passed = statuses.contains { $0.statusText == "passed" }
+        let failed = statuses.contains { $0.statusText == "failed" }
+        let skipped = statuses.contains { $0.statusText == "skipped" }
+        let unknown = statuses.contains { $0.statusText == "unknown" }
+        if passed && failed {
+            counts.flaked += 1
+        } else if passed && !failed && !skipped && !unknown {
+            counts.passed += 1
+        } else if failed && !passed && !skipped && !unknown {
+            counts.failed += 1
+        } else if skipped && !passed && !failed && !unknown {
+            counts.skipped += 1
+        } else {
+            counts.unknown += 1
+        }
+    }
+    return counts
+}
+
+private func removeExistingAggregateReviews(in aggregateURL: URL) throws {
+    try? FileManager.default.removeItem(at: aggregateURL.appendingPathComponent("review.md"))
+    for suiteURL in try aggregateReviewDirectoryChildren(of: aggregateURL) {
+        try? FileManager.default.removeItem(at: suiteURL.appendingPathComponent("review.md"))
+        for testURL in try aggregateReviewDirectoryChildren(of: suiteURL) {
+            try? FileManager.default.removeItem(at: testURL.appendingPathComponent("review.md"))
+        }
+    }
+}
+
+@discardableResult
+private func enforceAggregateSuiteReviewContract(in aggregateURL: URL) throws -> Int {
+    var count = 0
+    for suiteURL in try aggregateReviewDirectoryChildren(of: aggregateURL) {
+        if try enforceConcernReviewFile(at: suiteURL.appendingPathComponent("review.md")) {
+            count += 1
+        }
+        for testURL in try aggregateReviewDirectoryChildren(of: suiteURL) {
+            if try enforceConcernReviewFile(at: testURL.appendingPathComponent("review.md")) {
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
+private func enforceAggregateReportReviewContract(in aggregateURL: URL) throws {
+    let reviewURL = aggregateURL.appendingPathComponent("review.md")
+    guard let markdown = try aggregateReviewMarkdown(at: reviewURL) else { return }
+    guard let status = parseReviewStatus(from: markdown), ["pass", "concern", "fail"].contains(status) else {
+        try? FileManager.default.removeItem(at: reviewURL)
+        return
+    }
+}
+
+private func enforceConcernReviewFile(at reviewURL: URL) throws -> Bool {
+    guard let markdown = try aggregateReviewMarkdown(at: reviewURL) else { return false }
+    guard let status = parseReviewStatus(from: markdown), ["concern", "fail"].contains(status) else {
+        try? FileManager.default.removeItem(at: reviewURL)
+        return false
+    }
+    return true
 }
 
 private func defaultReviewTestsDir(packageURL: URL) -> URL {

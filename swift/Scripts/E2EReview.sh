@@ -26,7 +26,7 @@ Options:
                     Legacy aliases claude-code/anthropic and openai are accepted.
   --model NAME       Provider model override. Use latest/default to let the
                      agent CLI choose its default model.
-  --overwrite        Overwrite existing per-test review.md files.
+  --overwrite        Overwrite existing review.md files.
   --help             Show this help message.
 
 Environment:
@@ -135,22 +135,5 @@ review_single_run() {
     swift "${command_args[@]}"
   )
 }
-
-aggregate_observation_dirs() {
-  find "$RUN_DIR" -type f -name recording.md -print \
-    | while IFS= read -r record_path; do dirname "$record_path"; done \
-    | sort -u
-}
-
-is_aggregate_dir() {
-  [[ -f "$RUN_DIR/info.json" ]] \
-    && grep -q '"kind"[[:space:]]*:[[:space:]]*"swift-e2e-aggregate"' "$RUN_DIR/info.json"
-}
-
-if is_aggregate_dir; then
-  echo "==> Swift E2E aggregate AI review skipped"
-  echo "    Per-test aggregate reviews are disabled for now."
-  exit 0
-fi
 
 review_single_run "$RUN_DIR"

@@ -46,7 +46,9 @@ try {
 }
 if ($status -eq 0 -and $aggregateStatus -ne 0) { $status = $aggregateStatus }
 
-Write-Output '==> Swift E2E aggregate AI review skipped'
+& (Join-Path $ScriptDir 'E2EReview.ps1') --run-dir $aggregateDir
+$reviewStatus = $LASTEXITCODE
+if ($status -eq 0 -and $reviewStatus -ne 0) { $status = $reviewStatus }
 
 & (Join-Path $ScriptDir 'E2EReport.ps1') --run-dir $aggregateDir
 $reportStatus = $LASTEXITCODE
