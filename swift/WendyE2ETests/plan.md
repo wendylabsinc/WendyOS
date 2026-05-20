@@ -205,6 +205,60 @@ Completed pieces:
 - Local `make e2e-run*` composes test → aggregate → review → report.
 - CI matrix jobs upload raw runs, and the aggregate job downloads, aggregates, reviews, reports, and uploads the aggregate.
 
+### Iteration 2: count target outcomes in the aggregate report
+
+The top-level report should summarize each test across targets instead of
+collapsing it to a single status. Status is computed in two stages:
+
+1. Attempt outcomes are reduced to one target outcome for each
+   `<suite-key>/<test-key>/<target-name>`.
+2. Target outcomes are counted and rendered as badges on the test row.
+
+Per-target status semantics:
+
+- If all attempts for a target for a test pass, the target counts as `passed`.
+- If some attempts for a target for a test pass and some fail, the target
+  counts as `flaked`.
+- If all attempts for a target for a test fail, the target counts as `failed`.
+- If a test is skipped for a target, the target counts as `skipped`.
+
+Top-level test rows render one badge per non-zero target-status bucket:
+
+- `Passed N`: number of targets whose target outcome is passed.
+- `Flaked N`: number of targets whose target outcome is flaked.
+- `Skipped N`: number of targets whose target outcome is skipped.
+- `Failed N`: number of targets whose target outcome is failed.
+
+Badge number display rules:
+
+- If a test has exactly one non-zero target-status bucket and the count is one,
+  render only the label, such as `Passed` or `Failed`.
+- If a test has exactly one non-zero target-status bucket and the count is
+  greater than one, render the count, such as `Passed 3`.
+- If a test has multiple non-zero target-status buckets, render counts on every
+  badge, such as `Passed 2`, `Flaked 1`, and `Failed 1`.
+
+Visual treatment:
+
+- Keep passed green and failed red.
+- Add a new `flaked` badge in orange.
+- Keep skipped yellow/amber, but adjust its tone so it is clearly distinct from
+  the orange flaked badge.
+
+Filtering should treat the row as multi-status:
+
+- The `Passed` filter shows tests with a non-zero passed target count.
+- The `Flaked` filter shows tests with a non-zero flaked target count.
+- The `Skipped` filter shows tests with a non-zero skipped target count.
+- The `Failed` filter shows tests with a non-zero failed target count.
+
+Default filter priority should surface actionable results first:
+
+1. failed
+2. flaked
+3. AI review, once aggregate review is reintroduced
+4. all
+
 ## Open plumbing questions
 
 We still need to decide implementation details:
