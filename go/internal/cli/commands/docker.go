@@ -72,7 +72,7 @@ func detectProjectType(dir string) (string, error) {
 				continue
 			}
 			name := e.Name()
-			if strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+			if (strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
 				return "docker", nil
 			}
 		}
@@ -109,6 +109,9 @@ var validDockerfileNameRe = regexp.MustCompile(`^Dockerfile([.\-][a-zA-Z0-9._-]+
 // names with control characters or other unsafe content.
 func validateDockerfileName(name string) error {
 	base := filepath.Base(name)
+	if strings.HasSuffix(base, ".dockerignore") {
+		return fmt.Errorf("invalid Dockerfile name %q: .dockerignore files are not Dockerfiles", base)
+	}
 	if !validDockerfileNameRe.MatchString(base) {
 		return fmt.Errorf("invalid Dockerfile name %q: must be Dockerfile or Dockerfile.<variant>", base)
 	}
@@ -236,7 +239,7 @@ func detectBuildOptions(dir string) []BuildOption {
 				continue
 			}
 			name := e.Name()
-			if name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+			if (name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
 				options = append(options, BuildOption{
 					Label: name,
 					Type:  "docker",

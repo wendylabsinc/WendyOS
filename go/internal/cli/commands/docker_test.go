@@ -1326,7 +1326,7 @@ func TestValidateDockerfileName(t *testing.T) {
 			t.Errorf("validateDockerfileName(%q) unexpected error: %v", name, err)
 		}
 	}
-	invalid := []string{"-flag", "dockerfile", "DOCKERFILE", "not-a-dockerfile", "Dockerfile/evil", ".hidden"}
+	invalid := []string{"-flag", "dockerfile", "DOCKERFILE", "not-a-dockerfile", "Dockerfile/evil", ".hidden", "Dockerfile.dockerignore", "Dockerfile.prod.dockerignore"}
 	for _, name := range invalid {
 		if err := validateDockerfileName(name); err == nil {
 			t.Errorf("validateDockerfileName(%q) expected error, got nil", name)

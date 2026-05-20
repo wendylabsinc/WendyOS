@@ -88,7 +88,7 @@ func (p *DockerProvider) CanBuild(projectPath string) bool {
 				continue
 			}
 			name := e.Name()
-			if name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+			if (name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
 				return true
 			}
 		}
