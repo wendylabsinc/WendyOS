@@ -189,25 +189,42 @@ struct `'wendy completion install'` {
      Running installation repeatedly leaves a single managed completion
      script and a single source line in the relevant shell rc file.
      */
-    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows))
+    @Test
     func `is idempotent when completion is already installed`() async throws {
         // AI: Look for surprising repeated-install behavior in the command log.
         // The second run should read as safe and intentional, not as if it
         // rewrote user shell configuration unnecessarily.
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                SHELL=/bin/zsh wendy completion install
-                SHELL=/bin/zsh wendy completion install
-                test -f "$HOME/.zfunc/_wendy"
-                test "$(grep -c '^# wendy-completion$' "$HOME/.zshrc")" = 1
-                """
+                posix: """
+                    SHELL=/bin/zsh wendy completion install
+                    SHELL=/bin/zsh wendy completion install
+                    test -f "$HOME/.zfunc/_wendy"
+                    test "$(grep -c '^# wendy-completion$' "$HOME/.zshrc")" = 1
+                    """,
+                power: """
+                    wendy completion install
+                    wendy completion install
+                    $completionPath = Join-Path $env:HOME 'Documents/PowerShell/Completions/wendy.ps1'
+                    $profilePath = Join-Path $env:HOME 'Documents/PowerShell/Microsoft.PowerShell_profile.ps1'
+                    if (!(Test-Path -LiteralPath $completionPath -PathType Leaf)) {
+                        throw 'PowerShell completion should exist'
+                    }
+                    $profile = Get-Content -Raw -LiteralPath $profilePath
+                    if (([regex]::Matches($profile, '(?m)^# wendy-completion$')).Count -ne 1) {
+                        throw 'PowerShell profile should contain one managed marker'
+                    }
+                    """
             ) { result in
+                let normalizedStderr = result.stderr.replacingOccurrences(of: "\\", with: "/")
 
                 #expect(result.status.isSuccess)
                 #expect(result.stdout == "")
                 #expect(result.stderr.contains("Already configured"))
-                #expect(result.stderr.contains(".zfunc/_wendy"))
+                #expect(
+                    normalizedStderr.contains(".zfunc/_wendy")
+                        || normalizedStderr.contains("Completions/wendy.ps1")
+                )
             }
         }
     }
