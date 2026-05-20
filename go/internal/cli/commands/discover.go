@@ -742,7 +742,11 @@ func discoverTableRows(collection *models.DevicesCollection) []bubbleTable.Row {
 		} else if d.Bluetooth != nil && !d.Bluetooth.IsWendyAgent() {
 			deviceType = "ESP32"
 		}
-		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, deviceType, d.Address(), markOutdated(d.AgentVersion)})
+		addr := d.Address()
+		if d.LAN != nil {
+			addr = lanDisplayHost(*d.LAN)
+		}
+		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, deviceType, addr, markOutdated(d.AgentVersion)})
 	}
 	for _, d := range collection.EthernetInterfaces {
 		rows = append(rows, bubbleTable.Row{defaultMark(d.DisplayName), d.DisplayName, "", d.IPAddress, markOutdated(d.AgentVersion)})
