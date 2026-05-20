@@ -207,64 +207,76 @@ func LoadFromBytes(data []byte) (*AppConfig, error) {
 	return &cfg, nil
 }
 
+// validateEntitlements checks a slice of entitlements for required fields and
+// valid types. The prefix string is used in error messages (e.g.
+// "entitlement" for top-level or "services[\"foo\"].entitlement" for service-
+// level entitlements).
+func validateEntitlements(entitlements []Entitlement, prefix string) error {
+	for i, e := range entitlements {
+		if e.Type == "" {
+			return fmt.Errorf("%s[%d]: type is required", prefix, i)
+		}
+		if !slices.Contains(ValidEntitlementTypes, e.Type) {
+			return fmt.Errorf("%s[%d]: unknown type %q", prefix, i, e.Type)
+		}
+
+		switch e.Type {
+		case EntitlementNetwork:
+			if e.Mode != "" && e.Mode != "host" && e.Mode != "none" {
+				return fmt.Errorf("%s[%d]: network mode must be \"host\" or \"none\", got %q", prefix, i, e.Mode)
+			}
+		case EntitlementPersist:
+			if e.Name == "" {
+				return fmt.Errorf("%s[%d]: persist entitlement requires a name", prefix, i)
+			}
+			if e.Path == "" {
+				return fmt.Errorf("%s[%d]: persist entitlement requires a path", prefix, i)
+			}
+			// Persist paths are container destinations, so validate them as
+			// POSIX paths regardless of the host OS running the CLI.
+			if !path.IsAbs(e.Path) {
+				return fmt.Errorf("%s[%d]: persist path must be absolute, got %q", prefix, i, e.Path)
+			}
+			if containsDotDot(e.Path) {
+				return fmt.Errorf("%s[%d]: persist path must not contain '..' components", prefix, i)
+			}
+		case EntitlementI2C:
+			if e.Device == "" {
+				return fmt.Errorf("%s[%d]: i2c entitlement requires a device", prefix, i)
+			}
+			if !isValidI2CDevice(e.Device) {
+				return fmt.Errorf("%s[%d]: i2c device must be in i2c-N format, got %q", prefix, i, e.Device)
+			}
+		case EntitlementGPIO:
+			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementMCP:
+			if e.Port < 1 || e.Port > 65535 {
+				return fmt.Errorf("%s[%d]: mcp port must be between 1 and 65535, got %d", prefix, i, e.Port)
+			}
+		}
+	}
+
+	mcpCount := 0
+	for _, e := range entitlements {
+		if e.Type == EntitlementMCP {
+			mcpCount++
+		}
+	}
+	if mcpCount > 1 {
+		return fmt.Errorf("at most one mcp entitlement is allowed in %s, found %d", prefix, mcpCount)
+	}
+
+	return nil
+}
+
 // Validate checks the AppConfig for required fields and valid entitlement types.
 func (c *AppConfig) Validate() error {
 	if c.AppID == "" {
 		return fmt.Errorf("appId is required")
 	}
 
-	for i, e := range c.Entitlements {
-		if e.Type == "" {
-			return fmt.Errorf("entitlement[%d]: type is required", i)
-		}
-		if !slices.Contains(ValidEntitlementTypes, e.Type) {
-			return fmt.Errorf("entitlement[%d]: unknown type %q", i, e.Type)
-		}
-
-		switch e.Type {
-		case EntitlementNetwork:
-			if e.Mode != "" && e.Mode != "host" && e.Mode != "none" {
-				return fmt.Errorf("entitlement[%d]: network mode must be \"host\" or \"none\", got %q", i, e.Mode)
-			}
-		case EntitlementPersist:
-			if e.Name == "" {
-				return fmt.Errorf("entitlement[%d]: persist entitlement requires a name", i)
-			}
-			if e.Path == "" {
-				return fmt.Errorf("entitlement[%d]: persist entitlement requires a path", i)
-			}
-			// Persist paths are container destinations, so validate them as
-			// POSIX paths regardless of the host OS running the CLI.
-			if !path.IsAbs(e.Path) {
-				return fmt.Errorf("entitlement[%d]: persist path must be absolute, got %q", i, e.Path)
-			}
-			if containsDotDot(e.Path) {
-				return fmt.Errorf("entitlement[%d]: persist path must not contain '..' components", i)
-			}
-		case EntitlementI2C:
-			if e.Device == "" {
-				return fmt.Errorf("entitlement[%d]: i2c entitlement requires a device", i)
-			}
-			if !isValidI2CDevice(e.Device) {
-				return fmt.Errorf("entitlement[%d]: i2c device must be in i2c-N format, got %q", i, e.Device)
-			}
-		case EntitlementGPIO:
-			// Pins are optional; omitting them grants access to all GPIO chips.
-		case EntitlementMCP:
-			if e.Port < 1 || e.Port > 65535 {
-				return fmt.Errorf("entitlement[%d]: mcp port must be between 1 and 65535, got %d", i, e.Port)
-			}
-		}
-	}
-
-	mcpCount := 0
-	for _, e := range c.Entitlements {
-		if e.Type == EntitlementMCP {
-			mcpCount++
-		}
-	}
-	if mcpCount > 1 {
-		return fmt.Errorf("at most one mcp entitlement is allowed, found %d", mcpCount)
+	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
 	}
 
 	for i, f := range c.Files {
@@ -317,6 +329,9 @@ func (c *AppConfig) Validate() error {
 				return fmt.Errorf("services[%q]: dependsOn references unknown service %q", name, dep)
 			}
 		}
+		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -360,12 +375,33 @@ func ValidateJSON(data []byte) []string {
 	}
 
 	var warnings []string
-	warnings = append(warnings, validateEntitlementsJSON(raw["entitlements"])...)
+	warnings = append(warnings, validateEntitlementsJSON(raw["entitlements"], "entitlement")...)
 	warnings = append(warnings, validateHooksJSON(raw["hooks"])...)
+
+	// Validate service-level entitlements when a services map is present.
+	// Unmarshal into map[string]json.RawMessage first so a null/invalid entry
+	// for one service doesn't silently drop warnings for all other services.
+	if servicesRaw, ok := raw["services"]; ok && len(servicesRaw) > 0 {
+		var serviceEntries map[string]json.RawMessage
+		if err := json.Unmarshal(servicesRaw, &serviceEntries); err == nil {
+			for name, svcRaw := range serviceEntries {
+				var svc map[string]json.RawMessage
+				if err := json.Unmarshal(svcRaw, &svc); err != nil {
+					continue
+				}
+				prefix := fmt.Sprintf("services[%q].entitlement", name)
+				warnings = append(warnings, validateEntitlementsJSON(svc["entitlements"], prefix)...)
+			}
+		}
+	}
+
 	return warnings
 }
 
-func validateEntitlementsJSON(entRaw json.RawMessage) []string {
+// validateEntitlementsJSON checks raw JSON entitlements for deprecated types
+// and unknown keys. prefix is used in warning messages (e.g. "entitlement" for
+// top-level, or "services[\"foo\"].entitlement" for service-level).
+func validateEntitlementsJSON(entRaw json.RawMessage, prefix string) []string {
 	if len(entRaw) == 0 {
 		return nil
 	}
@@ -388,8 +424,8 @@ func validateEntitlementsJSON(entRaw json.RawMessage) []string {
 
 		if replacement, ok := DeprecatedEntitlementReplacement(entType); ok {
 			warnings = append(warnings, fmt.Sprintf(
-				"entitlement[%d]: %q is deprecated; use %q instead",
-				i, entType, replacement,
+				"%s[%d]: %q is deprecated; use %q instead",
+				prefix, i, entType, replacement,
 			))
 		}
 
@@ -416,8 +452,8 @@ func validateEntitlementsJSON(entRaw json.RawMessage) []string {
 			copy(sortedAllowed, allowed)
 			sort.Strings(sortedAllowed)
 			warnings = append(warnings, fmt.Sprintf(
-				"Unknown key(s) in entitlement[%d] (%s): %s. Allowed keys are: %s",
-				i, entType,
+				"Unknown key(s) in %s[%d] (%s): %s. Allowed keys are: %s",
+				prefix, i, entType,
 				strings.Join(unknown, ", "),
 				strings.Join(sortedAllowed, ", "),
 			))
