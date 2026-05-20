@@ -1210,7 +1210,7 @@ private func renderCards(files: [ReportTestFile]) -> String {
                 "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
             )
             cards.append(
-                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)</span>\(aggregateDurationBadge(test.durationRange))\(aiBadge)<span class=\"report-links\"></span></summary>"
+                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)\(aiBadge)</span>\(aggregateDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
             )
             cards.append(renderObservations(test.observations, aiReview: test.aiReview))
             cards.append("</details>")
@@ -1248,7 +1248,9 @@ private func renderObservations(_ observations: [ReportTestObservation], aiRevie
     }
 
     var chunks: [String] = [
-        "<div class=\"test-body\"><section class=\"observations\" aria-label=\"Concrete observations\">"
+        "<div class=\"test-body\">",
+        renderTestAIReview(aiReview),
+        "<section class=\"observations\" aria-label=\"Concrete observations\">",
     ]
     var previousTarget: String?
     for observation in observations.sorted(by: observationSort) {
@@ -1261,7 +1263,6 @@ private func renderObservations(_ observations: [ReportTestObservation], aiRevie
         )
     }
     chunks.append("</section>")
-    chunks.append(renderTestAIReview(aiReview))
     chunks.append("</div>")
     return chunks.joined(separator: "\n")
 }
